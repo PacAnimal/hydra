@@ -3,25 +3,43 @@ using Hydra.Keyboard;
 namespace Hydra.Platform.Linux;
 
 // translates X11 key events into platform-independent KeyEvents.
-// always resolves the base keysym (group 0, level 0) regardless of modifier state,
-// matching the Mac/Windows approach of using the key's identity rather than its output character.
+// resolves the layout-translated character using the active keyboard layout and modifier state,
+// matching the Mac approach of using the server-side layout to determine the intended character.
 internal sealed class XorgKeyResolver
 {
     internal static KeyEvent? Resolve(int evType, uint keycode, uint state, nint display)
     {
-        var keysym = NativeMethods.XkbKeycodeToKeysym(display, keycode, 0, 0);
+        // resolve using the active layout: group from Xkb state bits, level from Shift/AltGr
+        var group = ExtractGroup(state);
+        var level = ComputeLevel(state);
+        var keysym = NativeMethods.XkbKeycodeToKeysym(display, keycode, group, level);
+
+        // fall back to base keysym (0,0) for modifier keys and unmapped levels
+        if (keysym == 0)
+            keysym = NativeMethods.XkbKeycodeToKeysym(display, keycode, 0, 0);
         if (keysym == 0) return null;
 
         // X11 state lags by one: the modifier being pressed/released is not yet reflected.
         // adjust so modifiers always describe what's held after the event takes effect.
-        state = AdjustModifierState(evType, keysym, state);
+        var adjustedState = AdjustModifierState(evType, keysym, state);
 
-        var mods = MapModifiers(state);
+        var mods = MapModifiers(adjustedState);
         var type = evType == NativeMethods.KeyPress ? KeyEventType.KeyDown : KeyEventType.KeyUp;
         var keyId = KeySymToKeyId(keysym);
         if (keyId == KeyId.None) return null;
 
         return new KeyEvent(type, keyId, mods, (ushort)keycode);
+    }
+
+    // Xkb group is encoded in bits 13-14 of the X11 state field (XkbGroupForCoreState macro)
+    private static int ExtractGroup(uint state) => (int)((state >> 13) & 3);
+
+    // shift level: 0=base, 1=Shift, 2=AltGr, 3=Shift+AltGr
+    private static int ComputeLevel(uint state)
+    {
+        var shift = (state & NativeMethods.ShiftMask) != 0;
+        var altGr = (state & NativeMethods.Mod5Mask) != 0;
+        return (shift ? 1 : 0) + (altGr ? 2 : 0);
     }
 
     // maps a keysym to a KeyId.
