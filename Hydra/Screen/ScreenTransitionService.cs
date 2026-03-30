@@ -34,7 +34,7 @@ public class ScreenTransitionService(IPlatformInput platform, ILogger<ScreenTran
     {
         if (!platform.IsAccessibilityTrusted())
         {
-            log.LogError("Accessibility permission not granted. Grant access in System Settings > Privacy & Security > Accessibility, then restart Hydra.");
+            log.LogError("Input hook permission not granted. On macOS: grant access in System Settings > Privacy & Security > Accessibility. Then restart Hydra.");
             return Task.CompletedTask;
         }
 

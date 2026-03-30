@@ -7,6 +7,16 @@
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+        <ApplicationManifest>app.manifest</ApplicationManifest>
+    </PropertyGroup>
+
+    <PropertyGroup>
+        <Version>0.1.0</Version>
+        <AssemblyTitle>Hydra</AssemblyTitle>
+        <Product>Hydra</Product>
+        <Company>Cathedral</Company>
+        <Description>Software KVM — seamless mouse and keyboard sharing between screens over a network</Description>
+        <Copyright>Copyright (c) 2026 Cathedral. Licensed under the Apache License, Version 2.0.</Copyright>
     </PropertyGroup>
 
     <PropertyGroup Condition=" '$(Configuration)' == 'Debug' ">
