@@ -57,9 +57,9 @@ public class MacInputHandler(ILogger<MacInputHandler> log) : IPlatformInput
     public void ShowCursor()
     {
         if (!_cursorHidden) return;
-        _ = NativeMethods.CGAssociateMouseAndMouseCursorPosition(true);
         _ = NativeMethods.CGDisplayShowCursor(_display);
-        NativeMethods.CGSetLocalEventsSuppressionInterval(0.25);
+        _ = NativeMethods.CGAssociateMouseAndMouseCursorPosition(true);
+        NativeMethods.CGSetLocalEventsSuppressionInterval(0.0);
         _cursorHidden = false;
     }
 

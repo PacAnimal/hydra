@@ -22,6 +22,9 @@ public class ScreenTransitionService(IPlatformInput platform, ILogger<ScreenTran
     // throttle virtual position logging to 10/sec
     private long _lastVirtualLogTick;
 
+    // show cursor on next real-screen event (deferred to avoid flash at warp position)
+    private bool _pendingCursorShow;
+
     public Task StartAsync(CancellationToken cancellationToken)
     {
         if (!platform.IsAccessibilityTrusted())
@@ -51,8 +54,9 @@ public class ScreenTransitionService(IPlatformInput platform, ILogger<ScreenTran
     public Task StopAsync(CancellationToken cancellationToken)
     {
         platform.StopEventTap();
-        if (_mouse.IsOnVirtualScreen)
+        if (_mouse.IsOnVirtualScreen || _pendingCursorShow)
         {
+            _pendingCursorShow = false;
             platform.IsOnVirtualScreen = false;
             platform.ShowCursor();
         }
@@ -71,6 +75,12 @@ public class ScreenTransitionService(IPlatformInput platform, ILogger<ScreenTran
 
     private void HandleRealScreenMove(double x, double y)
     {
+        if (_pendingCursorShow)
+        {
+            _pendingCursorShow = false;
+            platform.ShowCursor();
+        }
+
         var ix = (int)x;
         var iy = (int)y;
         var hit = _layout!.DetectEdgeExit(_realScreen!, ix, iy);
@@ -96,11 +106,6 @@ public class ScreenTransitionService(IPlatformInput platform, ILogger<ScreenTran
         // zero-delta filter
         if (dx == 0 && dy == 0) return;
 
-        // warp to center on every event (synergy's approach; suppression interval keeps acceleration intact)
-        platform.WarpCursor(_warpX, _warpY);
-        _lastWarpX = _warpX;
-        _lastWarpY = _warpY;
-
         // bogus filter: drop delta that looks like a warp-displacement artifact (synergy lines 1065-1071)
         var centerToEdgeX = Math.Abs(_warpX - _realScreen!.X);
         var centerToEdgeY = Math.Abs(_warpY - _realScreen!.Y);
@@ -118,14 +123,21 @@ public class ScreenTransitionService(IPlatformInput platform, ILogger<ScreenTran
         // check if we've crossed back to the real screen
         var virtualScreen = _mouse.CurrentScreen!;
         var hit = _layout!.DetectEdgeExit(virtualScreen, (int)_mouse.X, (int)_mouse.Y);
-        if (hit is null || hit.Destination.IsVirtual) return;
+        if (hit is not null && !hit.Destination.IsVirtual)
+        {
+            // warp to entry while still hidden; show is deferred to next real-screen event to avoid flash
+            _mouse.LeaveScreen();
+            platform.IsOnVirtualScreen = false;
+            platform.WarpCursor(hit.EntryX, hit.EntryY);
+            _pendingCursorShow = true;
+            log.LogInformation("Returned to real screen ← ({X}, {Y})", hit.EntryX, hit.EntryY);
+            return;
+        }
 
-        // returning to real screen
-        _mouse.LeaveScreen();
-        platform.IsOnVirtualScreen = false;
-        platform.WarpCursor(hit.EntryX, hit.EntryY);
-        platform.ShowCursor();
-        log.LogInformation("Returned to real screen ← ({X}, {Y})", hit.EntryX, hit.EntryY);
+        // warp to center on every event (synergy's approach; suppression interval keeps acceleration intact)
+        platform.WarpCursor(_warpX, _warpY);
+        _lastWarpX = _warpX;
+        _lastWarpY = _warpY;
     }
 
     // fills in screens with zero width/height using real display bounds,
