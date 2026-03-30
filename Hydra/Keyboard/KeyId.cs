@@ -28,6 +28,7 @@ public static class KeyId
     public const uint Insert = 0xEF63;
     public const uint AltGr = 0xEF7E;
     public const uint NumLock = 0xEF7F;
+    public const uint ScrollLock = 0xEF14;
 
     // keypad
     public const uint KP_Space = 0xEF80;

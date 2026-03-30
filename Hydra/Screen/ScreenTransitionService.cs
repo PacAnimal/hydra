@@ -26,6 +26,10 @@ public class ScreenTransitionService(IPlatformInput platform, ILogger<ScreenTran
     // show cursor on next real-screen event (deferred to avoid flash at warp position)
     private bool _pendingCursorShow;
 
+    // locked to current screen — toggled by Ctrl+Alt+Super+L
+    private bool _lockedToScreen;
+    private const KeyModifiers LockHotkey = KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Super;
+
     public Task StartAsync(CancellationToken cancellationToken)
     {
         if (!platform.IsAccessibilityTrusted())
@@ -69,6 +73,14 @@ public class ScreenTransitionService(IPlatformInput platform, ILogger<ScreenTran
         var ch = KeyId.IsPrintable(keyEvent.KeyId) ? $" '{(char)keyEvent.KeyId}'" : "";
         log.LogDebug("Key: {Type} id=0x{KeyId:X4}{Char} button={KeyButton} mods={Modifiers}",
             keyEvent.Type, keyEvent.KeyId, ch, keyEvent.KeyButton, keyEvent.Modifiers);
+
+        if (keyEvent.Type == KeyEventType.KeyDown
+            && keyEvent.KeyId == 'l'
+            && (keyEvent.Modifiers & LockHotkey) == LockHotkey)
+        {
+            _lockedToScreen = !_lockedToScreen;
+            log.LogInformation("Screen lock: {State}", _lockedToScreen ? "locked" : "unlocked");
+        }
     }
 
     private void OnMouseMove(double x, double y)
@@ -88,6 +100,8 @@ public class ScreenTransitionService(IPlatformInput platform, ILogger<ScreenTran
             _pendingCursorShow = false;
             platform.ShowCursor();
         }
+
+        if (_lockedToScreen) return;
 
         var ix = (int)x;
         var iy = (int)y;
@@ -131,7 +145,7 @@ public class ScreenTransitionService(IPlatformInput platform, ILogger<ScreenTran
         // check if we've crossed back to the real screen
         var virtualScreen = _mouse.CurrentScreen!;
         var hit = _layout!.DetectEdgeExit(virtualScreen, (int)_mouse.X, (int)_mouse.Y);
-        if (hit is not null && !hit.Destination.IsVirtual)
+        if (hit is not null && !hit.Destination.IsVirtual && !_lockedToScreen)
         {
             // warp to entry while still hidden; show is deferred to next real-screen event to avoid flash
             _mouse.LeaveScreen();
