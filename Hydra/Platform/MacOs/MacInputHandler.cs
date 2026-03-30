@@ -15,8 +15,9 @@ public class MacInputHandler(ILogger<MacInputHandler> log) : IPlatformInput
     private nint _runLoop;
     private nint _tapPort;
     private nint _runLoopSource;
-    private Action<double, double, long, long>? _onMouseMove;
+    private Action<double, double>? _onMouseMove;
     private bool _cursorHidden;
+    public bool IsOnVirtualScreen { get; set; }
 
     public ScreenRect GetPrimaryScreenBounds()
     {
@@ -47,8 +48,9 @@ public class MacInputHandler(ILogger<MacInputHandler> log) : IPlatformInput
         NativeMethods.CFRelease(key);
 
         _ = NativeMethods.CGDisplayHideCursor(_display);
-        // disassociate so cursor stays pinned -- events still fire with raw device deltas at kCGHIDEventTap level
-        _ = NativeMethods.CGAssociateMouseAndMouseCursorPosition(false);
+        _ = NativeMethods.CGAssociateMouseAndMouseCursorPosition(true);
+        // near-zero suppression interval prevents CGWarpMouseCursorPosition from resetting acceleration
+        NativeMethods.CGSetLocalEventsSuppressionInterval(0.0001);
         _cursorHidden = true;
     }
 
@@ -57,10 +59,11 @@ public class MacInputHandler(ILogger<MacInputHandler> log) : IPlatformInput
         if (!_cursorHidden) return;
         _ = NativeMethods.CGAssociateMouseAndMouseCursorPosition(true);
         _ = NativeMethods.CGDisplayShowCursor(_display);
+        NativeMethods.CGSetLocalEventsSuppressionInterval(0.25);
         _cursorHidden = false;
     }
 
-    public void StartEventTap(Action<double, double, long, long> onMouseMove)
+    public void StartEventTap(Action<double, double> onMouseMove)
     {
         _onMouseMove = onMouseMove;
 
@@ -135,12 +138,12 @@ public class MacInputHandler(ILogger<MacInputHandler> log) : IPlatformInput
             or NativeMethods.KCGEventOtherMouseDragged)
         {
             var pos = NativeMethods.CGEventGetLocation(eventRef);
-            var dx = NativeMethods.CGEventGetIntegerValueField(eventRef, NativeMethods.KCGMouseEventDeltaX);
-            var dy = NativeMethods.CGEventGetIntegerValueField(eventRef, NativeMethods.KCGMouseEventDeltaY);
-            _onMouseMove?.Invoke(pos.X, pos.Y, dx, dy);
+            _onMouseMove?.Invoke(pos.X, pos.Y);
+            return eventRef;
         }
 
-        return eventRef;
+        // swallow all non-mouse events while on virtual screen (synergy: return nullptr when off-screen)
+        return IsOnVirtualScreen ? nint.Zero : eventRef;
     }
 
     // reads kCFRunLoopCommonModes symbol pointer from CoreFoundation

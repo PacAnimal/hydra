@@ -74,6 +74,11 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial int CGWarpMouseCursorPosition(CGPoint point);
 
+    // setting near-zero prevents CGWarpMouseCursorPosition from resetting the acceleration curve
+    [LibraryImport(CoreGraphics)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void CGSetLocalEventsSuppressionInterval(double seconds);
+
     // -- CoreGraphics: events --
 
     internal const int KCGMouseEventDeltaX = 4;

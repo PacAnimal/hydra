@@ -8,7 +8,8 @@ public interface IPlatformInput : IDisposable
     void WarpCursor(int x, int y);
     void HideCursor();
     void ShowCursor();
-    void StartEventTap(Action<double, double, long, long> onMouseMove);
+    void StartEventTap(Action<double, double> onMouseMove);
     void StopEventTap();
     bool IsAccessibilityTrusted();
+    bool IsOnVirtualScreen { get; set; }
 }
