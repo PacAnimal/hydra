@@ -13,6 +13,7 @@ public class XorgInputHandler : IPlatformInput
     private readonly nint _inputSink;
     private readonly int _xiOpcode;
     private readonly int _lockKeycode;
+    private readonly XorgKeyResolver _keyResolver = new();
 
     private Thread? _eventThread;
     private volatile bool _running;
@@ -155,7 +156,7 @@ public class XorgInputHandler : IPlatformInput
         // standard keyboard events from XGrabKeyboard or XGrabKey
         if (ev.Type is NativeMethods.KeyPress or NativeMethods.KeyRelease)
         {
-            var keyEvent = XorgKeyResolver.Resolve(ev.Type, ev.XKeyKeycode, ev.XKeyState, _display);
+            var keyEvent = _keyResolver.Resolve(ev.Type, ev.XKeyKeycode, ev.XKeyState, _display);
             if (keyEvent is not null)
                 _onKeyEvent?.Invoke(keyEvent);
             return;

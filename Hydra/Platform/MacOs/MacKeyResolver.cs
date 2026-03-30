@@ -10,6 +10,7 @@ internal sealed class MacKeyResolver
 {
     private uint _deadKeyState;
     private KeyModifiers _previousModifiers;
+    private readonly Dictionary<int, uint> _keyDownId = [];  // vkCode → last emitted KeyId
 
     // symbol pointer for kTISPropertyUnicodeKeyLayoutData (loaded once)
     private static readonly nint TisPropertyUnicodeKeyLayoutData = LoadTisPropertyKey();
@@ -48,11 +49,11 @@ internal sealed class MacKeyResolver
         var cgFlags = NativeMethods.CGEventGetFlags(eventRef);
         var mods = MapModifiers(cgFlags);
 
-        // key-up: no character resolution needed — just return the physical key
+        // key-up: replay the keyId that was emitted on key-down (modifier state may have changed)
         if (eventType == NativeMethods.KCGEventKeyUp)
         {
-            _deadKeyState = 0;
-            if (!MacSpecialKeyMap.TryGet(vkCode, out var upId)) upId = KeyId.None;
+            _keyDownId.Remove(vkCode, out var upId);
+            if (upId == KeyId.None) return null;
             return new KeyEvent(KeyEventType.KeyUp, upId, mods, (ushort)(vkCode + 1));
         }
 
@@ -60,11 +61,14 @@ internal sealed class MacKeyResolver
         if (MacSpecialKeyMap.TryGet(vkCode, out var specialId))
         {
             _deadKeyState = 0;
+            _keyDownId[vkCode] = specialId;
             return new KeyEvent(KeyEventType.KeyDown, specialId, mods, (ushort)(vkCode + 1));
         }
 
         // resolve character via UCKeyTranslate
-        return ResolveCharacter(vkCode, cgFlags, mods);
+        var ev = ResolveCharacter(vkCode, cgFlags, mods);
+        if (ev is not null) _keyDownId[vkCode] = ev.KeyId;
+        return ev;
     }
 
     private KeyEvent? ResolveCharacter(int vkCode, ulong cgFlags, KeyModifiers mods)
@@ -83,11 +87,13 @@ internal sealed class MacKeyResolver
             // is this a command (ctrl or cmd held)? used for AltGr detection
             bool isCommand = (cgFlags & (NativeMethods.KCGEventFlagMaskCommand | NativeMethods.KCGEventFlagMaskControl)) != 0;
 
-            // strip command, control, and option from modifiers before UCKeyTranslate
-            // (deskflow: always strips option to get the base glyph, then uses AltGr detection)
+            // include Shift, CapsLock, and Option (when not a Cmd/Ctrl shortcut) in UCKeyTranslate.
+            // Hydra resolves the final character server-side, so Option must be included to get
+            // e.g. Opt+Shift+4 → '€' rather than '$'. Cmd/Ctrl shortcuts still strip Option.
             uint ucMods = 0;
             if ((cgFlags & NativeMethods.KCGEventFlagMaskShift) != 0) ucMods |= 0x02;       // shiftKey >> 8
             if ((cgFlags & NativeMethods.KCGEventFlagMaskAlphaShift) != 0) ucMods |= 0x04;  // alphaLock >> 8
+            if (!isCommand && (cgFlags & NativeMethods.KCGEventFlagMaskAlternate) != 0) ucMods |= 0x08;  // optionKey >> 8
 
             uint keyId;
             unsafe

@@ -1,4 +1,3 @@
-using Cathedral.Extensions;
 using Cathedral.Logging;
 using Hydra.Config;
 using Hydra.Platform;
