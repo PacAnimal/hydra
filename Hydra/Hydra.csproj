@@ -8,6 +8,9 @@
         <Nullable>enable</Nullable>
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
         <ApplicationManifest>app.manifest</ApplicationManifest>
+        <PublishSingleFile>true</PublishSingleFile>
+        <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
+        <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     </PropertyGroup>
 
     <PropertyGroup>

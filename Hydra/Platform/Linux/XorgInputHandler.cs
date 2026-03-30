@@ -10,8 +10,9 @@ public class XorgInputHandler : IPlatformInput
     private readonly ILogger<XorgInputHandler> _log;
     private readonly nint _display;
     private readonly nint _rootWindow;
-    private readonly nint _blankCursor;
+    private readonly nint _inputSink;
     private readonly int _xiOpcode;
+    private readonly int _lockKeycode;
 
     private Thread? _eventThread;
     private volatile bool _running;
@@ -19,16 +20,20 @@ public class XorgInputHandler : IPlatformInput
     private Action<KeyEvent>? _onKeyEvent;
     private bool _cursorHidden;
     private bool _isOnVirtualScreen;
+    private bool _keyboardGrabbed;
 
-    // XI2 mask bytes for: XI_RawKeyPress(13), XI_RawKeyRelease(14), XI_RawMotion(17).
+    // XI2 mask bytes for XI_RawMotion(17) only.
     // XISetMask(mask, n) = mask[n>>3] |= 1 << (n&7)
     private static readonly byte[] Xi2Mask =
     [
         0,
-        (1 << (NativeMethods.XI_RawKeyPress & 7)) | (1 << (NativeMethods.XI_RawKeyRelease & 7)), // byte 1: bits 5+6
-        (1 << (NativeMethods.XI_RawMotion & 7)),                                                   // byte 2: bit 1
+        0,
+        (1 << (NativeMethods.XI_RawMotion & 7)),   // byte 2: bit 1
         0,
     ];
+
+    // Ctrl+Alt+Super+L — baseMods = ControlMask|Mod1Mask|Mod4Mask
+    private static readonly uint LockBaseMods = NativeMethods.ControlMask | NativeMethods.Mod1Mask | NativeMethods.Mod4Mask;
 
     public XorgInputHandler(ILogger<XorgInputHandler> log)
     {
@@ -42,8 +47,9 @@ public class XorgInputHandler : IPlatformInput
             throw new InvalidOperationException("XOpenDisplay failed — is DISPLAY set?");
 
         _rootWindow = NativeMethods.XDefaultRootWindow(_display);
-        _blankCursor = CreateBlankCursor();
+        _inputSink = CreateInputSink();
         _xiOpcode = DetectXI2();
+        _lockKeycode = (int)NativeMethods.XKeysymToKeycode(_display, 0x006C); // XK_l
     }
 
     public ScreenRect GetPrimaryScreenBounds()
@@ -67,7 +73,9 @@ public class XorgInputHandler : IPlatformInput
     public void HideCursor()
     {
         if (_cursorHidden) return;
-        _ = NativeMethods.XDefineCursor(_display, _rootWindow, _blankCursor);
+        _ = NativeMethods.XMapWindow(_display, _inputSink);
+        _ = NativeMethods.XRaiseWindow(_display, _inputSink);
+        NativeMethods.XFixesHideCursor(_display, _rootWindow);
         _ = NativeMethods.XFlush(_display);
         _cursorHidden = true;
     }
@@ -75,21 +83,18 @@ public class XorgInputHandler : IPlatformInput
     public void ShowCursor()
     {
         if (!_cursorHidden) return;
-        _ = NativeMethods.XUndefineCursor(_display, _rootWindow);
+        _ = NativeMethods.XUnmapWindow(_display, _inputSink);
+        NativeMethods.XFixesShowCursor(_display, _rootWindow);
         _ = NativeMethods.XFlush(_display);
         _cursorHidden = false;
     }
 
-    // when true, grab the keyboard so apps can't receive key events.
-    // XI2 raw events bypass grabs, so our listener still sees everything.
     public bool IsOnVirtualScreen
     {
         get => _isOnVirtualScreen;
         set
         {
-            if (_isOnVirtualScreen == value) return;
             _isOnVirtualScreen = value;
-
             if (value)
                 GrabKeyboard();
             else
@@ -107,6 +112,7 @@ public class XorgInputHandler : IPlatformInput
         _eventThread = new Thread(() =>
         {
             RegisterXI2Events();
+            GrabLockHotkey();
             ready.Set();
 
             while (_running)
@@ -136,45 +142,93 @@ public class XorgInputHandler : IPlatformInput
     public void Dispose()
     {
         StopEventTap();
+        UngrabKeyboard();
+        UngrabLockHotkey();
         if (_cursorHidden) ShowCursor();
-        if (_isOnVirtualScreen) UngrabKeyboard();
-        if (_blankCursor != nint.Zero) _ = NativeMethods.XFreeCursor(_display, _blankCursor);
+        if (_inputSink != nint.Zero) _ = NativeMethods.XDestroyWindow(_display, _inputSink);
         if (_display != nint.Zero) _ = NativeMethods.XCloseDisplay(_display);
         GC.SuppressFinalize(this);
     }
 
     private void HandleEvent(ref XEvent ev)
     {
+        // standard keyboard events from XGrabKeyboard or XGrabKey
+        if (ev.Type is NativeMethods.KeyPress or NativeMethods.KeyRelease)
+        {
+            var keyEvent = XorgKeyResolver.Resolve(ev.Type, ev.XKeyKeycode, ev.XKeyState, _display);
+            if (keyEvent is not null)
+                _onKeyEvent?.Invoke(keyEvent);
+            return;
+        }
+
+        // XI2 raw events (motion only)
         if (ev.Type != NativeMethods.GenericEvent) return;
         if (ev.XCookieExtension != _xiOpcode) return;
         if (!NativeMethods.XGetEventData(_display, ref ev)) return;
 
         try
         {
-            switch (ev.XCookieEvType)
+            if (ev.XCookieEvType == NativeMethods.XI_RawMotion)
             {
-                case NativeMethods.XI_RawMotion:
-                    // use XQueryPointer for absolute position (matches deskflow approach)
-                    _ = NativeMethods.XQueryPointer(_display, _rootWindow,
-                        out _, out _, out var rootX, out var rootY, out _, out _, out _);
-                    _onMouseMove?.Invoke(rootX, rootY);
-                    break;
-
-                case NativeMethods.XI_RawKeyPress:
-                case NativeMethods.XI_RawKeyRelease:
-                    // XIRawEvent.detail is the keycode; on 64-bit LP64 it sits at offset 56:
-                    // type(4)+pad(4)+serial(8)+send_event(4)+pad(4)+display*(8)+extension(4)+evtype(4)+time(8)+deviceid(4)+sourceid(4) = 56
-                    var keycode = (uint)Marshal.ReadInt32(ev.XCookieData, 56);
-                    var keyEvent = XorgKeyResolver.Resolve(ev.XCookieEvType, keycode, _display);
-                    if (keyEvent is not null)
-                        _onKeyEvent?.Invoke(keyEvent);
-                    break;
+                // use XQueryPointer for absolute position (matches deskflow approach)
+                _ = NativeMethods.XQueryPointer(_display, _rootWindow,
+                    out _, out _, out var rootX, out var rootY, out _, out _, out _);
+                _onMouseMove?.Invoke(rootX, rootY);
             }
         }
         finally
         {
             NativeMethods.XFreeEventData(_display, ref ev);
         }
+    }
+
+    private void GrabKeyboard()
+    {
+        if (_keyboardGrabbed) return;
+        _ = NativeMethods.XMapWindow(_display, _inputSink);
+        _ = NativeMethods.XRaiseWindow(_display, _inputSink);
+        var result = NativeMethods.XGrabKeyboard(_display, _inputSink, true,
+            NativeMethods.GrabModeAsync, NativeMethods.GrabModeAsync, NativeMethods.CurrentTime);
+        if (result == NativeMethods.GrabSuccess)
+            _keyboardGrabbed = true;
+        else
+            _log.LogWarning("XGrabKeyboard failed (result={Result})", result);
+        _ = NativeMethods.XFlush(_display);
+    }
+
+    private void UngrabKeyboard()
+    {
+        if (!_keyboardGrabbed) return;
+        _ = NativeMethods.XUngrabKeyboard(_display, NativeMethods.CurrentTime);
+        _ = NativeMethods.XFlush(_display);
+        _keyboardGrabbed = false;
+    }
+
+    // passive grab for Ctrl+Alt+Super+L — 4 variants for NumLock/CapsLock combinations
+    private void GrabLockHotkey()
+    {
+        if (_lockKeycode == 0) return;
+        foreach (var extra in LockModVariants())
+            _ = NativeMethods.XGrabKey(_display, _lockKeycode, LockBaseMods | extra, _rootWindow, true,
+                NativeMethods.GrabModeAsync, NativeMethods.GrabModeAsync);
+        _ = NativeMethods.XFlush(_display);
+    }
+
+    private void UngrabLockHotkey()
+    {
+        if (_lockKeycode == 0) return;
+        foreach (var extra in LockModVariants())
+            _ = NativeMethods.XUngrabKey(_display, _lockKeycode, LockBaseMods | extra, _rootWindow);
+        _ = NativeMethods.XFlush(_display);
+    }
+
+    // yields the 4 modifier variants needed for NumLock/CapsLock combinations
+    private static IEnumerable<uint> LockModVariants()
+    {
+        yield return 0;
+        yield return NativeMethods.LockMask;
+        yield return NativeMethods.Mod2Mask;
+        yield return NativeMethods.LockMask | NativeMethods.Mod2Mask;
     }
 
     private void RegisterXI2Events()
@@ -197,34 +251,20 @@ public class XorgInputHandler : IPlatformInput
         }
     }
 
-    private void GrabKeyboard()
+    // full-screen InputOnly OverrideRedirect window — absorbs pointer hover events while on virtual screen,
+    // and serves as the grab window for XGrabKeyboard
+    private nint CreateInputSink()
     {
-        var result = NativeMethods.XGrabKeyboard(
-            _display, _rootWindow, false,
-            NativeMethods.GrabModeAsync, NativeMethods.GrabModeAsync,
-            NativeMethods.CurrentTime);
-
-        if (result != NativeMethods.GrabSuccess)
-            _log.LogWarning("XGrabKeyboard failed (result={Result}) — keyboard events may reach apps", result);
-
-        _ = NativeMethods.XFlush(_display);
-    }
-
-    private void UngrabKeyboard()
-    {
-        _ = NativeMethods.XUngrabKeyboard(_display, NativeMethods.CurrentTime);
-        _ = NativeMethods.XFlush(_display);
-    }
-
-    // creates a 1x1 blank pixmap cursor used to hide the OS cursor
-    private unsafe nint CreateBlankCursor()
-    {
-        byte data = 0;
-        var pixmap = NativeMethods.XCreateBitmapFromData(_display, _rootWindow, &data, 1, 1);
-        var color = default(XColor);
-        var cursor = NativeMethods.XCreatePixmapCursor(_display, pixmap, pixmap, ref color, ref color, 0, 0);
-        _ = NativeMethods.XFreePixmap(_display, pixmap);
-        return cursor;
+        var screen = NativeMethods.XDefaultScreen(_display);
+        var w = (uint)NativeMethods.XDisplayWidth(_display, screen);
+        var h = (uint)NativeMethods.XDisplayHeight(_display, screen);
+        var attrs = new XSetWindowAttributes { OverrideRedirect = 1 };
+        return NativeMethods.XCreateWindow(
+            _display, _rootWindow,
+            0, 0, w, h,
+            0, 0, NativeMethods.InputOnly,
+            nint.Zero, NativeMethods.CWOverrideRedirect,
+            ref attrs);
     }
 
     private int DetectXI2()

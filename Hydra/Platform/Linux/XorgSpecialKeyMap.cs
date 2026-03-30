@@ -71,6 +71,7 @@ internal static class XorgSpecialKeyMap
         { XorgVirtualKey.F16, KeyId.F16 },
 
         // modifiers
+        { XorgVirtualKey.ISO_Level3_Shift, KeyId.AltGr },
         { XorgVirtualKey.Shift_L, KeyId.Shift_L },
         { XorgVirtualKey.Shift_R, KeyId.Shift_R },
         { XorgVirtualKey.Control_L, KeyId.Control_L },

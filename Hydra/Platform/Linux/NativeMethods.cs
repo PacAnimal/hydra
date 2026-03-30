@@ -7,33 +7,41 @@ internal static partial class NativeMethods
 {
     private const string X11 = "libX11.so.6";
     private const string Xi = "libXi.so.6";
+    private const string XFixes = "libXfixes.so.3";
 
     // -- event type constants --
 
     internal const int GenericEvent = 35;
+    internal const int KeyPress = 2;
+    internal const int KeyRelease = 3;
 
     // -- XI2 event type constants --
 
-    internal const int XI_RawKeyPress = 13;
-    internal const int XI_RawKeyRelease = 14;
     internal const int XI_RawMotion = 17;
 
     // -- XI2 device constants --
 
     internal const int XIAllMasterDevices = 1;
 
-    // -- grab mode constants --
+    // -- window class / attribute constants --
+
+    internal const int InputOnly = 2;
+    internal const ulong CWOverrideRedirect = 0x200;
+
+    // -- grab constants --
 
     internal const int GrabModeAsync = 1;
     internal const int GrabSuccess = 0;
 
-    // -- Xkb constants --
+    // -- modifier mask constants (X.h) --
 
-    internal const uint XkbUseCoreKbd = 0x0100;
-
-    // -- window class constant --
-
-    internal const int InputOnly = 2;
+    internal const uint ShiftMask = 0x01;
+    internal const uint LockMask = 0x02;
+    internal const uint ControlMask = 0x04;
+    internal const uint Mod1Mask = 0x08;   // Alt
+    internal const uint Mod2Mask = 0x10;   // NumLock
+    internal const uint Mod4Mask = 0x40;   // Super/Win
+    internal const uint Mod5Mask = 0x80;   // AltGr (ISO_Level3_Shift)
 
     // -- time --
 
@@ -122,45 +130,64 @@ internal static partial class NativeMethods
         int srcX, int srcY, uint srcWidth, uint srcHeight,
         int destX, int destY);
 
-    // -- cursor --
+    // -- window --
 
     [LibraryImport(X11)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    internal static unsafe partial nint XCreateBitmapFromData(nint display, nint drawable, byte* data, uint width, uint height);
+    internal static partial nint XCreateWindow(
+        nint display, nint parent,
+        int x, int y, uint width, uint height,
+        uint borderWidth, int depth, uint @class,
+        nint visual, ulong valueMask,
+        ref XSetWindowAttributes attributes);
 
     [LibraryImport(X11)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    internal static partial nint XCreatePixmapCursor(nint display, nint source, nint mask, ref XColor foreground, ref XColor background, uint x, uint y);
+    internal static partial int XDestroyWindow(nint display, nint window);
 
     [LibraryImport(X11)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    internal static partial int XDefineCursor(nint display, nint window, nint cursor);
+    internal static partial int XMapWindow(nint display, nint window);
 
     [LibraryImport(X11)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    internal static partial int XUndefineCursor(nint display, nint window);
+    internal static partial int XUnmapWindow(nint display, nint window);
 
     [LibraryImport(X11)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    internal static partial int XFreeCursor(nint display, nint cursor);
+    internal static partial int XRaiseWindow(nint display, nint window);
+
+    // -- keyboard grab --
 
     [LibraryImport(X11)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    internal static partial int XFreePixmap(nint display, nint pixmap);
-
-    // -- keyboard grabs --
-
-    [LibraryImport(X11)]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    internal static partial int XGrabKeyboard(
-        nint display, nint grabWindow,
+    internal static partial int XGrabKeyboard(nint display, nint grabWindow,
         [MarshalAs(UnmanagedType.Bool)] bool ownerEvents,
-        int pointerMode, int keyboardMode,
-        nuint time);
+        int pointerMode, int keyboardMode, nuint time);
 
     [LibraryImport(X11)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial int XUngrabKeyboard(nint display, nuint time);
+
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int XGrabKey(nint display, int keycode, uint modifiers, nint grabWindow,
+        [MarshalAs(UnmanagedType.Bool)] bool ownerEvents,
+        int pointerMode, int keyboardMode);
+
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int XUngrabKey(nint display, int keycode, uint modifiers, nint grabWindow);
+
+    // -- cursor (XFixes) --
+
+    [LibraryImport(XFixes)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void XFixesHideCursor(nint display, nint window);
+
+    [LibraryImport(XFixes)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void XFixesShowCursor(nint display, nint window);
 
     // -- Xkb keyboard --
 
@@ -170,7 +197,7 @@ internal static partial class NativeMethods
 
     [LibraryImport(X11)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    internal static partial int XkbGetState(nint display, uint deviceSpec, out XkbStateRec stateReturn);
+    internal static partial uint XKeysymToKeycode(nint display, ulong keysym);
 }
 
 // XEvent union — 192 bytes on 64-bit LP64 (24 longs).
@@ -179,6 +206,10 @@ internal static partial class NativeMethods
 internal struct XEvent
 {
     [FieldOffset(0)] internal int Type;
+
+    // XKeyEvent fields (for standard KeyPress/KeyRelease events)
+    [FieldOffset(80)] internal uint XKeyState;     // modifier mask
+    [FieldOffset(84)] internal uint XKeyKeycode;   // hardware keycode
 
     // XGenericEventCookie fields (for XI2 raw events)
     [FieldOffset(32)] internal int XCookieExtension;
@@ -195,23 +226,9 @@ internal struct XIEventMask
     internal nint Mask;   // byte* to the bitmask array
 }
 
-// XColor — used when creating blank cursor pixmap
-[StructLayout(LayoutKind.Sequential)]
-internal struct XColor
+// XSetWindowAttributes — 112 bytes on 64-bit LP64; we only set override_redirect at offset 88
+[StructLayout(LayoutKind.Explicit, Size = 112)]
+internal struct XSetWindowAttributes
 {
-    internal ulong Pixel;
-    internal ushort Red, Green, Blue;
-    internal byte Flags;
-    internal byte Pad;
-}
-
-// subset of XkbStateRec — only the fields we read
-[StructLayout(LayoutKind.Sequential)]
-internal struct XkbStateRec
-{
-    internal byte Group;
-    internal byte LockedGroup;
-    internal ushort BaseGroup;
-    internal ushort LatchedGroup;
-    internal byte Mods;   // effective modifier mask (ShiftMask, ControlMask, etc.)
+    [FieldOffset(88)] internal int OverrideRedirect;
 }

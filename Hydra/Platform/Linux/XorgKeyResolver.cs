@@ -2,18 +2,22 @@ using Hydra.Keyboard;
 
 namespace Hydra.Platform.Linux;
 
-// translates X11 XI2 raw key events into platform-independent KeyEvents.
+// translates X11 key events into platform-independent KeyEvents.
 // always resolves the base keysym (group 0, level 0) regardless of modifier state,
 // matching the Mac/Windows approach of using the key's identity rather than its output character.
 internal sealed class XorgKeyResolver
 {
-    internal static KeyEvent? Resolve(int evType, uint keycode, nint display)
+    internal static KeyEvent? Resolve(int evType, uint keycode, uint state, nint display)
     {
         var keysym = NativeMethods.XkbKeycodeToKeysym(display, keycode, 0, 0);
         if (keysym == 0) return null;
 
-        var mods = ReadModifiers(display);
-        var type = evType == NativeMethods.XI_RawKeyPress ? KeyEventType.KeyDown : KeyEventType.KeyUp;
+        // X11 state lags by one: the modifier being pressed/released is not yet reflected.
+        // adjust so modifiers always describe what's held after the event takes effect.
+        state = AdjustModifierState(evType, keysym, state);
+
+        var mods = MapModifiers(state);
+        var type = evType == NativeMethods.KeyPress ? KeyEventType.KeyDown : KeyEventType.KeyUp;
         var keyId = KeySymToKeyId(keysym);
         if (keyId == KeyId.None) return null;
 
@@ -40,19 +44,41 @@ internal sealed class XorgKeyResolver
         return KeyId.None;
     }
 
-    // X11 standard modifier mask bits (from X.h).
-    // Mod1 = Alt, Mod2 = NumLock, Mod4 = Super on standard desktop configurations.
-    private static KeyModifiers ReadModifiers(nint display)
+    // X11 state field reflects modifier state before the event takes effect.
+    // for modifier key presses: the bit isn't set yet — add it.
+    // for modifier key releases: the bit is still set — remove it.
+    private static uint AdjustModifierState(int evType, ulong keysym, uint state)
     {
-        NativeMethods.XkbGetState(display, NativeMethods.XkbUseCoreKbd, out var state);
-        var m = state.Mods;
+        var bit = ModifierBit(keysym);
+        if (bit == 0) return state;
+        return evType == NativeMethods.KeyPress ? state | bit : state & ~bit;
+    }
+
+    // X11 modifier mask bit for a modifier keysym, or 0 for non-modifier keys
+    private static uint ModifierBit(ulong keysym) => keysym switch
+    {
+        XorgVirtualKey.Shift_L or XorgVirtualKey.Shift_R => NativeMethods.ShiftMask,
+        XorgVirtualKey.Control_L or XorgVirtualKey.Control_R => NativeMethods.ControlMask,
+        XorgVirtualKey.Alt_L or XorgVirtualKey.Alt_R => NativeMethods.Mod1Mask,
+        XorgVirtualKey.Super_L or XorgVirtualKey.Super_R => NativeMethods.Mod4Mask,
+        XorgVirtualKey.CapsLock => NativeMethods.LockMask,
+        XorgVirtualKey.NumLock => NativeMethods.Mod2Mask,
+        XorgVirtualKey.ISO_Level3_Shift => NativeMethods.Mod5Mask,
+        _ => 0,
+    };
+
+    // X11 standard modifier mask bits (from X.h).
+    // Mod1 = Alt, Mod2 = NumLock, Mod4 = Super, Mod5 = AltGr on standard desktop configurations.
+    private static KeyModifiers MapModifiers(uint state)
+    {
         var mods = KeyModifiers.None;
-        if ((m & 0x01) != 0) mods |= KeyModifiers.Shift;      // ShiftMask
-        if ((m & 0x02) != 0) mods |= KeyModifiers.CapsLock;   // LockMask
-        if ((m & 0x04) != 0) mods |= KeyModifiers.Control;    // ControlMask
-        if ((m & 0x08) != 0) mods |= KeyModifiers.Alt;        // Mod1Mask (typically Alt)
-        if ((m & 0x10) != 0) mods |= KeyModifiers.NumLock;    // Mod2Mask (typically NumLock)
-        if ((m & 0x40) != 0) mods |= KeyModifiers.Super;      // Mod4Mask (typically Super/Win)
+        if ((state & NativeMethods.ShiftMask) != 0) mods |= KeyModifiers.Shift;
+        if ((state & NativeMethods.LockMask) != 0) mods |= KeyModifiers.CapsLock;
+        if ((state & NativeMethods.ControlMask) != 0) mods |= KeyModifiers.Control;
+        if ((state & NativeMethods.Mod1Mask) != 0) mods |= KeyModifiers.Alt;
+        if ((state & NativeMethods.Mod2Mask) != 0) mods |= KeyModifiers.NumLock;
+        if ((state & NativeMethods.Mod4Mask) != 0) mods |= KeyModifiers.Super;
+        if ((state & NativeMethods.Mod5Mask) != 0) mods |= KeyModifiers.AltGr;
         return mods;
     }
 }

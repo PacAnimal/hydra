@@ -1,5 +1,6 @@
 using Cathedral.Extensions;
 using Cathedral.Logging;
+using Hydra.Config;
 using Hydra.Platform;
 using Hydra.Platform.Linux;
 using Hydra.Platform.MacOs;
@@ -8,11 +9,12 @@ using Hydra.Screen;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 
+var config = HydraConfig.Load();
 var builder = Host.CreateDefaultBuilder(args).DisableEventLog();
 
 builder.ConfigureServices((_, services) =>
 {
-    services.AddSereneConsoleLogging();
+    services.AddSereneConsoleLogging(c => c.MinLogLevel = config.LogLevel);
 
     if (OperatingSystem.IsMacOS())
         services.AddSingleton<IPlatformInput, MacInputHandler>();

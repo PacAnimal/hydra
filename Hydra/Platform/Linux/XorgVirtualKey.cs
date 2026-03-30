@@ -67,6 +67,7 @@ internal static class XorgVirtualKey
     internal const ulong F16 = 0xFFCD;
 
     // modifiers
+    internal const ulong ISO_Level3_Shift = 0xFE03;  // AltGr on most layouts
     internal const ulong Shift_L = 0xFFE1;
     internal const ulong Shift_R = 0xFFE2;
     internal const ulong Control_L = 0xFFE3;
