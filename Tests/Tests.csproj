@@ -35,4 +35,8 @@
         <ProjectReference Include="../Hydra/Hydra.csproj" />
     </ItemGroup>
 
+    <ItemGroup>
+        <Content Include="../Hydra/hydra.conf" CopyToOutputDirectory="PreserveNewest" Link="hydra.conf" />
+    </ItemGroup>
+
 </Project>
