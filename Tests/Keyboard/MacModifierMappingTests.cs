@@ -1,0 +1,71 @@
+using Hydra.Keyboard;
+using Hydra.Platform.MacOs;
+
+namespace Tests.Keyboard;
+
+[TestFixture]
+public class MacModifierMappingTests
+{
+    // CGEventFlag mask values (matching NativeMethods constants)
+    private const ulong AlphaShift = 0x00010000;
+    private const ulong Shift = 0x00020000;
+    private const ulong Control = 0x00040000;
+    private const ulong Alternate = 0x00080000;
+    private const ulong Command = 0x00100000;
+    private const ulong NumericPad = 0x00200000;
+
+    [Test]
+    public void NoFlags_ReturnsNone() =>
+        Assert.That(MacKeyResolver.MapModifiers(0), Is.EqualTo(KeyModifiers.None));
+
+    [Test]
+    public void ShiftFlag_ReturnsShift() =>
+        Assert.That(MacKeyResolver.MapModifiers(Shift), Is.EqualTo(KeyModifiers.Shift));
+
+    [Test]
+    public void ControlFlag_ReturnsControl() =>
+        Assert.That(MacKeyResolver.MapModifiers(Control), Is.EqualTo(KeyModifiers.Control));
+
+    [Test]
+    public void AlternateFlag_ReturnsAlt() =>
+        Assert.That(MacKeyResolver.MapModifiers(Alternate), Is.EqualTo(KeyModifiers.Alt));
+
+    [Test]
+    public void CommandFlag_ReturnsSuperNotAlt()
+    {
+        // macOS Command maps to Super (cross-platform), not Meta
+        var mods = MacKeyResolver.MapModifiers(Command);
+        Assert.That(mods, Is.EqualTo(KeyModifiers.Super));
+        Assert.That(mods.HasFlag(KeyModifiers.Alt), Is.False);
+    }
+
+    [Test]
+    public void AlphaShiftFlag_ReturnsCapsLock() =>
+        Assert.That(MacKeyResolver.MapModifiers(AlphaShift), Is.EqualTo(KeyModifiers.CapsLock));
+
+    [Test]
+    public void NumericPadFlag_ReturnsNumLock() =>
+        Assert.That(MacKeyResolver.MapModifiers(NumericPad), Is.EqualTo(KeyModifiers.NumLock));
+
+    [Test]
+    public void MultipleFlags_ReturnsCombination()
+    {
+        var mods = MacKeyResolver.MapModifiers(Shift | Control);
+        Assert.That(mods, Is.EqualTo(KeyModifiers.Shift | KeyModifiers.Control));
+    }
+
+    [Test]
+    public void AllModifiers_MapsCorrectly()
+    {
+        var mods = MacKeyResolver.MapModifiers(AlphaShift | Shift | Control | Alternate | Command | NumericPad);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(mods.HasFlag(KeyModifiers.Shift), Is.True);
+            Assert.That(mods.HasFlag(KeyModifiers.Control), Is.True);
+            Assert.That(mods.HasFlag(KeyModifiers.Alt), Is.True);
+            Assert.That(mods.HasFlag(KeyModifiers.Super), Is.True);
+            Assert.That(mods.HasFlag(KeyModifiers.CapsLock), Is.True);
+            Assert.That(mods.HasFlag(KeyModifiers.NumLock), Is.True);
+        }
+    }
+}

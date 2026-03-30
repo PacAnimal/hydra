@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using Hydra.Keyboard;
 using Hydra.Screen;
 using Microsoft.Extensions.Logging;
 
@@ -8,6 +9,7 @@ public class MacInputHandler(ILogger<MacInputHandler> log) : IPlatformInput
 {
     private readonly uint _display = NativeMethods.CGMainDisplayID();
     private readonly nint _cfBooleanTrue = GetCFBooleanTrue();
+    private readonly MacKeyResolver _keyResolver = new();
 
     // stored as fields to prevent GC collection while the tap is active
     private CGEventTapCallBack? _tapCallback;
@@ -16,6 +18,7 @@ public class MacInputHandler(ILogger<MacInputHandler> log) : IPlatformInput
     private nint _tapPort;
     private nint _runLoopSource;
     private Action<double, double>? _onMouseMove;
+    private Action<KeyEvent>? _onKeyEvent;
     private bool _cursorHidden;
     public bool IsOnVirtualScreen { get; set; }
 
@@ -63,9 +66,10 @@ public class MacInputHandler(ILogger<MacInputHandler> log) : IPlatformInput
         _cursorHidden = false;
     }
 
-    public void StartEventTap(Action<double, double> onMouseMove)
+    public void StartEventTap(Action<double, double> onMouseMove, Action<KeyEvent> onKeyEvent)
     {
         _onMouseMove = onMouseMove;
+        _onKeyEvent = onKeyEvent;
 
         // callback must be stored as field -- will crash if collected
         _tapCallback = TapCallback;
@@ -142,7 +146,18 @@ public class MacInputHandler(ILogger<MacInputHandler> log) : IPlatformInput
             return eventRef;
         }
 
-        // swallow all non-mouse events while on virtual screen (synergy: return nullptr when off-screen)
+        if (type is NativeMethods.KCGEventKeyDown
+            or NativeMethods.KCGEventKeyUp
+            or NativeMethods.KCGEventFlagsChanged)
+        {
+            // always resolve to track modifier state even on the real screen
+            var keyEvent = _keyResolver.Resolve(type, eventRef);
+            if (keyEvent is not null)
+                _onKeyEvent?.Invoke(keyEvent);
+            return IsOnVirtualScreen ? nint.Zero : eventRef;
+        }
+
+        // swallow all other events while on virtual screen (synergy: return nullptr when off-screen)
         return IsOnVirtualScreen ? nint.Zero : eventRef;
     }
 

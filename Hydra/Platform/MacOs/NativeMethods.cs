@@ -79,6 +79,28 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void CGSetLocalEventsSuppressionInterval(double seconds);
 
+    // -- CoreGraphics: keyboard event types and fields --
+
+    internal const int KCGEventKeyDown = 10;
+    internal const int KCGEventKeyUp = 11;
+    internal const int KCGEventFlagsChanged = 12;
+
+    internal const int KCGKeyboardEventAutorepeat = 8;
+    internal const int KCGKeyboardEventKeycode = 9;
+
+    // CGEventFlags modifier mask bits
+    internal const ulong KCGEventFlagMaskAlphaShift = 0x00010000; // caps lock
+    internal const ulong KCGEventFlagMaskShift = 0x00020000;
+    internal const ulong KCGEventFlagMaskControl = 0x00040000;
+    internal const ulong KCGEventFlagMaskAlternate = 0x00080000; // option/alt
+    internal const ulong KCGEventFlagMaskCommand = 0x00100000;
+    internal const ulong KCGEventFlagMaskNumericPad = 0x00200000;
+    internal const ulong KCGEventFlagMaskSecondaryFn = 0x00800000;
+
+    [LibraryImport(CoreGraphics)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial ulong CGEventGetFlags(nint eventRef);
+
     // -- CoreGraphics: events --
 
     internal const int KCGMouseEventDeltaX = 4;
@@ -135,6 +157,51 @@ internal static partial class NativeMethods
     [LibraryImport(CoreFoundation)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial nint CFRunLoopCopyCurrentMode(nint rl);
+
+    // -- CoreFoundation: data --
+
+    [LibraryImport(CoreFoundation)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint CFDataGetBytePtr(nint theData);
+
+    // -- Carbon: text input sources --
+
+    private const string Carbon = "/System/Library/Frameworks/Carbon.framework/Carbon";
+
+    [LibraryImport(Carbon)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint TISCopyCurrentKeyboardLayoutInputSource();
+
+    [LibraryImport(Carbon)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint TISGetInputSourceProperty(nint inputSource, nint propertyKey);
+
+    // -- Carbon: UCKeyTranslate --
+
+    // kUCKeyAction values
+    internal const ushort KUCKeyActionDown = 0;
+    internal const ushort KUCKeyActionUp = 1;
+    internal const ushort KUCKeyActionAutoKey = 2;
+
+    [LibraryImport(Carbon)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static unsafe partial int UCKeyTranslate(
+        nint keyLayoutPtr,
+        ushort virtualKeyCode,
+        ushort keyAction,
+        uint modifierKeyState,
+        uint keyboardType,
+        uint keyTranslateOptions,
+        ref uint deadKeyState,
+        nuint maxStringLength,
+        out nuint actualStringLength,
+        ushort* unicodeString);
+
+    // -- Carbon: keyboard type --
+
+    [LibraryImport(Carbon)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial byte LMGetKbdType();
 }
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
