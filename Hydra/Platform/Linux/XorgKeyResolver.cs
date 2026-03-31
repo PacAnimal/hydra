@@ -9,6 +9,7 @@ namespace Hydra.Platform.Linux;
 internal sealed class XorgKeyResolver
 {
     private char _pendingDeadKey;
+    private char _pendingDeadSpacing;  // spacing form used when composition fails (e.g. dead_tilde + space → ~)
     private readonly Dictionary<uint, (char? ch, SpecialKey? key)> _keyDownId = [];
 
     internal KeyEvent? Resolve(int evType, uint keycode, uint state, nint display)
@@ -39,11 +40,12 @@ internal sealed class XorgKeyResolver
             return null;
         }
 
-        // dead key: store combining char and wait for the next character
+        // dead key: store combining char and its spacing form, then wait for the next character
         var combining = DeadKeyCombining(keysym);
         if (combining != '\0')
         {
             _pendingDeadKey = combining;
+            _pendingDeadSpacing = DeadKeySpacing(keysym);
             return null;
         }
 
@@ -52,6 +54,7 @@ internal sealed class XorgKeyResolver
         if (special.HasValue)
         {
             _pendingDeadKey = '\0';
+            _pendingDeadSpacing = '\0';
             _keyDownId[keycode] = (null, special.Value);
             return KeyEvent.Special(type, special.Value, mods);
         }
@@ -62,8 +65,19 @@ internal sealed class XorgKeyResolver
         {
             if (_pendingDeadKey != '\0')
             {
-                ch = KeyResolver.Compose(ch.Value, _pendingDeadKey);
+                var dead = _pendingDeadKey;
+                var spacing = _pendingDeadSpacing;
                 _pendingDeadKey = '\0';
+                _pendingDeadSpacing = '\0';
+
+                if (ch.Value == ' ' && spacing != '\0')
+                    ch = spacing;   // dead key + space → spacing form (e.g. dead_tilde + space → ~)
+                else
+                {
+                    var composed = KeyResolver.Compose(ch.Value, dead);
+                    if (composed != ch.Value) ch = composed;
+                    // else: incompatible pair — emit base char, dead key lost
+                }
             }
             _keyDownId[keycode] = (ch, null);
             return KeyEvent.Char(type, ch.Value, mods);
@@ -90,6 +104,26 @@ internal sealed class XorgKeyResolver
         0xFE5B => '\u0327',  // XK_dead_cedilla      → combining cedilla
         0xFE5C => '\u0328',  // XK_dead_ogonek       → combining ogonek
         0xFE5E => '\u0335',  // XK_dead_stroke       → combining short stroke
+        _ => '\0',
+    };
+
+    // maps a dead keysym to its standalone spacing character (emitted when dead key + space is pressed).
+    private static char DeadKeySpacing(ulong keysym) => keysym switch
+    {
+        0xFE50 => '\u0060',  // XK_dead_grave        → ` (grave accent)
+        0xFE51 => '\u00B4',  // XK_dead_acute        → ´ (acute accent)
+        0xFE52 => '\u005E',  // XK_dead_circumflex   → ^ (circumflex)
+        0xFE53 => '\u007E',  // XK_dead_tilde        → ~ (tilde)
+        0xFE54 => '\u00AF',  // XK_dead_macron       → ¯ (macron)
+        0xFE55 => '\u02D8',  // XK_dead_breve        → ˘ (breve)
+        0xFE56 => '\u02D9',  // XK_dead_abovedot     → ˙ (dot above)
+        0xFE57 => '\u00A8',  // XK_dead_diaeresis    → ¨ (diaeresis)
+        0xFE58 => '\u02DA',  // XK_dead_abovering    → ˚ (ring above)
+        0xFE59 => '\u02DD',  // XK_dead_doubleacute  → ˝ (double acute)
+        0xFE5A => '\u02C7',  // XK_dead_caron        → ˇ (caron)
+        0xFE5B => '\u00B8',  // XK_dead_cedilla      → ¸ (cedilla)
+        0xFE5C => '\u02DB',  // XK_dead_ogonek       → ˛ (ogonek)
+        0xFE5E => '\u002F',  // XK_dead_stroke       → / (solidus)
         _ => '\0',
     };
 

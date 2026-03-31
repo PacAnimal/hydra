@@ -18,6 +18,7 @@ internal sealed class WinKeyResolver
 
     // pending dead key combining character (e.g. '\u0301' for acute accent)
     private char _pendingDeadKey;
+    private char _pendingDeadSpacing;  // spacing form used when composition fails (e.g. dead_circumflex + space → ^)
 
     internal KeyEvent? Resolve(int wParam, KBDLLHOOKSTRUCT info)
     {
@@ -46,6 +47,7 @@ internal sealed class WinKeyResolver
             // suppress modifier auto-repeat — only emit on initial press, not while held
             if (specialKey.IsModifier() && _keyDownId.ContainsKey(vk)) return null;
             _pendingDeadKey = '\0';
+            _pendingDeadSpacing = '\0';
             _keyDownId[vk] = (null, specialKey);
             return KeyEvent.Special(KeyEventType.KeyDown, specialKey, mods);
         }
@@ -151,8 +153,13 @@ internal sealed class WinKeyResolver
                 {
                     char flush;
                     _ = NativeMethods.ToUnicodeEx(NativeMethods.VK_SPACE, 0, pState, &flush, 1, 0, hkl);
-                    var combining = DeadCharToCombining(buff[0]);
-                    if (combining != '\0') _pendingDeadKey = combining;
+                    var spacingForm = buff[0];
+                    var combining = DeadCharToCombining(spacingForm);
+                    if (combining != '\0')
+                    {
+                        _pendingDeadKey = combining;
+                        _pendingDeadSpacing = spacingForm;
+                    }
                     return null;
                 }
 
@@ -166,9 +173,22 @@ internal sealed class WinKeyResolver
         // apply pending dead key composition
         if (_pendingDeadKey != '\0')
         {
-            if (ch.HasValue)
-                ch = KeyResolver.Compose(ch.Value, _pendingDeadKey);
+            var dead = _pendingDeadKey;
+            var spacing = _pendingDeadSpacing;
             _pendingDeadKey = '\0';
+            _pendingDeadSpacing = '\0';
+
+            if (ch.HasValue)
+            {
+                if (ch.Value == ' ' && spacing != '\0')
+                    ch = spacing;   // dead key + space → spacing form (e.g. dead_circumflex + space → ^)
+                else
+                {
+                    var composed = KeyResolver.Compose(ch.Value, dead);
+                    if (composed != ch.Value) ch = composed;
+                    // else: incompatible pair — emit base char, dead key lost
+                }
+            }
         }
 
         if (ch.HasValue)
