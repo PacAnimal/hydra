@@ -17,7 +17,7 @@
     </PropertyGroup>
 
     <ItemGroup>
-        <PackageReference Include="Cathedral" Version="0.0.420" />
+        <PackageReference Include="Cathedral" Version="0.0.421" />
         <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.3.0" />
         <PackageReference Include="NUnit" Version="4.5.1" />
         <PackageReference Include="NUnit.Analyzers" Version="4.12.0">

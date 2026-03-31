@@ -38,6 +38,10 @@ internal static partial class NativeMethods
     internal const uint LLKHF_EXTENDED = 0x01;
     internal const uint LLKHF_INJECTED = 0x10;
 
+    // -- virtual key codes --
+
+    internal const uint VK_SPACE = 0x20;
+
     // -- hooks --
 
     [LibraryImport(User32, EntryPoint = "SetWindowsHookExW")]
@@ -84,6 +88,28 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     internal static partial int ShowCursor([MarshalAs(UnmanagedType.Bool)] bool bShow);
 
+    // OCR_NORMAL = the default arrow cursor id for SetSystemCursor
+    internal const uint OCR_NORMAL = 32512;
+
+    // SPI_SETCURSORS = restore all system cursors to their defaults
+    internal const uint SPI_SETCURSORS = 0x0057;
+
+    [LibraryImport(User32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static unsafe partial nint CreateCursor(
+        nint hInst, int xHotSpot, int yHotSpot, int nWidth, int nHeight,
+        byte* pvANDPlane, byte* pvXORPlane);
+
+    [LibraryImport(User32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool SetSystemCursor(nint hcur, uint id);
+
+    [LibraryImport(User32, EntryPoint = "SystemParametersInfoW")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool SystemParametersInfo(uint uiAction, uint uiParam, nint pvParam, uint fWinIni);
+
     // -- display --
 
     [LibraryImport(User32)]
@@ -117,6 +143,11 @@ internal static partial class NativeMethods
     [LibraryImport(User32)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     internal static partial uint GetWindowThreadProcessId(nint hWnd, out uint lpdwProcessId);
+
+    // low word: toggle state (bit 0); high word: pressed state (bit 15)
+    [LibraryImport(User32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial short GetKeyState(int nVirtKey);
 }
 
 [UnmanagedFunctionPointer(CallingConvention.StdCall)]

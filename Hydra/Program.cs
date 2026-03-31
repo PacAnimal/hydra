@@ -1,3 +1,4 @@
+using System.Text;
 using Cathedral.Logging;
 using Hydra.Config;
 using Hydra.Platform;
@@ -7,6 +8,9 @@ using Hydra.Platform.Windows;
 using Hydra.Screen;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+
+// ensure console can display non-ASCII characters (e.g. '€', 'ø') in debug logs
+Console.OutputEncoding = Encoding.UTF8;
 
 var config = HydraConfig.Load();
 var builder = Host.CreateDefaultBuilder(args).DisableEventLog();

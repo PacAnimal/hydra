@@ -1,10 +1,12 @@
+using System.Text;
 using Hydra.Keyboard;
 
 namespace Hydra.Platform.Windows;
 
 // translates low-level keyboard hook data into KeyEvents using ToUnicodeEx.
-// follows the same approach as MacKeyResolver: strip ctrl/win for base character,
-// detect AltGr separately (right alt held + printable glyph).
+// follows the same server-is-master approach as the other resolvers: resolve
+// the final character/key here using our own keyboard layout, so the receiver
+// only needs to inject what it's told.
 internal sealed class WinKeyResolver
 {
     // full key state array (256 bytes): high bit set = pressed, low bit = toggled (for lock keys)
@@ -15,6 +17,9 @@ internal sealed class WinKeyResolver
 
     private readonly Dictionary<int, (char? ch, SpecialKey? key)> _keyDownId = [];
 
+    // pending dead key combining character (e.g. '\u0301' for acute accent)
+    private char _pendingDeadKey;
+
     internal KeyEvent? Resolve(int wParam, KBDLLHOOKSTRUCT info)
     {
         var vk = (int)info.vkCode;
@@ -22,6 +27,10 @@ internal sealed class WinKeyResolver
 
         // update tracked key state before resolving
         UpdateKeyState(vk, info.flags, isKeyUp);
+
+        // suppress injected modifier events (e.g. synthetic LCtrl from AltGr — state is tracked
+        // but the event itself should not be forwarded to the receiver)
+        if ((info.flags & NativeMethods.LLKHF_INJECTED) != 0 && IsModifier(vk)) return null;
 
         var mods = GetModifiers();
 
@@ -35,11 +44,14 @@ internal sealed class WinKeyResolver
 
         if (WinSpecialKeyMap.TryGet(vk, out var specialKey))
         {
+            // suppress modifier auto-repeat — only emit on initial press, not while held
+            if (specialKey.IsModifier() && _keyDownId.ContainsKey(vk)) return null;
+            _pendingDeadKey = '\0';
             _keyDownId[vk] = (null, specialKey);
             return KeyEvent.Special(KeyEventType.KeyDown, specialKey, mods);
         }
 
-        return ResolveCharacter(vk, info.scanCode, mods);
+        return ResolveCharacter(vk, info.scanCode, info.flags, mods);
     }
 
     private void UpdateKeyState(int vk, uint flags, bool isKeyUp)
@@ -56,9 +68,9 @@ internal sealed class WinKeyResolver
         {
             _keyState[vk] = 0x80;
 
-            // toggle lock keys on keydown
+            // toggle lock keys on keydown; sync from OS to avoid startup state mismatch
             if (vk == WinVirtualKey.Capital || vk == WinVirtualKey.Numlock || vk == WinVirtualKey.Scroll)
-                _keyState[vk] ^= 0x01;
+                _keyState[vk] = (byte)(0x80 | (NativeMethods.GetKeyState(vk) & 0x01));
         }
 
         // sync generic modifier VKs (ToUnicodeEx checks VK_SHIFT, not VK_LSHIFT)
@@ -76,19 +88,25 @@ internal sealed class WinKeyResolver
         if ((_keyState[WinVirtualKey.LWin] | _keyState[WinVirtualKey.RWin]) != 0) mods |= KeyModifiers.Super;
         if ((_keyState[WinVirtualKey.Capital] & 0x01) != 0) mods |= KeyModifiers.CapsLock;
         if ((_keyState[WinVirtualKey.Numlock] & 0x01) != 0) mods |= KeyModifiers.NumLock;
-        // right alt acts as AltGr on many European layouts
-        if (_keyState[WinVirtualKey.RMenu] != 0) mods |= KeyModifiers.AltGr;
+        // AltGr = RMenu alone; the synthesized LCtrl is injected and stripped in UpdateKeyState
+        if ((_keyState[WinVirtualKey.RMenu] & 0x80) != 0) mods |= KeyModifiers.AltGr;
         return mods;
     }
 
-    private KeyEvent? ResolveCharacter(int vk, uint scanCode, KeyModifiers mods)
+    private KeyEvent? ResolveCharacter(int vk, uint scanCode, uint hookFlags, KeyModifiers mods)
     {
-        // build resolve state: strip ctrl and win unless AltGr (ctrl+rmenu) is active.
-        // this gives the base character for Ctrl+X combos (e.g. Ctrl+A → 'a' not 0x01).
         Array.Copy(_keyState, _resolveState, 256);
 
-        bool altGrActive = _keyState[WinVirtualKey.RMenu] != 0;
-        if (!altGrActive)
+        // AltGr: pressing the AltGr key synthesizes an injected LCtrl, which UpdateKeyState strips
+        // to avoid phantom Ctrl in modifier reporting. Restore it here so ToUnicodeEx sees the
+        // full Ctrl+RMenu state it needs to resolve the AltGr character layer.
+        bool altGrActive = (_resolveState[WinVirtualKey.RMenu] & 0x80) != 0;
+        if (altGrActive)
+        {
+            _resolveState[WinVirtualKey.LControl] = 0x80;
+            _resolveState[WinVirtualKey.Control] = 0x80;
+        }
+        else
         {
             // strip ctrl so ToUnicodeEx produces letters, not control codes
             _resolveState[WinVirtualKey.LControl] = 0;
@@ -101,23 +119,58 @@ internal sealed class WinKeyResolver
         // get keyboard layout of the foreground window's thread for correct character mapping
         var hkl = GetForegroundKeyboardLayout();
 
-        char? ch;
-        SpecialKey? specialKey;
+        // pass extended key flag through to ToUnicodeEx (same approach as input-leap MSWindowsKeyState)
+        uint uFlags = hookFlags & NativeMethods.LLKHF_EXTENDED;
+
+        int count;
+        char rawChar;
         unsafe
         {
             char* buff = stackalloc char[4];
             fixed (byte* pState = _resolveState)
             {
-                var count = NativeMethods.ToUnicodeEx((uint)vk, scanCode, pState, buff, 4, 0, hkl);
+                count = NativeMethods.ToUnicodeEx((uint)vk, scanCode, pState, buff, 4, uFlags, hkl);
 
-                // count < 0: dead key consumed (no output yet); count == 0: no character
-                if (count <= 0) return null;
+                // altGr fallback: if Ctrl+Alt didn't produce anything, retry without them
+                if (count == 0 && altGrActive)
+                {
+                    _resolveState[WinVirtualKey.LControl] = 0;
+                    _resolveState[WinVirtualKey.RControl] = 0;
+                    _resolveState[WinVirtualKey.Control] = 0;
+                    _resolveState[WinVirtualKey.LMenu] = 0;
+                    _resolveState[WinVirtualKey.RMenu] = 0;
+                    _resolveState[WinVirtualKey.Menu] = 0;
+                    count = NativeMethods.ToUnicodeEx((uint)vk, scanCode, pState, buff, 4, uFlags, hkl);
+                }
 
-                (ch, specialKey) = ClassifyChar(buff[0]);
+                if (count == 0) return null;
+
+                // count == -1: dead key — buff[0] has the standalone dead character.
+                // flush the system dead key state with a space call so subsequent ToUnicodeEx
+                // calls start from a clean state (we track dead keys ourselves).
+                if (count < 0)
+                {
+                    char flush;
+                    _ = NativeMethods.ToUnicodeEx(NativeMethods.VK_SPACE, 0, pState, &flush, 1, 0, hkl);
+                    var combining = DeadCharToCombining(buff[0]);
+                    if (combining != '\0') _pendingDeadKey = combining;
+                    return null;
+                }
+
+                rawChar = buff[0];
             }
         }
 
-        if (!ch.HasValue && !specialKey.HasValue) return null;
+        var (ch, key) = ClassifyChar(rawChar);
+        if (!ch.HasValue && !key.HasValue) return null;
+
+        // apply pending dead key composition
+        if (_pendingDeadKey != '\0')
+        {
+            if (ch.HasValue)
+                ch = Compose(ch.Value);
+            _pendingDeadKey = '\0';
+        }
 
         if (ch.HasValue)
         {
@@ -125,9 +178,37 @@ internal sealed class WinKeyResolver
             return KeyEvent.Char(KeyEventType.KeyDown, ch.Value, mods);
         }
 
-        _keyDownId[vk] = (null, specialKey);
-        return KeyEvent.Special(KeyEventType.KeyDown, specialKey!.Value, mods);
+        _keyDownId[vk] = (null, key);
+        return KeyEvent.Special(KeyEventType.KeyDown, key!.Value, mods);
     }
+
+    // compose a pending dead key combining character with a base character via NFC normalization.
+    // if composition produces no single codepoint (incompatible pair), returns the base unchanged.
+    private char Compose(char baseChar)
+    {
+        var composed = new string([baseChar, _pendingDeadKey]).Normalize(NormalizationForm.FormC);
+        return composed.Length == 1 ? composed[0] : baseChar;
+    }
+
+    // maps the standalone dead key character from ToUnicodeEx buff[0] to its Unicode combining equivalent.
+    // standalone dead chars (spacing accents) must be converted to combining chars for NFC composition.
+    private static char DeadCharToCombining(char dead) => dead switch
+    {
+        '`' => '\u0300',  // grave accent
+        '\u00B4' => '\u0301',  // acute accent (U+00B4)
+        '^' => '\u0302',  // circumflex
+        '~' => '\u0303',  // tilde
+        '\u00AF' => '\u0304',  // macron (U+00AF overline/macron)
+        '\u02D8' => '\u0306',  // breve
+        '\u02D9' => '\u0307',  // dot above
+        '\u00A8' => '\u0308',  // diaeresis / umlaut (U+00A8)
+        '\u02DA' => '\u030A',  // ring above
+        '\u02DD' => '\u030B',  // double acute
+        '\u02C7' => '\u030C',  // caron
+        '\u00B8' => '\u0327',  // cedilla (U+00B8)
+        '\u02DB' => '\u0328',  // ogonek
+        _ => '\0',
+    };
 
     // gets the keyboard layout associated with the foreground window's thread.
     // falls back to layout 0 (system default) if there is no foreground window.
