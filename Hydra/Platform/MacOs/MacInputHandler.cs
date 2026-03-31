@@ -11,6 +11,7 @@ public class MacInputHandler(ILogger<MacInputHandler> log) : IPlatformInput
     private readonly uint _display = NativeMethods.CGMainDisplayID();
     private readonly nint _cfBooleanTrue = GetCFBooleanTrue();
     private readonly MacKeyResolver _keyResolver = new();
+    private readonly MacShieldProcess _shield = new();
 
     // stored as fields to prevent GC collection while the tap is active
     private CGEventTapCallBack? _tapCallback;
@@ -52,6 +53,7 @@ public class MacInputHandler(ILogger<MacInputHandler> log) : IPlatformInput
     public void HideCursor()
     {
         if (_cursorHidden) return;
+        _shield.Show();
 
         // allow cursor manipulation from background (private CGS API -- matches synergy)
         var cid = NativeMethods.CGSMainConnectionID();
@@ -69,6 +71,7 @@ public class MacInputHandler(ILogger<MacInputHandler> log) : IPlatformInput
     public void ShowCursor()
     {
         if (!_cursorHidden) return;
+        _shield.Hide();
         _ = NativeMethods.CGDisplayShowCursor(_display);
         _ = NativeMethods.CGAssociateMouseAndMouseCursorPosition(true);
         NativeMethods.CGSetLocalEventsSuppressionInterval(0.0);
@@ -81,6 +84,7 @@ public class MacInputHandler(ILogger<MacInputHandler> log) : IPlatformInput
         Action<MouseButtonEvent> onMouseButton,
         Action<MouseScrollEvent> onMouseScroll)
     {
+        _shield.Start();
         _onMouseMove = onMouseMove;
         _onKeyEvent = onKeyEvent;
         _onMouseButton = onMouseButton;
@@ -139,6 +143,7 @@ public class MacInputHandler(ILogger<MacInputHandler> log) : IPlatformInput
     {
         StopEventTap();
         if (_cursorHidden) ShowCursor();
+        _shield.Dispose();
         GC.SuppressFinalize(this);
     }
 

@@ -134,3 +134,6 @@ _NCrunch*
 
 # Test output logs
 /test-output/
+
+# macOS shield helper — compiled from Resources/MacShield/main.swift
+Hydra/Resources/MacShield/hydra-shield
