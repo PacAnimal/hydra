@@ -18,6 +18,7 @@ var builder = Host.CreateDefaultBuilder(args).DisableEventLog();
 builder.ConfigureServices((_, services) =>
 {
     services.AddSereneConsoleLogging(c => c.MinLogLevel = config.LogLevel);
+    services.AddSingleton(config);
 
     if (OperatingSystem.IsMacOS())
         services.AddSingleton<IPlatformInput, MacInputHandler>();

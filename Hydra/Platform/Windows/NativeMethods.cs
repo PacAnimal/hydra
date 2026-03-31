@@ -84,10 +84,6 @@ internal static partial class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool SetCursorPos(int x, int y);
 
-    [LibraryImport(User32)]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
-    internal static partial int ShowCursor([MarshalAs(UnmanagedType.Bool)] bool bShow);
-
     // OCR_NORMAL = the default arrow cursor id for SetSystemCursor
     internal const uint OCR_NORMAL = 32512;
 

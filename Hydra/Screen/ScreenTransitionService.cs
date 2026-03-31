@@ -6,7 +6,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Hydra.Screen;
 
-public class ScreenTransitionService(IPlatformInput platform, ILogger<ScreenTransitionService> log) : IHostedService
+public class ScreenTransitionService(IPlatformInput platform, HydraConfig config, ILogger<ScreenTransitionService> log) : IHostedService
 {
     private ScreenLayout? _layout;
     private ScreenRect? _realScreen;
@@ -39,7 +39,6 @@ public class ScreenTransitionService(IPlatformInput platform, ILogger<ScreenTran
         }
 
         var bounds = platform.GetPrimaryScreenBounds();
-        var config = HydraConfig.Load();
         var screens = ResolveScreens(config, bounds);
 
         _realScreen = screens.First(s => !s.IsVirtual);

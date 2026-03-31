@@ -1,5 +1,4 @@
 using Hydra.Keyboard;
-using Hydra.Platform.MacOs;
 
 namespace Tests.Keyboard;
 
@@ -14,7 +13,7 @@ public class ClassifyCharTests
     [TestCase('€')]
     public void PrintableChar_ReturnsCharacter(char c)
     {
-        var (ch, key) = MacKeyResolver.ClassifyChar(c);
+        var (ch, key) = KeyResolver.ClassifyChar(c);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(ch, Is.EqualTo(c));
@@ -30,7 +29,7 @@ public class ClassifyCharTests
     [TestCase((char)3, SpecialKey.KP_Enter)]
     public void ControlChar_ReturnsMappedSpecialKey(char c, SpecialKey expected)
     {
-        var (ch, key) = MacKeyResolver.ClassifyChar(c);
+        var (ch, key) = KeyResolver.ClassifyChar(c);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(ch, Is.Null);
@@ -45,7 +44,7 @@ public class ClassifyCharTests
     [TestCase((char)31)]
     public void UnmappedControlChar_ReturnsBothNull(char c)
     {
-        var (ch, key) = MacKeyResolver.ClassifyChar(c);
+        var (ch, key) = KeyResolver.ClassifyChar(c);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(ch, Is.Null);

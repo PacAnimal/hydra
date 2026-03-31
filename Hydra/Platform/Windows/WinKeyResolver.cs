@@ -1,4 +1,3 @@
-using System.Text;
 using Hydra.Keyboard;
 
 namespace Hydra.Platform.Windows;
@@ -161,14 +160,14 @@ internal sealed class WinKeyResolver
             }
         }
 
-        var (ch, key) = ClassifyChar(rawChar);
+        var (ch, key) = KeyResolver.ClassifyChar(rawChar);
         if (!ch.HasValue && !key.HasValue) return null;
 
         // apply pending dead key composition
         if (_pendingDeadKey != '\0')
         {
             if (ch.HasValue)
-                ch = Compose(ch.Value);
+                ch = KeyResolver.Compose(ch.Value, _pendingDeadKey);
             _pendingDeadKey = '\0';
         }
 
@@ -180,14 +179,6 @@ internal sealed class WinKeyResolver
 
         _keyDownId[vk] = (null, key);
         return KeyEvent.Special(KeyEventType.KeyDown, key!.Value, mods);
-    }
-
-    // compose a pending dead key combining character with a base character via NFC normalization.
-    // if composition produces no single codepoint (incompatible pair), returns the base unchanged.
-    private char Compose(char baseChar)
-    {
-        var composed = new string([baseChar, _pendingDeadKey]).Normalize(NormalizationForm.FormC);
-        return composed.Length == 1 ? composed[0] : baseChar;
     }
 
     // maps the standalone dead key character from ToUnicodeEx buff[0] to its Unicode combining equivalent.
@@ -219,20 +210,6 @@ internal sealed class WinKeyResolver
         var tid = NativeMethods.GetWindowThreadProcessId(hwnd, out _);
         return NativeMethods.GetKeyboardLayout(tid);
     }
-
-    // classifies a unicode char from ToUnicodeEx output as a printable char or SpecialKey.
-    // control characters are mapped to their SpecialKey constants; other printable chars pass through.
-    internal static (char? ch, SpecialKey? key) ClassifyChar(char c) => c switch
-    {
-        (char)3 => (null, SpecialKey.KP_Enter),
-        (char)8 => (null, SpecialKey.BackSpace),
-        (char)9 => (null, SpecialKey.Tab),
-        (char)13 => (null, SpecialKey.Return),
-        (char)27 => (null, SpecialKey.Escape),
-        (char)127 => (null, SpecialKey.Delete),
-        _ when c < 32 => (null, null),
-        _ => (c, null),
-    };
 
     private static bool IsModifier(int vk) =>
         vk is WinVirtualKey.LShift or WinVirtualKey.RShift

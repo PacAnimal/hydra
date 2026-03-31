@@ -4,5 +4,4 @@ public enum KeyEventType
 {
     KeyDown,
     KeyUp,
-    KeyRepeat,
 }

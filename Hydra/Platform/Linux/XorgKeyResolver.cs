@@ -1,4 +1,3 @@
-using System.Text;
 using Hydra.Keyboard;
 
 namespace Hydra.Platform.Linux;
@@ -63,7 +62,7 @@ internal sealed class XorgKeyResolver
         {
             if (_pendingDeadKey != '\0')
             {
-                ch = Compose(ch.Value);
+                ch = KeyResolver.Compose(ch.Value, _pendingDeadKey);
                 _pendingDeadKey = '\0';
             }
             _keyDownId[keycode] = (ch, null);
@@ -71,14 +70,6 @@ internal sealed class XorgKeyResolver
         }
 
         return null;
-    }
-
-    // compose a pending dead key combining character with a base character via NFC normalization.
-    // if composition produces no single codepoint (incompatible pair), returns the base unchanged.
-    private char Compose(char baseChar)
-    {
-        var composed = new string([baseChar, _pendingDeadKey]).Normalize(NormalizationForm.FormC);
-        return composed.Length == 1 ? composed[0] : baseChar;
     }
 
     // returns the Unicode combining character for a dead keysym, or '\0' if not a dead key.

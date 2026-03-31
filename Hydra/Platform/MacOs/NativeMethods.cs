@@ -103,9 +103,6 @@ internal static partial class NativeMethods
 
     // -- CoreGraphics: events --
 
-    internal const int KCGMouseEventDeltaX = 4;
-    internal const int KCGMouseEventDeltaY = 5;
-
     [LibraryImport(CoreGraphics)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial long CGEventGetIntegerValueField(nint eventRef, int field);
@@ -152,12 +149,6 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void CFRelease(nint cf);
 
-    // kCFRunLoopCommonModes string constant – queried via CFStringCreateWithCString is complex;
-    // instead, read the symbol pointer directly from the framework
-    [LibraryImport(CoreFoundation)]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    internal static partial nint CFRunLoopCopyCurrentMode(nint rl);
-
     // -- CoreFoundation: data --
 
     [LibraryImport(CoreFoundation)]
@@ -180,8 +171,6 @@ internal static partial class NativeMethods
 
     // kUCKeyAction values
     internal const ushort KUCKeyActionDown = 0;
-    internal const ushort KUCKeyActionUp = 1;
-    internal const ushort KUCKeyActionAutoKey = 2;
 
     [LibraryImport(Carbon)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]

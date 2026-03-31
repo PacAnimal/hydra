@@ -1,3 +1,4 @@
+using Hydra.Config;
 using Hydra.Keyboard;
 using Hydra.Platform;
 using Hydra.Screen;
@@ -11,11 +12,16 @@ public class ScreenLockTests
     private FakePlatform _platform = null!;
     private ScreenTransitionService _service = null!;
 
+    private static readonly HydraConfig TestConfig = new()
+    {
+        Screens = [new ScreenRect("main", 0, 0, 0, 0, false), new ScreenRect("right", 0, 0, 0, 0, true)]
+    };
+
     [SetUp]
     public async Task SetUp()
     {
         _platform = new FakePlatform();
-        _service = new ScreenTransitionService(_platform, NullLogger<ScreenTransitionService>.Instance);
+        _service = new ScreenTransitionService(_platform, TestConfig, NullLogger<ScreenTransitionService>.Instance);
         await _service.StartAsync(CancellationToken.None);
     }
 
@@ -44,7 +50,7 @@ public class ScreenLockTests
 
         // restart fresh
         _platform.Reset();
-        _service = new ScreenTransitionService(_platform, NullLogger<ScreenTransitionService>.Instance);
+        _service = new ScreenTransitionService(_platform, TestConfig, NullLogger<ScreenTransitionService>.Instance);
         _service.StartAsync(CancellationToken.None).Wait();
 
         // lock

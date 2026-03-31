@@ -71,6 +71,4 @@ internal static class WinSpecialKeyMap
     };
 
     internal static bool TryGet(int vkCode, out SpecialKey key) => Map.TryGetValue(vkCode, out key);
-
-    internal static IReadOnlyDictionary<int, SpecialKey> All => Map;
 }

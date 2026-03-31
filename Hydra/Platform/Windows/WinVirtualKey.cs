@@ -79,6 +79,4 @@ internal static class WinVirtualKey
     internal const int Control = 0x11;
     internal const int Menu = 0x12;        // alt
 
-    // numpad enter: there is no distinct VK for numpad enter — VK_RETURN with extended flag
-    internal const int Separator = 0x6C;   // numpad separator (not numpad enter on most layouts)
 }
