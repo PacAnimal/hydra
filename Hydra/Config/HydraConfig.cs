@@ -9,6 +9,8 @@ public class HydraConfig
 {
     public List<ScreenRect> Screens { get; set; } = [];
     public LogLevel LogLevel { get; set; } = LogLevel.Information;
+    public string? NetworkConfig { get; set; }
+    public string? HostName { get; set; }
 
     public static HydraConfig Load(string path = "hydra.conf")
     {

@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Styx — Network Config</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            background: #0d0d0d;
+            color: #e0e0e0;
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .card {
+            background: #1a1a1a;
+            border: 1px solid #2a2a2a;
+            border-radius: 10px;
+            padding: 36px 40px;
+            width: 100%;
+            max-width: 520px;
+        }
+
+        h1 {
+            font-size: 1.3rem;
+            font-weight: 600;
+            color: #fff;
+            margin-bottom: 6px;
+        }
+
+        .subtitle {
+            font-size: 0.85rem;
+            color: #666;
+            margin-bottom: 28px;
+        }
+
+        label {
+            display: block;
+            font-size: 0.8rem;
+            color: #888;
+            margin-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+        }
+
+        input[type=password], textarea {
+            width: 100%;
+            background: #111;
+            border: 1px solid #2a2a2a;
+            border-radius: 6px;
+            color: #e0e0e0;
+            font-family: inherit;
+            font-size: 0.95rem;
+            padding: 10px 12px;
+            outline: none;
+            transition: border-color 0.15s;
+        }
+
+        input[type=password]:focus, textarea:focus {
+            border-color: #444;
+        }
+
+        textarea {
+            font-family: 'Cascadia Code', 'Fira Code', monospace;
+            font-size: 0.8rem;
+            resize: none;
+            height: 90px;
+            word-break: break-all;
+            margin-top: 20px;
+        }
+
+        button {
+            margin-top: 16px;
+            width: 100%;
+            padding: 11px;
+            background: #2563eb;
+            color: #fff;
+            border: none;
+            border-radius: 6px;
+            font-size: 0.95rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+
+        button:hover { background: #1d4ed8; }
+        button:disabled { background: #1e3a6e; cursor: default; }
+
+        .copy-btn {
+            margin-top: 8px;
+            background: #1a2a1a;
+            border: 1px solid #2a3a2a;
+            color: #5a9a5a;
+        }
+
+        .copy-btn:hover { background: #1e341e; }
+
+        .error {
+            margin-top: 14px;
+            font-size: 0.85rem;
+            color: #e05050;
+        }
+
+        .output { display: none; }
+        .output.visible { display: block; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>Styx</h1>
+        <p class="subtitle">Enter the relay password to generate a network config string.</p>
+
+        <label for="password">Relay Password</label>
+        <input type="password" id="password" placeholder="••••••••" autocomplete="current-password">
+
+        <button id="generate-btn" onclick="generate()">Generate Network Config</button>
+
+        <div class="error" id="error"></div>
+
+        <div class="output" id="output">
+            <textarea id="config-output" readonly></textarea>
+            <button class="copy-btn" onclick="copyConfig()">Copy to Clipboard</button>
+        </div>
+    </div>
+
+    <script>
+        function randomKey(length) {
+            const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+            const bytes = new Uint8Array(length);
+            crypto.getRandomValues(bytes);
+            return Array.from(bytes, b => chars[b % chars.length]).join('');
+        }
+
+        async function generate() {
+            const password = document.getElementById('password').value;
+            const errorEl = document.getElementById('error');
+            const outputEl = document.getElementById('output');
+            const btn = document.getElementById('generate-btn');
+
+            errorEl.textContent = '';
+            outputEl.classList.remove('visible');
+
+            if (!password) {
+                errorEl.textContent = 'Password is required.';
+                return;
+            }
+
+            btn.disabled = true;
+            btn.textContent = 'Generating...';
+
+            try {
+                const resp = await fetch('/api/network-config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ password })
+                });
+
+                if (!resp.ok) {
+                    const text = await resp.text();
+                    errorEl.textContent = resp.status === 401 ? 'Wrong password.' : `Error: ${text}`;
+                    return;
+                }
+
+                const data = await resp.json();
+                const encryptionKey = randomKey(128);
+                const configObj = {
+                    StyxServer: window.location.origin,
+                    EncryptionKey: encryptionKey,
+                    Authorization: data.authorization
+                };
+                const configString = btoa(JSON.stringify(configObj));
+
+                document.getElementById('config-output').value = configString;
+                outputEl.classList.add('visible');
+            } catch (err) {
+                errorEl.textContent = 'Request failed. Is the server running?';
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Generate Network Config';
+            }
+        }
+
+        async function copyConfig() {
+            const text = document.getElementById('config-output').value;
+            await navigator.clipboard.writeText(text);
+        }
+
+        document.getElementById('password').addEventListener('keydown', e => {
+            if (e.key === 'Enter') generate();
+        });
+    </script>
+</body>
+</html>

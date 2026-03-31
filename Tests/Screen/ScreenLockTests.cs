@@ -2,6 +2,7 @@ using Hydra.Config;
 using Hydra.Keyboard;
 using Hydra.Mouse;
 using Hydra.Platform;
+using Hydra.Relay;
 using Hydra.Screen;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -22,7 +23,7 @@ public class ScreenLockTests
     public async Task SetUp()
     {
         _platform = new FakePlatform();
-        _service = new ScreenTransitionService(_platform, TestConfig, NullLogger<ScreenTransitionService>.Instance);
+        _service = new ScreenTransitionService(_platform, TestConfig, new NullRelaySender(), NullLogger<ScreenTransitionService>.Instance);
         await _service.StartAsync(CancellationToken.None);
     }
 
@@ -51,7 +52,7 @@ public class ScreenLockTests
 
         // restart fresh
         _platform.Reset();
-        _service = new ScreenTransitionService(_platform, TestConfig, NullLogger<ScreenTransitionService>.Instance);
+        _service = new ScreenTransitionService(_platform, TestConfig, new NullRelaySender(), NullLogger<ScreenTransitionService>.Instance);
         _service.StartAsync(CancellationToken.None).Wait();
 
         // lock

@@ -1,10 +1,12 @@
 using System.Text;
+using Cathedral.Extensions;
 using Cathedral.Logging;
 using Hydra.Config;
 using Hydra.Platform;
 using Hydra.Platform.Linux;
 using Hydra.Platform.MacOs;
 using Hydra.Platform.Windows;
+using Hydra.Relay;
 using Hydra.Screen;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -28,6 +30,11 @@ builder.ConfigureServices((_, services) =>
         services.AddSingleton<IPlatformInput, XorgInputHandler>();
     else
         throw new PlatformNotSupportedException($"Unsupported OS: {Environment.OSVersion}");
+
+    if (config.NetworkConfig != null)
+        services.AddHostedService<IRelaySender, RelayConnection>();
+    else
+        services.AddSingleton<IRelaySender, NullRelaySender>();
 
     services.AddHostedService<ScreenTransitionService>();
 });

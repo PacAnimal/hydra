@@ -2,12 +2,13 @@ using Hydra.Config;
 using Hydra.Keyboard;
 using Hydra.Mouse;
 using Hydra.Platform;
+using Hydra.Relay;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace Hydra.Screen;
 
-public class ScreenTransitionService(IPlatformInput platform, HydraConfig config, ILogger<ScreenTransitionService> log) : IHostedService
+public class ScreenTransitionService(IPlatformInput platform, HydraConfig config, IRelaySender relay, ILogger<ScreenTransitionService> log) : IHostedService
 {
     private ScreenLayout? _layout;
     private ScreenRect? _realScreen;
@@ -80,16 +81,33 @@ public class ScreenTransitionService(IPlatformInput platform, HydraConfig config
             _lockedToScreen = !_lockedToScreen;
             log.LogInformation("Screen lock: {State}", _lockedToScreen ? "locked" : "unlocked");
         }
+
+        if (_mouse.IsOnVirtualScreen && relay.IsConnected)
+            ForwardToVirtualScreen(MessageKind.KeyEvent, new KeyEventMessage(keyEvent.Type, keyEvent.Modifiers, keyEvent.Character, keyEvent.Key));
     }
 
     private void OnMouseButton(MouseButtonEvent e)
     {
         log.LogDebug("Mouse: {Type} {Button}", e.IsPressed ? "down" : "up", e.Button);
+
+        if (_mouse.IsOnVirtualScreen && relay.IsConnected)
+            ForwardToVirtualScreen(MessageKind.MouseButton, new MouseButtonMessage(e.Button, e.IsPressed));
     }
 
     private void OnMouseScroll(MouseScrollEvent e)
     {
         log.LogDebug("Scroll: x={X} y={Y}", e.XDelta, e.YDelta);
+
+        if (_mouse.IsOnVirtualScreen && relay.IsConnected)
+            ForwardToVirtualScreen(MessageKind.MouseScroll, new MouseScrollMessage(e.XDelta, e.YDelta));
+    }
+
+    private void ForwardToVirtualScreen<T>(MessageKind kind, T message)
+    {
+        var target = _mouse.CurrentScreen?.Name;
+        if (target == null) return;
+        var payload = MessageSerializer.Encode(kind, message);
+        _ = relay.Send(target, payload).AsTask();
     }
 
     private void OnMouseMove(double x, double y)
@@ -123,6 +141,12 @@ public class ScreenTransitionService(IPlatformInput platform, HydraConfig config
         _lastWarpX = x;
         _lastWarpY = y;
         log.LogInformation("Entered virtual screen → ({X}, {Y})", (int)_mouse.X, (int)_mouse.Y);
+
+        if (relay.IsConnected)
+        {
+            var payload = MessageSerializer.Encode(MessageKind.EnterScreen, new EnterScreenMessage(hit.EntryX, hit.EntryY, hit.Destination.Width, hit.Destination.Height));
+            _ = relay.Send(hit.Destination.Name, payload).AsTask();
+        }
     }
 
     private void HandleVirtualScreenMove(double x, double y)
@@ -157,12 +181,26 @@ public class ScreenTransitionService(IPlatformInput platform, HydraConfig config
         if (hit is not null && !hit.Destination.IsVirtual && !_lockedToScreen)
         {
             // warp to entry while still hidden; show is deferred to next real-screen event to avoid flash
+            var leavingScreen = _mouse.CurrentScreen;
             _mouse.LeaveScreen();
             platform.IsOnVirtualScreen = false;
             platform.WarpCursor(hit.EntryX, hit.EntryY);
             _pendingCursorShow = true;
             log.LogInformation("Returned to real screen ← ({X}, {Y})", hit.EntryX, hit.EntryY);
+
+            if (relay.IsConnected && leavingScreen != null)
+            {
+                var payload = MessageSerializer.Encode(MessageKind.LeaveScreen, new { });
+                _ = relay.Send(leavingScreen.Name, payload).AsTask();
+            }
             return;
+        }
+
+        // forward current virtual position to remote
+        if (relay.IsConnected && _mouse.CurrentScreen != null)
+        {
+            var payload = MessageSerializer.Encode(MessageKind.MouseMove, new MouseMoveMessage((int)_mouse.X, (int)_mouse.Y));
+            _ = relay.Send(_mouse.CurrentScreen.Name, payload).AsTask();
         }
 
         // warp to center on every event (synergy's approach; suppression interval keeps acceleration intact)
