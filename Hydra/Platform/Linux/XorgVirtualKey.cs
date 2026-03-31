@@ -66,6 +66,18 @@ internal static class XorgVirtualKey
     internal const ulong F15 = 0xFFCC;
     internal const ulong F16 = 0xFFCD;
 
+    // media keys (XF86 vendor keysyms, 0x1008FFxx range)
+    internal const ulong XF86AudioLowerVolume = 0x1008FF11;
+    internal const ulong XF86AudioMute = 0x1008FF12;
+    internal const ulong XF86AudioRaiseVolume = 0x1008FF13;
+    internal const ulong XF86AudioPlay = 0x1008FF14;
+    internal const ulong XF86AudioStop = 0x1008FF15;
+    internal const ulong XF86AudioPrev = 0x1008FF16;
+    internal const ulong XF86AudioNext = 0x1008FF17;
+    internal const ulong XF86MonBrightnessUp = 0x1008FF02;
+    internal const ulong XF86MonBrightnessDown = 0x1008FF03;
+    internal const ulong XF86Eject = 0x1008FF2C;
+
     // modifiers
     internal const ulong ISO_Level3_Shift = 0xFE03;  // AltGr on most layouts
     internal const ulong Shift_L = 0xFFE1;

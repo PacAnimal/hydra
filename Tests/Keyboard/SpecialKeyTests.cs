@@ -24,6 +24,8 @@ public class SpecialKeyTests
     [TestCase(SpecialKey.F1)]
     [TestCase(SpecialKey.Left)]
     [TestCase(SpecialKey.NumLock)]
+    [TestCase(SpecialKey.AudioPlay)]
+    [TestCase(SpecialKey.AudioVolumeUp)]
     public void IsModifier_NonModifier_ReturnsFalse(SpecialKey key) =>
         Assert.That(key.IsModifier(), Is.False);
 

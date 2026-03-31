@@ -68,6 +68,15 @@ internal static class WinSpecialKeyMap
         { WinVirtualKey.Capital, SpecialKey.CapsLock },
         { WinVirtualKey.Numlock, SpecialKey.NumLock },
         { WinVirtualKey.Scroll, SpecialKey.ScrollLock },
+
+        // media keys
+        { WinVirtualKey.VolumeMute, SpecialKey.AudioMute },
+        { WinVirtualKey.VolumeDown, SpecialKey.AudioVolumeDown },
+        { WinVirtualKey.VolumeUp, SpecialKey.AudioVolumeUp },
+        { WinVirtualKey.MediaNextTrack, SpecialKey.AudioNext },
+        { WinVirtualKey.MediaPrevTrack, SpecialKey.AudioPrev },
+        { WinVirtualKey.MediaStop, SpecialKey.AudioStop },
+        { WinVirtualKey.MediaPlayPause, SpecialKey.AudioPlay },
     };
 
     internal static bool TryGet(int vkCode, out SpecialKey key) => Map.TryGetValue(vkCode, out key);

@@ -69,6 +69,18 @@ public enum SpecialKey : uint
     F15 = 0x01FFCC,
     F16 = 0x01FFCD,
 
+    // media
+    AudioMute = 0xE0AD,
+    AudioVolumeDown = 0xE0AE,
+    AudioVolumeUp = 0xE0AF,
+    AudioNext = 0xE0B0,
+    AudioPrev = 0xE0B1,
+    AudioStop = 0xE0B2,
+    AudioPlay = 0xE0B3,
+    BrightnessDown = 0xE0B8,
+    BrightnessUp = 0xE0B9,
+    Eject = 0xE001,
+
     // modifiers
     Shift_L = 0x01FFE1,
     Shift_R = 0x01FFE2,
@@ -84,6 +96,10 @@ public enum SpecialKey : uint
 public static class SpecialKeyExtensions
 {
     // true for keys that modify subsequent input: shift, ctrl, alt, super, capslock, altgr
-    public static bool IsModifier(this SpecialKey key) =>
-        key == SpecialKey.AltGr || (key >= SpecialKey.Shift_L && key <= SpecialKey.Super_R);
+    public static bool IsModifier(this SpecialKey key) => key is
+        SpecialKey.AltGr or SpecialKey.CapsLock or
+        SpecialKey.Shift_L or SpecialKey.Shift_R or
+        SpecialKey.Control_L or SpecialKey.Control_R or
+        SpecialKey.Alt_L or SpecialKey.Alt_R or
+        SpecialKey.Super_L or SpecialKey.Super_R;
 }

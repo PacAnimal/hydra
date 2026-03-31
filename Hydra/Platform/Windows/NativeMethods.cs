@@ -16,6 +16,20 @@ internal static partial class NativeMethods
     // -- wParam values for WH_MOUSE_LL --
 
     internal const int WM_MOUSEMOVE = 0x0200;
+    internal const int WM_LBUTTONDOWN = 0x0201;
+    internal const int WM_LBUTTONUP = 0x0202;
+    internal const int WM_RBUTTONDOWN = 0x0204;
+    internal const int WM_RBUTTONUP = 0x0205;
+    internal const int WM_MBUTTONDOWN = 0x0207;
+    internal const int WM_MBUTTONUP = 0x0208;
+    internal const int WM_MOUSEWHEEL = 0x020A;
+    internal const int WM_XBUTTONDOWN = 0x020B;
+    internal const int WM_XBUTTONUP = 0x020C;
+    internal const int WM_MOUSEHWHEEL = 0x020E;
+
+    // XBUTTON identifiers (HIWORD of mouseData for WM_XBUTTON*)
+    internal const int XBUTTON1 = 1;
+    internal const int XBUTTON2 = 2;
 
     // -- wParam values for WH_KEYBOARD_LL --
 

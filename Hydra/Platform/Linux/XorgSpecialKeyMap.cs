@@ -70,6 +70,18 @@ internal static class XorgSpecialKeyMap
         { XorgVirtualKey.F15, SpecialKey.F15 },
         { XorgVirtualKey.F16, SpecialKey.F16 },
 
+        // media keys (XF86 vendor keysyms)
+        { XorgVirtualKey.XF86AudioMute, SpecialKey.AudioMute },
+        { XorgVirtualKey.XF86AudioLowerVolume, SpecialKey.AudioVolumeDown },
+        { XorgVirtualKey.XF86AudioRaiseVolume, SpecialKey.AudioVolumeUp },
+        { XorgVirtualKey.XF86AudioNext, SpecialKey.AudioNext },
+        { XorgVirtualKey.XF86AudioPrev, SpecialKey.AudioPrev },
+        { XorgVirtualKey.XF86AudioStop, SpecialKey.AudioStop },
+        { XorgVirtualKey.XF86AudioPlay, SpecialKey.AudioPlay },
+        { XorgVirtualKey.XF86MonBrightnessUp, SpecialKey.BrightnessUp },
+        { XorgVirtualKey.XF86MonBrightnessDown, SpecialKey.BrightnessDown },
+        { XorgVirtualKey.XF86Eject, SpecialKey.Eject },
+
         // modifiers
         { XorgVirtualKey.ISO_Level3_Shift, SpecialKey.AltGr },
         { XorgVirtualKey.Shift_L, SpecialKey.Shift_L },

@@ -58,6 +58,11 @@ internal static class MacSpecialKeyMap
         { MacVirtualKey.KeypadEnter, SpecialKey.KP_Enter },
         { MacVirtualKey.KeypadClear, SpecialKey.NumLock },
 
+        // media (volume keys arrive as regular kCGEventKeyDown; play/next/prev/brightness/eject via NX_SYSDEFINED)
+        { MacVirtualKey.VolumeUp, SpecialKey.AudioVolumeUp },
+        { MacVirtualKey.VolumeDown, SpecialKey.AudioVolumeDown },
+        { MacVirtualKey.Mute, SpecialKey.AudioMute },
+
         // modifiers — left and right map to distinct SpecialKeys
         { MacVirtualKey.Shift, SpecialKey.Shift_L },
         { MacVirtualKey.RightShift, SpecialKey.Shift_R },

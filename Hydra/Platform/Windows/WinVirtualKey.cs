@@ -79,4 +79,12 @@ internal static class WinVirtualKey
     internal const int Control = 0x11;
     internal const int Menu = 0x12;        // alt
 
+    // media keys
+    internal const int VolumeMute = 0xAD;
+    internal const int VolumeDown = 0xAE;
+    internal const int VolumeUp = 0xAF;
+    internal const int MediaNextTrack = 0xB0;
+    internal const int MediaPrevTrack = 0xB1;
+    internal const int MediaStop = 0xB2;
+    internal const int MediaPlayPause = 0xB3;
 }

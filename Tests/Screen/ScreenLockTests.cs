@@ -1,5 +1,6 @@
 using Hydra.Config;
 using Hydra.Keyboard;
+using Hydra.Mouse;
 using Hydra.Platform;
 using Hydra.Screen;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -152,7 +153,11 @@ public class ScreenLockTests
         public ScreenRect GetPrimaryScreenBounds() => new("main", 0, 0, 2560, 1440, false);
         public bool IsAccessibilityTrusted() => true;
 
-        public void StartEventTap(Action<double, double> onMouseMove, Action<KeyEvent> onKeyEvent)
+        public void StartEventTap(
+            Action<double, double> onMouseMove,
+            Action<KeyEvent> onKeyEvent,
+            Action<MouseButtonEvent> onMouseButton,
+            Action<MouseScrollEvent> onMouseScroll)
         {
             _onMouseMove = onMouseMove;
             _onKeyEvent = onKeyEvent;

@@ -154,11 +154,17 @@ internal sealed class WinKeyResolver
                     char flush;
                     _ = NativeMethods.ToUnicodeEx(NativeMethods.VK_SPACE, 0, pState, &flush, 1, 0, hkl);
                     var spacingForm = buff[0];
-                    var combining = DeadCharToCombining(spacingForm);
-                    if (combining != '\0')
+                    if (KeyResolver.SpacingToCombining.TryGetValue(spacingForm, out var combining))
                     {
+                        // standard dead key: spacing form → combining char (e.g. ´ → U+0301)
                         _pendingDeadKey = combining;
                         _pendingDeadSpacing = spacingForm;
+                    }
+                    else if (spacingForm is >= '\u0300' and <= '\u036F')
+                    {
+                        // some layouts (e.g. polytonic Greek) return the combining char directly
+                        _pendingDeadKey = spacingForm;
+                        _pendingDeadSpacing = '\0';
                     }
                     return null;
                 }
@@ -171,24 +177,13 @@ internal sealed class WinKeyResolver
         if (!ch.HasValue && !key.HasValue) return null;
 
         // apply pending dead key composition
-        if (_pendingDeadKey != '\0')
+        if (_pendingDeadKey != '\0' && ch.HasValue)
         {
             var dead = _pendingDeadKey;
             var spacing = _pendingDeadSpacing;
             _pendingDeadKey = '\0';
             _pendingDeadSpacing = '\0';
-
-            if (ch.HasValue)
-            {
-                if (ch.Value == ' ' && spacing != '\0')
-                    ch = spacing;   // dead key + space → spacing form (e.g. dead_circumflex + space → ^)
-                else
-                {
-                    var composed = KeyResolver.Compose(ch.Value, dead);
-                    if (composed != ch.Value) ch = composed;
-                    // else: incompatible pair — emit base char, dead key lost
-                }
-            }
+            ch = KeyResolver.ComposeOrSpacing(ch.Value, dead, spacing);
         }
 
         if (ch.HasValue)
@@ -200,26 +195,6 @@ internal sealed class WinKeyResolver
         _keyDownId[vk] = (null, key);
         return KeyEvent.Special(KeyEventType.KeyDown, key!.Value, mods);
     }
-
-    // maps the standalone dead key character from ToUnicodeEx buff[0] to its Unicode combining equivalent.
-    // standalone dead chars (spacing accents) must be converted to combining chars for NFC composition.
-    private static char DeadCharToCombining(char dead) => dead switch
-    {
-        '`' => '\u0300',  // grave accent
-        '\u00B4' => '\u0301',  // acute accent (U+00B4)
-        '^' => '\u0302',  // circumflex
-        '~' => '\u0303',  // tilde
-        '\u00AF' => '\u0304',  // macron (U+00AF overline/macron)
-        '\u02D8' => '\u0306',  // breve
-        '\u02D9' => '\u0307',  // dot above
-        '\u00A8' => '\u0308',  // diaeresis / umlaut (U+00A8)
-        '\u02DA' => '\u030A',  // ring above
-        '\u02DD' => '\u030B',  // double acute
-        '\u02C7' => '\u030C',  // caron
-        '\u00B8' => '\u0327',  // cedilla (U+00B8)
-        '\u02DB' => '\u0328',  // ogonek
-        _ => '\0',
-    };
 
     // gets the keyboard layout associated with the foreground window's thread.
     // falls back to layout 0 (system default) if there is no foreground window.

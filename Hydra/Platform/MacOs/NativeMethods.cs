@@ -16,10 +16,22 @@ internal static partial class NativeMethods
     internal const int KCGEventTapOptionDefault = 0;
     internal const ulong KCGEventMaskForAllEvents = ~0UL;
     internal const int KCGEventTapDisabledByTimeout = unchecked((int)0xFFFFFFFE);
+    internal const int KCGEventLeftMouseDown = 1;
+    internal const int KCGEventLeftMouseUp = 2;
+    internal const int KCGEventRightMouseDown = 3;
+    internal const int KCGEventRightMouseUp = 4;
     internal const int KCGEventMouseMoved = 5;
     internal const int KCGEventLeftMouseDragged = 6;
     internal const int KCGEventRightMouseDragged = 7;
     internal const int KCGEventOtherMouseDragged = 27;
+    internal const int KCGEventScrollWheel = 22;
+    internal const int KCGEventOtherMouseDown = 25;
+    internal const int KCGEventOtherMouseUp = 26;
+
+    // CGEventField values for mouse button number and scroll wheel deltas
+    internal const int KCGMouseEventButtonNumber = 3;
+    internal const int KCGScrollWheelEventDeltaAxis1 = 11;   // vertical (positive = up)
+    internal const int KCGScrollWheelEventDeltaAxis2 = 12;   // horizontal (positive = right)
 
     // -- CoreGraphics private APIs (CGS) --
 
@@ -191,6 +203,44 @@ internal static partial class NativeMethods
     [LibraryImport(Carbon)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial byte LMGetKbdType();
+
+    // -- Objective-C runtime (used for NX_SYSDEFINED media key decoding) --
+
+    private const string ObjC = "/usr/lib/libobjc.A.dylib";
+
+    [LibraryImport(ObjC, StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint objc_getClass(string name);
+
+    [LibraryImport(ObjC, StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint sel_registerName(string str);
+
+    // receiver + selector + one nint argument → nint (used for class method calls with one arg)
+    [LibraryImport(ObjC)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint objc_msgSend(nint obj, nint sel, nint arg);
+
+    // receiver + selector → long (used for NSInteger return values)
+    [LibraryImport(ObjC, EntryPoint = "objc_msgSend")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial long objc_msgSend_long(nint obj, nint sel);
+
+    // NX_SYSDEFINED event type constant (NSSystemDefined, subtype 8 = media key)
+    internal const int KNXSysDefined = 14;
+
+    // NX_KEYTYPE_* constants (from IOKit/hidsystem/ev_keymap.h)
+    internal const uint NXKeytypeSoundUp = 0;
+    internal const uint NXKeytypeSoundDown = 1;
+    internal const uint NXKeytypeBrightnessUp = 2;
+    internal const uint NXKeytypeBrightnessDown = 3;
+    internal const uint NXKeytypeMute = 7;
+    internal const uint NXKeytypeEject = 14;
+    internal const uint NXKeytypePlay = 16;
+    internal const uint NXKeytypeNext = 17;
+    internal const uint NXKeytypePrevious = 18;
+    internal const uint NXKeytypeFast = 19;
+    internal const uint NXKeytypeRewind = 20;
 }
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]

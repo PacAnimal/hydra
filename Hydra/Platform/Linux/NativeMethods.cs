@@ -17,6 +17,8 @@ internal static partial class NativeMethods
 
     // -- XI2 event type constants --
 
+    internal const int XI_RawButtonPress = 15;
+    internal const int XI_RawButtonRelease = 16;
     internal const int XI_RawMotion = 17;
 
     // -- XI2 device constants --
@@ -84,6 +86,18 @@ internal static partial class NativeMethods
     [LibraryImport(X11)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial int XPending(nint display);
+
+    // returns the file descriptor of the X11 connection — used with poll() for blocking event wait
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int XConnectionNumber(nint display);
+
+    // poll() — block until fd is readable or timeout_ms elapses (timeout -1 = block forever)
+    internal const short POLLIN = 0x0001;
+
+    [LibraryImport("libc", EntryPoint = "poll")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int poll(ref PollFd fds, uint nfds, int timeout_ms);
 
     // -- events --
 
@@ -200,6 +214,15 @@ internal static partial class NativeMethods
     internal static partial uint XKeysymToKeycode(nint display, ulong keysym);
 }
 
+// struct pollfd for use with poll()
+[StructLayout(LayoutKind.Sequential)]
+internal struct PollFd
+{
+    internal int Fd;
+    internal short Events;
+    internal short Revents;
+}
+
 // XEvent union — 192 bytes on 64-bit LP64 (24 longs).
 // explicit layout covers only the fields we access; all others are padding.
 [StructLayout(LayoutKind.Explicit, Size = 192)]
@@ -231,4 +254,13 @@ internal struct XIEventMask
 internal struct XSetWindowAttributes
 {
     [FieldOffset(88)] internal int OverrideRedirect;
+}
+
+// minimal XIRawEvent layout — covers only the detail field (button number / key detail).
+// full struct: int type, ulong serial, int send_event, Display* display, int extension, int evtype,
+// ulong time, int deviceid, int sourceid, int detail → offset 56 on 64-bit LP64.
+[StructLayout(LayoutKind.Explicit)]
+internal struct XIRawEvent
+{
+    [FieldOffset(56)] internal int Detail;
 }

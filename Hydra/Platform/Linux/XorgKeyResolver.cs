@@ -41,11 +41,11 @@ internal sealed class XorgKeyResolver
         }
 
         // dead key: store combining char and its spacing form, then wait for the next character
-        var combining = DeadKeyCombining(keysym);
+        var (combining, spacing) = DeadKeyLookup(keysym);
         if (combining != '\0')
         {
             _pendingDeadKey = combining;
-            _pendingDeadSpacing = DeadKeySpacing(keysym);
+            _pendingDeadSpacing = spacing;
             return null;
         }
 
@@ -66,18 +66,10 @@ internal sealed class XorgKeyResolver
             if (_pendingDeadKey != '\0')
             {
                 var dead = _pendingDeadKey;
-                var spacing = _pendingDeadSpacing;
+                var spc = _pendingDeadSpacing;
                 _pendingDeadKey = '\0';
                 _pendingDeadSpacing = '\0';
-
-                if (ch.Value == ' ' && spacing != '\0')
-                    ch = spacing;   // dead key + space → spacing form (e.g. dead_tilde + space → ~)
-                else
-                {
-                    var composed = KeyResolver.Compose(ch.Value, dead);
-                    if (composed != ch.Value) ch = composed;
-                    // else: incompatible pair — emit base char, dead key lost
-                }
+                ch = KeyResolver.ComposeOrSpacing(ch.Value, dead, spc);
             }
             _keyDownId[keycode] = (ch, null);
             return KeyEvent.Char(type, ch.Value, mods);
@@ -86,45 +78,41 @@ internal sealed class XorgKeyResolver
         return null;
     }
 
-    // returns the Unicode combining character for a dead keysym, or '\0' if not a dead key.
-    // dead keysyms live in 0xFE50-0xFE5F (X11 keysymdef.h XK_dead_* constants).
-    private static char DeadKeyCombining(ulong keysym) => keysym switch
+    // maps a dead keysym to its (combining char, spacing form).
+    // spacing is '\0' for dead keys with no natural standalone character.
+    // when dead key + space is pressed, spacing form is emitted if available, otherwise space passes through.
+    private static (char combining, char spacing) DeadKeyLookup(ulong keysym) => keysym switch
     {
-        0xFE50 => '\u0300',  // XK_dead_grave        → combining grave accent
-        0xFE51 => '\u0301',  // XK_dead_acute        → combining acute accent
-        0xFE52 => '\u0302',  // XK_dead_circumflex   → combining circumflex
-        0xFE53 => '\u0303',  // XK_dead_tilde        → combining tilde
-        0xFE54 => '\u0304',  // XK_dead_macron       → combining macron
-        0xFE55 => '\u0306',  // XK_dead_breve        → combining breve
-        0xFE56 => '\u0307',  // XK_dead_abovedot     → combining dot above
-        0xFE57 => '\u0308',  // XK_dead_diaeresis    → combining diaeresis
-        0xFE58 => '\u030A',  // XK_dead_abovering    → combining ring above
-        0xFE59 => '\u030B',  // XK_dead_doubleacute  → combining double acute
-        0xFE5A => '\u030C',  // XK_dead_caron        → combining caron
-        0xFE5B => '\u0327',  // XK_dead_cedilla      → combining cedilla
-        0xFE5C => '\u0328',  // XK_dead_ogonek       → combining ogonek
-        0xFE5E => '\u0335',  // XK_dead_stroke       → combining short stroke
-        _ => '\0',
-    };
-
-    // maps a dead keysym to its standalone spacing character (emitted when dead key + space is pressed).
-    private static char DeadKeySpacing(ulong keysym) => keysym switch
-    {
-        0xFE50 => '\u0060',  // XK_dead_grave        → ` (grave accent)
-        0xFE51 => '\u00B4',  // XK_dead_acute        → ´ (acute accent)
-        0xFE52 => '\u005E',  // XK_dead_circumflex   → ^ (circumflex)
-        0xFE53 => '\u007E',  // XK_dead_tilde        → ~ (tilde)
-        0xFE54 => '\u00AF',  // XK_dead_macron       → ¯ (macron)
-        0xFE55 => '\u02D8',  // XK_dead_breve        → ˘ (breve)
-        0xFE56 => '\u02D9',  // XK_dead_abovedot     → ˙ (dot above)
-        0xFE57 => '\u00A8',  // XK_dead_diaeresis    → ¨ (diaeresis)
-        0xFE58 => '\u02DA',  // XK_dead_abovering    → ˚ (ring above)
-        0xFE59 => '\u02DD',  // XK_dead_doubleacute  → ˝ (double acute)
-        0xFE5A => '\u02C7',  // XK_dead_caron        → ˇ (caron)
-        0xFE5B => '\u00B8',  // XK_dead_cedilla      → ¸ (cedilla)
-        0xFE5C => '\u02DB',  // XK_dead_ogonek       → ˛ (ogonek)
-        0xFE5E => '\u002F',  // XK_dead_stroke       → / (solidus)
-        _ => '\0',
+        0xFE50 => ('\u0300', '\u0060'),  // XK_dead_grave              → combining grave, ` spacing
+        0xFE51 => ('\u0301', '\u00B4'),  // XK_dead_acute              → combining acute, ´ spacing
+        0xFE52 => ('\u0302', '\u005E'),  // XK_dead_circumflex         → combining circumflex, ^ spacing
+        0xFE53 => ('\u0303', '\u007E'),  // XK_dead_tilde              → combining tilde, ~ spacing
+        0xFE54 => ('\u0304', '\u00AF'),  // XK_dead_macron             → combining macron, ¯ spacing
+        0xFE55 => ('\u0306', '\u02D8'),  // XK_dead_breve              → combining breve, ˘ spacing
+        0xFE56 => ('\u0307', '\u02D9'),  // XK_dead_abovedot           → combining dot above, ˙ spacing
+        0xFE57 => ('\u0308', '\u00A8'),  // XK_dead_diaeresis          → combining diaeresis, ¨ spacing
+        0xFE58 => ('\u030A', '\u02DA'),  // XK_dead_abovering          → combining ring above, ˚ spacing
+        0xFE59 => ('\u030B', '\u02DD'),  // XK_dead_doubleacute        → combining double acute, ˝ spacing
+        0xFE5A => ('\u030C', '\u02C7'),  // XK_dead_caron              → combining caron, ˇ spacing
+        0xFE5B => ('\u0327', '\u00B8'),  // XK_dead_cedilla            → combining cedilla, ¸ spacing
+        0xFE5C => ('\u0328', '\u02DB'),  // XK_dead_ogonek             → combining ogonek, ˛ spacing
+        0xFE5D => ('\u0345', '\u037A'),  // XK_dead_iota               → combining ypogegrammeni (polytonic Greek)
+        0xFE60 => ('\u0323', '\0'),      // XK_dead_belowdot           → combining dot below (Vietnamese)
+        0xFE61 => ('\u0309', '\0'),      // XK_dead_hook               → combining hook above (Vietnamese)
+        0xFE62 => ('\u031B', '\0'),      // XK_dead_horn               → combining horn (Vietnamese)
+        0xFE63 => ('\u0335', '\u002F'),  // XK_dead_stroke             → combining short stroke overlay, / spacing
+        0xFE64 => ('\u0313', '\u1FBD'),  // XK_dead_abovecomma/psili   → combining comma above (polytonic Greek)
+        0xFE65 => ('\u0314', '\u1FFE'),  // XK_dead_abovereversedcomma/dasia → combining reversed comma above
+        0xFE66 => ('\u030F', '\0'),      // XK_dead_doublegrave        → combining double grave accent
+        0xFE67 => ('\u0325', '\0'),      // XK_dead_belowring          → combining ring below
+        0xFE68 => ('\u0331', '\0'),      // XK_dead_belowmacron        → combining macron below
+        0xFE69 => ('\u032D', '\0'),      // XK_dead_belowcircumflex    → combining circumflex accent below
+        0xFE6A => ('\u0330', '\0'),      // XK_dead_belowtilde         → combining tilde below
+        0xFE6B => ('\u032E', '\0'),      // XK_dead_belowbreve         → combining breve below
+        0xFE6C => ('\u0324', '\0'),      // XK_dead_belowdiaeresis     → combining diaeresis below
+        0xFE6D => ('\u0311', '\0'),      // XK_dead_invertedbreve      → combining inverted breve
+        0xFE6E => ('\u0326', '\0'),      // XK_dead_belowcomma         → combining comma below (Romanian)
+        _ => ('\0', '\0'),
     };
 
     // checks special key map first, then falls back to mechanical MISCELLANY mapping.

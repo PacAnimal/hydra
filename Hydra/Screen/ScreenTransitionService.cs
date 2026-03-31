@@ -1,5 +1,6 @@
 using Hydra.Config;
 using Hydra.Keyboard;
+using Hydra.Mouse;
 using Hydra.Platform;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -51,7 +52,7 @@ public class ScreenTransitionService(IPlatformInput platform, HydraConfig config
         var virtualScreen = screens.First(s => s.IsVirtual);
         log.LogInformation("Virtual screen: {W}x{H} at ({X},{Y})", virtualScreen.Width, virtualScreen.Height, virtualScreen.X, virtualScreen.Y);
 
-        platform.StartEventTap((x, y) => OnMouseMove(x, y), OnKeyEvent);
+        platform.StartEventTap((x, y) => OnMouseMove(x, y), OnKeyEvent, OnMouseButton, OnMouseScroll);
         return Task.CompletedTask;
     }
 
@@ -79,6 +80,16 @@ public class ScreenTransitionService(IPlatformInput platform, HydraConfig config
             _lockedToScreen = !_lockedToScreen;
             log.LogInformation("Screen lock: {State}", _lockedToScreen ? "locked" : "unlocked");
         }
+    }
+
+    private void OnMouseButton(MouseButtonEvent e)
+    {
+        log.LogDebug("Mouse: {Type} {Button}", e.IsPressed ? "down" : "up", e.Button);
+    }
+
+    private void OnMouseScroll(MouseScrollEvent e)
+    {
+        log.LogDebug("Scroll: x={X} y={Y}", e.XDelta, e.YDelta);
     }
 
     private void OnMouseMove(double x, double y)

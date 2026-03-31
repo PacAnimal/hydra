@@ -13,7 +13,6 @@ public class KeyModifiersTests
             Assert.That((uint)KeyModifiers.Shift, Is.EqualTo(0x0001u));
             Assert.That((uint)KeyModifiers.Control, Is.EqualTo(0x0002u));
             Assert.That((uint)KeyModifiers.Alt, Is.EqualTo(0x0004u));
-            Assert.That((uint)KeyModifiers.Meta, Is.EqualTo(0x0008u));
             Assert.That((uint)KeyModifiers.Super, Is.EqualTo(0x0010u));
             Assert.That((uint)KeyModifiers.AltGr, Is.EqualTo(0x0020u));
             Assert.That((uint)KeyModifiers.CapsLock, Is.EqualTo(0x1000u));
@@ -28,7 +27,7 @@ public class KeyModifiersTests
         var values = new[]
         {
             KeyModifiers.Shift, KeyModifiers.Control, KeyModifiers.Alt,
-            KeyModifiers.Meta, KeyModifiers.Super, KeyModifiers.AltGr,
+            KeyModifiers.Super, KeyModifiers.AltGr,
             KeyModifiers.CapsLock, KeyModifiers.NumLock, KeyModifiers.ScrollLock,
         };
 

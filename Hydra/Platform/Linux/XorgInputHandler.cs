@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using Hydra.Keyboard;
+using Hydra.Mouse;
 using Hydra.Screen;
 using Microsoft.Extensions.Logging;
 
@@ -19,17 +20,19 @@ public class XorgInputHandler : IPlatformInput
     private volatile bool _running;
     private Action<double, double>? _onMouseMove;
     private Action<KeyEvent>? _onKeyEvent;
+    private Action<MouseButtonEvent>? _onMouseButton;
+    private Action<MouseScrollEvent>? _onMouseScroll;
     private bool _cursorHidden;
     private bool _isOnVirtualScreen;
     private bool _keyboardGrabbed;
 
-    // XI2 mask bytes for XI_RawMotion(17) only.
+    // XI2 event mask for raw button press/release (15, 16) and raw motion (17).
     // XISetMask(mask, n) = mask[n>>3] |= 1 << (n&7)
     private static readonly byte[] Xi2Mask =
     [
         0,
-        0,
-        (1 << (NativeMethods.XI_RawMotion & 7)),   // byte 2: bit 1
+        (1 << (NativeMethods.XI_RawButtonPress & 7)),   // byte 1: bit 7 (event 15)
+        (1 << (NativeMethods.XI_RawButtonRelease & 7)) | (1 << (NativeMethods.XI_RawMotion & 7)),  // byte 2: bits 0+1 (events 16, 17)
         0,
     ];
 
@@ -103,10 +106,16 @@ public class XorgInputHandler : IPlatformInput
         }
     }
 
-    public void StartEventTap(Action<double, double> onMouseMove, Action<KeyEvent> onKeyEvent)
+    public void StartEventTap(
+        Action<double, double> onMouseMove,
+        Action<KeyEvent> onKeyEvent,
+        Action<MouseButtonEvent> onMouseButton,
+        Action<MouseScrollEvent> onMouseScroll)
     {
         _onMouseMove = onMouseMove;
         _onKeyEvent = onKeyEvent;
+        _onMouseButton = onMouseButton;
+        _onMouseScroll = onMouseScroll;
 
         var ready = new ManualResetEventSlim(false);
 
@@ -116,6 +125,9 @@ public class XorgInputHandler : IPlatformInput
             GrabLockHotkey();
             ready.Set();
 
+            var xFd = NativeMethods.XConnectionNumber(_display);
+            var pfd = new PollFd { Fd = xFd, Events = NativeMethods.POLLIN };
+
             while (_running)
             {
                 if (NativeMethods.XPending(_display) > 0)
@@ -124,7 +136,7 @@ public class XorgInputHandler : IPlatformInput
                     HandleEvent(ref ev);
                 }
                 else
-                    Thread.Sleep(1);
+                    NativeMethods.poll(ref pfd, 1, 100);  // block up to 100ms, then check _running
             }
         })
         { IsBackground = true, Name = "HydraXorgEventTap" };
@@ -175,6 +187,38 @@ public class XorgInputHandler : IPlatformInput
                 _ = NativeMethods.XQueryPointer(_display, _rootWindow,
                     out _, out _, out var rootX, out var rootY, out _, out _, out _);
                 _onMouseMove?.Invoke(rootX, rootY);
+            }
+            else if (ev.XCookieEvType is NativeMethods.XI_RawButtonPress or NativeMethods.XI_RawButtonRelease)
+            {
+                var rawEvent = Marshal.PtrToStructure<XIRawEvent>(ev.XCookieData);
+                var btn = rawEvent.Detail;
+                var isDown = ev.XCookieEvType == NativeMethods.XI_RawButtonPress;
+
+                // buttons 4-7: scroll (X11 convention: 4=up, 5=down, 6=left, 7=right)
+                if (btn is >= 4 and <= 7)
+                {
+                    var scroll = btn switch
+                    {
+                        4 => new MouseScrollEvent(0, 120),   // scroll up
+                        5 => new MouseScrollEvent(0, -120),  // scroll down
+                        6 => new MouseScrollEvent(-120, 0),  // scroll left
+                        7 => new MouseScrollEvent(120, 0),   // scroll right
+                        _ => default,
+                    };
+                    if (isDown) _onMouseScroll?.Invoke(scroll);  // only fire on press (scroll has no up)
+                }
+                else
+                {
+                    var button = btn switch
+                    {
+                        1 => MouseButton.Left,
+                        2 => MouseButton.Middle,
+                        3 => MouseButton.Right,
+                        8 => MouseButton.Extra1,
+                        _ => MouseButton.Extra2,
+                    };
+                    _onMouseButton?.Invoke(new MouseButtonEvent(button, isDown));
+                }
             }
         }
         finally
