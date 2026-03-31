@@ -48,8 +48,8 @@ public class ScreenLockTests
         _service.StartAsync(CancellationToken.None).Wait();
 
         // lock
-        _platform.FireKeyEvent(new KeyEvent(KeyEventType.KeyDown, 'l',
-            KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Super, 0));
+        _platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyDown, 'l',
+            KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Super));
 
         // attempt transition — should be blocked
         _platform.HideCursorCalled = false;
@@ -57,8 +57,8 @@ public class ScreenLockTests
         Assert.That(_platform.HideCursorCalled, Is.False, "transition should be blocked when locked");
 
         // unlock
-        _platform.FireKeyEvent(new KeyEvent(KeyEventType.KeyDown, 'l',
-            KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Super, 0));
+        _platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyDown, 'l',
+            KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Super));
 
         // transition should work again
         _platform.HideCursorCalled = false;
@@ -70,7 +70,7 @@ public class ScreenLockTests
     public void LockHotkey_WrongModifiers_DoesNotLock()
     {
         // ctrl+L only — missing Alt and Super
-        _platform.FireKeyEvent(new KeyEvent(KeyEventType.KeyDown, 'l', KeyModifiers.Control, 0));
+        _platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyDown, 'l', KeyModifiers.Control));
 
         _platform.HideCursorCalled = false;
         _platform.FireMouseMove(2559, 720);
@@ -81,8 +81,8 @@ public class ScreenLockTests
     public void LockHotkey_KeyUp_DoesNotToggle()
     {
         // key-up event should not toggle
-        _platform.FireKeyEvent(new KeyEvent(KeyEventType.KeyUp, 'l',
-            KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Super, 0));
+        _platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyUp, 'l',
+            KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Super));
 
         _platform.HideCursorCalled = false;
         _platform.FireMouseMove(2559, 720);
@@ -97,8 +97,8 @@ public class ScreenLockTests
         Assert.That(_platform.IsOnVirtualScreen, Is.True);
 
         // lock while on virtual screen
-        _platform.FireKeyEvent(new KeyEvent(KeyEventType.KeyDown, 'l',
-            KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Super, 0));
+        _platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyDown, 'l',
+            KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Super));
 
         // simulate movement past virtual screen left edge — return should be blocked
         // The virtual screen is at x=2560..5119; left edge is x=2560

@@ -10,7 +10,7 @@ namespace Hydra.Platform.Linux;
 internal sealed class XorgKeyResolver
 {
     private char _pendingDeadKey;
-    private readonly Dictionary<uint, uint> _keyDownId = [];  // keycode → last emitted KeyId
+    private readonly Dictionary<uint, (char? ch, SpecialKey? key)> _keyDownId = [];
 
     internal KeyEvent? Resolve(int evType, uint keycode, uint state, nint display)
     {
@@ -30,50 +30,55 @@ internal sealed class XorgKeyResolver
         var mods = MapModifiers(adjustedState);
         var type = evType == NativeMethods.KeyPress ? KeyEventType.KeyDown : KeyEventType.KeyUp;
 
-        var keyId = KeySymToKeyId(keysym);
-
-        if (evType == NativeMethods.KeyPress)
+        // key-up: replay the same event that was emitted on key-down
+        if (evType == NativeMethods.KeyRelease)
         {
-            var combining = DeadKeyCombining(keysym);
-            if (combining != '\0')
-            {
-                // dead key: store combining char and wait for the next character
-                _pendingDeadKey = combining;
-                return null;
-            }
+            if (!_keyDownId.TryGetValue(keycode, out var downVal)) return null;
+            _keyDownId.Remove(keycode);
+            if (downVal.ch.HasValue) return KeyEvent.Char(type, downVal.ch.Value, mods);
+            if (downVal.key.HasValue) return KeyEvent.Special(type, downVal.key.Value, mods);
+            return null;
+        }
 
+        // dead key: store combining char and wait for the next character
+        var combining = DeadKeyCombining(keysym);
+        if (combining != '\0')
+        {
+            _pendingDeadKey = combining;
+            return null;
+        }
+
+        // special key (arrows, function keys, modifiers, keypad)?
+        var special = KeySymToSpecialKey(keysym);
+        if (special.HasValue)
+        {
+            _pendingDeadKey = '\0';
+            _keyDownId[keycode] = (null, special.Value);
+            return KeyEvent.Special(type, special.Value, mods);
+        }
+
+        // character key
+        var ch = KeySymToChar(keysym);
+        if (ch.HasValue)
+        {
             if (_pendingDeadKey != '\0')
             {
-                if (KeyId.IsPrintable(keyId))
-                    keyId = Compose(keyId);
+                ch = Compose(ch.Value);
                 _pendingDeadKey = '\0';
             }
+            _keyDownId[keycode] = (ch, null);
+            return KeyEvent.Char(type, ch.Value, mods);
         }
 
-        if (evType == NativeMethods.KeyPress)
-        {
-            if (keyId != KeyId.None)
-                _keyDownId[keycode] = keyId;
-        }
-        else if (_keyDownId.TryGetValue(keycode, out var downId))
-        {
-            // use the same keyId that was emitted on KeyDown (e.g. 'é' not 'e' for composed keys)
-            keyId = downId;
-            _keyDownId.Remove(keycode);
-        }
-
-        if (keyId == KeyId.None) return null;
-
-        return new KeyEvent(type, keyId, mods, (ushort)keycode);
+        return null;
     }
 
     // compose a pending dead key combining character with a base character via NFC normalization.
     // if composition produces no single codepoint (incompatible pair), returns the base unchanged.
-    private uint Compose(uint baseKeyId)
+    private char Compose(char baseChar)
     {
-        if (baseKeyId > 0xFFFF) return baseKeyId;
-        var composed = new string([(char)baseKeyId, _pendingDeadKey]).Normalize(NormalizationForm.FormC);
-        return composed.Length == 1 ? composed[0] : baseKeyId;
+        var composed = new string([baseChar, _pendingDeadKey]).Normalize(NormalizationForm.FormC);
+        return composed.Length == 1 ? composed[0] : baseChar;
     }
 
     // returns the Unicode combining character for a dead keysym, or '\0' if not a dead key.
@@ -97,6 +102,37 @@ internal sealed class XorgKeyResolver
         _ => '\0',
     };
 
+    // checks special key map first, then falls back to mechanical MISCELLANY mapping.
+    // MISCELLANY keysyms (0xFF00-0xFFFF) map directly: keysym | 0x01000000 = SpecialKey value.
+    private static SpecialKey? KeySymToSpecialKey(ulong keysym)
+    {
+        if (XorgSpecialKeyMap.TryGet(keysym, out var special)) return special;
+
+        // mechanical MISCELLANY mapping for named keys not in the special map
+        if (keysym is >= 0xFF00 and <= 0xFFFF)
+            return (SpecialKey)(keysym | 0x01000000);
+
+        return null;
+    }
+
+    // maps a keysym to a printable char.
+    // latin-1 printable range (0x0020-0x00FF) maps directly as unicode codepoints.
+    // modern Unicode-extension keysyms (0x01000000 | codepoint) strip the flag bit.
+    // legacy named keysyms where X11 value equals Unicode codepoint (e.g. EuroSign = 0x20AC).
+    private static char? KeySymToChar(ulong keysym)
+    {
+        if (keysym is >= 0x0020 and <= 0x00FF)
+            return (char)keysym;
+
+        if (keysym is >= 0x01000100 and <= 0x0110FFFF)
+            return (char)(keysym - 0x01000000);
+
+        if (keysym is > 0x00FF and < 0xFF00)
+            return (char)keysym;
+
+        return null;
+    }
+
     // Xkb group is encoded in bits 13-14 of the X11 state field (XkbGroupForCoreState macro)
     private static int ExtractGroup(uint state) => (int)((state >> 13) & 3);
 
@@ -106,34 +142,6 @@ internal sealed class XorgKeyResolver
         var shift = (state & NativeMethods.ShiftMask) != 0;
         var altGr = (state & NativeMethods.Mod5Mask) != 0;
         return (shift ? 1 : 0) + (altGr ? 2 : 0);
-    }
-
-    // maps a keysym to a KeyId.
-    // special keys are looked up by table; MISCELLANY range (0xFF00-0xFFFF) maps mechanically
-    // since Hydra's KeyId constants are literally keysym - 0x1000.
-    // latin-1 printable range (0x0020-0x00FF) maps directly as unicode codepoints.
-    private static uint KeySymToKeyId(ulong keysym)
-    {
-        if (XorgSpecialKeyMap.TryGet(keysym, out var specialId))
-            return specialId;
-
-        // latin-1 printable range: direct unicode codepoint
-        if (keysym is >= 0x0020 and <= 0x00FF)
-            return (uint)keysym;
-
-        // MISCELLANY range: keysym - 0x1000 = KeyId (e.g. 0xFF51 → 0xEF51 = KeyId.Left)
-        if (keysym is >= 0xFF00 and <= 0xFFFF)
-            return (uint)(keysym - 0x1000);
-
-        // modern Unicode-extension keysyms (0x01000000 | codepoint) — used by current XKB layouts
-        if (keysym is >= 0x01000100 and <= 0x0110FFFF)
-            return (uint)(keysym - 0x01000000);
-
-        // legacy named keysyms where X11 value equals Unicode codepoint (e.g. EuroSign = 0x20AC)
-        if (keysym is > 0x00FF and < 0xFF00)
-            return (uint)keysym;
-
-        return KeyId.None;
     }
 
     // X11 state field reflects modifier state before the event takes effect.

@@ -2,75 +2,75 @@ using Hydra.Keyboard;
 
 namespace Hydra.Platform.Windows;
 
-// maps Windows virtual key codes to platform-independent KeyId constants.
+// maps Windows virtual key codes to SpecialKey constants.
 // only covers non-character keys (function keys, arrows, modifiers, keypad).
 // character keys are resolved via ToUnicodeEx.
 internal static class WinSpecialKeyMap
 {
-    private static readonly Dictionary<int, uint> Map = new()
+    private static readonly Dictionary<int, SpecialKey> Map = new()
     {
         // cursor / navigation
-        { WinVirtualKey.Left, KeyId.Left },
-        { WinVirtualKey.Right, KeyId.Right },
-        { WinVirtualKey.Up, KeyId.Up },
-        { WinVirtualKey.Down, KeyId.Down },
-        { WinVirtualKey.Home, KeyId.Home },
-        { WinVirtualKey.End, KeyId.End },
-        { WinVirtualKey.Prior, KeyId.PageUp },
-        { WinVirtualKey.Next, KeyId.PageDown },
-        { WinVirtualKey.Insert, KeyId.Insert },
-        { WinVirtualKey.Delete, KeyId.Delete },
+        { WinVirtualKey.Left, SpecialKey.Left },
+        { WinVirtualKey.Right, SpecialKey.Right },
+        { WinVirtualKey.Up, SpecialKey.Up },
+        { WinVirtualKey.Down, SpecialKey.Down },
+        { WinVirtualKey.Home, SpecialKey.Home },
+        { WinVirtualKey.End, SpecialKey.End },
+        { WinVirtualKey.Prior, SpecialKey.PageUp },
+        { WinVirtualKey.Next, SpecialKey.PageDown },
+        { WinVirtualKey.Insert, SpecialKey.Insert },
+        { WinVirtualKey.Delete, SpecialKey.Delete },
 
         // function keys
-        { WinVirtualKey.F1, KeyId.F1 },
-        { WinVirtualKey.F2, KeyId.F2 },
-        { WinVirtualKey.F3, KeyId.F3 },
-        { WinVirtualKey.F4, KeyId.F4 },
-        { WinVirtualKey.F5, KeyId.F5 },
-        { WinVirtualKey.F6, KeyId.F6 },
-        { WinVirtualKey.F7, KeyId.F7 },
-        { WinVirtualKey.F8, KeyId.F8 },
-        { WinVirtualKey.F9, KeyId.F9 },
-        { WinVirtualKey.F10, KeyId.F10 },
-        { WinVirtualKey.F11, KeyId.F11 },
-        { WinVirtualKey.F12, KeyId.F12 },
-        { WinVirtualKey.F13, KeyId.F13 },
-        { WinVirtualKey.F14, KeyId.F14 },
-        { WinVirtualKey.F15, KeyId.F15 },
-        { WinVirtualKey.F16, KeyId.F16 },
+        { WinVirtualKey.F1, SpecialKey.F1 },
+        { WinVirtualKey.F2, SpecialKey.F2 },
+        { WinVirtualKey.F3, SpecialKey.F3 },
+        { WinVirtualKey.F4, SpecialKey.F4 },
+        { WinVirtualKey.F5, SpecialKey.F5 },
+        { WinVirtualKey.F6, SpecialKey.F6 },
+        { WinVirtualKey.F7, SpecialKey.F7 },
+        { WinVirtualKey.F8, SpecialKey.F8 },
+        { WinVirtualKey.F9, SpecialKey.F9 },
+        { WinVirtualKey.F10, SpecialKey.F10 },
+        { WinVirtualKey.F11, SpecialKey.F11 },
+        { WinVirtualKey.F12, SpecialKey.F12 },
+        { WinVirtualKey.F13, SpecialKey.F13 },
+        { WinVirtualKey.F14, SpecialKey.F14 },
+        { WinVirtualKey.F15, SpecialKey.F15 },
+        { WinVirtualKey.F16, SpecialKey.F16 },
 
         // keypad
-        { WinVirtualKey.Numpad0, KeyId.KP_0 },
-        { WinVirtualKey.Numpad1, KeyId.KP_1 },
-        { WinVirtualKey.Numpad2, KeyId.KP_2 },
-        { WinVirtualKey.Numpad3, KeyId.KP_3 },
-        { WinVirtualKey.Numpad4, KeyId.KP_4 },
-        { WinVirtualKey.Numpad5, KeyId.KP_5 },
-        { WinVirtualKey.Numpad6, KeyId.KP_6 },
-        { WinVirtualKey.Numpad7, KeyId.KP_7 },
-        { WinVirtualKey.Numpad8, KeyId.KP_8 },
-        { WinVirtualKey.Numpad9, KeyId.KP_9 },
-        { WinVirtualKey.Decimal, KeyId.KP_Decimal },
-        { WinVirtualKey.Multiply, KeyId.KP_Multiply },
-        { WinVirtualKey.Add, KeyId.KP_Add },
-        { WinVirtualKey.Subtract, KeyId.KP_Subtract },
-        { WinVirtualKey.Divide, KeyId.KP_Divide },
+        { WinVirtualKey.Numpad0, SpecialKey.KP_0 },
+        { WinVirtualKey.Numpad1, SpecialKey.KP_1 },
+        { WinVirtualKey.Numpad2, SpecialKey.KP_2 },
+        { WinVirtualKey.Numpad3, SpecialKey.KP_3 },
+        { WinVirtualKey.Numpad4, SpecialKey.KP_4 },
+        { WinVirtualKey.Numpad5, SpecialKey.KP_5 },
+        { WinVirtualKey.Numpad6, SpecialKey.KP_6 },
+        { WinVirtualKey.Numpad7, SpecialKey.KP_7 },
+        { WinVirtualKey.Numpad8, SpecialKey.KP_8 },
+        { WinVirtualKey.Numpad9, SpecialKey.KP_9 },
+        { WinVirtualKey.Decimal, SpecialKey.KP_Decimal },
+        { WinVirtualKey.Multiply, SpecialKey.KP_Multiply },
+        { WinVirtualKey.Add, SpecialKey.KP_Add },
+        { WinVirtualKey.Subtract, SpecialKey.KP_Subtract },
+        { WinVirtualKey.Divide, SpecialKey.KP_Divide },
 
-        // modifiers — left and right map to distinct KeyIds
-        { WinVirtualKey.LShift, KeyId.Shift_L },
-        { WinVirtualKey.RShift, KeyId.Shift_R },
-        { WinVirtualKey.LControl, KeyId.Control_L },
-        { WinVirtualKey.RControl, KeyId.Control_R },
-        { WinVirtualKey.LMenu, KeyId.Alt_L },
-        { WinVirtualKey.RMenu, KeyId.Alt_R },
-        { WinVirtualKey.LWin, KeyId.Super_L },
-        { WinVirtualKey.RWin, KeyId.Super_R },
-        { WinVirtualKey.Capital, KeyId.CapsLock },
-        { WinVirtualKey.Numlock, KeyId.NumLock },
-        { WinVirtualKey.Scroll, KeyId.ScrollLock },
+        // modifiers — left and right map to distinct SpecialKeys
+        { WinVirtualKey.LShift, SpecialKey.Shift_L },
+        { WinVirtualKey.RShift, SpecialKey.Shift_R },
+        { WinVirtualKey.LControl, SpecialKey.Control_L },
+        { WinVirtualKey.RControl, SpecialKey.Control_R },
+        { WinVirtualKey.LMenu, SpecialKey.Alt_L },
+        { WinVirtualKey.RMenu, SpecialKey.Alt_R },
+        { WinVirtualKey.LWin, SpecialKey.Super_L },
+        { WinVirtualKey.RWin, SpecialKey.Super_R },
+        { WinVirtualKey.Capital, SpecialKey.CapsLock },
+        { WinVirtualKey.Numlock, SpecialKey.NumLock },
+        { WinVirtualKey.Scroll, SpecialKey.ScrollLock },
     };
 
-    internal static bool TryGet(int vkCode, out uint keyId) => Map.TryGetValue(vkCode, out keyId);
+    internal static bool TryGet(int vkCode, out SpecialKey key) => Map.TryGetValue(vkCode, out key);
 
-    internal static IReadOnlyDictionary<int, uint> All => Map;
+    internal static IReadOnlyDictionary<int, SpecialKey> All => Map;
 }

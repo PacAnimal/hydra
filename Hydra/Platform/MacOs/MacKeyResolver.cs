@@ -10,7 +10,7 @@ internal sealed class MacKeyResolver
 {
     private uint _deadKeyState;
     private KeyModifiers _previousModifiers;
-    private readonly Dictionary<int, uint> _keyDownId = [];  // vkCode → last emitted KeyId
+    private readonly Dictionary<int, (char? ch, SpecialKey? key)> _keyDownId = [];
 
     // symbol pointer for kTISPropertyUnicodeKeyLayoutData (loaded once)
     private static readonly nint TisPropertyUnicodeKeyLayoutData = LoadTisPropertyKey();
@@ -36,11 +36,11 @@ internal sealed class MacKeyResolver
         _previousModifiers = newMods;
 
         if (changed == KeyModifiers.None) return null;
-        if (!MacSpecialKeyMap.TryGet(vkCode, out var keyId)) return null;
+        if (!MacSpecialKeyMap.TryGet(vkCode, out var specialKey)) return null;
 
         var isPress = (newMods & changed) != 0;
         var type = isPress ? KeyEventType.KeyDown : KeyEventType.KeyUp;
-        return new KeyEvent(type, keyId, newMods, (ushort)(vkCode + 1));
+        return KeyEvent.Special(type, specialKey, newMods);
     }
 
     private KeyEvent? ResolveKeyEvent(int eventType, nint eventRef)
@@ -52,22 +52,26 @@ internal sealed class MacKeyResolver
         // key-up: replay the keyId that was emitted on key-down (modifier state may have changed)
         if (eventType == NativeMethods.KCGEventKeyUp)
         {
-            _keyDownId.Remove(vkCode, out var upId);
-            if (upId == KeyId.None) return null;
-            return new KeyEvent(KeyEventType.KeyUp, upId, mods, (ushort)(vkCode + 1));
+            _keyDownId.Remove(vkCode, out var downVal);
+            if (downVal.ch.HasValue) return KeyEvent.Char(KeyEventType.KeyUp, downVal.ch.Value, mods);
+            if (downVal.key.HasValue) return KeyEvent.Special(KeyEventType.KeyUp, downVal.key.Value, mods);
+            return null;
         }
 
         // special key (function keys, arrows, modifiers, keypad)?
-        if (MacSpecialKeyMap.TryGet(vkCode, out var specialId))
+        if (MacSpecialKeyMap.TryGet(vkCode, out var specialKey))
         {
             _deadKeyState = 0;
-            _keyDownId[vkCode] = specialId;
-            return new KeyEvent(KeyEventType.KeyDown, specialId, mods, (ushort)(vkCode + 1));
+            _keyDownId[vkCode] = (null, specialKey);
+            return KeyEvent.Special(KeyEventType.KeyDown, specialKey, mods);
         }
 
         // resolve character via UCKeyTranslate
         var ev = ResolveCharacter(vkCode, cgFlags, mods);
-        if (ev is not null) _keyDownId[vkCode] = ev.KeyId;
+        if (ev is not null)
+        {
+            _keyDownId[vkCode] = (ev.Character, ev.Key);
+        }
         return ev;
     }
 
@@ -95,7 +99,8 @@ internal sealed class MacKeyResolver
             if ((cgFlags & NativeMethods.KCGEventFlagMaskAlphaShift) != 0) ucMods |= 0x04;  // alphaLock >> 8
             if (!isCommand && (cgFlags & NativeMethods.KCGEventFlagMaskAlternate) != 0) ucMods |= 0x08;  // optionKey >> 8
 
-            uint keyId;
+            char? ch;
+            SpecialKey? specialKey;
             unsafe
             {
                 ushort* chars = stackalloc ushort[2];
@@ -119,17 +124,18 @@ internal sealed class MacKeyResolver
                 _deadKeyState = 0;
                 if (count == 0) return null;
 
-                keyId = UnicodeToKeyId((char)chars[0]);
+                (ch, specialKey) = ClassifyChar((char)chars[0]);
             }
 
-            if (keyId == KeyId.None) return null;
+            if (!ch.HasValue && !specialKey.HasValue) return null;
 
-            // detect AltGr: option was held and produced a printable glyph (not a keyboard shortcut)
+            // detect AltGr: option was held and produced a printable character (not a keyboard shortcut)
             bool optionHeld = (cgFlags & NativeMethods.KCGEventFlagMaskAlternate) != 0;
-            if (DetectAltGr(keyId, isCommand, optionHeld))
+            if (DetectAltGr(ch, isCommand, optionHeld))
                 mods |= KeyModifiers.AltGr;
 
-            return new KeyEvent(KeyEventType.KeyDown, keyId, mods, (ushort)(vkCode + 1));
+            if (ch.HasValue) return KeyEvent.Char(KeyEventType.KeyDown, ch.Value, mods);
+            return KeyEvent.Special(KeyEventType.KeyDown, specialKey!.Value, mods);
         }
         finally
         {
@@ -151,23 +157,23 @@ internal sealed class MacKeyResolver
         return mods;
     }
 
-    // detects whether option acted as AltGr: option was held, the key produced a printable glyph,
+    // detects whether option acted as AltGr: option was held, the key produced a printable character,
     // and no command modifier was held (which would make it a keyboard shortcut instead).
-    internal static bool DetectAltGr(uint keyId, bool isCommand, bool optionHeld) =>
-        optionHeld && !isCommand && KeyId.IsPrintable(keyId);
+    internal static bool DetectAltGr(char? character, bool isCommand, bool optionHeld) =>
+        optionHeld && !isCommand && character.HasValue;
 
-    // converts a unicode char from UCKeyTranslate output to a KeyId.
-    // control characters are mapped to their special KeyId constants.
-    internal static uint UnicodeToKeyId(char c) => c switch
+    // classifies a unicode char from UCKeyTranslate output as a printable char or SpecialKey.
+    // control characters are mapped to their SpecialKey constants; other printable chars pass through.
+    internal static (char? ch, SpecialKey? key) ClassifyChar(char c) => c switch
     {
-        (char)3 => KeyId.KP_Enter,
-        (char)8 => KeyId.BackSpace,
-        (char)9 => KeyId.Tab,
-        (char)13 => KeyId.Return,
-        (char)27 => KeyId.Escape,
-        (char)127 => KeyId.Delete,
-        _ when c < 32 => KeyId.None,
-        _ => c,
+        (char)3 => (null, SpecialKey.KP_Enter),
+        (char)8 => (null, SpecialKey.BackSpace),
+        (char)9 => (null, SpecialKey.Tab),
+        (char)13 => (null, SpecialKey.Return),
+        (char)27 => (null, SpecialKey.Escape),
+        (char)127 => (null, SpecialKey.Delete),
+        _ when c < 32 => (null, null),
+        _ => (c, null),
     };
 
     private static nint LoadTisPropertyKey()

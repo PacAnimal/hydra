@@ -4,31 +4,52 @@ using Hydra.Platform.MacOs;
 namespace Tests.Keyboard;
 
 [TestFixture]
-public class UnicodeToKeyIdTests
+public class ClassifyCharTests
 {
-    [TestCase('a', (uint)'a')]
-    [TestCase('Z', (uint)'Z')]
-    [TestCase('0', (uint)'0')]
-    [TestCase(' ', (uint)' ')]
-    [TestCase('@', (uint)'@')]
-    [TestCase('€', (uint)'€')]
-    public void PrintableChar_ReturnsSelf(char c, uint expected) =>
-        Assert.That(MacKeyResolver.UnicodeToKeyId(c), Is.EqualTo(expected));
+    [TestCase('a')]
+    [TestCase('Z')]
+    [TestCase('0')]
+    [TestCase(' ')]
+    [TestCase('@')]
+    [TestCase('€')]
+    public void PrintableChar_ReturnsCharacter(char c)
+    {
+        var (ch, key) = MacKeyResolver.ClassifyChar(c);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(ch, Is.EqualTo(c));
+            Assert.That(key, Is.Null);
+        }
+    }
 
-    [TestCase((char)8, KeyId.BackSpace)]
-    [TestCase((char)9, KeyId.Tab)]
-    [TestCase((char)13, KeyId.Return)]
-    [TestCase((char)27, KeyId.Escape)]
-    [TestCase((char)127, KeyId.Delete)]
-    [TestCase((char)3, KeyId.KP_Enter)]
-    public void ControlChar_ReturnsMappedKeyId(char c, uint expected) =>
-        Assert.That(MacKeyResolver.UnicodeToKeyId(c), Is.EqualTo(expected));
+    [TestCase((char)8, SpecialKey.BackSpace)]
+    [TestCase((char)9, SpecialKey.Tab)]
+    [TestCase((char)13, SpecialKey.Return)]
+    [TestCase((char)27, SpecialKey.Escape)]
+    [TestCase((char)127, SpecialKey.Delete)]
+    [TestCase((char)3, SpecialKey.KP_Enter)]
+    public void ControlChar_ReturnsMappedSpecialKey(char c, SpecialKey expected)
+    {
+        var (ch, key) = MacKeyResolver.ClassifyChar(c);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(ch, Is.Null);
+            Assert.That(key, Is.EqualTo(expected));
+        }
+    }
 
     [TestCase((char)0)]
     [TestCase((char)1)]
     [TestCase((char)7)]
     [TestCase((char)10)]
     [TestCase((char)31)]
-    public void UnmappedControlChar_ReturnsNone(char c) =>
-        Assert.That(MacKeyResolver.UnicodeToKeyId(c), Is.EqualTo(KeyId.None));
+    public void UnmappedControlChar_ReturnsBothNull(char c)
+    {
+        var (ch, key) = MacKeyResolver.ClassifyChar(c);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(ch, Is.Null);
+            Assert.That(key, Is.Null);
+        }
+    }
 }

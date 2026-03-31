@@ -14,67 +14,67 @@ public class MacSpecialKeyMapTests
     }
 
     // kVK_* values from Carbon Events.h
-    [TestCase(0x7A, KeyId.F1)]
-    [TestCase(0x78, KeyId.F2)]
-    [TestCase(0x60, KeyId.F5)]
-    [TestCase(0x6D, KeyId.F10)]
-    [TestCase(0x6F, KeyId.F12)]
-    [TestCase(0x69, KeyId.F13)]
-    [TestCase(0x6A, KeyId.F16)]
-    public void FunctionKeys_AreMapped(int vk, uint expectedId)
+    [TestCase(0x7A, SpecialKey.F1)]
+    [TestCase(0x78, SpecialKey.F2)]
+    [TestCase(0x60, SpecialKey.F5)]
+    [TestCase(0x6D, SpecialKey.F10)]
+    [TestCase(0x6F, SpecialKey.F12)]
+    [TestCase(0x69, SpecialKey.F13)]
+    [TestCase(0x6A, SpecialKey.F16)]
+    public void FunctionKeys_AreMapped(int vk, SpecialKey expected)
     {
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(MacSpecialKeyMap.TryGet(vk, out var id), Is.True);
-            Assert.That(id, Is.EqualTo(expectedId));
+            Assert.That(MacSpecialKeyMap.TryGet(vk, out var key), Is.True);
+            Assert.That(key, Is.EqualTo(expected));
         }
     }
 
-    [TestCase(0x7B, KeyId.Left)]
-    [TestCase(0x7C, KeyId.Right)]
-    [TestCase(0x7E, KeyId.Up)]
-    [TestCase(0x7D, KeyId.Down)]
-    [TestCase(0x73, KeyId.Home)]
-    [TestCase(0x77, KeyId.End)]
-    [TestCase(0x74, KeyId.PageUp)]
-    [TestCase(0x79, KeyId.PageDown)]
-    public void NavigationKeys_AreMapped(int vk, uint expectedId)
+    [TestCase(0x7B, SpecialKey.Left)]
+    [TestCase(0x7C, SpecialKey.Right)]
+    [TestCase(0x7E, SpecialKey.Up)]
+    [TestCase(0x7D, SpecialKey.Down)]
+    [TestCase(0x73, SpecialKey.Home)]
+    [TestCase(0x77, SpecialKey.End)]
+    [TestCase(0x74, SpecialKey.PageUp)]
+    [TestCase(0x79, SpecialKey.PageDown)]
+    public void NavigationKeys_AreMapped(int vk, SpecialKey expected)
     {
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(MacSpecialKeyMap.TryGet(vk, out var id), Is.True);
-            Assert.That(id, Is.EqualTo(expectedId));
+            Assert.That(MacSpecialKeyMap.TryGet(vk, out var key), Is.True);
+            Assert.That(key, Is.EqualTo(expected));
         }
     }
 
-    [TestCase(0x38, KeyId.Shift_L)]
-    [TestCase(0x3C, KeyId.Shift_R)]
-    [TestCase(0x3B, KeyId.Control_L)]
-    [TestCase(0x3E, KeyId.Control_R)]
-    [TestCase(0x3A, KeyId.Alt_L)]
-    [TestCase(0x3D, KeyId.Alt_R)]
-    [TestCase(0x37, KeyId.Super_L)]
-    [TestCase(0x36, KeyId.Super_R)]
-    [TestCase(0x39, KeyId.CapsLock)]
-    public void ModifierKeys_AreMapped(int vk, uint expectedId)
+    [TestCase(0x38, SpecialKey.Shift_L)]
+    [TestCase(0x3C, SpecialKey.Shift_R)]
+    [TestCase(0x3B, SpecialKey.Control_L)]
+    [TestCase(0x3E, SpecialKey.Control_R)]
+    [TestCase(0x3A, SpecialKey.Alt_L)]
+    [TestCase(0x3D, SpecialKey.Alt_R)]
+    [TestCase(0x37, SpecialKey.Super_L)]
+    [TestCase(0x36, SpecialKey.Super_R)]
+    [TestCase(0x39, SpecialKey.CapsLock)]
+    public void ModifierKeys_AreMapped(int vk, SpecialKey expected)
     {
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(MacSpecialKeyMap.TryGet(vk, out var id), Is.True);
-            Assert.That(id, Is.EqualTo(expectedId));
+            Assert.That(MacSpecialKeyMap.TryGet(vk, out var key), Is.True);
+            Assert.That(key, Is.EqualTo(expected));
         }
     }
 
-    [TestCase(0x52, KeyId.KP_0)]
-    [TestCase(0x5C, KeyId.KP_9)]
-    [TestCase(0x4C, KeyId.KP_Enter)]
-    [TestCase(0x47, KeyId.NumLock)]  // keypad clear = numlock on mac
-    public void KeypadKeys_AreMapped(int vk, uint expectedId)
+    [TestCase(0x52, SpecialKey.KP_0)]
+    [TestCase(0x5C, SpecialKey.KP_9)]
+    [TestCase(0x4C, SpecialKey.KP_Enter)]
+    [TestCase(0x47, SpecialKey.NumLock)]  // keypad clear = numlock on mac
+    public void KeypadKeys_AreMapped(int vk, SpecialKey expected)
     {
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(MacSpecialKeyMap.TryGet(vk, out var id), Is.True);
-            Assert.That(id, Is.EqualTo(expectedId));
+            Assert.That(MacSpecialKeyMap.TryGet(vk, out var key), Is.True);
+            Assert.That(key, Is.EqualTo(expected));
         }
     }
 

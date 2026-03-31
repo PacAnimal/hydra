@@ -70,12 +70,11 @@ public class ScreenTransitionService(IPlatformInput platform, ILogger<ScreenTran
 
     private void OnKeyEvent(KeyEvent keyEvent)
     {
-        var ch = KeyId.IsPrintable(keyEvent.KeyId) ? $" '{(char)keyEvent.KeyId}'" : "";
-        log.LogDebug("Key: {Type} id=0x{KeyId:X4}{Char} button={KeyButton} mods={Modifiers}",
-            keyEvent.Type, keyEvent.KeyId, ch, keyEvent.KeyButton, keyEvent.Modifiers);
+        var label = keyEvent.Character.HasValue ? $" '{keyEvent.Character}'" : keyEvent.Key.HasValue ? $" {keyEvent.Key}" : "";
+        log.LogDebug("Key: {Type}{Label} mods={Modifiers}", keyEvent.Type, label, keyEvent.Modifiers);
 
         if (keyEvent.Type == KeyEventType.KeyDown
-            && keyEvent.KeyId == 'l'
+            && keyEvent.Character == 'l'
             && (keyEvent.Modifiers & LockHotkey) == LockHotkey)
         {
             _lockedToScreen = !_lockedToScreen;

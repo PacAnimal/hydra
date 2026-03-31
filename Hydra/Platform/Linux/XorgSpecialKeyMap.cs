@@ -2,86 +2,86 @@ using Hydra.Keyboard;
 
 namespace Hydra.Platform.Linux;
 
-// maps X11 keysyms to platform-independent KeyId constants.
+// maps X11 keysyms to SpecialKey constants.
 // only covers special (non-character) keys; printable keys are handled mechanically
-// in XorgKeyResolver (MISCELLANY range: keysym - 0x1000 = KeyId).
+// in XorgKeyResolver (MISCELLANY range: keysym | 0x01000000 = SpecialKey value).
 internal static class XorgSpecialKeyMap
 {
-    private static readonly Dictionary<ulong, uint> Map = new()
+    private static readonly Dictionary<ulong, SpecialKey> Map = new()
     {
         // tty
-        { XorgVirtualKey.BackSpace, KeyId.BackSpace },
-        { XorgVirtualKey.Tab, KeyId.Tab },
-        { XorgVirtualKey.Return, KeyId.Return },
-        { XorgVirtualKey.Escape, KeyId.Escape },
-        { XorgVirtualKey.Delete, KeyId.Delete },
+        { XorgVirtualKey.BackSpace, SpecialKey.BackSpace },
+        { XorgVirtualKey.Tab, SpecialKey.Tab },
+        { XorgVirtualKey.Return, SpecialKey.Return },
+        { XorgVirtualKey.Escape, SpecialKey.Escape },
+        { XorgVirtualKey.Delete, SpecialKey.Delete },
 
         // cursor / navigation
-        { XorgVirtualKey.Home, KeyId.Home },
-        { XorgVirtualKey.Left, KeyId.Left },
-        { XorgVirtualKey.Up, KeyId.Up },
-        { XorgVirtualKey.Right, KeyId.Right },
-        { XorgVirtualKey.Down, KeyId.Down },
-        { XorgVirtualKey.PageUp, KeyId.PageUp },
-        { XorgVirtualKey.PageDown, KeyId.PageDown },
-        { XorgVirtualKey.End, KeyId.End },
-        { XorgVirtualKey.Insert, KeyId.Insert },
+        { XorgVirtualKey.Home, SpecialKey.Home },
+        { XorgVirtualKey.Left, SpecialKey.Left },
+        { XorgVirtualKey.Up, SpecialKey.Up },
+        { XorgVirtualKey.Right, SpecialKey.Right },
+        { XorgVirtualKey.Down, SpecialKey.Down },
+        { XorgVirtualKey.PageUp, SpecialKey.PageUp },
+        { XorgVirtualKey.PageDown, SpecialKey.PageDown },
+        { XorgVirtualKey.End, SpecialKey.End },
+        { XorgVirtualKey.Insert, SpecialKey.Insert },
 
         // misc
-        { XorgVirtualKey.NumLock, KeyId.NumLock },
-        { XorgVirtualKey.ScrollLock, KeyId.ScrollLock },
+        { XorgVirtualKey.NumLock, SpecialKey.NumLock },
+        { XorgVirtualKey.ScrollLock, SpecialKey.ScrollLock },
 
         // keypad
-        { XorgVirtualKey.KP_Space, KeyId.KP_Space },
-        { XorgVirtualKey.KP_Tab, KeyId.KP_Tab },
-        { XorgVirtualKey.KP_Enter, KeyId.KP_Enter },
-        { XorgVirtualKey.KP_Equal, KeyId.KP_Equal },
-        { XorgVirtualKey.KP_Multiply, KeyId.KP_Multiply },
-        { XorgVirtualKey.KP_Add, KeyId.KP_Add },
-        { XorgVirtualKey.KP_Subtract, KeyId.KP_Subtract },
-        { XorgVirtualKey.KP_Decimal, KeyId.KP_Decimal },
-        { XorgVirtualKey.KP_Divide, KeyId.KP_Divide },
-        { XorgVirtualKey.KP_0, KeyId.KP_0 },
-        { XorgVirtualKey.KP_1, KeyId.KP_1 },
-        { XorgVirtualKey.KP_2, KeyId.KP_2 },
-        { XorgVirtualKey.KP_3, KeyId.KP_3 },
-        { XorgVirtualKey.KP_4, KeyId.KP_4 },
-        { XorgVirtualKey.KP_5, KeyId.KP_5 },
-        { XorgVirtualKey.KP_6, KeyId.KP_6 },
-        { XorgVirtualKey.KP_7, KeyId.KP_7 },
-        { XorgVirtualKey.KP_8, KeyId.KP_8 },
-        { XorgVirtualKey.KP_9, KeyId.KP_9 },
+        { XorgVirtualKey.KP_Space, SpecialKey.KP_Space },
+        { XorgVirtualKey.KP_Tab, SpecialKey.KP_Tab },
+        { XorgVirtualKey.KP_Enter, SpecialKey.KP_Enter },
+        { XorgVirtualKey.KP_Equal, SpecialKey.KP_Equal },
+        { XorgVirtualKey.KP_Multiply, SpecialKey.KP_Multiply },
+        { XorgVirtualKey.KP_Add, SpecialKey.KP_Add },
+        { XorgVirtualKey.KP_Subtract, SpecialKey.KP_Subtract },
+        { XorgVirtualKey.KP_Decimal, SpecialKey.KP_Decimal },
+        { XorgVirtualKey.KP_Divide, SpecialKey.KP_Divide },
+        { XorgVirtualKey.KP_0, SpecialKey.KP_0 },
+        { XorgVirtualKey.KP_1, SpecialKey.KP_1 },
+        { XorgVirtualKey.KP_2, SpecialKey.KP_2 },
+        { XorgVirtualKey.KP_3, SpecialKey.KP_3 },
+        { XorgVirtualKey.KP_4, SpecialKey.KP_4 },
+        { XorgVirtualKey.KP_5, SpecialKey.KP_5 },
+        { XorgVirtualKey.KP_6, SpecialKey.KP_6 },
+        { XorgVirtualKey.KP_7, SpecialKey.KP_7 },
+        { XorgVirtualKey.KP_8, SpecialKey.KP_8 },
+        { XorgVirtualKey.KP_9, SpecialKey.KP_9 },
 
         // function keys
-        { XorgVirtualKey.F1, KeyId.F1 },
-        { XorgVirtualKey.F2, KeyId.F2 },
-        { XorgVirtualKey.F3, KeyId.F3 },
-        { XorgVirtualKey.F4, KeyId.F4 },
-        { XorgVirtualKey.F5, KeyId.F5 },
-        { XorgVirtualKey.F6, KeyId.F6 },
-        { XorgVirtualKey.F7, KeyId.F7 },
-        { XorgVirtualKey.F8, KeyId.F8 },
-        { XorgVirtualKey.F9, KeyId.F9 },
-        { XorgVirtualKey.F10, KeyId.F10 },
-        { XorgVirtualKey.F11, KeyId.F11 },
-        { XorgVirtualKey.F12, KeyId.F12 },
-        { XorgVirtualKey.F13, KeyId.F13 },
-        { XorgVirtualKey.F14, KeyId.F14 },
-        { XorgVirtualKey.F15, KeyId.F15 },
-        { XorgVirtualKey.F16, KeyId.F16 },
+        { XorgVirtualKey.F1, SpecialKey.F1 },
+        { XorgVirtualKey.F2, SpecialKey.F2 },
+        { XorgVirtualKey.F3, SpecialKey.F3 },
+        { XorgVirtualKey.F4, SpecialKey.F4 },
+        { XorgVirtualKey.F5, SpecialKey.F5 },
+        { XorgVirtualKey.F6, SpecialKey.F6 },
+        { XorgVirtualKey.F7, SpecialKey.F7 },
+        { XorgVirtualKey.F8, SpecialKey.F8 },
+        { XorgVirtualKey.F9, SpecialKey.F9 },
+        { XorgVirtualKey.F10, SpecialKey.F10 },
+        { XorgVirtualKey.F11, SpecialKey.F11 },
+        { XorgVirtualKey.F12, SpecialKey.F12 },
+        { XorgVirtualKey.F13, SpecialKey.F13 },
+        { XorgVirtualKey.F14, SpecialKey.F14 },
+        { XorgVirtualKey.F15, SpecialKey.F15 },
+        { XorgVirtualKey.F16, SpecialKey.F16 },
 
         // modifiers
-        { XorgVirtualKey.ISO_Level3_Shift, KeyId.AltGr },
-        { XorgVirtualKey.Shift_L, KeyId.Shift_L },
-        { XorgVirtualKey.Shift_R, KeyId.Shift_R },
-        { XorgVirtualKey.Control_L, KeyId.Control_L },
-        { XorgVirtualKey.Control_R, KeyId.Control_R },
-        { XorgVirtualKey.CapsLock, KeyId.CapsLock },
-        { XorgVirtualKey.Alt_L, KeyId.Alt_L },
-        { XorgVirtualKey.Alt_R, KeyId.Alt_R },
-        { XorgVirtualKey.Super_L, KeyId.Super_L },
-        { XorgVirtualKey.Super_R, KeyId.Super_R },
+        { XorgVirtualKey.ISO_Level3_Shift, SpecialKey.AltGr },
+        { XorgVirtualKey.Shift_L, SpecialKey.Shift_L },
+        { XorgVirtualKey.Shift_R, SpecialKey.Shift_R },
+        { XorgVirtualKey.Control_L, SpecialKey.Control_L },
+        { XorgVirtualKey.Control_R, SpecialKey.Control_R },
+        { XorgVirtualKey.CapsLock, SpecialKey.CapsLock },
+        { XorgVirtualKey.Alt_L, SpecialKey.Alt_L },
+        { XorgVirtualKey.Alt_R, SpecialKey.Alt_R },
+        { XorgVirtualKey.Super_L, SpecialKey.Super_L },
+        { XorgVirtualKey.Super_R, SpecialKey.Super_R },
     };
 
-    internal static bool TryGet(ulong keysym, out uint keyId) => Map.TryGetValue(keysym, out keyId);
+    internal static bool TryGet(ulong keysym, out SpecialKey key) => Map.TryGetValue(keysym, out key);
 }

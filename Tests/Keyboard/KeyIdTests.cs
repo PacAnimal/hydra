@@ -3,86 +3,47 @@ using Hydra.Keyboard;
 namespace Tests.Keyboard;
 
 [TestFixture]
-public class KeyIdTests
+public class SpecialKeyTests
 {
-    // -- IsPrintable --
-
-    [TestCase('a', ExpectedResult = true)]
-    [TestCase('Z', ExpectedResult = true)]
-    [TestCase('0', ExpectedResult = true)]
-    [TestCase(' ', ExpectedResult = true)]
-    [TestCase('@', ExpectedResult = true)]
-    public bool IsPrintable_AsciiChar(char c) => KeyId.IsPrintable(c);
-
-    [Test]
-    public void IsPrintable_None_ReturnsFalse() =>
-        Assert.That(KeyId.IsPrintable(KeyId.None), Is.False);
-
-    [TestCase(KeyId.Left)]
-    [TestCase(KeyId.Up)]
-    [TestCase(KeyId.F1)]
-    [TestCase(KeyId.F16)]
-    [TestCase(KeyId.Escape)]
-    [TestCase(KeyId.BackSpace)]
-    [TestCase(KeyId.Shift_L)]
-    public void IsPrintable_SpecialKey_ReturnsFalse(uint id) =>
-        Assert.That(KeyId.IsPrintable(id), Is.False);
-
-    // keypad digits and equal count as printable (for AltGr detection)
-    [TestCase(KeyId.KP_0)]
-    [TestCase(KeyId.KP_9)]
-    [TestCase(KeyId.KP_Equal)]
-    public void IsPrintable_KeypadDigits_ReturnsTrue(uint id) =>
-        Assert.That(KeyId.IsPrintable(id), Is.True);
-
     // -- IsModifier --
 
-    [TestCase(KeyId.Shift_L)]
-    [TestCase(KeyId.Shift_R)]
-    [TestCase(KeyId.Control_L)]
-    [TestCase(KeyId.Control_R)]
-    [TestCase(KeyId.Alt_L)]
-    [TestCase(KeyId.Alt_R)]
-    [TestCase(KeyId.Super_L)]
-    [TestCase(KeyId.Super_R)]
-    [TestCase(KeyId.CapsLock)]
-    public void IsModifier_ModifierKey_ReturnsTrue(uint id) =>
-        Assert.That(KeyId.IsModifier(id), Is.True);
+    [TestCase(SpecialKey.Shift_L)]
+    [TestCase(SpecialKey.Shift_R)]
+    [TestCase(SpecialKey.Control_L)]
+    [TestCase(SpecialKey.Control_R)]
+    [TestCase(SpecialKey.Alt_L)]
+    [TestCase(SpecialKey.Alt_R)]
+    [TestCase(SpecialKey.Super_L)]
+    [TestCase(SpecialKey.Super_R)]
+    [TestCase(SpecialKey.CapsLock)]
+    [TestCase(SpecialKey.AltGr)]
+    public void IsModifier_ModifierKey_ReturnsTrue(SpecialKey key) =>
+        Assert.That(key.IsModifier(), Is.True);
 
-    [TestCase(KeyId.Return)]
-    [TestCase(KeyId.F1)]
-    [TestCase((uint)'a')]
-    public void IsModifier_NonModifier_ReturnsFalse(uint id) =>
-        Assert.That(KeyId.IsModifier(id), Is.False);
+    [TestCase(SpecialKey.Return)]
+    [TestCase(SpecialKey.F1)]
+    [TestCase(SpecialKey.Left)]
+    [TestCase(SpecialKey.NumLock)]
+    public void IsModifier_NonModifier_ReturnsFalse(SpecialKey key) =>
+        Assert.That(key.IsModifier(), Is.False);
 
-    // -- constant values --
-
-    [Test]
-    public void PrintableAscii_EqualsUnicodeCodepoint()
-    {
-        using (Assert.EnterMultipleScope())
-        {
-            // printable ASCII chars ARE their unicode codepoint
-            Assert.That((uint)'A', Is.EqualTo(0x0041u));
-            Assert.That((uint)'a', Is.EqualTo(0x0061u));
-            Assert.That((uint)'0', Is.EqualTo(0x0030u));
-        }
-    }
+    // -- enum values (encoding: keysym | 0x01000000) --
 
     [Test]
     public void SpecialKeys_HaveExpectedValues()
     {
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(KeyId.BackSpace, Is.EqualTo(0xEF08u));
-            Assert.That(KeyId.Tab, Is.EqualTo(0xEF09u));
-            Assert.That(KeyId.Return, Is.EqualTo(0xEF0Du));
-            Assert.That(KeyId.Escape, Is.EqualTo(0xEF1Bu));
-            Assert.That(KeyId.Left, Is.EqualTo(0xEF51u));
-            Assert.That(KeyId.F1, Is.EqualTo(0xEFBEu));
-            Assert.That(KeyId.F16, Is.EqualTo(0xEFCDu));
-            Assert.That(KeyId.Shift_L, Is.EqualTo(0xEFE1u));
-            Assert.That(KeyId.Delete, Is.EqualTo(0xEFFFu));
+            Assert.That((uint)SpecialKey.BackSpace, Is.EqualTo(0x01FF08u));
+            Assert.That((uint)SpecialKey.Tab, Is.EqualTo(0x01FF09u));
+            Assert.That((uint)SpecialKey.Return, Is.EqualTo(0x01FF0Du));
+            Assert.That((uint)SpecialKey.Escape, Is.EqualTo(0x01FF1Bu));
+            Assert.That((uint)SpecialKey.Left, Is.EqualTo(0x01FF51u));
+            Assert.That((uint)SpecialKey.F1, Is.EqualTo(0x01FFBEu));
+            Assert.That((uint)SpecialKey.F16, Is.EqualTo(0x01FFCDu));
+            Assert.That((uint)SpecialKey.Shift_L, Is.EqualTo(0x01FFE1u));
+            Assert.That((uint)SpecialKey.Delete, Is.EqualTo(0x01FFFFu));
+            Assert.That((uint)SpecialKey.AltGr, Is.EqualTo(0x01FE03u));
         }
     }
 
@@ -91,28 +52,28 @@ public class KeyIdTests
     {
         for (uint i = 0; i < 16; i++)
         {
-            var expected = KeyId.F1 + i;
+            var expected = (uint)SpecialKey.F1 + i;
             var actual = i switch
             {
-                0 => KeyId.F1,
-                1 => KeyId.F2,
-                2 => KeyId.F3,
-                3 => KeyId.F4,
-                4 => KeyId.F5,
-                5 => KeyId.F6,
-                6 => KeyId.F7,
-                7 => KeyId.F8,
-                8 => KeyId.F9,
-                9 => KeyId.F10,
-                10 => KeyId.F11,
-                11 => KeyId.F12,
-                12 => KeyId.F13,
-                13 => KeyId.F14,
-                14 => KeyId.F15,
-                15 => KeyId.F16,
-                _ => 0u,
+                0 => SpecialKey.F1,
+                1 => SpecialKey.F2,
+                2 => SpecialKey.F3,
+                3 => SpecialKey.F4,
+                4 => SpecialKey.F5,
+                5 => SpecialKey.F6,
+                6 => SpecialKey.F7,
+                7 => SpecialKey.F8,
+                8 => SpecialKey.F9,
+                9 => SpecialKey.F10,
+                10 => SpecialKey.F11,
+                11 => SpecialKey.F12,
+                12 => SpecialKey.F13,
+                13 => SpecialKey.F14,
+                14 => SpecialKey.F15,
+                15 => SpecialKey.F16,
+                _ => SpecialKey.F1,
             };
-            Assert.That(actual, Is.EqualTo(expected), $"F{i + 1}");
+            Assert.That((uint)actual, Is.EqualTo(expected), $"F{i + 1}");
         }
     }
 }

@@ -13,6 +13,8 @@ internal sealed class WinKeyResolver
     // scratch buffer for ToUnicodeEx — avoid allocation on each keypress
     private readonly byte[] _resolveState = new byte[256];
 
+    private readonly Dictionary<int, (char? ch, SpecialKey? key)> _keyDownId = [];
+
     internal KeyEvent? Resolve(int wParam, KBDLLHOOKSTRUCT info)
     {
         var vk = (int)info.vkCode;
@@ -25,12 +27,17 @@ internal sealed class WinKeyResolver
 
         if (isKeyUp)
         {
-            if (!WinSpecialKeyMap.TryGet(vk, out var upId)) upId = KeyId.None;
-            return new KeyEvent(KeyEventType.KeyUp, upId, mods, (ushort)info.scanCode);
+            _keyDownId.Remove(vk, out var downVal);
+            if (downVal.ch.HasValue) return KeyEvent.Char(KeyEventType.KeyUp, downVal.ch.Value, mods);
+            if (downVal.key.HasValue) return KeyEvent.Special(KeyEventType.KeyUp, downVal.key.Value, mods);
+            return null;
         }
 
-        if (WinSpecialKeyMap.TryGet(vk, out var specialId))
-            return new KeyEvent(KeyEventType.KeyDown, specialId, mods, (ushort)info.scanCode);
+        if (WinSpecialKeyMap.TryGet(vk, out var specialKey))
+        {
+            _keyDownId[vk] = (null, specialKey);
+            return KeyEvent.Special(KeyEventType.KeyDown, specialKey, mods);
+        }
 
         return ResolveCharacter(vk, info.scanCode, mods);
     }
@@ -94,7 +101,8 @@ internal sealed class WinKeyResolver
         // get keyboard layout of the foreground window's thread for correct character mapping
         var hkl = GetForegroundKeyboardLayout();
 
-        uint keyId;
+        char? ch;
+        SpecialKey? specialKey;
         unsafe
         {
             char* buff = stackalloc char[4];
@@ -105,12 +113,20 @@ internal sealed class WinKeyResolver
                 // count < 0: dead key consumed (no output yet); count == 0: no character
                 if (count <= 0) return null;
 
-                keyId = UnicodeToKeyId(buff[0]);
+                (ch, specialKey) = ClassifyChar(buff[0]);
             }
         }
 
-        if (keyId == KeyId.None) return null;
-        return new KeyEvent(KeyEventType.KeyDown, keyId, mods, (ushort)scanCode);
+        if (!ch.HasValue && !specialKey.HasValue) return null;
+
+        if (ch.HasValue)
+        {
+            _keyDownId[vk] = (ch, null);
+            return KeyEvent.Char(KeyEventType.KeyDown, ch.Value, mods);
+        }
+
+        _keyDownId[vk] = (null, specialKey);
+        return KeyEvent.Special(KeyEventType.KeyDown, specialKey!.Value, mods);
     }
 
     // gets the keyboard layout associated with the foreground window's thread.
@@ -123,18 +139,18 @@ internal sealed class WinKeyResolver
         return NativeMethods.GetKeyboardLayout(tid);
     }
 
-    // maps a unicode char from ToUnicodeEx output to a KeyId.
-    // control characters are mapped to their special KeyId constants.
-    internal static uint UnicodeToKeyId(char c) => c switch
+    // classifies a unicode char from ToUnicodeEx output as a printable char or SpecialKey.
+    // control characters are mapped to their SpecialKey constants; other printable chars pass through.
+    internal static (char? ch, SpecialKey? key) ClassifyChar(char c) => c switch
     {
-        (char)3 => KeyId.KP_Enter,
-        (char)8 => KeyId.BackSpace,
-        (char)9 => KeyId.Tab,
-        (char)13 => KeyId.Return,
-        (char)27 => KeyId.Escape,
-        (char)127 => KeyId.Delete,
-        _ when c < 32 => KeyId.None,
-        _ => c,
+        (char)3 => (null, SpecialKey.KP_Enter),
+        (char)8 => (null, SpecialKey.BackSpace),
+        (char)9 => (null, SpecialKey.Tab),
+        (char)13 => (null, SpecialKey.Return),
+        (char)27 => (null, SpecialKey.Escape),
+        (char)127 => (null, SpecialKey.Delete),
+        _ when c < 32 => (null, null),
+        _ => (c, null),
     };
 
     private static bool IsModifier(int vk) =>
