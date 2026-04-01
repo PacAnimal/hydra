@@ -1,0 +1,26 @@
+name: Build Hydra
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    strategy:
+      matrix:
+        rid: [osx-arm64, win-x64, linux-x64]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Publish Hydra (${{ matrix.rid }})
+        run: dotnet publish Hydra --runtime ${{ matrix.rid }} --self-contained
