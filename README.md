@@ -67,6 +67,12 @@ For machines on different networks, **Styx** is a relay server that securely tun
 docker run -e RELAY_PASSWORD=<secret> -p 5000:5000 ghcr.io/pacanimal/styx:latest
 ```
 
+Styx listens on port `5000` by default. Override with `LOCAL_PORT`:
+
+```bash
+docker run -e RELAY_PASSWORD=<secret> -e LOCAL_PORT=8080 -p 8080:8080 ghcr.io/pacanimal/styx:latest
+```
+
 Or build from source:
 
 ```bash
