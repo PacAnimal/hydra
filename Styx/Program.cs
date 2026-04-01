@@ -76,6 +76,7 @@ app.MapPost("/api/network-config", async (NetworkConfigRequest request) =>
 
 app.MapGet("/", () => Results.Redirect("/index.html"));
 
+app.Logger.LogInformation("Styx listening on port {Port}", port);
 app.Run();
 return 0;
 

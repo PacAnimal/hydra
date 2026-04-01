@@ -93,12 +93,12 @@
 
         .copy-btn {
             margin-top: 8px;
-            background: #1a2a1a;
-            border: 1px solid #2a3a2a;
-            color: #5a9a5a;
+            background: #14532d;
+            border: 1px solid #166534;
+            color: #4ade80;
         }
 
-        .copy-btn:hover { background: #1e341e; }
+        .copy-btn:hover { background: #166534; }
 
         .error {
             margin-top: 14px;
@@ -186,8 +186,15 @@
         }
 
         async function copyConfig() {
+            const btn = document.querySelector('.copy-btn');
             const text = document.getElementById('config-output').value;
             await navigator.clipboard.writeText(text);
+            btn.textContent = 'Copied!';
+            btn.style.color = '#fff';
+            setTimeout(() => {
+                btn.textContent = 'Copy to Clipboard';
+                btn.style.color = '';
+            }, 1500);
         }
 
         document.getElementById('password').addEventListener('keydown', e => {
