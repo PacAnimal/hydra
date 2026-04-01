@@ -1,6 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using Cathedral.Config;
+using Cathedral.Extensions;
 using Hydra.Screen;
 using Microsoft.Extensions.Logging;
 
@@ -8,19 +8,20 @@ namespace Hydra.Config;
 
 public class HydraConfig
 {
-    public required Mode Mode { get; set; }
-    public List<ScreenRect> Screens { get; set; } = [];
+    public required Mode Mode { get; init; }
+    // master only — ignored in slave mode
+    public List<ScreenRect> Screens { get; init; } = [];
 
     [JsonConverter(typeof(LogLevelConverter))]
     public LogLevel LogLevel { get; set; } = LogLevel.Information;
 
-    public string? NetworkConfig { get; set; }
-    public string? HostName { get; set; }
+    public string? NetworkConfig { get; init; }
+    public string? HostName { get; init; }
 
     public static HydraConfig Load(string path = "hydra.conf")
     {
         var json = File.ReadAllText(path);
-        return JsonSerializer.Deserialize<HydraConfig>(json, SaneJson.Options)
+        return json.FromSaneJson<HydraConfig>()
             ?? throw new InvalidOperationException("Failed to deserialize hydra.conf");
     }
 

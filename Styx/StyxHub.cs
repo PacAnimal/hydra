@@ -13,10 +13,14 @@ public class StyxHub(IClientRegistry registry, ILogger<StyxHub> log) : Hub<IStyx
     [AllowAnonymousHub]
     public async Task<RelayLoginResponse> Authenticate(RelayLogin login)
     {
+        // throttle — minimum response time regardless of outcome
+        var throttle = Task.Delay(TimeSpan.FromSeconds(1), Context.ConnectionAborted);
+
         var password = Environment.GetEnvironmentVariable("RELAY_PASSWORD");
         if (string.IsNullOrEmpty(password))
         {
             log.LogError("RELAY_PASSWORD is not set");
+            await throttle;
             return new RelayLoginResponse { Authenticated = false, Message = "Server misconfigured" };
         }
 
@@ -28,6 +32,7 @@ public class StyxHub(IClientRegistry registry, ILogger<StyxHub> log) : Hub<IStyx
         catch (Exception ex)
         {
             log.LogWarning(ex, "Authentication failed for {HostName}", login.HostName);
+            await throttle;
             return new RelayLoginResponse { Authenticated = false, Message = "Invalid authorization" };
         }
 
@@ -39,6 +44,7 @@ public class StyxHub(IClientRegistry registry, ILogger<StyxHub> log) : Hub<IStyx
         await registry.Register(Context.ConnectionId, networkId, login.HostName);
         log.LogInformation("Authenticated {HostName} on network {NetworkId}", login.HostName, networkId);
         await BroadcastPeers(networkId);
+        await throttle;
         return new RelayLoginResponse { Authenticated = true };
     }
 
