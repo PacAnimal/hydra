@@ -35,9 +35,31 @@ builder.ConfigureServices((_, services) =>
 
         services.AddHostedService<ScreenTransitionService>();
     }
+    else if (config.Mode == Mode.Slave)
+    {
+        if (OperatingSystem.IsMacOS())
+            services.AddSingleton<IPlatformOutput, MacOutputHandler>();
+        else if (OperatingSystem.IsWindows())
+            services.AddSingleton<IPlatformOutput, WindowsOutputHandler>();
+        else if (OperatingSystem.IsLinux())
+            services.AddSingleton<IPlatformOutput, XorgOutputHandler>();
+        else
+            throw new PlatformNotSupportedException($"Unsupported OS: {Environment.OSVersion}");
+
+        // forwarder buffers log entries; SlaveLogSender drains them to masters
+        var forwarder = new SlaveLogForwarder();
+        services.AddSingleton(forwarder);
+        services.AddSereneCustomLogging(e => forwarder.ForwardAsync(e).AsTask(), c => c.MinLogLevel = config.LogLevel);
+        services.AddHostedService<SlaveLogSender>();
+    }
 
     if (config.NetworkConfig != null)
-        services.AddHostedService<IRelaySender, RelayConnection>();
+    {
+        if (config.Mode == Mode.Slave)
+            services.AddHostedService<IRelaySender, SlaveRelayConnection>();
+        else
+            services.AddHostedService<IRelaySender, MasterRelayConnection>();
+    }
     else
         services.AddSingleton<IRelaySender, NullRelaySender>();
 });

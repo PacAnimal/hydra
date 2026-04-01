@@ -45,19 +45,34 @@ public class StyxHub(IClientRegistry registry, ILogger<StyxHub> log) : Hub<IStyx
     [AllowAnonymousHub]
     public Task<bool> Ping() => Task.FromResult(true);
 
-    public async Task Send(string targetHost, byte[] payload)
+    public async Task Send(string[] targetHosts, byte[] payload)
     {
-        var identity = await registry.GetIdentity(Context.ConnectionId);
-        if (identity == null) return;
-
-        var targetConnectionId = await registry.GetConnectionId(identity.NetworkId, targetHost);
-        if (targetConnectionId == null)
+        if (targetHosts.Length == 0)
         {
-            log.LogDebug("Target {TargetHost} not found on network {NetworkId}", targetHost, identity.NetworkId);
+            log.LogError("Send called with empty targetHosts array");
             return;
         }
 
-        await Clients.Client(targetConnectionId).Receive(identity.HostName, payload);
+        var identity = await registry.GetIdentity(Context.ConnectionId);
+        if (identity == null) return;
+
+        foreach (var targetHost in targetHosts)
+        {
+            if (string.IsNullOrEmpty(targetHost))
+            {
+                log.LogError("Send called with empty hostname in targetHosts");
+                continue;
+            }
+
+            var targetConnectionId = await registry.GetConnectionId(identity.NetworkId, targetHost);
+            if (targetConnectionId == null)
+            {
+                log.LogDebug("Target {TargetHost} not found on network {NetworkId}", targetHost, identity.NetworkId);
+                continue;
+            }
+
+            await Clients.Client(targetConnectionId).Receive(identity.HostName, payload);
+        }
     }
 
     public override async Task OnDisconnectedAsync(Exception? exception)

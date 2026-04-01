@@ -113,7 +113,37 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial ulong CGEventGetFlags(nint eventRef);
 
-    // -- CoreGraphics: events --
+    // -- CoreGraphics: event creation and injection --
+
+    [LibraryImport(CoreGraphics)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint CGEventCreateKeyboardEvent(nint source, ushort virtualKey, [MarshalAs(UnmanagedType.Bool)] bool keyDown);
+
+    [LibraryImport(CoreGraphics)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint CGEventCreateMouseEvent(nint source, int mouseType, CGPoint mouseCursorPosition, int mouseButton);
+
+    [LibraryImport(CoreGraphics)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint CGEventCreateScrollWheelEvent(nint source, int units, uint wheelCount, int wheel1, int wheel2);
+
+    [LibraryImport(CoreGraphics)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void CGEventPost(int tap, nint eventRef);
+
+    [LibraryImport(CoreGraphics)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void CGEventSetFlags(nint eventRef, ulong flags);
+
+    [LibraryImport(CoreGraphics)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void CGEventSetIntegerValueField(nint eventRef, int field, long value);
+
+    [LibraryImport(CoreGraphics)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static unsafe partial void CGEventKeyboardSetUnicodeString(nint eventRef, nuint stringLength, ushort* unicodeString);
+
+    // -- CoreGraphics: events (read) --
 
     [LibraryImport(CoreGraphics)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]

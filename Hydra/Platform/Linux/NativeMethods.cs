@@ -203,6 +203,22 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void XFixesShowCursor(nint display, nint window);
 
+    // -- XTest input injection --
+
+    private const string XTest = "libXtst.so.6";
+
+    [LibraryImport(XTest)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int XTestFakeKeyEvent(nint display, uint keycode, [MarshalAs(UnmanagedType.Bool)] bool isPress, nuint delay);
+
+    [LibraryImport(XTest)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int XTestFakeButtonEvent(nint display, uint button, [MarshalAs(UnmanagedType.Bool)] bool isPress, nuint delay);
+
+    [LibraryImport(XTest)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int XTestFakeMotionEvent(nint display, int screenNumber, int x, int y, nuint delay);
+
     // -- Xkb keyboard --
 
     [LibraryImport(X11)]

@@ -96,4 +96,6 @@ internal static class XorgSpecialKeyMap
     };
 
     internal static bool TryGet(ulong keysym, out SpecialKey key) => Map.TryGetValue(keysym, out key);
+
+    internal static readonly Dictionary<SpecialKey, ulong> Reverse = Map.ToDictionary(kvp => kvp.Value, kvp => kvp.Key);
 }

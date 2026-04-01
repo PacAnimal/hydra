@@ -35,14 +35,12 @@ public class StyxHttpTests
     }
 
     [Test]
-    public async Task Root_RedirectsTo_IndexHtml()
+    public async Task Root_Returns200WithHtmlContent()
     {
         var response = await _http!.GetAsync("/");
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.Redirect).Or.EqualTo(HttpStatusCode.MovedPermanently).Or.EqualTo(HttpStatusCode.Found));
-            Assert.That(response.Headers.Location?.ToString(), Does.EndWith("index.html"));
-        }
+        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+        var content = await response.Content.ReadAsStringAsync();
+        Assert.That(content, Does.Contain("<!DOCTYPE html>").Or.Contain("<html"));
     }
 
     [Test]

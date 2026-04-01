@@ -38,7 +38,7 @@ public class RelayEncryption(string key)
             }
             catch (Exception retryEx)
             {
-                log.LogWarning(retryEx, "Decrypt failed after key re-derivation for {SourceHost} — dropping message", sourceHost);
+                log.LogDebug(retryEx, "Decrypt failed after key re-derivation for {SourceHost}", sourceHost);
                 throw;
             }
         }

@@ -23,18 +23,20 @@ public class RelayConnection(HydraConfig config, ILogger<RelayConnection> log)
 
     // IRelaySender
     public bool IsConnected => _server != null;
+    public event Action<string[]>? PeersChanged;
+    public event Action<string, MessageKind, string>? MessageReceived;
 
-    public async ValueTask Send(string targetHost, byte[] payload)
+    public async ValueTask Send(string[] targetHosts, byte[] payload)
     {
         if (_server == null || _encryption == null) return;
         try
         {
             var encrypted = await _encryption.Encrypt(payload);
-            await _server.Send(targetHost, encrypted);
+            await _server.Send(targetHosts, encrypted);
         }
         catch (Exception ex)
         {
-            log.LogWarning(ex, "Failed to send relay message to {TargetHost}", targetHost);
+            log.LogWarning(ex, "Failed to send relay message to [{TargetHosts}]", string.Join(", ", targetHosts));
         }
     }
 
@@ -42,9 +44,20 @@ public class RelayConnection(HydraConfig config, ILogger<RelayConnection> log)
     public async Task Receive(string sourceHost, byte[] payload)
     {
         if (_encryption == null) return;
+
+        byte[] decrypted;
         try
         {
-            var decrypted = await _encryption.Decrypt(sourceHost, payload, log);
+            decrypted = await _encryption.Decrypt(sourceHost, payload, log);
+        }
+        catch (Exception ex)
+        {
+            log.LogWarning(ex, "Could not decrypt message from {SourceHost} — discarding (wrong key or malicious sender)", sourceHost);
+            return;
+        }
+
+        try
+        {
             var (kind, json) = MessageSerializer.Decode(decrypted);
             log.LogDebug("Received {Kind} from {SourceHost} ({Bytes} bytes)", kind, sourceHost, payload.Length);
             await OnReceive(sourceHost, kind, json);
@@ -67,9 +80,19 @@ public class RelayConnection(HydraConfig config, ILogger<RelayConnection> log)
         await OnPeers(hostNames);
     }
 
-    // override in subclasses (e.g. tests, future receiver injection)
-    protected virtual Task OnReceive(string sourceHost, MessageKind kind, string json) => Task.CompletedTask;
-    protected virtual Task OnPeers(string[] hostNames) => Task.CompletedTask;
+    // override in subclasses (e.g. tests, slave mode)
+    protected virtual Task OnReceive(string sourceHost, MessageKind kind, string json)
+    {
+        MessageReceived?.Invoke(sourceHost, kind, json);
+        return Task.CompletedTask;
+    }
+
+    protected virtual Task OnPeers(string[] hostNames)
+    {
+        PeersChanged?.Invoke(hostNames);
+        return Task.CompletedTask;
+    }
+
     protected virtual Task OnKicked(string reason) => Task.CompletedTask;
     // fires after _server and _encryption are set — guaranteed connection-ready signal
     protected virtual void OnAuthenticated() { }

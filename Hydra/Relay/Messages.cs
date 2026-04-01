@@ -14,9 +14,14 @@ public enum MessageKind : byte
     MouseScroll = 4,
     EnterScreen = 5,
     LeaveScreen = 6,
+    MasterConfig = 7,
+    ScreenInfo = 8,
+    SlaveLog = 9,
 }
 
 public record MouseMoveMessage(int X, int Y);
+public record ScreenInfoMessage(int Width, int Height);
+public record SlaveLogMessage(int Level, string Category, string Message, string? Exception);
 public record KeyEventMessage(KeyEventType Type, KeyModifiers Modifiers, char? Character, SpecialKey? Key);
 public record MouseButtonMessage(MouseButton Button, bool IsPressed);
 public record MouseScrollMessage(short XDelta, short YDelta);

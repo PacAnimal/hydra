@@ -126,6 +126,36 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     internal static partial int GetSystemMetrics(int nIndex);
 
+    // -- input injection --
+
+    internal const uint INPUT_MOUSE = 0;
+    internal const uint INPUT_KEYBOARD = 1;
+
+    internal const uint KEYEVENTF_EXTENDEDKEY = 0x01;
+    internal const uint KEYEVENTF_KEYUP = 0x02;
+    internal const uint KEYEVENTF_UNICODE = 0x04;
+
+    internal const uint MOUSEEVENTF_MOVE = 0x0001;
+    internal const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
+    internal const uint MOUSEEVENTF_LEFTUP = 0x0004;
+    internal const uint MOUSEEVENTF_RIGHTDOWN = 0x0008;
+    internal const uint MOUSEEVENTF_RIGHTUP = 0x0010;
+    internal const uint MOUSEEVENTF_MIDDLEDOWN = 0x0020;
+    internal const uint MOUSEEVENTF_MIDDLEUP = 0x0040;
+    internal const uint MOUSEEVENTF_XDOWN = 0x0080;
+    internal const uint MOUSEEVENTF_XUP = 0x0100;
+    internal const uint MOUSEEVENTF_WHEEL = 0x0800;
+    internal const uint MOUSEEVENTF_HWHEEL = 0x1000;
+    internal const uint MOUSEEVENTF_ABSOLUTE = 0x8000;
+
+    [LibraryImport(User32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static unsafe partial uint SendInput(uint nInputs, INPUT* pInputs, int cbSize);
+
+    [LibraryImport(User32, EntryPoint = "MapVirtualKeyW")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial uint MapVirtualKey(uint uCode, uint uMapType);
+
     // -- keyboard --
 
     [LibraryImport(User32)]
@@ -200,4 +230,35 @@ internal struct MSG
     internal uint time;
     internal WINPOINT pt;
     internal uint lPrivate;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct MOUSEINPUT
+{
+    internal int dx;
+    internal int dy;
+    internal uint mouseData;
+    internal uint dwFlags;
+    internal uint time;
+    internal nuint dwExtraInfo;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct KEYBDINPUT
+{
+    internal ushort wVk;
+    internal ushort wScan;
+    internal uint dwFlags;
+    internal uint time;
+    internal nuint dwExtraInfo;
+}
+
+// INPUT is a union of MOUSEINPUT and KEYBDINPUT (plus HARDWAREINPUT, unused).
+// The union starts at offset 4 (after the type field). On 64-bit: sizeof = 40.
+[StructLayout(LayoutKind.Explicit, Size = 40)]
+internal struct INPUT
+{
+    [FieldOffset(0)] internal uint type;
+    [FieldOffset(4)] internal MOUSEINPUT mi;
+    [FieldOffset(4)] internal KEYBDINPUT ki;
 }

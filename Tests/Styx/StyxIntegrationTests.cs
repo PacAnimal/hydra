@@ -57,7 +57,7 @@ public class StyxIntegrationTests
         await using var client = new TestStyxClient();
         await client.ConnectRaw(_factory!);
         Assert.CatchAsync(async () =>
-            await client.Server!.Send("any-host", [1, 2, 3]));
+            await client.Server!.Send(["any-host"], [1, 2, 3]));
     }
 
     [Test]
@@ -100,7 +100,7 @@ public class StyxIntegrationTests
         await receiver.WaitForReady();
 
         var payload = MessageSerializer.Encode(MessageKind.MouseMove, new MouseMoveMessage(42, 99));
-        await sender.Send("receiver", payload);
+        await sender.Send(["receiver"], payload);
 
         var (source, kind, json) = await receiver.WaitForMessage();
 
@@ -128,12 +128,12 @@ public class StyxIntegrationTests
         await beta.WaitForReady();
 
         // alpha → beta
-        await alpha.Send("beta", MessageSerializer.Encode(MessageKind.MouseMove, new MouseMoveMessage(1, 2)));
+        await alpha.Send(["beta"], MessageSerializer.Encode(MessageKind.MouseMove, new MouseMoveMessage(1, 2)));
         var (fromAlpha, _, _) = await beta.WaitForMessage();
         Assert.That(fromAlpha, Is.EqualTo("alpha"));
 
         // beta → alpha
-        await beta.Send("alpha", MessageSerializer.Encode(MessageKind.MouseMove, new MouseMoveMessage(3, 4)));
+        await beta.Send(["alpha"], MessageSerializer.Encode(MessageKind.MouseMove, new MouseMoveMessage(3, 4)));
         var (fromBeta, _, _) = await alpha.WaitForMessage();
         Assert.That(fromBeta, Is.EqualTo("beta"));
     }
@@ -158,7 +158,7 @@ public class StyxIntegrationTests
         await clientB.WaitForReady();
 
         // clientB targets "receiver" — should not reach receiverA (different network)
-        await clientB.Send("receiver", MessageSerializer.Encode(MessageKind.MouseMove, new MouseMoveMessage(7, 7)));
+        await clientB.Send(["receiver"], MessageSerializer.Encode(MessageKind.MouseMove, new MouseMoveMessage(7, 7)));
 
         Assert.ThrowsAsync<TimeoutException>(() => receiverA.WaitForMessage(800));
     }
@@ -230,7 +230,7 @@ public class StyxIntegrationTests
         await sender1.StartAsync(CancellationToken.None);
         await sender1.WaitForReady();
 
-        await sender1.Send("receiver", MessageSerializer.Encode(MessageKind.MouseMove, new MouseMoveMessage(1, 1)));
+        await sender1.Send(["receiver"], MessageSerializer.Encode(MessageKind.MouseMove, new MouseMoveMessage(1, 1)));
         var (_, kind1, _) = await receiver.WaitForMessage();
         Assert.That(kind1, Is.EqualTo(MessageKind.MouseMove));
 
@@ -244,7 +244,7 @@ public class StyxIntegrationTests
         await sender2.WaitForReady();
 
         // receiver must re-derive remote key via ExtractKey — should succeed transparently
-        await sender2.Send("receiver", MessageSerializer.Encode(MessageKind.MouseMove, new MouseMoveMessage(2, 2)));
+        await sender2.Send(["receiver"], MessageSerializer.Encode(MessageKind.MouseMove, new MouseMoveMessage(2, 2)));
         var (_, kind2, json2) = await receiver.WaitForMessage();
 
         using (Assert.EnterMultipleScope())
@@ -268,6 +268,6 @@ public class StyxIntegrationTests
 
         // send to a host that doesn't exist — should silently no-op, not throw
         Assert.DoesNotThrowAsync(async () =>
-            await client.Send("nonexistent", MessageSerializer.Encode(MessageKind.MouseMove, new MouseMoveMessage(0, 0))));
+            await client.Send(["nonexistent"], MessageSerializer.Encode(MessageKind.MouseMove, new MouseMoveMessage(0, 0))));
     }
 }

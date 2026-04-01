@@ -80,4 +80,6 @@ internal static class WinSpecialKeyMap
     };
 
     internal static bool TryGet(int vkCode, out SpecialKey key) => Map.TryGetValue(vkCode, out key);
+
+    internal static readonly Dictionary<SpecialKey, int> Reverse = Map.ToDictionary(kvp => kvp.Value, kvp => kvp.Key);
 }

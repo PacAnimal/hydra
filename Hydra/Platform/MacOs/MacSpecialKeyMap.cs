@@ -78,4 +78,6 @@ internal static class MacSpecialKeyMap
     internal static bool TryGet(int vkCode, out SpecialKey key) => Map.TryGetValue(vkCode, out key);
 
     internal static IReadOnlyDictionary<int, SpecialKey> All => Map;
+
+    internal static readonly Dictionary<SpecialKey, int> Reverse = Map.ToDictionary(kvp => kvp.Value, kvp => kvp.Key);
 }

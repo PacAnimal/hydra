@@ -59,6 +59,7 @@ builder.WebHost.ConfigureKestrel(options =>
 
 var app = builder.Build();
 
+app.UseDefaultFiles();
 app.UseStaticFiles();
 
 app.MapHub<StyxHub>("/relay");
@@ -80,7 +81,6 @@ app.MapPost("/api/network-config", async (NetworkConfigRequest request) =>
     return Results.Ok(new NetworkConfigResponse(authorization));
 });
 
-app.MapGet("/", () => Results.Redirect("/index.html"));
 
 app.Logger.LogInformation("Styx listening on port {Port}", port);
 app.Run();
