@@ -8,6 +8,7 @@ namespace Hydra.Config;
 
 public class HydraConfig
 {
+    public required Mode Mode { get; set; }
     public List<ScreenRect> Screens { get; set; } = [];
 
     [JsonConverter(typeof(LogLevelConverter))]

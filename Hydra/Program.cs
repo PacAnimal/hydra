@@ -22,21 +22,24 @@ builder.ConfigureServices((_, services) =>
     services.AddSereneConsoleLogging(c => c.MinLogLevel = config.LogLevel);
     services.AddSingleton(config);
 
-    if (OperatingSystem.IsMacOS())
-        services.AddSingleton<IPlatformInput, MacInputHandler>();
-    else if (OperatingSystem.IsWindows())
-        services.AddSingleton<IPlatformInput, WindowsInputHandler>();
-    else if (OperatingSystem.IsLinux())
-        services.AddSingleton<IPlatformInput, XorgInputHandler>();
-    else
-        throw new PlatformNotSupportedException($"Unsupported OS: {Environment.OSVersion}");
+    if (config.Mode == Mode.Master)
+    {
+        if (OperatingSystem.IsMacOS())
+            services.AddSingleton<IPlatformInput, MacInputHandler>();
+        else if (OperatingSystem.IsWindows())
+            services.AddSingleton<IPlatformInput, WindowsInputHandler>();
+        else if (OperatingSystem.IsLinux())
+            services.AddSingleton<IPlatformInput, XorgInputHandler>();
+        else
+            throw new PlatformNotSupportedException($"Unsupported OS: {Environment.OSVersion}");
+
+        services.AddHostedService<ScreenTransitionService>();
+    }
 
     if (config.NetworkConfig != null)
         services.AddHostedService<IRelaySender, RelayConnection>();
     else
         services.AddSingleton<IRelaySender, NullRelaySender>();
-
-    services.AddHostedService<ScreenTransitionService>();
 });
 
 var app = builder.Build();

@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using Hydra.Config;
 using System.Text;
 using System.Text.Json;
 using Cathedral.Config;
@@ -115,7 +116,7 @@ public class StyxHttpTests
         var config = new NetworkConfig(styxServer, key, authorization);
         var configBase64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(config, SaneJson.Options)));
 
-        await using var client = new HydraTestClient(_factory!, new Hydra.Config.HydraConfig { NetworkConfig = configBase64, HostName = "api-test" });
+        await using var client = new HydraTestClient(_factory!, new Hydra.Config.HydraConfig { Mode = Mode.Master, NetworkConfig = configBase64, HostName = "api-test" });
         await client.StartAsync(CancellationToken.None);
         await client.WaitForReady();
 

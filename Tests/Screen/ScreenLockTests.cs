@@ -16,6 +16,7 @@ public class ScreenLockTests
 
     private static readonly HydraConfig TestConfig = new()
     {
+        Mode = Mode.Master,
         Screens = [new ScreenRect("main", 0, 0, 0, 0, false), new ScreenRect("right", 0, 0, 0, 0, true)]
     };
 
