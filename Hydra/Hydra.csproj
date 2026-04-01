@@ -55,8 +55,8 @@
                  Condition="$([MSBuild]::IsOSPlatform('OSX'))" />
     </ItemGroup>
 
-    <!-- compile the Swift shield helper before build; only runs on macOS where swiftc is available -->
-    <Target Name="CompileMacShield" BeforeTargets="Build" Condition="$([MSBuild]::IsOSPlatform('OSX'))">
+    <!-- compile the Swift shield helper before content files are copied; only runs on macOS where swiftc is available -->
+    <Target Name="CompileMacShield" BeforeTargets="_CopyOutOfDateSourceItemsToOutputDirectory" Condition="$([MSBuild]::IsOSPlatform('OSX'))">
         <Exec Command="xcrun swiftc -O -o &quot;$(MSBuildProjectDirectory)/Resources/MacShield/hydra-shield&quot; &quot;$(MSBuildProjectDirectory)/Resources/MacShield/main.swift&quot;" />
     </Target>
 
