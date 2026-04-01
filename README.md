@@ -7,7 +7,7 @@ Hydra runs on the machine with the physical keyboard and mouse (the **master**).
 ## Features
 
 - Seamless cursor transitions across screen edges
-- Full keyboard forwarding, including dead keys and special characters — resolved on the server using its own keyboard layout, so receivers always get the right character regardless of their layout
+- Full keyboard forwarding, including dead keys and special characters — resolved on the master using its own keyboard layout, so slaves always get the right character regardless of their layout
 - Mouse button and scroll forwarding
 - End-to-end encrypted relay via **Styx** for machines on different networks
 - macOS, Windows, and Linux support
@@ -24,7 +24,7 @@ Edit `hydra.conf` (sits next to the binary):
 
 ```json
 {
-  "logLevel": "information",
+  "logLevel": "info",
   "screens": [
     { "name": "main",  "x": 0, "y": 0, "width": 2560, "height": 1440, "isVirtual": false },
     { "name": "right", "x": 0, "y": 0, "width": 1920, "height": 1080, "isVirtual": true  }
@@ -32,6 +32,7 @@ Edit `hydra.conf` (sits next to the binary):
 }
 ```
 
+- `logLevel` — `trce`, `dbug`, `info`, `warn`, `fail`, or `crit`
 - `screens` — list your physical screen first (`isVirtual: false`), then one virtual screen per remote machine. The `name` of each virtual screen must match the hostname of the Hydra instance running on that machine.
 - `x`, `y`, `width`, `height` — screen dimensions. Set `width`/`height` to 0 to auto-detect.
 - Cursor exits the **right** edge of the first screen to reach the next screen in the list. Additional layout directions are not yet configurable.
@@ -83,7 +84,7 @@ Add `networkConfig` and `hostName` to `hydra.conf`:
 
 ```json
 {
-  "logLevel": "information",
+  "logLevel": "info",
   "hostName": "my-macbook",
   "networkConfig": "<base64 string from the Styx web UI>",
   "screens": [
