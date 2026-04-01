@@ -8,35 +8,37 @@ public class RelayEncryption(string key)
     private readonly string _key = key;
     private readonly SimpleAes _aes = new(key);
     private readonly SimpleAesKey _localKey = SimpleAes.GenerateKey(key);
-    private SimpleAesKey? _remoteKey;
+    private readonly Dictionary<string, SimpleAesKey> _remoteKeys = [];
 
     public async Task<byte[]> Encrypt(byte[] payload, CancellationToken cancel = default) =>
         await _aes.Encrypt(payload, _localKey, cancel);
 
-    public async Task<byte[]> Decrypt(byte[] payload, ILogger log, CancellationToken cancel = default)
+    public async Task<byte[]> Decrypt(string sourceHost, byte[] payload, ILogger log, CancellationToken cancel = default)
     {
-        if (_remoteKey == null)
+        if (!_remoteKeys.TryGetValue(sourceHost, out var remoteKey))
         {
-            // first message — derive remote key from the salt embedded in the payload
-            _remoteKey = SimpleAes.ExtractKey(_key, payload);
+            // first message from this host — derive key from the salt embedded in the payload
+            remoteKey = SimpleAes.ExtractKey(_key, payload);
+            _remoteKeys[sourceHost] = remoteKey;
         }
 
         try
         {
-            return await _aes.Decrypt(payload, _remoteKey, false, cancel);
+            return await _aes.Decrypt(payload, remoteKey, false, cancel);
         }
         catch (Exception ex)
         {
             // salt mismatch or auth failure — remote peer may have reconnected with a new key
-            log.LogDebug(ex, "Decrypt failed with cached remote key — re-deriving from message salt");
+            log.LogDebug(ex, "Decrypt failed with cached remote key for {SourceHost} — re-deriving from message salt", sourceHost);
             try
             {
-                _remoteKey = SimpleAes.ExtractKey(_key, payload);
-                return await _aes.Decrypt(payload, _remoteKey, false, cancel);
+                remoteKey = SimpleAes.ExtractKey(_key, payload);
+                _remoteKeys[sourceHost] = remoteKey;
+                return await _aes.Decrypt(payload, remoteKey, false, cancel);
             }
             catch (Exception retryEx)
             {
-                log.LogWarning(retryEx, "Decrypt failed after key re-derivation — dropping message");
+                log.LogWarning(retryEx, "Decrypt failed after key re-derivation for {SourceHost} — dropping message", sourceHost);
                 throw;
             }
         }

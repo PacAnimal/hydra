@@ -44,7 +44,7 @@ public class RelayConnection(HydraConfig config, ILogger<RelayConnection> log)
         if (_encryption == null) return;
         try
         {
-            var decrypted = await _encryption.Decrypt(payload, log);
+            var decrypted = await _encryption.Decrypt(sourceHost, payload, log);
             var (kind, json) = MessageSerializer.Decode(decrypted);
             log.LogDebug("Received {Kind} from {SourceHost} ({Bytes} bytes)", kind, sourceHost, payload.Length);
             await OnReceive(sourceHost, kind, json);

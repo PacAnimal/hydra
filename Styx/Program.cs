@@ -65,12 +65,18 @@ app.MapHub<StyxHub>("/relay");
 
 app.MapPost("/api/network-config", async (NetworkConfigRequest request) =>
 {
+    var deadline = Task.Delay(TimeSpan.FromSeconds(5));
+
     var password = Environment.GetEnvironmentVariable("RELAY_PASSWORD");
     if (string.IsNullOrEmpty(password) || request.Password != password)
+    {
+        await deadline;
         return Results.Unauthorized();
+    }
 
     var networkId = Guid.NewGuid();
     var authorization = await new SimpleAes(password).EncryptBase64(networkId, CancellationToken.None);
+    await deadline;
     return Results.Ok(new NetworkConfigResponse(authorization));
 });
 
