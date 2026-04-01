@@ -133,11 +133,17 @@ public class ScreenTransitionService(
         }
 
         // remove departed peers so they re-trigger on next join
+        var anyDeparted = false;
         foreach (var departed in _knownPeers.Where(h => !current.Contains(h)).ToList())
         {
             _knownPeers.Remove(departed);
             _peerScreens.Remove(departed);
+            anyDeparted = true;
         }
+
+        // rebuild layout so departed screens go back to Width=0 (offline) and can't be transitioned to
+        if (anyDeparted)
+            UpdateVirtualScreenDimensions();
 
         _knownPeers.UnionWith(current);
     }
