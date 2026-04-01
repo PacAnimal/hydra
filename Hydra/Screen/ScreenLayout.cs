@@ -1,75 +1,103 @@
+using Hydra.Config;
+
 namespace Hydra.Screen;
 
-public class ScreenLayout(List<ScreenRect> screens)
+public class ScreenLayout(List<ScreenRect> screens, List<ScreenConfig> configs)
 {
     private const int JumpZone = 1;
     private const int NudgeDistance = 2;
 
-    // returns the screen that contains point (x, y), or null
-    public ScreenRect? GetScreenAt(int x, int y) =>
-        screens.FirstOrDefault(s => x >= s.X && x < s.X + s.Width && y >= s.Y && y < s.Y + s.Height);
+    // (screenName, direction) → (destination, scale, offset)
+    private readonly Dictionary<(string Name, Direction Dir), (ScreenRect Dest, decimal Scale, int Offset)> _graph = BuildGraph(screens, configs);
+    private readonly List<ScreenRect> _screens = screens;
 
-    // checks if the cursor is in the jump zone of any edge of 'current' that has a neighbor.
-    // returns the neighbor screen and mapped entry coordinates, or null.
+    private static Dictionary<(string, Direction), (ScreenRect, decimal, int)> BuildGraph(
+        List<ScreenRect> screens, List<ScreenConfig> configs)
+    {
+        var byName = screens.ToDictionary(s => s.Name, StringComparer.OrdinalIgnoreCase);
+        var graph = new Dictionary<(string, Direction), (ScreenRect, decimal, int)>();
+
+        foreach (var config in configs)
+        {
+            foreach (var neighbour in config.Neighbours)
+            {
+                if (byName.TryGetValue(neighbour.Name, out var dest))
+                    graph[(config.Name, neighbour.Direction)] = (dest, neighbour.Scale, neighbour.Offset);
+            }
+        }
+
+        return graph;
+    }
+
+    // returns the screen containing point (x, y) in 0-based coords, or null
+    public ScreenRect? GetScreenAt(int x, int y) =>
+        _screens.FirstOrDefault(s => x >= 0 && x < s.Width && y >= 0 && y < s.Height);
+
+    // checks if the cursor is in the jump zone of any edge that has a neighbour.
+    // coords are 0-based within the current screen.
+    // returns the neighbour and mapped entry coords, or null.
     public EdgeHit? DetectEdgeExit(ScreenRect current, int x, int y)
     {
         Direction? dir = null;
 
-        if (x <= current.X + JumpZone - 1)
+        if (x <= JumpZone - 1)
             dir = Direction.Left;
-        else if (x >= current.X + current.Width - JumpZone)
+        else if (x >= current.Width - JumpZone)
             dir = Direction.Right;
-        else if (y <= current.Y + JumpZone - 1)
+        else if (y <= JumpZone - 1)
             dir = Direction.Top;
-        else if (y >= current.Y + current.Height - JumpZone)
+        else if (y >= current.Height - JumpZone)
             dir = Direction.Bottom;
 
         if (dir is null)
             return null;
 
-        var neighbor = FindNeighbor(current, dir.Value);
-        if (neighbor is null)
+        if (!_graph.TryGetValue((current.Name, dir.Value), out var link))
             return null;
 
-        var (entryX, entryY) = MapEntry(current, neighbor, dir.Value, x, y);
-        return new EdgeHit(neighbor, dir.Value, entryX, entryY);
+        var (dest, scale, offset) = link;
+
+        // skip-through offline screens (Width=0 means slave not yet connected)
+        const int maxHops = 10;
+        for (var hops = 0; dest.Width == 0 && hops < maxHops; hops++)
+        {
+            if (!_graph.TryGetValue((dest.Name, dir.Value), out link))
+                return null;
+            (dest, scale, offset) = link;
+        }
+
+        if (dest.Width == 0)
+            return null;
+
+        var (entryX, entryY) = MapEntry(current, dest, dir.Value, x, y, offset);
+        return new EdgeHit(dest, dir.Value, entryX, entryY, scale);
     }
 
-    // finds the neighbor in the given direction, or null
-    private ScreenRect? FindNeighbor(ScreenRect current, Direction dir)
+    // maps cursor position from source edge to entry coords on the destination, with offset and nudge
+    private static (int entryX, int entryY) MapEntry(
+        ScreenRect from, ScreenRect to, Direction dir, int x, int y, int offset)
     {
         return dir switch
         {
-            // look for a screen whose left edge aligns with our right edge
-            Direction.Right => screens.FirstOrDefault(s => s != current && s.X == current.X + current.Width),
-            // look for a screen whose right edge aligns with our left edge
-            Direction.Left => screens.FirstOrDefault(s => s != current && s.X + s.Width == current.X),
-            // look for a screen whose bottom edge aligns with our top edge
-            Direction.Top => screens.FirstOrDefault(s => s != current && s.Y + s.Height == current.Y),
-            // look for a screen whose top edge aligns with our bottom edge
-            Direction.Bottom => screens.FirstOrDefault(s => s != current && s.Y == current.Y + current.Height),
-            _ => null
-        };
-    }
-
-    // maps cursor position fractionally along the source edge to entry coords on the destination,
-    // then nudges inward to prevent immediately re-triggering the jump zone
-    private static (int entryX, int entryY) MapEntry(ScreenRect from, ScreenRect to, Direction dir, int x, int y)
-    {
-        return dir switch
-        {
-            Direction.Right => (to.X + NudgeDistance, MapFraction(y, from.Y, from.Height, to.Y, to.Height)),
-            Direction.Left => (to.X + to.Width - 1 - NudgeDistance, MapFraction(y, from.Y, from.Height, to.Y, to.Height)),
-            Direction.Bottom => (MapFraction(x, from.X, from.Width, to.X, to.Width), to.Y + NudgeDistance),
-            Direction.Top => (MapFraction(x, from.X, from.Width, to.X, to.Width), to.Y + to.Height - 1 - NudgeDistance),
+            Direction.Right => (NudgeDistance, ApplyOffset(MapFraction(y, from.Height, to.Height), to.Height, offset)),
+            Direction.Left => (to.Width - 1 - NudgeDistance, ApplyOffset(MapFraction(y, from.Height, to.Height), to.Height, offset)),
+            Direction.Bottom => (ApplyOffset(MapFraction(x, from.Width, to.Width), to.Width, offset), NudgeDistance),
+            Direction.Top => (ApplyOffset(MapFraction(x, from.Width, to.Width), to.Width, offset), to.Height - 1 - NudgeDistance),
             _ => (x, y)
         };
     }
 
-    // maps a position proportionally from one axis range to another
-    private static int MapFraction(int pos, int fromOrigin, int fromSize, int toOrigin, int toSize)
+    // applies an offset (percentage of destination size) to a position, clamped to safe bounds
+    private static int ApplyOffset(int pos, int size, int offset)
     {
-        var fraction = (pos - fromOrigin + 0.5) / fromSize;
-        return (int)(fraction * toSize + toOrigin);
+        if (offset == 0) return pos;
+        return Math.Clamp(pos + (int)(offset / 100.0 * size), NudgeDistance, size - 1 - NudgeDistance);
+    }
+
+    // maps a position proportionally from one size range to another (both 0-based)
+    private static int MapFraction(int pos, int fromSize, int toSize)
+    {
+        var fraction = (pos + 0.5) / fromSize;
+        return (int)(fraction * toSize);
     }
 }

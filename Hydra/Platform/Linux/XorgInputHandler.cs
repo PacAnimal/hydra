@@ -61,7 +61,7 @@ public class XorgInputHandler : IPlatformInput
         var screen = NativeMethods.XDefaultScreen(_display);
         var w = NativeMethods.XDisplayWidth(_display, screen);
         var h = NativeMethods.XDisplayHeight(_display, screen);
-        return new ScreenRect("main", 0, 0, w, h, false);
+        return new ScreenRect("main", w, h);
     }
 
     // X11 requires no special accessibility permission (unlike macOS)

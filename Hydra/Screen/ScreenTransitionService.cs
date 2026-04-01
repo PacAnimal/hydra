@@ -1,5 +1,4 @@
-using System.Text.Json;
-using Cathedral.Config;
+using Cathedral.Extensions;
 using Hydra.Config;
 using Hydra.Keyboard;
 using Hydra.Mouse;
@@ -18,9 +17,9 @@ public class ScreenTransitionService(
     ILogger<ScreenTransitionService> log)
     : IHostedService
 {
-    private ScreenLayout? _layout;
     private List<ScreenRect> _screens = [];
     private ScreenRect? _realScreen;
+    private ScreenLayout? _layout;
     private readonly VirtualMouseState _mouse = new();
 
     // center of the real screen -- cursor warped here on every virtual-screen event
@@ -46,6 +45,12 @@ public class ScreenTransitionService(
     private readonly Dictionary<string, (int Width, int Height)> _peerScreens = [];
     private readonly Dictionary<string, ILogger> _slaveLoggers = [];
 
+    // debug screens — IsVirtual in config, no real slave, skip relay sends
+    private readonly HashSet<string> _debugScreens = config.Screens
+        .Where(s => s.IsVirtual)
+        .Select(s => s.Name)
+        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
     public Task StartAsync(CancellationToken cancellationToken)
     {
         if (!platform.IsAccessibilityTrusted())
@@ -54,18 +59,25 @@ public class ScreenTransitionService(
             return Task.CompletedTask;
         }
 
+        log.LogInformation("Host: {Name}", config.ResolvedName);
+
         var bounds = platform.GetPrimaryScreenBounds();
-        _screens = ResolveScreens(config, bounds);
+        _screens = BuildScreens(config, bounds);
 
-        _realScreen = _screens.First(s => !s.IsVirtual);
-        _warpX = _realScreen.X + _realScreen.Width / 2;
-        _warpY = _realScreen.Y + _realScreen.Height / 2;
-        _layout = new ScreenLayout(_screens);
+        _realScreen = _screens.FirstOrDefault(s => !s.IsVirtual);
+        if (_realScreen == null)
+        {
+            log.LogError("No local screen found in config — add a screen whose name matches this host ({Name}).", config.ResolvedName);
+            return Task.CompletedTask;
+        }
 
-        log.LogInformation("Real screen: {W}x{H} at ({X},{Y})", _realScreen.Width, _realScreen.Height, _realScreen.X, _realScreen.Y);
+        _warpX = _realScreen.Width / 2;
+        _warpY = _realScreen.Height / 2;
+        _layout = new ScreenLayout(_screens, config.Screens);
+        log.LogInformation("Local screen: {W}x{H}", _realScreen.Width, _realScreen.Height);
 
-        var virtualScreen = _screens.First(s => s.IsVirtual);
-        log.LogInformation("Virtual screen: {W}x{H} at ({X},{Y})", virtualScreen.Width, virtualScreen.Height, virtualScreen.X, virtualScreen.Y);
+        foreach (var remote in _screens.Where(s => s.IsVirtual))
+            log.LogInformation("Remote screen '{Name}': {W}x{H}", remote.Name, remote.Width, remote.Height);
 
         relay.PeersChanged += OnPeersChanged;
         relay.MessageReceived += OnMessageReceived;
@@ -92,7 +104,25 @@ public class ScreenTransitionService(
     private void OnPeersChanged(string[] hostNames)
     {
         var current = new HashSet<string>(hostNames);
-        var configuredSlaves = config.Screens.Where(s => s.IsVirtual).Select(s => s.Name).ToHashSet();
+        var configuredSlaves = config.RemoteScreens
+            .Where(s => !s.IsVirtual)
+            .Select(s => s.Name)
+            .ToHashSet();
+
+        // snap back if the peer we're currently on has disconnected
+        if (_mouse.IsOnVirtualScreen && _mouse.CurrentScreen != null)
+        {
+            var currentName = _mouse.CurrentScreen.Name;
+            if (!current.Contains(currentName) && !_debugScreens.Contains(currentName))
+            {
+                _mouse.LeaveScreen();
+                platform.IsOnVirtualScreen = false;
+                platform.WarpCursor(_warpX, _warpY);
+                platform.ShowCursor();
+                _pendingCursorShow = false;
+                log.LogInformation("Remote peer '{Name}' disconnected — returned to local screen", currentName);
+            }
+        }
 
         // send MasterConfig only to newly appeared peers that are configured as slaves
         foreach (var host in current.Where(h => !_knownPeers.Contains(h) && configuredSlaves.Contains(h)))
@@ -117,7 +147,7 @@ public class ScreenTransitionService(
         switch (kind)
         {
             case MessageKind.ScreenInfo:
-                var info = JsonSerializer.Deserialize<ScreenInfoMessage>(json, SaneJson.Options);
+                var info = json.FromSaneJson<ScreenInfoMessage>();
                 if (info != null)
                 {
                     _peerScreens[sourceHost] = (info.Width, info.Height);
@@ -126,7 +156,7 @@ public class ScreenTransitionService(
                 }
                 break;
             case MessageKind.SlaveLog:
-                var entry = JsonSerializer.Deserialize<SlaveLogMessage>(json, SaneJson.Options);
+                var entry = json.FromSaneJson<SlaveLogMessage>();
                 if (entry != null) ForwardSlaveLog(sourceHost, entry);
                 break;
         }
@@ -155,26 +185,26 @@ public class ScreenTransitionService(
         if (_realScreen == null) return;
 
         var bounds = platform.GetPrimaryScreenBounds();
-        var updated = ResolveScreens(config, bounds);
+        var updated = BuildScreens(config, bounds);
 
-        // apply known peer screen sizes to matching virtual screens
+        // apply known peer screen sizes to matching remote screens
         for (var i = 0; i < updated.Count; i++)
         {
             var screen = updated[i];
-            if (screen.IsVirtual && _peerScreens.TryGetValue(screen.Name, out var dims))
+            if (screen.IsVirtual && !_debugScreens.Contains(screen.Name) && _peerScreens.TryGetValue(screen.Name, out var dims))
                 updated[i] = screen with { Width = dims.Width, Height = dims.Height };
         }
 
         _screens = updated;
         _realScreen = _screens.First(s => !s.IsVirtual);
-        _layout = new ScreenLayout(_screens);
+        _layout = new ScreenLayout(_screens, config.Screens);
 
-        // if the cursor is on a virtual screen whose dims changed, update it
+        // if the cursor is on a remote screen whose dims changed, update it
         if (_mouse.IsOnVirtualScreen && _mouse.CurrentScreen != null)
         {
             var refreshed = _screens.FirstOrDefault(s => s.Name == _mouse.CurrentScreen.Name);
             if (refreshed != null && refreshed != _mouse.CurrentScreen)
-                _mouse.EnterScreen(refreshed, (int)_mouse.X, (int)_mouse.Y);
+                _mouse.EnterScreen(refreshed, (int)_mouse.X, (int)_mouse.Y, _mouse.Scale);
         }
 
         log.LogDebug("Screen layout updated");
@@ -193,7 +223,7 @@ public class ScreenTransitionService(
             log.LogInformation("Screen lock: {State}", _lockedToScreen ? "locked" : "unlocked");
         }
 
-        if (_mouse.IsOnVirtualScreen && relay.IsConnected)
+        if (_mouse.IsOnVirtualScreen && relay.IsConnected && !IsDebugScreen(_mouse.CurrentScreen))
             ForwardToVirtualScreen(MessageKind.KeyEvent, new KeyEventMessage(keyEvent.Type, keyEvent.Modifiers, keyEvent.Character, keyEvent.Key));
     }
 
@@ -201,7 +231,7 @@ public class ScreenTransitionService(
     {
         log.LogDebug("Mouse: {Type} {Button}", e.IsPressed ? "down" : "up", e.Button);
 
-        if (_mouse.IsOnVirtualScreen && relay.IsConnected)
+        if (_mouse.IsOnVirtualScreen && relay.IsConnected && !IsDebugScreen(_mouse.CurrentScreen))
             ForwardToVirtualScreen(MessageKind.MouseButton, new MouseButtonMessage(e.Button, e.IsPressed));
     }
 
@@ -209,7 +239,7 @@ public class ScreenTransitionService(
     {
         log.LogDebug("Scroll: x={X} y={Y}", e.XDelta, e.YDelta);
 
-        if (_mouse.IsOnVirtualScreen && relay.IsConnected)
+        if (_mouse.IsOnVirtualScreen && relay.IsConnected && !IsDebugScreen(_mouse.CurrentScreen))
             ForwardToVirtualScreen(MessageKind.MouseScroll, new MouseScrollMessage(e.XDelta, e.YDelta));
     }
 
@@ -248,12 +278,12 @@ public class ScreenTransitionService(
 
         platform.HideCursor();
         platform.IsOnVirtualScreen = true;
-        _mouse.EnterScreen(hit.Destination, hit.EntryX, hit.EntryY);
+        _mouse.EnterScreen(hit.Destination, hit.EntryX, hit.EntryY, hit.Scale);
         _lastWarpX = x;
         _lastWarpY = y;
-        log.LogInformation("Entered virtual screen → ({X}, {Y})", (int)_mouse.X, (int)_mouse.Y);
+        log.LogInformation("Entered remote screen '{Name}' → ({X}, {Y})", hit.Destination.Name, hit.EntryX, hit.EntryY);
 
-        if (relay.IsConnected)
+        if (relay.IsConnected && !IsDebugScreen(hit.Destination))
         {
             var payload = MessageSerializer.Encode(MessageKind.EnterScreen, new EnterScreenMessage(hit.EntryX, hit.EntryY, hit.Destination.Width, hit.Destination.Height));
             _ = relay.Send([hit.Destination.Name], payload).AsTask();
@@ -265,17 +295,15 @@ public class ScreenTransitionService(
         var dx = x - _lastWarpX;
         var dy = y - _lastWarpY;
 
-        // update before warp (synergy: m_xCursor = mx before warpCursor)
+        // update before warp
         _lastWarpX = x;
         _lastWarpY = y;
 
         // zero-delta filter
         if (dx == 0 && dy == 0) return;
 
-        // bogus filter: drop delta that looks like a warp-displacement artifact (synergy lines 1065-1071)
-        var centerToEdgeX = Math.Abs(_warpX - _realScreen!.X);
-        var centerToEdgeY = Math.Abs(_warpY - _realScreen!.Y);
-        if (Math.Abs(dx) > centerToEdgeX - 10 || Math.Abs(dy) > centerToEdgeY - 10) return;
+        // bogus filter: drop delta that looks like a warp-displacement artifact
+        if (Math.Abs(dx) > _warpX - 10 || Math.Abs(dy) > _warpY - 10) return;
 
         _mouse.ApplyDelta(dx, dy);
 
@@ -297,9 +325,9 @@ public class ScreenTransitionService(
             platform.IsOnVirtualScreen = false;
             platform.WarpCursor(hit.EntryX, hit.EntryY);
             _pendingCursorShow = true;
-            log.LogInformation("Returned to real screen ← ({X}, {Y})", hit.EntryX, hit.EntryY);
+            log.LogInformation("Returned to local screen ← ({X}, {Y})", hit.EntryX, hit.EntryY);
 
-            if (relay.IsConnected && leavingScreen != null)
+            if (relay.IsConnected && leavingScreen != null && !IsDebugScreen(leavingScreen))
             {
                 var payload = MessageSerializer.Encode(MessageKind.LeaveScreen, new { });
                 _ = relay.Send([leavingScreen.Name], payload).AsTask();
@@ -308,48 +336,36 @@ public class ScreenTransitionService(
         }
 
         // forward current virtual position to remote
-        if (relay.IsConnected && _mouse.CurrentScreen != null)
+        if (relay.IsConnected && _mouse.CurrentScreen != null && !IsDebugScreen(_mouse.CurrentScreen))
         {
             var payload = MessageSerializer.Encode(MessageKind.MouseMove, new MouseMoveMessage((int)_mouse.X, (int)_mouse.Y));
             _ = relay.Send([_mouse.CurrentScreen.Name], payload).AsTask();
         }
 
-        // warp to center on every event (synergy's approach; suppression interval keeps acceleration intact)
+        // warp to center on every event
         platform.WarpCursor(_warpX, _warpY);
         _lastWarpX = _warpX;
         _lastWarpY = _warpY;
     }
 
-    // fills in screens with zero width/height using real display bounds,
-    // and positions the virtual screen to the right of the real one.
-    // default virtual screen size is 100x100 until peer reports its real dimensions.
-    private static List<ScreenRect> ResolveScreens(HydraConfig config, ScreenRect primaryBounds)
+    // builds runtime screen rects from config.
+    // local screen gets real dimensions from OS; remote screens start at 0x0 until ScreenInfo arrives;
+    // debug (IsVirtual) screens get fixed 1920x1080.
+    private static List<ScreenRect> BuildScreens(HydraConfig config, ScreenRect bounds)
     {
         var result = new List<ScreenRect>();
-        ScreenRect? realScreen = null;
-
-        foreach (var def in config.Screens)
+        foreach (var screen in config.Screens)
         {
-            var w = def.Width == 0 ? primaryBounds.Width : def.Width;
-            var h = def.Height == 0 ? primaryBounds.Height : def.Height;
-            var x = def.X;
-            var y = def.Y;
-
-            if (!def.IsVirtual)
-            {
-                realScreen = new ScreenRect(def.Name, x, y, w, h, false);
-                result.Add(realScreen);
-            }
+            if (screen.Name == config.ResolvedName)
+                result.Add(new ScreenRect(screen.Name, bounds.Width, bounds.Height));
+            else if (screen.IsVirtual)
+                result.Add(new ScreenRect(screen.Name, 1920, 1080, true));
             else
-            {
-                // position virtual screen to the right of the real one; default 100x100 until peer responds
-                var rx = realScreen?.X + (realScreen?.Width ?? primaryBounds.Width);
-                var vw = def.Width == 0 ? 100 : w;
-                var vh = def.Height == 0 ? 100 : h;
-                result.Add(new ScreenRect(def.Name, rx ?? x, y, vw, vh, true));
-            }
+                result.Add(new ScreenRect(screen.Name, 0, 0, true));
         }
-
         return result;
     }
+
+    private bool IsDebugScreen(ScreenRect? screen) =>
+        screen != null && _debugScreens.Contains(screen.Name);
 }

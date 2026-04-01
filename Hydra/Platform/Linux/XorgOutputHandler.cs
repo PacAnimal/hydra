@@ -27,7 +27,7 @@ public sealed class XorgOutputHandler : IPlatformOutput
     {
         var w = NativeMethods.XDisplayWidth(_display, _screen);
         var h = NativeMethods.XDisplayHeight(_display, _screen);
-        return new ScreenRect(string.Empty, 0, 0, w, h, false);
+        return new ScreenRect(string.Empty, w, h);
     }
 
     public void MoveMouse(int x, int y)

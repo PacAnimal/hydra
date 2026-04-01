@@ -38,6 +38,7 @@ services.AddSignalR(options =>
 });
 
 services.AddSingleton<IClientRegistry, ClientRegistry>();
+services.AddHostedService<IPeerBroadcaster, PeerBroadcastService>();
 services.AddSingleton<AuthenticationHubFilter>();
 services.Configure<HubOptions>(options => options.AddFilter<AuthenticationHubFilter>());
 

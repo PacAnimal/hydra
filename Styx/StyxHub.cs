@@ -8,7 +8,7 @@ using Styx.Services;
 
 namespace Styx;
 
-public class StyxHub(IClientRegistry registry, ILogger<StyxHub> log) : Hub<IStyxClient>, IStyxServer
+public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, ILogger<StyxHub> log) : Hub<IStyxClient>, IStyxServer
 {
     [AllowAnonymousHub]
     public async Task<RelayLoginResponse> Authenticate(RelayLogin login)
@@ -43,8 +43,10 @@ public class StyxHub(IClientRegistry registry, ILogger<StyxHub> log) : Hub<IStyx
 
         await registry.Register(Context.ConnectionId, networkId, login.HostName);
         log.LogInformation("Authenticated {HostName} on network {NetworkId}", login.HostName, networkId);
-        await BroadcastPeers(networkId);
         await throttle;
+
+        // queue after throttle so Authenticated=true is sent to the caller before Peers arrives
+        peers.QueueBroadcast(networkId);
         return new RelayLoginResponse { Authenticated = true };
     }
 
@@ -86,19 +88,7 @@ public class StyxHub(IClientRegistry registry, ILogger<StyxHub> log) : Hub<IStyx
         var identity = await registry.GetIdentity(Context.ConnectionId);
         await registry.Unregister(Context.ConnectionId);
         if (identity != null)
-            await BroadcastPeers(identity.NetworkId);
+            peers.QueueBroadcast(identity.NetworkId);
         await base.OnDisconnectedAsync(exception);
-    }
-
-    // sends each client in the network its current peer list (excluding itself)
-    private async Task BroadcastPeers(Guid networkId)
-    {
-        var clients = await registry.GetNetworkClients(networkId);
-        var allHostNames = clients.Select(c => c.HostName).ToArray();
-        foreach (var (connectionId, hostName) in clients)
-        {
-            var peers = allHostNames.Where(h => h != hostName).ToArray();
-            await Clients.Client(connectionId).Peers(peers);
-        }
     }
 }

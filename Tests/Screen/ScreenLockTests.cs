@@ -14,10 +14,25 @@ public class ScreenLockTests
     private FakePlatform _platform = null!;
     private ScreenTransitionService _service = null!;
 
+    // "home" is the local screen; "remote" is a debug virtual screen (always connected)
     private static readonly HydraConfig TestConfig = new()
     {
         Mode = Mode.Master,
-        Screens = [new ScreenRect("main", 0, 0, 0, 0, false), new ScreenRect("right", 0, 0, 0, 0, true)]
+        Name = "home",
+        Screens =
+        [
+            new ScreenConfig
+            {
+                Name = "home",
+                Neighbours = [new NeighbourConfig { Direction = Direction.Right, Name = "remote" }],
+            },
+            new ScreenConfig
+            {
+                Name = "remote",
+                IsVirtual = true,
+                Neighbours = [new NeighbourConfig { Direction = Direction.Left, Name = "home" }],
+            },
+        ],
     };
 
     [SetUp]
@@ -47,8 +62,8 @@ public class ScreenLockTests
         Assert.That(_platform.IsOnVirtualScreen, Is.True, "should enter virtual before lock");
 
         // return to real screen
-        _platform.FireMouseMove(_platform.WarpX, _platform.WarpY); // trigger warp-center path
-        _platform.IsOnVirtualScreen = false; // simulate return
+        _platform.FireMouseMove(_platform.WarpX, _platform.WarpY);
+        _platform.IsOnVirtualScreen = false;
         _service.StopAsync(CancellationToken.None).Wait();
 
         // restart fresh
@@ -109,11 +124,6 @@ public class ScreenLockTests
         _platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyDown, 'l',
             KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Super));
 
-        // simulate movement past virtual screen left edge — return should be blocked
-        // The virtual screen is at x=2560..5119; left edge is x=2560
-        // Apply enough movement to cross back: start from entry, move far left
-        // We need to drive the virtual mouse past the left edge via delta accumulation.
-        // Simulate multiple warp-cycle moves leftward by warping cursor slightly left of center each time.
         var warpX = _platform.WarpX;
         var warpY = _platform.WarpY;
         _platform.ShowCursorCalled = false;
@@ -152,7 +162,7 @@ public class ScreenLockTests
             ShowCursorCalled = false;
         }
 
-        public ScreenRect GetPrimaryScreenBounds() => new("main", 0, 0, 2560, 1440, false);
+        public ScreenRect GetPrimaryScreenBounds() => new("home", 2560, 1440);
         public bool IsAccessibilityTrusted() => true;
 
         public void StartEventTap(

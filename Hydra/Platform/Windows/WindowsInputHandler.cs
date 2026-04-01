@@ -29,7 +29,7 @@ public class WindowsInputHandler(ILogger<WindowsInputHandler> log) : IPlatformIn
     {
         var w = NativeMethods.GetSystemMetrics(NativeMethods.SM_CXSCREEN);
         var h = NativeMethods.GetSystemMetrics(NativeMethods.SM_CYSCREEN);
-        return new ScreenRect("main", 0, 0, w, h, false);
+        return new ScreenRect("main", w, h);
     }
 
     // low-level hooks work without elevation for non-elevated processes

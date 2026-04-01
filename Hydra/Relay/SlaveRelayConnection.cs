@@ -1,5 +1,4 @@
-using System.Text.Json;
-using Cathedral.Config;
+using Cathedral.Extensions;
 using Hydra.Config;
 using Hydra.Platform;
 using Hydra.Screen;
@@ -11,6 +10,7 @@ public sealed class SlaveRelayConnection : RelayConnection
 {
     private readonly IPlatformOutput _output;
     private readonly SlaveLogForwarder _logForwarder;
+    private readonly ILogger<RelayConnection> _log;
     private readonly ScreenRect _localScreen;
 
     // ReSharper disable once ConvertToPrimaryConstructor
@@ -20,9 +20,15 @@ public sealed class SlaveRelayConnection : RelayConnection
     {
         _output = output;
         _logForwarder = logForwarder;
+        _log = log;
         _localScreen = output.GetPrimaryScreenBounds();
     }
 #pragma warning restore IDE0290
+
+    protected override void OnAuthenticated()
+    {
+        _log.LogInformation("Local screen: {W}x{H}", _localScreen.Width, _localScreen.Height);
+    }
 
     protected override Task OnReceive(string sourceHost, MessageKind kind, string json)
     {
@@ -32,23 +38,23 @@ public sealed class SlaveRelayConnection : RelayConnection
                 HandleMasterConfig(sourceHost);
                 break;
             case MessageKind.MouseMove:
-                var move = JsonSerializer.Deserialize<MouseMoveMessage>(json, SaneJson.Options);
+                var move = json.FromSaneJson<MouseMoveMessage>();
                 if (move != null) _output.MoveMouse(move.X, move.Y);
                 break;
             case MessageKind.KeyEvent:
-                var key = JsonSerializer.Deserialize<KeyEventMessage>(json, SaneJson.Options);
+                var key = json.FromSaneJson<KeyEventMessage>();
                 if (key != null) _output.InjectKey(key);
                 break;
             case MessageKind.MouseButton:
-                var btn = JsonSerializer.Deserialize<MouseButtonMessage>(json, SaneJson.Options);
+                var btn = json.FromSaneJson<MouseButtonMessage>();
                 if (btn != null) _output.InjectMouseButton(btn);
                 break;
             case MessageKind.MouseScroll:
-                var scroll = JsonSerializer.Deserialize<MouseScrollMessage>(json, SaneJson.Options);
+                var scroll = json.FromSaneJson<MouseScrollMessage>();
                 if (scroll != null) _output.InjectMouseScroll(scroll);
                 break;
             case MessageKind.EnterScreen:
-                var enter = JsonSerializer.Deserialize<EnterScreenMessage>(json, SaneJson.Options);
+                var enter = json.FromSaneJson<EnterScreenMessage>();
                 if (enter != null) _output.MoveMouse(enter.X, enter.Y);
                 break;
             case MessageKind.LeaveScreen:
@@ -60,6 +66,7 @@ public sealed class SlaveRelayConnection : RelayConnection
     private void HandleMasterConfig(string masterHost)
     {
         _logForwarder.AddMaster(masterHost);
+        _log.LogInformation("Sending screen info to {Master}: {W}x{H}", masterHost, _localScreen.Width, _localScreen.Height);
         var payload = MessageSerializer.Encode(MessageKind.ScreenInfo, new ScreenInfoMessage(_localScreen.Width, _localScreen.Height));
         _ = Send([masterHost], payload).AsTask();
     }

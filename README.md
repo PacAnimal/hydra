@@ -6,7 +6,10 @@ Hydra runs on the machine with the physical keyboard and mouse (the **master**).
 
 ## Features
 
-- Seamless cursor transitions across screen edges
+- Seamless cursor transitions across screen edges in any direction (left, right, up, down)
+- Flexible layout: configure arbitrary topologies — L-shaped, grids, or any combination
+- Scale factor per neighbour — control how fast the cursor moves on each remote screen
+- Offset per neighbour — shift the entry point when crossing a screen edge
 - Full keyboard forwarding, including dead keys and special characters — resolved on the master using its own keyboard layout, so slaves always get the right character regardless of their layout
 - Mouse button and scroll forwarding
 - End-to-end encrypted relay via **Styx** for machines on different networks
@@ -24,18 +27,63 @@ Edit `hydra.conf` (sits next to the binary):
 
 ```json
 {
+  "mode": "Master",
+  "name": "laptop",
   "logLevel": "info",
   "screens": [
-    { "name": "main",  "x": 0, "y": 0, "width": 2560, "height": 1440, "isVirtual": false },
-    { "name": "right", "x": 0, "y": 0, "width": 1920, "height": 1080, "isVirtual": true  }
+    {
+      "name": "laptop",
+      "neighbours": [
+        { "direction": "right", "name": "desktop" }
+      ]
+    },
+    {
+      "name": "desktop",
+      "neighbours": [
+        { "direction": "left", "name": "laptop" }
+      ]
+    }
   ]
 }
 ```
 
+### Config fields
+
+- `mode` — `Master` or `Slave`
+- `name` — this machine's name on the network. Optional — defaults to the machine's hostname without domain. Must match one of the screen names for the master to identify its own screen.
 - `logLevel` — `trce`, `dbug`, `info`, `warn`, `fail`, or `crit`
-- `screens` — list your physical screen first (`isVirtual: false`), then one virtual screen per remote machine. The `name` of each virtual screen must match the hostname of the Hydra instance running on that machine.
-- `x`, `y`, `width`, `height` — screen dimensions. Set `width`/`height` to 0 to auto-detect.
-- Cursor exits the **right** edge of the first screen to reach the next screen in the list. Additional layout directions are not yet configurable.
+- `networkConfig` — base64 relay config string from Styx (required when using the relay)
+
+### Screen layout
+
+Each entry in `screens` represents one machine. Declare your neighbours by direction:
+
+```json
+{
+  "name": "laptop",
+  "neighbours": [
+    { "direction": "right", "name": "desktop" },
+    { "direction": "up",    "name": "tv-box"  }
+  ]
+}
+```
+
+Supported directions: `left`, `right`, `up`, `down`.
+
+**Neighbour options** (all optional):
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `scale` | `1.0` | Mouse speed multiplier on the destination screen. `0.5` = half speed, `2.0` = double speed. |
+| `offset` | `0` | Shifts the entry point when crossing an edge, as a percentage of the destination screen's perpendicular dimension. Positive = down/right, negative = up/left. Range: -99 to 99. |
+
+Example — a desktop that is taller than the laptop, mounted slightly lower:
+
+```json
+{ "direction": "right", "name": "desktop", "scale": 0.8, "offset": 15 }
+```
+
+**Missing screens**: if a peer is offline, Hydra skips through to the next machine in the same direction (if configured). This lets you maintain a logical layout even when a machine in the middle of the chain is down.
 
 ### Lock hotkey
 
@@ -56,6 +104,21 @@ dotnet publish Hydra --runtime linux-x64 --self-contained   # Linux x64
 ```
 
 Output lands in `Hydra/bin/Release/net10.0/<rid>/publish/`. The binary bundles the runtime and all assets — nothing else needs to ship alongside it.
+
+## Slave setup
+
+On the slave machine:
+
+```json
+{
+  "mode": "Slave",
+  "name": "desktop",
+  "logLevel": "info",
+  "networkConfig": "<same base64 string as master>"
+}
+```
+
+Slaves do not need a `screens` section — they receive and replay input from the master.
 
 ## Networking with Styx
 
@@ -86,22 +149,41 @@ Open `http://<your-styx-host>:5000` in a browser, enter the relay password, and 
 
 ### Connecting Hydra to Styx
 
-Add `networkConfig` and `hostName` to `hydra.conf`:
+Add `networkConfig` to `hydra.conf` on both machines. Use the same config string on all machines in a network.
+
+**Master** (`hydra.conf`):
 
 ```json
 {
-  "logLevel": "info",
-  "hostName": "my-macbook",
+  "mode": "Master",
+  "name": "laptop",
   "networkConfig": "<base64 string from the Styx web UI>",
+  "logLevel": "info",
   "screens": [
-    { "name": "main",       "x": 0, "y": 0, "width": 0, "height": 0, "isVirtual": false },
-    { "name": "my-desktop", "x": 0, "y": 0, "width": 0, "height": 0, "isVirtual": true  }
+    {
+      "name": "laptop",
+      "neighbours": [{ "direction": "right", "name": "desktop" }]
+    },
+    {
+      "name": "desktop",
+      "neighbours": [{ "direction": "left", "name": "laptop" }]
+    }
   ]
 }
 ```
 
-- Both machines must use the **same** network config string (generated once from Styx).
-- The `name` of each virtual screen must match the `hostName` of the Hydra instance on that machine.
+**Slave** (`hydra.conf`):
+
+```json
+{
+  "mode": "Slave",
+  "name": "desktop",
+  "networkConfig": "<same base64 string>",
+  "logLevel": "info"
+}
+```
+
+- Both machines must use the **same** network config string.
 - Traffic between Hydra instances is end-to-end encrypted — Styx only routes opaque bytes.
 
 ## Building from source

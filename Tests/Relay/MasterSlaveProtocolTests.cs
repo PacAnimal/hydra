@@ -154,7 +154,8 @@ public class MasterSlaveProtocolTests
     private static HydraConfig MakeConfig(params string[] slaveNames) => new()
     {
         Mode = Mode.Master,
-        Screens = [new ScreenRect("main", 0, 0, 0, 0, false), .. slaveNames.Select(n => new ScreenRect(n, 0, 0, 0, 0, true))],
+        Name = "main",
+        Screens = [new ScreenConfig { Name = "main" }, .. slaveNames.Select(n => new ScreenConfig { Name = n })],
     };
 
     private static ScreenTransitionService MakeService(HydraConfig config, IRelaySender relay) =>
@@ -166,7 +167,7 @@ public class MasterSlaveProtocolTests
     private sealed class TestableMasterRelay : MasterRelayConnection
     {
         public TestableMasterRelay() : base(
-            new HydraConfig { Mode = Mode.Master, Screens = [] },
+            new HydraConfig { Mode = Mode.Master },
             NullLogger<RelayConnection>.Instance)
         { }
 
@@ -214,7 +215,7 @@ public class MasterSlaveProtocolTests
     private sealed class FakePlatform : IPlatformInput
     {
         public bool IsOnVirtualScreen { get; set; }
-        public ScreenRect GetPrimaryScreenBounds() => new("main", 0, 0, 2560, 1440, false);
+        public ScreenRect GetPrimaryScreenBounds() => new("main", 2560, 1440);
         public bool IsAccessibilityTrusted() => true;
         public void StartEventTap(Action<double, double> onMouseMove, Action<KeyEvent> onKeyEvent, Action<MouseButtonEvent> onMouseButton, Action<MouseScrollEvent> onMouseScroll) { }
         public void StopEventTap() { }

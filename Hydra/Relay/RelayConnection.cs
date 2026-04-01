@@ -59,7 +59,17 @@ public class RelayConnection(HydraConfig config, ILogger<RelayConnection> log)
         try
         {
             var (kind, json) = MessageSerializer.Decode(decrypted);
-            log.LogDebug("Received {Kind} from {SourceHost} ({Bytes} bytes)", kind, sourceHost, payload.Length);
+            switch (kind)
+            {
+                case MessageKind.MouseMove:
+                case MessageKind.SlaveLog:
+                    if (log.IsEnabled(LogLevel.Trace))
+                        log.LogTrace("Received {Kind} from {SourceHost} ({Bytes} bytes)", kind, sourceHost, payload.Length);
+                    break;
+                default:
+                    log.LogDebug("Received {Kind} from {SourceHost} ({Bytes} bytes)", kind, sourceHost, payload.Length);
+                    break;
+            }
             await OnReceive(sourceHost, kind, json);
         }
         catch (Exception ex)
@@ -126,7 +136,7 @@ public class RelayConnection(HydraConfig config, ILogger<RelayConnection> log)
             return;
         }
 
-        var hostName = config.HostName ?? Environment.MachineName;
+        var hostName = config.ResolvedName;
         log.LogInformation("Starting relay connection to {Server} as {HostName}", netConfig.StyxServer, hostName);
 
         while (!stoppingToken.IsCancellationRequested)
@@ -179,6 +189,12 @@ public class RelayConnection(HydraConfig config, ILogger<RelayConnection> log)
         var server = con.CreateHubProxy<IStyxServer>(cancellationToken: disco.Token);
         using var reg = con.Register<IStyxClient>(this);
 
+        // set before Authenticate so messages arriving during the auth handshake aren't dropped:
+        // Styx broadcasts Peers (triggering MasterConfig from master) before returning Authenticated=true,
+        // so _encryption must be ready to decrypt that incoming message
+        _encryption = new RelayEncryption(netConfig.EncryptionKey);
+        _server = server;
+
         var response = await server.Authenticate(new RelayLogin
         {
             Authorization = netConfig.Authorization,
@@ -187,13 +203,13 @@ public class RelayConnection(HydraConfig config, ILogger<RelayConnection> log)
 
         if (!response.Authenticated)
         {
+            _server = null;
+            _encryption = null;
             log.LogError("Relay authentication failed: {Message}", response.Message);
             return;
         }
 
         log.LogInformation("Authenticated on relay as {HostName}", hostName);
-        _encryption = new RelayEncryption(netConfig.EncryptionKey);
-        _server = server;
         OnAuthenticated();
 
         // wait until the connection is closed

@@ -35,11 +35,7 @@ public class MacInputHandler(ILogger<MacInputHandler> log) : IPlatformInput
     public ScreenRect GetPrimaryScreenBounds()
     {
         var bounds = NativeMethods.CGDisplayBounds(_display);
-        return new ScreenRect(
-            "main",
-            (int)bounds.Origin.X, (int)bounds.Origin.Y,
-            (int)bounds.Size.X, (int)bounds.Size.Y,
-            false);
+        return new ScreenRect("main", (int)bounds.Size.X, (int)bounds.Size.Y);
     }
 
     public bool IsAccessibilityTrusted() => NativeMethods.AXIsProcessTrusted();

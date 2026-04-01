@@ -5,20 +5,22 @@ public class VirtualMouseState
     public ScreenRect? CurrentScreen { get; private set; }
     public double X { get; private set; }
     public double Y { get; private set; }
+    public decimal Scale { get; private set; } = 1.0m;
     public bool IsOnVirtualScreen => CurrentScreen is not null;
 
-    public void EnterScreen(ScreenRect screen, int x, int y)
+    public void EnterScreen(ScreenRect screen, int x, int y, decimal scale = 1.0m)
     {
         CurrentScreen = screen;
         X = x;
         Y = y;
+        Scale = scale;
     }
 
     public void ApplyDelta(double dx, double dy)
     {
         if (CurrentScreen is null) return;
-        X = Math.Clamp(X + dx, CurrentScreen.X, CurrentScreen.X + CurrentScreen.Width - 1);
-        Y = Math.Clamp(Y + dy, CurrentScreen.Y, CurrentScreen.Y + CurrentScreen.Height - 1);
+        X = Math.Clamp(X + dx * (double)Scale, 0, CurrentScreen.Width - 1);
+        Y = Math.Clamp(Y + dy * (double)Scale, 0, CurrentScreen.Height - 1);
     }
 
     public void LeaveScreen()
@@ -26,5 +28,6 @@ public class VirtualMouseState
         CurrentScreen = null;
         X = 0;
         Y = 0;
+        Scale = 1.0m;
     }
 }
