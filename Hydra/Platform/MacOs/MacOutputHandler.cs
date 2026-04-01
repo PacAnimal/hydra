@@ -7,9 +7,9 @@ namespace Hydra.Platform.MacOs;
 
 public sealed class MacOutputHandler : IPlatformOutput
 {
-    // track last mouse position for button events
     private double _mouseX;
     private double _mouseY;
+    private MouseButton? _heldButton;
 
     public ScreenRect GetPrimaryScreenBounds()
     {
@@ -22,7 +22,22 @@ public sealed class MacOutputHandler : IPlatformOutput
     {
         _mouseX = x;
         _mouseY = y;
-        _ = NativeMethods.CGWarpMouseCursorPosition(new CGPoint { X = x, Y = y });
+        var pos = new CGPoint { X = x, Y = y };
+
+        // post a real event so apps and OS features (dock, hot corners) see the movement.
+        // use drag event type when a button is held, otherwise plain moved
+        var (evType, btn) = _heldButton switch
+        {
+            MouseButton.Left => (NativeMethods.KCGEventLeftMouseDragged, 0),
+            MouseButton.Right => (NativeMethods.KCGEventRightMouseDragged, 1),
+            { } b => (NativeMethods.KCGEventOtherMouseDragged, (int)b - 1),
+            null => (NativeMethods.KCGEventMouseMoved, 0),
+        };
+
+        var eventRef = NativeMethods.CGEventCreateMouseEvent(nint.Zero, evType, pos, btn);
+        if (eventRef == nint.Zero) return;
+        NativeMethods.CGEventPost(NativeMethods.KCGHidEventTap, eventRef);
+        NativeMethods.CFRelease(eventRef);
     }
 
     public void InjectKey(KeyEventMessage msg)
@@ -55,6 +70,9 @@ public sealed class MacOutputHandler : IPlatformOutput
                 mouseButton = (int)msg.Button - 1;
                 break;
         }
+
+        if (msg.IsPressed) _heldButton = msg.Button;
+        else if (_heldButton == msg.Button) _heldButton = null;
 
         var pos = new CGPoint { X = _mouseX, Y = _mouseY };
         var eventRef = NativeMethods.CGEventCreateMouseEvent(nint.Zero, mouseType, pos, mouseButton);

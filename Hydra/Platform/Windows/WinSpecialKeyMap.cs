@@ -9,6 +9,12 @@ internal static class WinSpecialKeyMap
 {
     private static readonly Dictionary<int, SpecialKey> Map = new()
     {
+        // tty
+        { WinVirtualKey.Back, SpecialKey.BackSpace },
+        { WinVirtualKey.Tab, SpecialKey.Tab },
+        { WinVirtualKey.Return, SpecialKey.Return },
+        { WinVirtualKey.Escape, SpecialKey.Escape },
+
         // cursor / navigation
         { WinVirtualKey.Left, SpecialKey.Left },
         { WinVirtualKey.Right, SpecialKey.Right },

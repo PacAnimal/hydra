@@ -9,6 +9,13 @@ internal static class MacSpecialKeyMap
 {
     private static readonly Dictionary<int, SpecialKey> Map = new()
     {
+        // tty
+        { MacVirtualKey.Delete, SpecialKey.BackSpace },
+        { MacVirtualKey.ForwardDelete, SpecialKey.Delete },
+        { MacVirtualKey.Return, SpecialKey.Return },
+        { MacVirtualKey.Tab, SpecialKey.Tab },
+        { MacVirtualKey.Escape, SpecialKey.Escape },
+
         // cursor / navigation
         { MacVirtualKey.LeftArrow, SpecialKey.Left },
         { MacVirtualKey.RightArrow, SpecialKey.Right },
