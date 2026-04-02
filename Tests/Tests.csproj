@@ -39,7 +39,7 @@
     </ItemGroup>
 
     <ItemGroup>
-        <Content Include="../Hydra/hydra.conf" CopyToOutputDirectory="PreserveNewest" Link="hydra.conf" />
+        <Content Include="test.conf" CopyToOutputDirectory="PreserveNewest" />
     </ItemGroup>
 
 </Project>

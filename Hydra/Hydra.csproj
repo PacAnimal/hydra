@@ -50,7 +50,6 @@
     </ItemGroup>
 
     <ItemGroup>
-        <Content Include="hydra.conf" CopyToOutputDirectory="PreserveNewest" />
         <Content Include="Resources/MacShield/hydra-shield" CopyToOutputDirectory="PreserveNewest"
                  Condition="$([MSBuild]::IsOSPlatform('OSX'))" />
     </ItemGroup>
