@@ -7,6 +7,23 @@ on:
     branches: [main]
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Restore
+        run: dotnet restore Hydra.sln
+
+      - name: Test
+        run: dotnet test Hydra.sln --no-restore
+
   build:
     runs-on: macos-latest
 
@@ -24,3 +41,63 @@ jobs:
 
       - name: Publish Hydra (${{ matrix.rid }})
         run: dotnet publish Hydra --runtime ${{ matrix.rid }} --self-contained
+
+      - name: Package artifact
+        run: |
+          cd Hydra/bin/Release/net10.0/${{ matrix.rid }}/publish
+          if [[ "${{ matrix.rid }}" == win-* ]]; then
+            zip -r ${{ github.workspace }}/hydra-${{ matrix.rid }}.zip .
+          else
+            tar czf ${{ github.workspace }}/hydra-${{ matrix.rid }}.tar.gz .
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hydra-${{ matrix.rid }}
+          path: hydra-${{ matrix.rid }}.*
+
+  release:
+    needs: [build, test]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Determine next version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          latest=$(gh release list --limit 1 --json tagName --jq '.[0].tagName // empty')
+          if [ -z "$latest" ]; then
+            echo "version=0.0.1" >> "$GITHUB_OUTPUT"
+          else
+            patch=$(echo "$latest" | sed 's/^v\?0\.0\.//')
+            echo "version=0.0.$((patch + 1))" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/download-artifact@v4
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release create "v${{ steps.version.outputs.version }}" \
+            --title "Hydra ${{ steps.version.outputs.version }}" \
+            --generate-notes \
+            hydra-osx-arm64/hydra-osx-arm64.tar.gz \
+            hydra-win-x64/hydra-win-x64.zip \
+            hydra-linux-x64/hydra-linux-x64.tar.gz
+
+      - name: Prune old releases (keep last 5)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release list --json tagName --jq '.[5:][].tagName' | while read -r tag; do
+            gh release delete "$tag" --yes --cleanup-tag
+          done
