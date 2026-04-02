@@ -3,32 +3,24 @@
   "mode": "Master",
   "logLevel": "info",
   "name": "macbook",
-  "screens": [
+  "hosts": [
     {
       "name": "macbook",
       "neighbours": [
-        { "direction": "right", "name": "desktop", "scale": 1.5, "offset": 10 }
+        { "direction": "right", "name": "desktop" }
       ]
     },
     {
       "name": "desktop",
       "neighbours": [
-        { "direction": "left", "name": "macbook", "scale": 1.5, "offset": 10 },
+        { "direction": "left", "name": "macbook" },
         { "direction": "right", "name": "monitor" }
       ]
     },
     {
       "name": "monitor",
       "neighbours": [
-        { "direction": "left", "name": "desktop" },
-        { "direction": "right", "name": "virtual" }
-      ]
-    },
-    {
-      "name": "virtual",
-      "isVirtual": true,
-      "neighbours": [
-        { "direction": "left", "name": "monitor" }
+        { "direction": "left", "name": "desktop" }
       ]
     }
   ]

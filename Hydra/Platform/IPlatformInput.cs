@@ -4,9 +4,17 @@ using Hydra.Screen;
 
 namespace Hydra.Platform;
 
+// platform-detected screen with all available identifiers for config matching
+public record DetectedScreen(
+    int X, int Y, int Width, int Height,
+    string? DisplayName,   // e.g. "DELL U2720Q", "Built-in Retina Display"
+    string? OutputName,    // e.g. "HDMI-1", "eDP-1", "\\.\DISPLAY1"
+    string? PlatformId);   // platform-specific ID: CGDirectDisplayID, HMONITOR, XRandR output id
+
 public interface IPlatformInput : IDisposable
 {
     ScreenRect GetPrimaryScreenBounds();
+    List<DetectedScreen> GetAllScreens();
     void WarpCursor(int x, int y);
     void HideCursor();
     void ShowCursor();

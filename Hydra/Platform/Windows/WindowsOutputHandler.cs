@@ -31,9 +31,12 @@ public sealed class WindowsOutputHandler : IPlatformOutput
     }
 
     public ScreenRect GetPrimaryScreenBounds() =>
-        new(string.Empty,
+        new(string.Empty, string.Empty, 0, 0,
             NativeMethods.GetSystemMetrics(NativeMethods.SM_CXSCREEN),
-            NativeMethods.GetSystemMetrics(NativeMethods.SM_CYSCREEN));
+            NativeMethods.GetSystemMetrics(NativeMethods.SM_CYSCREEN),
+            IsLocal: true);
+
+    public List<DetectedScreen> GetAllScreens() => WindowsDisplayHelper.GetAllScreens();
 
     public unsafe void MoveMouse(int x, int y)
     {

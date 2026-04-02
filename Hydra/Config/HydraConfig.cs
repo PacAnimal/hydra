@@ -6,27 +6,37 @@ using Microsoft.Extensions.Logging;
 
 namespace Hydra.Config;
 
-public class ScreenConfig
+public class HostConfig
 {
     public required string Name { get; init; }
-    // fake always-connected debug screen — no real slave needed
-    public bool IsVirtual { get; init; }
     public List<NeighbourConfig> Neighbours { get; init; } = [];
 }
 
 public class NeighbourConfig
 {
     public required Direction Direction { get; init; }
-    public required string Name { get; init; }
-    public decimal Scale { get; init; } = 1.0m;
-    public int Offset { get; init; }
+    public required string Name { get; init; }       // target host
+    public string? SourceScreen { get; init; }       // optional: restrict to this local screen identifier
+    public string? DestScreen { get; init; }         // optional: target this specific remote screen identifier
+    public int SourceStart { get; init; }             // % of source edge (0-100)
+    public int SourceEnd { get; init; } = 100;        // % of source edge (0-100)
+    public int DestStart { get; init; }               // % of dest edge (0-100)
+    public int DestEnd { get; init; } = 100;          // % of dest edge (0-100)
+}
+
+public class ScreenDefinition
+{
+    public required string Match { get; init; }  // screen identifier: display name, output connector, or platform id
+    public decimal Scale { get; init; } = 1.0m;  // cursor speed multiplier for this screen
 }
 
 public class HydraConfig
 {
     public required Mode Mode { get; init; }
     // master only — ignored in slave mode
-    public List<ScreenConfig> Screens { get; init; } = [];
+    public List<HostConfig> Hosts { get; init; } = [];
+    // per-screen scale config — used by both master and slave
+    public List<ScreenDefinition> ScreenDefinitions { get; init; } = [];
 
     [JsonConverter(typeof(LogLevelConverter))]
     public LogLevel LogLevel { get; set; } = LogLevel.Information;
@@ -40,10 +50,10 @@ public class HydraConfig
     public string ResolvedName => Name ?? Environment.MachineName.Split('.')[0];
 
     [JsonIgnore]
-    public ScreenConfig? LocalScreen => Screens.FirstOrDefault(s => s.Name == ResolvedName);
+    public HostConfig? LocalHost => Hosts.FirstOrDefault(s => s.Name == ResolvedName);
 
     [JsonIgnore]
-    public IEnumerable<ScreenConfig> RemoteScreens => Screens.Where(s => s.Name != ResolvedName);
+    public IEnumerable<HostConfig> RemoteHosts => Hosts.Where(s => s.Name != ResolvedName);
 
     public static HydraConfig Load(string path = "hydra.conf")
     {

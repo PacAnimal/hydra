@@ -126,6 +126,20 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     internal static partial int GetSystemMetrics(int nIndex);
 
+    // SM_CMONITORS = number of monitors
+    internal const int SM_CMONITORS = 80;
+
+    // EnumDisplayMonitors: classic DllImport for managed delegate marshaling
+    [LibraryImport(User32, SetLastError = true)]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    internal static partial bool EnumDisplayMonitors(nint hdc, nint lprcClip, MonitorEnumProc lpfnEnum, nint dwData);
+
+#pragma warning disable SYSLIB1054 // ByValTStr not supported by LibraryImport source generator
+    [System.Runtime.InteropServices.DllImport(User32, EntryPoint = "GetMonitorInfoW", SetLastError = true)]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    internal static extern bool GetMonitorInfoW(nint hMonitor, ref MONITORINFOEX lpmi);
+#pragma warning restore SYSLIB1054
+
     // -- input injection --
 
     internal const uint INPUT_MOUSE = 0;
@@ -189,6 +203,9 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     internal static partial short GetKeyState(int nVirtKey);
 }
+
+[System.Runtime.InteropServices.UnmanagedFunctionPointer(System.Runtime.InteropServices.CallingConvention.StdCall)]
+internal delegate bool MonitorEnumProc(nint hMonitor, nint hdcMonitor, ref WINRECT lprcMonitor, nint dwData);
 
 [UnmanagedFunctionPointer(CallingConvention.StdCall)]
 internal delegate nint HookProc(int nCode, nint wParam, nint lParam);
@@ -261,4 +278,21 @@ internal struct INPUT
     [FieldOffset(0)] internal uint type;
     [FieldOffset(4)] internal MOUSEINPUT mi;
     [FieldOffset(4)] internal KEYBDINPUT ki;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct WINRECT
+{
+    internal int Left, Top, Right, Bottom;
+}
+
+[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode, Pack = 4)]
+internal struct MONITORINFOEX
+{
+    internal uint Size;
+    internal WINRECT Monitor;
+    internal WINRECT Work;
+    internal uint Flags;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+    internal string DeviceName;
 }

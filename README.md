@@ -7,10 +7,11 @@ Hydra runs on the machine with the physical keyboard and mouse (the **master**).
 ## Features
 
 - Seamless cursor transitions across screen edges in any direction (left, right, up, down)
+- **Multi-monitor support** — multiple local and remote monitors, auto-detected from the OS at startup and when screens are connected/disconnected
 - Flexible layout: configure arbitrary topologies — L-shaped, grids, or any combination
-- Scale factor per neighbour — control how fast the cursor moves on each remote screen
-- Offset per neighbour — shift the entry point when crossing a screen edge
-- Full keyboard forwarding, including dead keys and special characters — resolved on the master using its own keyboard layout, so slaves always get the right character regardless of their layout
+- **Range-based neighbours** — split edges to route to different hosts depending on cursor position (Synergy-style)
+- **Per-screen scale** — control cursor speed on each remote screen via `screenDefinitions`
+- Full keyboard forwarding, including dead keys and special characters — resolved on the master using its own keyboard layout
 - Mouse button and scroll forwarding
 - End-to-end encrypted relay via **Styx** for machines on different networks
 - macOS, Windows, and Linux support
@@ -30,7 +31,7 @@ Edit `hydra.conf` (sits next to the binary):
   "mode": "Master",
   "name": "laptop",
   "logLevel": "info",
-  "screens": [
+  "hosts": [
     {
       "name": "laptop",
       "neighbours": [
@@ -50,13 +51,15 @@ Edit `hydra.conf` (sits next to the binary):
 ### Config fields
 
 - `mode` — `Master` or `Slave`
-- `name` — this machine's name on the network. Optional — defaults to the machine's hostname without domain. Must match one of the screen names for the master to identify its own screen.
+- `name` — this machine's name on the network. Optional — defaults to the machine's hostname without domain. Must match one of the host names for the master to identify its own screen.
 - `logLevel` — `trce`, `dbug`, `info`, `warn`, `fail`, or `crit`
 - `networkConfig` — base64 relay config string from Styx (required when using the relay)
+- `hosts` — list of host entries for the neighbour graph (master only; slaves don't need this)
+- `screenDefinitions` — optional per-screen configuration for scale (used on any machine)
 
 ### Screen layout
 
-Each entry in `screens` represents one machine. Declare your neighbours by direction:
+Each entry in `hosts` represents one machine. Declare your neighbours by direction:
 
 ```json
 {
@@ -70,20 +73,67 @@ Each entry in `screens` represents one machine. Declare your neighbours by direc
 
 Supported directions: `left`, `right`, `up`, `down`.
 
-**Neighbour options** (all optional):
+**Neighbour options**:
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `scale` | `1.0` | Mouse speed multiplier on the destination screen. `0.5` = half speed, `2.0` = double speed. |
-| `offset` | `0` | Shifts the entry point when crossing an edge, as a percentage of the destination screen's perpendicular dimension. Positive = down/right, negative = up/left. Range: -99 to 99. |
+| `direction` | required | Which edge of this host triggers the transition |
+| `name` | required | Target host name |
+| `sourceStart` | `0` | Start of the source edge range (0–100%), inclusive |
+| `sourceEnd` | `100` | End of the source edge range (0–100%), inclusive |
+| `destStart` | `0` | Start of the destination edge range (0–100%) |
+| `destEnd` | `100` | End of the destination edge range (0–100%) |
+| `sourceScreen` | `null` | Restrict to a specific local screen (by display name or output name) |
+| `destScreen` | `null` | Target a specific screen on the remote host |
 
-Example — a desktop that is taller than the laptop, mounted slightly lower:
+**Range-based neighbours** let you split an edge to route to different hosts depending on where the cursor crosses:
 
 ```json
-{ "direction": "right", "name": "desktop", "scale": 0.8, "offset": 15 }
+{
+  "name": "laptop",
+  "neighbours": [
+    { "direction": "right", "name": "workstation", "sourceStart": 0,  "sourceEnd": 50  },
+    { "direction": "right", "name": "monitor-host", "sourceStart": 50, "sourceEnd": 100 }
+  ]
+}
 ```
 
-**Missing screens**: if a peer is offline, Hydra skips through to the next machine in the same direction (if configured). This lets you maintain a logical layout even when a machine in the middle of the chain is down.
+When cursor crosses the right edge in the top half (0–50%), it goes to `workstation`; bottom half goes to `monitor-host`.
+
+**Missing hosts**: if a peer is offline, Hydra skips through to the next machine in the same direction (if configured). This lets you maintain a logical layout even when a machine in the middle of the chain is down.
+
+### Multi-monitor
+
+Local screens are **auto-detected from the OS** — no config is required. On startup, Hydra logs all detected screens with their identifiers:
+
+```
+Detected 2 local screen(s):
+  Screen 0: 2560x1600 @ (0,0)     output=eDP-1    name=Built-in Retina Display
+  Screen 1: 3840x2160 @ (2560,0)  output=HDMI-1   name=DELL U2720Q
+```
+
+Use these identifiers in `screenDefinitions` to set per-screen options, and in `sourceScreen`/`destScreen` to target specific monitors in neighbour rules.
+
+### Screen definitions
+
+`screenDefinitions` is available on both master and slave. The `match` field is compared against the display name, output connector name, or platform ID of each detected screen (case-insensitive).
+
+```json
+{
+  "screenDefinitions": [
+    { "match": "DELL U2720Q",              "scale": 1.5 },
+    { "match": "Built-in Retina Display",  "scale": 1.0 },
+    { "match": "HDMI-1",                   "scale": 0.8 }
+  ]
+}
+```
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `match` | required | Screen identifier (display name, output name, or platform ID) |
+| `scale` | `1.0` | Cursor speed multiplier on this screen |
+
+Screens with no matching definition use default scale (1.0).
 
 ### Lock hotkey
 
@@ -114,11 +164,14 @@ On the slave machine:
   "mode": "Slave",
   "name": "desktop",
   "logLevel": "info",
-  "networkConfig": "<same base64 string as master>"
+  "networkConfig": "<same base64 string as master>",
+  "screenDefinitions": [
+    { "match": "DELL U2720Q", "scale": 1.5 }
+  ]
 }
 ```
 
-Slaves do not need a `screens` section — they receive and replay input from the master.
+Slaves do not need a `hosts` section — they receive and replay input from the master. The slave auto-detects all local monitors and reports them to the master so the master knows the full remote screen layout.
 
 ## Networking with Styx
 
@@ -159,7 +212,7 @@ Add `networkConfig` to `hydra.conf` on both machines. Use the same config string
   "name": "laptop",
   "networkConfig": "<base64 string from the Styx web UI>",
   "logLevel": "info",
-  "screens": [
+  "hosts": [
     {
       "name": "laptop",
       "neighbours": [{ "direction": "right", "name": "desktop" }]

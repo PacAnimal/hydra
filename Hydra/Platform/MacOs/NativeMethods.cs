@@ -70,6 +70,10 @@ internal static partial class NativeMethods
 
     [LibraryImport(CoreGraphics)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static unsafe partial int CGGetActiveDisplayList(uint maxDisplays, uint* activeDisplays, out uint displayCount);
+
+    [LibraryImport(CoreGraphics)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial int CGDisplayHideCursor(uint display);
 
     [LibraryImport(CoreGraphics)]
@@ -246,15 +250,30 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial nint sel_registerName(string str);
 
+    // receiver + selector → nint (no arguments, returns object)
+    [LibraryImport(ObjC, EntryPoint = "objc_msgSend")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint objc_msgSend_noarg(nint obj, nint sel);
+
     // receiver + selector + one nint argument → nint (used for class method calls with one arg)
     [LibraryImport(ObjC)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial nint objc_msgSend(nint obj, nint sel, nint arg);
 
+    // receiver + selector + nuint index → nint (for NSArray objectAtIndex:)
+    [LibraryImport(ObjC, EntryPoint = "objc_msgSend")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint objc_msgSend_nuint(nint obj, nint sel, nuint arg);
+
     // receiver + selector → long (used for NSInteger return values)
     [LibraryImport(ObjC, EntryPoint = "objc_msgSend")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial long objc_msgSend_long(nint obj, nint sel);
+
+    // receiver + selector → uint (for NSNumber unsignedIntValue)
+    [LibraryImport(ObjC, EntryPoint = "objc_msgSend")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial uint objc_msgSend_uint(nint obj, nint sel);
 
     // NX_SYSDEFINED event type constant (NSSystemDefined, subtype 8 = media key)
     internal const int KNXSysDefined = 14;

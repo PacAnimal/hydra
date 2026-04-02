@@ -15,8 +15,10 @@ public sealed class MacOutputHandler : IPlatformOutput
     {
         var display = NativeMethods.CGMainDisplayID();
         var bounds = NativeMethods.CGDisplayBounds(display);
-        return new ScreenRect(string.Empty, (int)bounds.Size.X, (int)bounds.Size.Y);
+        return new ScreenRect(string.Empty, string.Empty, 0, 0, (int)bounds.Size.X, (int)bounds.Size.Y, IsLocal: true);
     }
+
+    public List<DetectedScreen> GetAllScreens() => MacDisplayHelper.GetAllScreens();
 
     public void MoveMouse(int x, int y)
     {

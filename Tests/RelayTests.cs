@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using Cathedral.Extensions;
 using Common;
 using Hydra.Relay;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -143,7 +144,7 @@ public class RelayEncryptionTests
     [Test]
     public async Task MessageSerializer_Encode_Decode_RoundTrip()
     {
-        var move = new MouseMoveMessage(100, 200);
+        var move = new MouseMoveMessage("", 100, 200);
         var bytes = MessageSerializer.Encode(MessageKind.MouseMove, move);
         var (kind, json) = MessageSerializer.Decode(bytes);
 
@@ -153,5 +154,22 @@ public class RelayEncryptionTests
             Assert.That(json, Does.Contain("100"));
         }
         Assert.That(json, Does.Contain("200"));
+    }
+
+    [Test]
+    public void MessageSerializer_MouseMove_Screen_SurvivesRoundTrip()
+    {
+        var original = new MouseMoveMessage("desktop:1", 500, 300);
+        var bytes = MessageSerializer.Encode(MessageKind.MouseMove, original);
+        var (_, json) = MessageSerializer.Decode(bytes);
+        var decoded = json.FromSaneJson<MouseMoveMessage>();
+
+        Assert.That(decoded, Is.Not.Null);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(decoded!.Screen, Is.EqualTo("desktop:1"));
+            Assert.That(decoded.X, Is.EqualTo(500));
+            Assert.That(decoded.Y, Is.EqualTo(300));
+        }
     }
 }

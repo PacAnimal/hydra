@@ -1,3 +1,5 @@
+using System.Text.Json;
+using Cathedral.Config;
 using Hydra.Config;
 using Hydra.Keyboard;
 using Hydra.Mouse;
@@ -12,24 +14,24 @@ namespace Tests.Screen;
 public class ScreenLockTests
 {
     private FakePlatform _platform = null!;
+    private FakeRelay _relay = null!;
     private ScreenTransitionService _service = null!;
 
-    // "home" is the local screen; "remote" is a debug virtual screen (always connected)
+    // "home" is the local screen; "remote" is a real remote host
     private static readonly HydraConfig TestConfig = new()
     {
         Mode = Mode.Master,
         Name = "home",
-        Screens =
+        Hosts =
         [
-            new ScreenConfig
+            new HostConfig
             {
                 Name = "home",
                 Neighbours = [new NeighbourConfig { Direction = Direction.Right, Name = "remote" }],
             },
-            new ScreenConfig
+            new HostConfig
             {
                 Name = "remote",
-                IsVirtual = true,
                 Neighbours = [new NeighbourConfig { Direction = Direction.Left, Name = "home" }],
             },
         ],
@@ -38,9 +40,9 @@ public class ScreenLockTests
     [SetUp]
     public async Task SetUp()
     {
-        _platform = new FakePlatform();
-        _service = new ScreenTransitionService(_platform, TestConfig, new NullRelaySender(), NullLoggerFactory.Instance, NullLogger<ScreenTransitionService>.Instance);
+        (_platform, _relay, _service) = CreateService();
         await _service.StartAsync(CancellationToken.None);
+        BringRemoteOnline(_relay);
     }
 
     [TearDown]
@@ -67,9 +69,9 @@ public class ScreenLockTests
         _service.StopAsync(CancellationToken.None).Wait();
 
         // restart fresh
-        _platform.Reset();
-        _service = new ScreenTransitionService(_platform, TestConfig, new NullRelaySender(), NullLoggerFactory.Instance, NullLogger<ScreenTransitionService>.Instance);
+        (_platform, _relay, _service) = CreateService();
         _service.StartAsync(CancellationToken.None).Wait();
+        BringRemoteOnline(_relay);
 
         // lock
         _platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyDown, 'l',
@@ -139,7 +141,24 @@ public class ScreenLockTests
         }
     }
 
-    // -- stub --
+    // -- helpers --
+
+    private static (FakePlatform, FakeRelay, ScreenTransitionService) CreateService()
+    {
+        var platform = new FakePlatform();
+        var relay = new FakeRelay();
+        var service = new ScreenTransitionService(platform, TestConfig, relay, NullLoggerFactory.Instance, NullLogger<ScreenTransitionService>.Instance);
+        return (platform, relay, service);
+    }
+
+    private static void BringRemoteOnline(FakeRelay relay)
+    {
+        relay.FirePeersChanged("remote");
+        var info = JsonSerializer.Serialize(new ScreenInfoMessage([new ScreenInfoEntry("screen:0", 0, 0, 2560, 1440, 1.0m)]), SaneJson.Options);
+        relay.FireMessageReceived("remote", MessageKind.ScreenInfo, info);
+    }
+
+    // -- stubs --
 
     private sealed class FakePlatform : IPlatformInput
     {
@@ -162,7 +181,8 @@ public class ScreenLockTests
             ShowCursorCalled = false;
         }
 
-        public ScreenRect GetPrimaryScreenBounds() => new("home", 2560, 1440);
+        public ScreenRect GetPrimaryScreenBounds() => new("home", "home", 0, 0, 2560, 1440, IsLocal: true);
+        public List<DetectedScreen> GetAllScreens() => [new DetectedScreen(0, 0, 2560, 1440, null, null, null)];
         public bool IsAccessibilityTrusted() => true;
 
         public void StartEventTap(
@@ -182,5 +202,17 @@ public class ScreenLockTests
         public void HideCursor() { HideCursorCalled = true; }
         public void ShowCursor() { ShowCursorCalled = true; }
         public void Dispose() { }
+    }
+
+    private sealed class FakeRelay : IRelaySender
+    {
+        public bool IsConnected => true;
+        public event Action<string[]>? PeersChanged;
+        public event Action<string, MessageKind, string>? MessageReceived;
+
+        public ValueTask Send(string[] targetHosts, byte[] payload) => ValueTask.CompletedTask;
+
+        public void FirePeersChanged(params string[] hosts) => PeersChanged?.Invoke(hosts);
+        public void FireMessageReceived(string host, MessageKind kind, string json) => MessageReceived?.Invoke(host, kind, json);
     }
 }

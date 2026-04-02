@@ -19,13 +19,14 @@ public enum MessageKind : byte
     SlaveLog = 9,
 }
 
-public record MouseMoveMessage(int X, int Y);
-public record ScreenInfoMessage(int Width, int Height);
+public record MouseMoveMessage(string Screen, int X, int Y);
+public record ScreenInfoEntry(string Name, int X, int Y, int Width, int Height, decimal Scale);
+public record ScreenInfoMessage(List<ScreenInfoEntry> Screens);
 public record SlaveLogMessage(int Level, string Category, string Message, string? Exception);
 public record KeyEventMessage(KeyEventType Type, KeyModifiers Modifiers, char? Character, SpecialKey? Key);
 public record MouseButtonMessage(MouseButton Button, bool IsPressed);
 public record MouseScrollMessage(short XDelta, short YDelta);
-public record EnterScreenMessage(int X, int Y, int Width, int Height);
+public record EnterScreenMessage(string Screen, int X, int Y, int Width, int Height);
 
 public static class MessageSerializer
 {

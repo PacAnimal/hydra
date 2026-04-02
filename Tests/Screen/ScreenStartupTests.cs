@@ -19,10 +19,10 @@ public class ScreenStartupTests
         {
             Mode = Mode.Master,
             Name = "unknown-host",
-            Screens =
+            Hosts =
             [
-                new ScreenConfig { Name = "laptop", Neighbours = [new NeighbourConfig { Direction = Direction.Right, Name = "desktop" }] },
-                new ScreenConfig { Name = "desktop", Neighbours = [new NeighbourConfig { Direction = Direction.Left, Name = "laptop" }] },
+                new HostConfig { Name = "laptop", Neighbours = [new NeighbourConfig { Direction = Direction.Right, Name = "desktop" }] },
+                new HostConfig { Name = "desktop", Neighbours = [new NeighbourConfig { Direction = Direction.Left, Name = "laptop" }] },
             ],
         };
 
@@ -61,7 +61,8 @@ public class ScreenStartupTests
     private sealed class FakePlatform : IPlatformInput
     {
         public bool IsOnVirtualScreen { get; set; }
-        public ScreenRect GetPrimaryScreenBounds() => new("laptop", 2560, 1440);
+        public ScreenRect GetPrimaryScreenBounds() => new("laptop", "laptop", 0, 0, 2560, 1440, IsLocal: true);
+        public List<DetectedScreen> GetAllScreens() => [new DetectedScreen(0, 0, 2560, 1440, null, null, null)];
         public bool IsAccessibilityTrusted() => true;
         public void StartEventTap(Action<double, double> onMouseMove, Action<KeyEvent> onKeyEvent, Action<MouseButtonEvent> onMouseButton, Action<MouseScrollEvent> onMouseScroll) { }
         public void StopEventTap() { }

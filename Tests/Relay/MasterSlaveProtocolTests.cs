@@ -48,7 +48,7 @@ public class MasterSlaveProtocolTests
         var received = new List<MessageKind>();
         relay.MessageReceived += (_, kind, _) => received.Add(kind);
 
-        var info = new ScreenInfoMessage(1920, 1080);
+        var info = new ScreenInfoMessage([new ScreenInfoEntry("screen:0", 0, 0, 1920, 1080, 1.0m)]);
         await relay.SimulateReceive("slave-pc", MessageKind.ScreenInfo, JsonSerializer.Serialize(info, SaneJson.Options));
 
         Assert.That(received, Is.EqualTo([MessageKind.ScreenInfo]));
@@ -155,7 +155,7 @@ public class MasterSlaveProtocolTests
     {
         Mode = Mode.Master,
         Name = "main",
-        Screens = [new ScreenConfig { Name = "main" }, .. slaveNames.Select(n => new ScreenConfig { Name = n })],
+        Hosts = [new HostConfig { Name = "main" }, .. slaveNames.Select(n => new HostConfig { Name = n })],
     };
 
     private static ScreenTransitionService MakeService(HydraConfig config, IRelaySender relay) =>
@@ -215,7 +215,8 @@ public class MasterSlaveProtocolTests
     private sealed class FakePlatform : IPlatformInput
     {
         public bool IsOnVirtualScreen { get; set; }
-        public ScreenRect GetPrimaryScreenBounds() => new("main", 2560, 1440);
+        public ScreenRect GetPrimaryScreenBounds() => new("main", "main", 0, 0, 2560, 1440, IsLocal: true);
+        public List<DetectedScreen> GetAllScreens() => [new DetectedScreen(0, 0, 2560, 1440, null, null, null)];
         public bool IsAccessibilityTrusted() => true;
         public void StartEventTap(Action<double, double> onMouseMove, Action<KeyEvent> onKeyEvent, Action<MouseButtonEvent> onMouseButton, Action<MouseScrollEvent> onMouseScroll) { }
         public void StopEventTap() { }

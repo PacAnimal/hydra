@@ -27,8 +27,10 @@ public sealed class XorgOutputHandler : IPlatformOutput
     {
         var w = NativeMethods.XDisplayWidth(_display, _screen);
         var h = NativeMethods.XDisplayHeight(_display, _screen);
-        return new ScreenRect(string.Empty, w, h);
+        return new ScreenRect(string.Empty, string.Empty, 0, 0, w, h, IsLocal: true);
     }
+
+    public List<DetectedScreen> GetAllScreens() => XorgDisplayHelper.GetAllScreens(_display, _rootWindow);
 
     public void MoveMouse(int x, int y)
     {

@@ -17,14 +17,22 @@ public class ScreenTransitionService(
     ILogger<ScreenTransitionService> log)
     : IHostedService
 {
-    private List<ScreenRect> _screens = [];
-    private ScreenRect? _realScreen;
+    private List<ScreenRect> _screens = [];          // all screens: local + remote
+    private List<ScreenRect> _localScreens = [];     // local OS-detected screens only
+    private ScreenRect? _activeLocalScreen;           // which local screen the cursor is currently on
     private ScreenLayout? _layout;
     private readonly VirtualMouseState _mouse = new();
 
-    // center of the real screen -- cursor warped here on every virtual-screen event
+    // center of active local screen in global OS coords — cursor warped here on virtual events
     private int _warpX;
     private int _warpY;
+
+    // half-dimensions of active local screen — used for bogus-delta filter
+    private int _halfW;
+    private int _halfH;
+
+    // guards layout/screens shared between event-tap, relay, and poll threads
+    private readonly Lock _lock = new();
 
     // last known cursor position; deltas computed from this
     private double _lastWarpX;
@@ -45,11 +53,7 @@ public class ScreenTransitionService(
     private readonly Dictionary<string, (int Width, int Height)> _peerScreens = [];
     private readonly Dictionary<string, ILogger> _slaveLoggers = [];
 
-    // debug screens — IsVirtual in config, no real slave, skip relay sends
-    private readonly HashSet<string> _debugScreens = config.Screens
-        .Where(s => s.IsVirtual)
-        .Select(s => s.Name)
-        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    private CancellationTokenSource? _pollCts;
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
@@ -61,33 +65,46 @@ public class ScreenTransitionService(
 
         log.LogInformation("Host: {Name}", config.ResolvedName);
 
-        var bounds = platform.GetPrimaryScreenBounds();
-        _screens = BuildScreens(config, bounds);
-
-        _realScreen = _screens.FirstOrDefault(s => !s.IsVirtual);
-        if (_realScreen == null)
+        if (config.LocalHost == null && config.Hosts.Count > 0)
         {
-            log.LogError("No local screen found in config — add a screen whose name matches this host ({Name}).", config.ResolvedName);
+            log.LogError("Host '{Name}' is not listed in the config hosts — add it to the hosts list.", config.ResolvedName);
             return Task.CompletedTask;
         }
 
-        _warpX = _realScreen.Width / 2;
-        _warpY = _realScreen.Height / 2;
-        _layout = new ScreenLayout(_screens, config.Screens);
-        log.LogInformation("Local screen: {W}x{H}", _realScreen.Width, _realScreen.Height);
+        var detected = platform.GetAllScreens();
+        LogDetectedScreens(detected);
+        _localScreens = BuildLocalScreens(detected);
+        _activeLocalScreen = _localScreens.FirstOrDefault();
 
-        foreach (var remote in _screens.Where(s => s.IsVirtual))
-            log.LogInformation("Remote screen '{Name}': {W}x{H}", remote.Name, remote.Width, remote.Height);
+        if (_activeLocalScreen == null)
+        {
+            log.LogError("No local screens detected.");
+            return Task.CompletedTask;
+        }
+
+        UpdateWarpPoint(_activeLocalScreen);
+        _screens = BuildAllScreens(_localScreens, config);
+        _layout = new ScreenLayout(_screens, config.Hosts);
+
+        foreach (var remote in _screens.Where(s => !s.IsLocal))
+            log.LogInformation("Remote screen '{Name}': waiting for peer", remote.Name);
 
         relay.PeersChanged += OnPeersChanged;
         relay.MessageReceived += OnMessageReceived;
 
         platform.StartEventTap((x, y) => OnMouseMove(x, y), OnKeyEvent, OnMouseButton, OnMouseScroll);
+
+        // start background polling for screen configuration changes
+        _pollCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        _ = PollScreenChangesAsync(_pollCts.Token);
+
         return Task.CompletedTask;
     }
 
     public Task StopAsync(CancellationToken cancellationToken)
     {
+        _pollCts?.Cancel();
+        _pollCts?.Dispose();
         relay.PeersChanged -= OnPeersChanged;
         relay.MessageReceived -= OnMessageReceived;
 
@@ -101,11 +118,59 @@ public class ScreenTransitionService(
         return Task.CompletedTask;
     }
 
+    private async Task PollScreenChangesAsync(CancellationToken ct)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(2));
+        try
+        {
+            while (await timer.WaitForNextTickAsync(ct))
+            {
+                var detected = platform.GetAllScreens();
+                if (!ScreenListChanged(detected, _localScreens))
+                    continue;
+
+                log.LogInformation("Screen configuration changed — rebuilding layout");
+                LogDetectedScreens(detected);
+                var newLocal = BuildLocalScreens(detected);
+                var newScreens = BuildAllScreens(newLocal, config);
+                ApplyPeerScreenSizes(newScreens);
+                var newLayout = new ScreenLayout(newScreens, config.Hosts);
+
+                lock (_lock)
+                {
+                    _localScreens = newLocal;
+                    _screens = newScreens;
+                    _layout = newLayout;
+
+                    // if cursor is on local screen, snap active screen to match new layout
+                    if (!_mouse.IsOnVirtualScreen)
+                    {
+                        _activeLocalScreen = _localScreens.FirstOrDefault() ?? _activeLocalScreen;
+                        if (_activeLocalScreen != null) UpdateWarpPoint(_activeLocalScreen);
+                    }
+                }
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    private static bool ScreenListChanged(List<DetectedScreen> detected, List<ScreenRect> current)
+    {
+        if (detected.Count != current.Count) return true;
+        for (var i = 0; i < detected.Count; i++)
+        {
+            var d = detected[i];
+            var s = current[i];
+            if (d.X != s.X || d.Y != s.Y || d.Width != s.Width || d.Height != s.Height)
+                return true;
+        }
+        return false;
+    }
+
     private void OnPeersChanged(string[] hostNames)
     {
         var current = new HashSet<string>(hostNames);
-        var configuredSlaves = config.RemoteScreens
-            .Where(s => !s.IsVirtual)
+        var configuredSlaves = config.RemoteHosts
             .Select(s => s.Name)
             .ToHashSet();
 
@@ -113,7 +178,7 @@ public class ScreenTransitionService(
         if (_mouse.IsOnVirtualScreen && _mouse.CurrentScreen != null)
         {
             var currentName = _mouse.CurrentScreen.Name;
-            if (!current.Contains(currentName) && !_debugScreens.Contains(currentName))
+            if (!current.Contains(currentName))
             {
                 _mouse.LeaveScreen();
                 platform.IsOnVirtualScreen = false;
@@ -154,11 +219,13 @@ public class ScreenTransitionService(
         {
             case MessageKind.ScreenInfo:
                 var info = json.FromSaneJson<ScreenInfoMessage>();
-                if (info != null)
+                if (info != null && info.Screens.Count > 0)
                 {
-                    _peerScreens[sourceHost] = (info.Width, info.Height);
+                    // use primary screen dims for now (full multi-screen map in slave Phase 9)
+                    var primary = info.Screens[0];
+                    _peerScreens[sourceHost] = (primary.Width, primary.Height);
                     UpdateVirtualScreenDimensions();
-                    log.LogInformation("Screen info from {Host}: {W}x{H}", sourceHost, info.Width, info.Height);
+                    log.LogInformation("Screen info from {Host}: {Count} screen(s), primary {W}x{H}", sourceHost, info.Screens.Count, primary.Width, primary.Height);
                 }
                 break;
             case MessageKind.SlaveLog:
@@ -188,32 +255,38 @@ public class ScreenTransitionService(
 
     private void UpdateVirtualScreenDimensions()
     {
-        if (_realScreen == null) return;
+        if (_activeLocalScreen == null) return;
 
-        var bounds = platform.GetPrimaryScreenBounds();
-        var updated = BuildScreens(config, bounds);
+        var newScreens = BuildAllScreens(_localScreens, config);
+        ApplyPeerScreenSizes(newScreens);
+        var newLayout = new ScreenLayout(newScreens, config.Hosts);
 
-        // apply known peer screen sizes to matching remote screens
-        for (var i = 0; i < updated.Count; i++)
+        lock (_lock)
         {
-            var screen = updated[i];
-            if (screen.IsVirtual && !_debugScreens.Contains(screen.Name) && _peerScreens.TryGetValue(screen.Name, out var dims))
-                updated[i] = screen with { Width = dims.Width, Height = dims.Height };
-        }
+            _screens = newScreens;
+            _layout = newLayout;
+            _activeLocalScreen = _localScreens.FirstOrDefault(s => s.Name == _activeLocalScreen.Name) ?? _localScreens.FirstOrDefault() ?? _activeLocalScreen;
 
-        _screens = updated;
-        _realScreen = _screens.First(s => !s.IsVirtual);
-        _layout = new ScreenLayout(_screens, config.Screens);
-
-        // if the cursor is on a remote screen whose dims changed, update it
-        if (_mouse.IsOnVirtualScreen && _mouse.CurrentScreen != null)
-        {
-            var refreshed = _screens.FirstOrDefault(s => s.Name == _mouse.CurrentScreen.Name);
-            if (refreshed != null && refreshed != _mouse.CurrentScreen)
-                _mouse.EnterScreen(refreshed, (int)_mouse.X, (int)_mouse.Y, _mouse.Scale);
+            // if the cursor is on a remote screen whose dims changed, update it
+            if (_mouse.IsOnVirtualScreen && _mouse.CurrentScreen != null)
+            {
+                var refreshed = _screens.FirstOrDefault(s => s.Name == _mouse.CurrentScreen.Name);
+                if (refreshed != null && refreshed != _mouse.CurrentScreen)
+                    _mouse.EnterScreen(refreshed, _mouse.RemoteScreens, (int)_mouse.X, (int)_mouse.Y, _mouse.Scale);
+            }
         }
 
         log.LogDebug("Screen layout updated");
+    }
+
+    private void ApplyPeerScreenSizes(List<ScreenRect> screens)
+    {
+        for (var i = 0; i < screens.Count; i++)
+        {
+            var screen = screens[i];
+            if (!screen.IsLocal && _peerScreens.TryGetValue(screen.Name, out var dims))
+                screens[i] = screen with { Width = dims.Width, Height = dims.Height };
+        }
     }
 
     private void OnKeyEvent(KeyEvent keyEvent)
@@ -229,7 +302,7 @@ public class ScreenTransitionService(
             log.LogInformation("Screen lock: {State}", _lockedToScreen ? "locked" : "unlocked");
         }
 
-        if (_mouse.IsOnVirtualScreen && relay.IsConnected && !IsDebugScreen(_mouse.CurrentScreen))
+        if (_mouse.IsOnVirtualScreen && relay.IsConnected)
             ForwardToVirtualScreen(MessageKind.KeyEvent, new KeyEventMessage(keyEvent.Type, keyEvent.Modifiers, keyEvent.Character, keyEvent.Key));
     }
 
@@ -237,7 +310,7 @@ public class ScreenTransitionService(
     {
         log.LogDebug("Mouse: {Type} {Button}", e.IsPressed ? "down" : "up", e.Button);
 
-        if (_mouse.IsOnVirtualScreen && relay.IsConnected && !IsDebugScreen(_mouse.CurrentScreen))
+        if (_mouse.IsOnVirtualScreen && relay.IsConnected)
             ForwardToVirtualScreen(MessageKind.MouseButton, new MouseButtonMessage(e.Button, e.IsPressed));
     }
 
@@ -245,7 +318,7 @@ public class ScreenTransitionService(
     {
         log.LogDebug("Scroll: x={X} y={Y}", e.XDelta, e.YDelta);
 
-        if (_mouse.IsOnVirtualScreen && relay.IsConnected && !IsDebugScreen(_mouse.CurrentScreen))
+        if (_mouse.IsOnVirtualScreen && relay.IsConnected)
             ForwardToVirtualScreen(MessageKind.MouseScroll, new MouseScrollMessage(e.XDelta, e.YDelta));
     }
 
@@ -259,15 +332,22 @@ public class ScreenTransitionService(
 
     private void OnMouseMove(double x, double y)
     {
-        if (_layout is null || _realScreen is null) return;
+        ScreenLayout? layout;
+        ScreenRect? activeLocalScreen;
+        lock (_lock)
+        {
+            layout = _layout;
+            activeLocalScreen = _activeLocalScreen;
+        }
+        if (layout is null || activeLocalScreen is null) return;
 
         if (!_mouse.IsOnVirtualScreen)
-            HandleRealScreenMove(x, y);
+            HandleRealScreenMove(x, y, layout, activeLocalScreen);
         else
-            HandleVirtualScreenMove(x, y);
+            HandleVirtualScreenMove(x, y, layout);
     }
 
-    private void HandleRealScreenMove(double x, double y)
+    private void HandleRealScreenMove(double x, double y, ScreenLayout layout, ScreenRect activeLocalScreen)
     {
         if (_pendingCursorShow)
         {
@@ -275,28 +355,40 @@ public class ScreenTransitionService(
             platform.ShowCursor();
         }
 
+        // track which local screen the cursor is on
+        var screen = FindLocalScreenAt((int)x, (int)y) ?? activeLocalScreen;
+        if (screen != activeLocalScreen)
+        {
+            lock (_lock)
+            {
+                _activeLocalScreen = screen;
+                UpdateWarpPoint(screen);
+            }
+        }
+
         if (_lockedToScreen) return;
 
-        var ix = (int)x;
-        var iy = (int)y;
-        var hit = _layout!.DetectEdgeExit(_realScreen!, ix, iy);
+        // convert global cursor coords to screen-local
+        var localX = (int)x - screen.X;
+        var localY = (int)y - screen.Y;
+        var hit = layout.DetectEdgeExit(screen, localX, localY);
         if (hit is null) return;
 
         platform.HideCursor();
         platform.IsOnVirtualScreen = true;
-        _mouse.EnterScreen(hit.Destination, hit.EntryX, hit.EntryY, hit.Scale);
+        _mouse.EnterScreen(hit.Destination, [], hit.EntryX, hit.EntryY, 1.0m);
         _lastWarpX = x;
         _lastWarpY = y;
         log.LogInformation("Entered remote screen '{Name}' → ({X}, {Y})", hit.Destination.Name, hit.EntryX, hit.EntryY);
 
-        if (relay.IsConnected && !IsDebugScreen(hit.Destination))
+        if (relay.IsConnected)
         {
-            var payload = MessageSerializer.Encode(MessageKind.EnterScreen, new EnterScreenMessage(hit.EntryX, hit.EntryY, hit.Destination.Width, hit.Destination.Height));
+            var payload = MessageSerializer.Encode(MessageKind.EnterScreen, new EnterScreenMessage(hit.Destination.Name, hit.EntryX, hit.EntryY, hit.Destination.Width, hit.Destination.Height));
             _ = relay.Send([hit.Destination.Name], payload).AsTask();
         }
     }
 
-    private void HandleVirtualScreenMove(double x, double y)
+    private void HandleVirtualScreenMove(double x, double y, ScreenLayout layout)
     {
         var dx = x - _lastWarpX;
         var dy = y - _lastWarpY;
@@ -309,7 +401,9 @@ public class ScreenTransitionService(
         if (dx == 0 && dy == 0) return;
 
         // bogus filter: drop delta that looks like a warp-displacement artifact
-        if (Math.Abs(dx) > _warpX - 10 || Math.Abs(dy) > _warpY - 10) return;
+        int halfW, halfH;
+        lock (_lock) { halfW = _halfW; halfH = _halfH; }
+        if (Math.Abs(dx) > halfW - 10 || Math.Abs(dy) > halfH - 10) return;
 
         _mouse.ApplyDelta(dx, dy);
 
@@ -320,20 +414,29 @@ public class ScreenTransitionService(
             log.LogDebug("Virtual: ({X}, {Y})", (int)_mouse.X, (int)_mouse.Y);
         }
 
-        // check if we've crossed back to the real screen
+        // check if we've crossed back to a local screen
         var virtualScreen = _mouse.CurrentScreen!;
-        var hit = _layout!.DetectEdgeExit(virtualScreen, (int)_mouse.X, (int)_mouse.Y);
-        if (hit is not null && !hit.Destination.IsVirtual && !_lockedToScreen)
+        var hit = layout.DetectEdgeExit(virtualScreen, (int)_mouse.X, (int)_mouse.Y);
+        if (hit is not null && hit.Destination.IsLocal && !_lockedToScreen)
         {
-            // warp to entry while still hidden; show is deferred to next real-screen event to avoid flash
+            var targetScreen = hit.Destination;
+
+            // warp to entry in global OS coords; show is deferred to next real-screen event
+            var globalX = targetScreen.X + hit.EntryX;
+            var globalY = targetScreen.Y + hit.EntryY;
             var leavingScreen = _mouse.CurrentScreen;
             _mouse.LeaveScreen();
             platform.IsOnVirtualScreen = false;
-            platform.WarpCursor(hit.EntryX, hit.EntryY);
+            platform.WarpCursor(globalX, globalY);
             _pendingCursorShow = true;
-            log.LogInformation("Returned to local screen ← ({X}, {Y})", hit.EntryX, hit.EntryY);
+            lock (_lock)
+            {
+                _activeLocalScreen = targetScreen;
+                UpdateWarpPoint(targetScreen);
+            }
+            log.LogInformation("Returned to local screen ← ({X}, {Y})", globalX, globalY);
 
-            if (relay.IsConnected && leavingScreen != null && !IsDebugScreen(leavingScreen))
+            if (relay.IsConnected && leavingScreen != null)
             {
                 var payload = MessageSerializer.Encode(MessageKind.LeaveScreen, new { });
                 _ = relay.Send([leavingScreen.Name], payload).AsTask();
@@ -342,36 +445,61 @@ public class ScreenTransitionService(
         }
 
         // forward current virtual position to remote
-        if (relay.IsConnected && _mouse.CurrentScreen != null && !IsDebugScreen(_mouse.CurrentScreen))
+        if (relay.IsConnected && _mouse.CurrentScreen != null)
         {
-            var payload = MessageSerializer.Encode(MessageKind.MouseMove, new MouseMoveMessage((int)_mouse.X, (int)_mouse.Y));
+            var payload = MessageSerializer.Encode(MessageKind.MouseMove, new MouseMoveMessage(_mouse.CurrentScreen.Name, (int)_mouse.X, (int)_mouse.Y));
             _ = relay.Send([_mouse.CurrentScreen.Name], payload).AsTask();
         }
 
         // warp to center on every event
-        platform.WarpCursor(_warpX, _warpY);
-        _lastWarpX = _warpX;
-        _lastWarpY = _warpY;
+        int warpX, warpY;
+        lock (_lock) { warpX = _warpX; warpY = _warpY; }
+        platform.WarpCursor(warpX, warpY);
+        _lastWarpX = warpX;
+        _lastWarpY = warpY;
     }
 
-    // builds runtime screen rects from config.
-    // local screen gets real dimensions from OS; remote screens start at 0x0 until ScreenInfo arrives;
-    // debug (IsVirtual) screens get fixed 1920x1080.
-    private static List<ScreenRect> BuildScreens(HydraConfig config, ScreenRect bounds)
+    private void UpdateWarpPoint(ScreenRect screen)
+    {
+        _halfW = screen.Width / 2;
+        _halfH = screen.Height / 2;
+        _warpX = screen.X + _halfW;
+        _warpY = screen.Y + _halfH;
+    }
+
+    private ScreenRect? FindLocalScreenAt(int x, int y) =>
+        _localScreens.FirstOrDefault(s => x >= s.X && x < s.X + s.Width && y >= s.Y && y < s.Y + s.Height);
+
+    private void LogDetectedScreens(List<DetectedScreen> detected)
+    {
+        log.LogInformation("Detected {Count} local screen(s):", detected.Count);
+        for (var i = 0; i < detected.Count; i++)
+        {
+            var d = detected[i];
+            log.LogInformation("  Screen {I}: {W}x{H} @ ({X},{Y}) output={Output} name={Name}",
+                i, d.Width, d.Height, d.X, d.Y, d.OutputName ?? "?", d.DisplayName ?? "?");
+        }
+    }
+
+    // converts OS-detected screens to ScreenRects, naming single-screen = hostname, multi = hostname:N
+    private List<ScreenRect> BuildLocalScreens(List<DetectedScreen> detected)
     {
         var result = new List<ScreenRect>();
-        foreach (var screen in config.Screens)
+        for (var i = 0; i < detected.Count; i++)
         {
-            if (screen.Name == config.ResolvedName)
-                result.Add(new ScreenRect(screen.Name, bounds.Width, bounds.Height));
-            else if (screen.IsVirtual)
-                result.Add(new ScreenRect(screen.Name, 1920, 1080, true));
-            else
-                result.Add(new ScreenRect(screen.Name, 0, 0, true));
+            var d = detected[i];
+            var name = detected.Count == 1 ? config.ResolvedName : $"{config.ResolvedName}:{i}";
+            result.Add(new ScreenRect(name, config.ResolvedName, d.X, d.Y, d.Width, d.Height, IsLocal: true));
         }
         return result;
     }
 
-    private bool IsDebugScreen(ScreenRect? screen) =>
-        screen != null && _debugScreens.Contains(screen.Name);
+    // combines local screens with placeholder remote screens (Width=0 until ScreenInfo arrives)
+    private static List<ScreenRect> BuildAllScreens(List<ScreenRect> localScreens, HydraConfig config)
+    {
+        var result = new List<ScreenRect>(localScreens);
+        foreach (var host in config.RemoteHosts)
+            result.Add(new ScreenRect(host.Name, host.Name, 0, 0, 0, 0, IsLocal: false));
+        return result;
+    }
 }

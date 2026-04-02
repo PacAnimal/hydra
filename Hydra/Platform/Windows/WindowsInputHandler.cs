@@ -29,8 +29,10 @@ public class WindowsInputHandler(ILogger<WindowsInputHandler> log) : IPlatformIn
     {
         var w = NativeMethods.GetSystemMetrics(NativeMethods.SM_CXSCREEN);
         var h = NativeMethods.GetSystemMetrics(NativeMethods.SM_CYSCREEN);
-        return new ScreenRect("main", w, h);
+        return new ScreenRect("main", string.Empty, 0, 0, w, h, IsLocal: true);
     }
+
+    public List<DetectedScreen> GetAllScreens() => WindowsDisplayHelper.GetAllScreens();
 
     // low-level hooks work without elevation for non-elevated processes
     public bool IsAccessibilityTrusted() => true;

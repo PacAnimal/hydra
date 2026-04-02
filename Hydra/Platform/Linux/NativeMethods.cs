@@ -228,6 +228,37 @@ internal static partial class NativeMethods
     [LibraryImport(X11)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial uint XKeysymToKeycode(nint display, ulong keysym);
+
+    // -- XRandR multi-monitor enumeration --
+
+    private const string XRandR = "libXrandr.so.2";
+
+    // returns nint (XRRScreenResources*) or nint.Zero
+    [LibraryImport(XRandR)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint XRRGetScreenResources(nint display, nint window);
+
+    // returns nint (XRROutputInfo*) or nint.Zero
+    [LibraryImport(XRandR)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint XRRGetOutputInfo(nint display, nint resources, nint output);
+
+    // returns nint (XRRCrtcInfo*) or nint.Zero
+    [LibraryImport(XRandR)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint XRRGetCrtcInfo(nint display, nint resources, nint crtc);
+
+    [LibraryImport(XRandR)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void XRRFreeScreenResources(nint resources);
+
+    [LibraryImport(XRandR)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void XRRFreeOutputInfo(nint outputInfo);
+
+    [LibraryImport(XRandR)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void XRRFreeCrtcInfo(nint crtcInfo);
 }
 
 // struct pollfd for use with poll()
