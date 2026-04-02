@@ -1,0 +1,6 @@
+{
+  "networkConfig": "<base64-encoded network config from Styx>",
+  "mode": "Slave",
+  "logLevel": "info",
+  "name": "desktop"
+}

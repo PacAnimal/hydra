@@ -1,0 +1,35 @@
+{
+  "networkConfig": "<base64-encoded network config from Styx>",
+  "mode": "Master",
+  "logLevel": "info",
+  "name": "macbook",
+  "screens": [
+    {
+      "name": "macbook",
+      "neighbours": [
+        { "direction": "right", "name": "desktop", "scale": 1.5, "offset": 10 }
+      ]
+    },
+    {
+      "name": "desktop",
+      "neighbours": [
+        { "direction": "left", "name": "macbook", "scale": 1.5, "offset": 10 },
+        { "direction": "right", "name": "monitor" }
+      ]
+    },
+    {
+      "name": "monitor",
+      "neighbours": [
+        { "direction": "left", "name": "desktop" },
+        { "direction": "right", "name": "virtual" }
+      ]
+    },
+    {
+      "name": "virtual",
+      "isVirtual": true,
+      "neighbours": [
+        { "direction": "left", "name": "monitor" }
+      ]
+    }
+  ]
+}

@@ -143,3 +143,6 @@ CLAUDE.md
 
 # claude code
 .claude/
+
+# local config
+Hydra/hydra.conf
