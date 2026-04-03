@@ -25,7 +25,7 @@ public class ClientRegistry(ILogger<ClientRegistry> log) : IClientRegistry
     public async ValueTask Register(string connectionId, Guid networkId, string hostName)
     {
         using var clients = await _clients.WaitForDisposable();
-        clients.Value[connectionId] = new ClientData(networkId, hostName, DateTime.UtcNow);
+        clients.Value[connectionId] = new ClientData(networkId, hostName);
         log.LogInformation("Registered {HostName} ({NetworkId}) on {ConnectionId}", hostName, networkId, connectionId);
     }
 
@@ -59,18 +59,21 @@ public class ClientRegistry(ILogger<ClientRegistry> log) : IClientRegistry
     public async ValueTask<string?> KickDuplicate(Guid networkId, string hostName, string newConnectionId)
     {
         using var clients = await _clients.WaitForDisposable();
+        string? found = null;
         foreach (var (connectionId, data) in clients.Value)
         {
             if (data.NetworkId == networkId
                 && data.HostName.EqualsIgnoreCase(hostName)
                 && connectionId != newConnectionId)
             {
-                clients.Value.Remove(connectionId);
-                log.LogInformation("Kicked duplicate {HostName} ({NetworkId}) on {ConnectionId}", hostName, networkId, connectionId);
-                return connectionId;
+                found = connectionId;
+                break;
             }
         }
-        return null;
+        if (found is null) return null;
+        clients.Value.Remove(found);
+        log.LogInformation("Kicked duplicate {HostName} ({NetworkId}) on {ConnectionId}", hostName, networkId, found);
+        return found;
     }
 
     public async ValueTask<IReadOnlyList<(string ConnectionId, string HostName)>> GetNetworkClients(Guid networkId, string? excludeConnectionId = null)
@@ -85,5 +88,5 @@ public class ClientRegistry(ILogger<ClientRegistry> log) : IClientRegistry
         return result;
     }
 
-    private record ClientData(Guid NetworkId, string HostName, DateTime ConnectedAt);
+    private record ClientData(Guid NetworkId, string HostName);
 }

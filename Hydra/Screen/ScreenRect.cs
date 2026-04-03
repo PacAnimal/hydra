@@ -7,6 +7,12 @@ public record ScreenRect(
     string Host,      // hostname for relay routing
     int X, int Y,     // top-left in host coordinate space
     int Width, int Height,
-    bool IsLocal);    // true = local screen on this machine
+    bool IsLocal)     // true = local screen on this machine
+{
+    public (int X, int Y, int Width, int Height) Bounds => (X, Y, Width, Height);
+
+    public bool Contains(double x, double y) =>
+        x >= X && x < X + Width && y >= Y && y < Y + Height;
+}
 
 public record EdgeHit(ScreenRect Destination, Direction Direction, int EntryX, int EntryY);

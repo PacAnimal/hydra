@@ -1,5 +1,5 @@
-using System.Threading.Channels;
 using Cathedral.Logging;
+using System.Threading.Channels;
 
 namespace Hydra.Relay;
 
@@ -13,17 +13,12 @@ public sealed class SlaveLogForwarder
     {
         FullMode = BoundedChannelFullMode.DropOldest,
         AllowSynchronousContinuations = false,
+        SingleReader = true,
     };
 
     private readonly Channel<LogEntry> _channel = Channel.CreateBounded<LogEntry>(ChannelOptions);
-    private readonly HashSet<string> _masters = [];
-    private readonly Lock _mastersLock = new();
 
     public ChannelReader<LogEntry> Reader => _channel.Reader;
 
     public ValueTask ForwardAsync(LogEntry entry) => _channel.Writer.WriteAsync(entry);
-
-    public void AddMaster(string host) { lock (_mastersLock) _masters.Add(host); }
-
-    public string[] Masters { get { lock (_mastersLock) return [.. _masters]; } }
 }

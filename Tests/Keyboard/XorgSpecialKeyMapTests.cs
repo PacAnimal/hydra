@@ -84,4 +84,11 @@ public class XorgSpecialKeyMapTests
         // 0x0061 (XK_a) is a character key, not in the special map
         Assert.That(XorgSpecialKeyMap.TryGet(0x0061, out _), Is.False);
     }
+
+    [Test]
+    public void NoDuplicateSpecialKeys()
+    {
+        // Reverse construction throws if two keysyms map to the same SpecialKey
+        Assert.That(XorgSpecialKeyMap.Reverse, Is.Not.Empty);
+    }
 }

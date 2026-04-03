@@ -19,30 +19,20 @@ public sealed class WindowsOutputHandler : IPlatformOutput
         WinVirtualKey.Divide,   // numpad /
     ];
 
-    private readonly int _screenWidth;
-    private readonly int _screenHeight;
-
-    public WindowsOutputHandler()
-    {
-        _screenWidth = NativeMethods.GetSystemMetrics(NativeMethods.SM_CXSCREEN);
-        _screenHeight = NativeMethods.GetSystemMetrics(NativeMethods.SM_CYSCREEN);
-        if (_screenWidth == 0) _screenWidth = 1;
-        if (_screenHeight == 0) _screenHeight = 1;
-    }
-
-    public ScreenRect GetPrimaryScreenBounds() =>
-        new(string.Empty, string.Empty, 0, 0,
-            NativeMethods.GetSystemMetrics(NativeMethods.SM_CXSCREEN),
-            NativeMethods.GetSystemMetrics(NativeMethods.SM_CYSCREEN),
-            IsLocal: true);
-
     public List<DetectedScreen> GetAllScreens() => WindowsDisplayHelper.GetAllScreens();
 
     public unsafe void MoveMouse(int x, int y)
     {
-        // normalize to 0-65535 absolute coords
-        var dx = (x * 65536 + _screenWidth / 2) / _screenWidth;
-        var dy = (y * 65536 + _screenHeight / 2) / _screenHeight;
+        var vLeft = NativeMethods.GetSystemMetrics(NativeMethods.SM_XVIRTUALSCREEN);
+        var vTop = NativeMethods.GetSystemMetrics(NativeMethods.SM_YVIRTUALSCREEN);
+        var vWidth = NativeMethods.GetSystemMetrics(NativeMethods.SM_CXVIRTUALSCREEN);
+        var vHeight = NativeMethods.GetSystemMetrics(NativeMethods.SM_CYVIRTUALSCREEN);
+        if (vWidth == 0) vWidth = 1;
+        if (vHeight == 0) vHeight = 1;
+
+        // normalize to 0-65535 across entire virtual desktop (all monitors)
+        var dx = ((x - vLeft) * 65536 + vWidth / 2) / vWidth;
+        var dy = ((y - vTop) * 65536 + vHeight / 2) / vHeight;
 
         var input = new INPUT
         {
@@ -51,7 +41,7 @@ public sealed class WindowsOutputHandler : IPlatformOutput
             {
                 dx = dx,
                 dy = dy,
-                dwFlags = NativeMethods.MOUSEEVENTF_MOVE | NativeMethods.MOUSEEVENTF_ABSOLUTE,
+                dwFlags = NativeMethods.MOUSEEVENTF_MOVE | NativeMethods.MOUSEEVENTF_ABSOLUTE | NativeMethods.MOUSEEVENTF_VIRTUALDESK,
             },
         };
         _ = NativeMethods.SendInput(1, &input, sizeof(INPUT));

@@ -1,11 +1,9 @@
 using Hydra.Config;
-using Hydra.Keyboard;
-using Hydra.Mouse;
-using Hydra.Platform;
 using Hydra.Relay;
 using Hydra.Screen;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Tests.Setup;
 
 namespace Tests.Screen;
 
@@ -56,19 +54,5 @@ public class ScreenStartupTests
                     capture.HasError = true;
             }
         }
-    }
-
-    private sealed class FakePlatform : IPlatformInput
-    {
-        public bool IsOnVirtualScreen { get; set; }
-        public ScreenRect GetPrimaryScreenBounds() => new("laptop", "laptop", 0, 0, 2560, 1440, IsLocal: true);
-        public List<DetectedScreen> GetAllScreens() => [new DetectedScreen(0, 0, 2560, 1440, null, null, null)];
-        public bool IsAccessibilityTrusted() => true;
-        public void StartEventTap(Action<double, double> onMouseMove, Action<KeyEvent> onKeyEvent, Action<MouseButtonEvent> onMouseButton, Action<MouseScrollEvent> onMouseScroll) { }
-        public void StopEventTap() { }
-        public void WarpCursor(int x, int y) { }
-        public void HideCursor() { }
-        public void ShowCursor() { }
-        public void Dispose() { }
     }
 }

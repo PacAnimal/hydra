@@ -8,7 +8,6 @@ internal static class WinVirtualKey
     internal const int Tab = 0x09;
     internal const int Return = 0x0D;
     internal const int Escape = 0x1B;
-    internal const int Space = 0x20;
 
     // navigation
     internal const int Prior = 0x21;       // page up
@@ -60,6 +59,10 @@ internal static class WinVirtualKey
     internal const int F14 = 0x7D;
     internal const int F15 = 0x7E;
     internal const int F16 = 0x7F;
+    internal const int F17 = 0x80;
+    internal const int F18 = 0x81;
+    internal const int F19 = 0x82;
+    internal const int F20 = 0x83;
 
     // lock keys
     internal const int Capital = 0x14;     // caps lock

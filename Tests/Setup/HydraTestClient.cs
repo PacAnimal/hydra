@@ -10,7 +10,7 @@ namespace Tests.Setup;
 /// Use this for end-to-end tests that prove the full Hydra relay stack works as intended.
 /// Use TestStyxClient instead when you need to test protocol-level edge cases.
 /// </summary>
-public sealed class HydraTestClient(WebApplicationFactory<global::Styx.Program> factory, HydraConfig config) : RelayConnection(config, TestLog.CreateLogger<RelayConnection>()), IAsyncDisposable
+public sealed class HydraTestClient(WebApplicationFactory<global::Styx.Program> factory, HydraConfig config) : RelayConnection(config, TestLog.CreateLogger<RelayConnection>(), new WorldState()), IAsyncDisposable
 {
     private readonly WebApplicationFactory<global::Styx.Program> _factory = factory;
 
@@ -27,7 +27,7 @@ public sealed class HydraTestClient(WebApplicationFactory<global::Styx.Program> 
     public (string Source, MessageKind Kind, string Json)? LastMessage => _lastMessage;
     public string? KickReason => _kickReason;
 
-    protected override void OnAuthenticated() => _readySignal.Release();
+    protected override Task OnAuthenticated() { _readySignal.Release(); return Task.CompletedTask; }
 
     // route the hub connection through the in-memory test server handler
     protected override void ConfigureHubUrl(HttpConnectionOptions options)

@@ -65,6 +65,10 @@ internal static class XorgVirtualKey
     internal const ulong F14 = 0xFFCB;
     internal const ulong F15 = 0xFFCC;
     internal const ulong F16 = 0xFFCD;
+    internal const ulong F17 = 0xFFCE;
+    internal const ulong F18 = 0xFFCF;
+    internal const ulong F19 = 0xFFD0;
+    internal const ulong F20 = 0xFFD1;
 
     // media keys (XF86 vendor keysyms, 0x1008FFxx range)
     internal const ulong XF86AudioLowerVolume = 0x1008FF11;

@@ -46,6 +46,10 @@ internal static partial class NativeMethods
 
     internal const int SM_CXSCREEN = 0;
     internal const int SM_CYSCREEN = 1;
+    internal const int SM_XVIRTUALSCREEN = 76;
+    internal const int SM_YVIRTUALSCREEN = 77;
+    internal const int SM_CXVIRTUALSCREEN = 78;
+    internal const int SM_CYVIRTUALSCREEN = 79;
 
     // -- KBDLLHOOKSTRUCT flags --
 
@@ -98,8 +102,27 @@ internal static partial class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool SetCursorPos(int x, int y);
 
-    // OCR_NORMAL = the default arrow cursor id for SetSystemCursor
+    // OCR_* = standard system cursor ids for SetSystemCursor
     internal const uint OCR_NORMAL = 32512;
+    internal const uint OCR_IBEAM = 32513;
+    internal const uint OCR_WAIT = 32514;
+    internal const uint OCR_CROSS = 32515;
+    internal const uint OCR_UP = 32516;
+    internal const uint OCR_SIZENWSE = 32642;
+    internal const uint OCR_SIZENESW = 32643;
+    internal const uint OCR_SIZEWE = 32644;
+    internal const uint OCR_SIZENS = 32645;
+    internal const uint OCR_SIZEALL = 32646;
+    internal const uint OCR_NO = 32648;
+    internal const uint OCR_HAND = 32649;
+    internal const uint OCR_APPSTARTING = 32650;
+
+    internal static readonly uint[] AllCursorIds =
+    [
+        OCR_NORMAL, OCR_IBEAM, OCR_WAIT, OCR_CROSS, OCR_UP,
+        OCR_SIZENWSE, OCR_SIZENESW, OCR_SIZEWE, OCR_SIZENS,
+        OCR_SIZEALL, OCR_NO, OCR_HAND, OCR_APPSTARTING,
+    ];
 
     // SPI_SETCURSORS = restore all system cursors to their defaults
     internal const uint SPI_SETCURSORS = 0x0057;
@@ -109,6 +132,15 @@ internal static partial class NativeMethods
     internal static unsafe partial nint CreateCursor(
         nint hInst, int xHotSpot, int yHotSpot, int nWidth, int nHeight,
         byte* pvANDPlane, byte* pvXORPlane);
+
+    [LibraryImport(User32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial nint CopyCursor(nint hcur);
+
+    [LibraryImport(User32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool DestroyCursor(nint hCursor);
 
     [LibraryImport(User32)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
@@ -125,9 +157,6 @@ internal static partial class NativeMethods
     [LibraryImport(User32)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     internal static partial int GetSystemMetrics(int nIndex);
-
-    // SM_CMONITORS = number of monitors
-    internal const int SM_CMONITORS = 80;
 
     // EnumDisplayMonitors: classic DllImport for managed delegate marshaling
     [LibraryImport(User32, SetLastError = true)]
@@ -160,15 +189,12 @@ internal static partial class NativeMethods
     internal const uint MOUSEEVENTF_XUP = 0x0100;
     internal const uint MOUSEEVENTF_WHEEL = 0x0800;
     internal const uint MOUSEEVENTF_HWHEEL = 0x1000;
+    internal const uint MOUSEEVENTF_VIRTUALDESK = 0x4000;
     internal const uint MOUSEEVENTF_ABSOLUTE = 0x8000;
 
     [LibraryImport(User32)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     internal static unsafe partial uint SendInput(uint nInputs, INPUT* pInputs, int cbSize);
-
-    [LibraryImport(User32, EntryPoint = "MapVirtualKeyW")]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
-    internal static partial uint MapVirtualKey(uint uCode, uint uMapType);
 
     // -- keyboard --
 

@@ -101,7 +101,6 @@ internal static partial class NativeMethods
     internal const int KCGEventKeyUp = 11;
     internal const int KCGEventFlagsChanged = 12;
 
-    internal const int KCGKeyboardEventAutorepeat = 8;
     internal const int KCGKeyboardEventKeycode = 9;
 
     // CGEventFlags modifier mask bits
@@ -111,7 +110,6 @@ internal static partial class NativeMethods
     internal const ulong KCGEventFlagMaskAlternate = 0x00080000; // option/alt
     internal const ulong KCGEventFlagMaskCommand = 0x00100000;
     internal const ulong KCGEventFlagMaskNumericPad = 0x00200000;
-    internal const ulong KCGEventFlagMaskSecondaryFn = 0x00800000;
 
     [LibraryImport(CoreGraphics)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
@@ -134,10 +132,6 @@ internal static partial class NativeMethods
     [LibraryImport(CoreGraphics)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void CGEventPost(int tap, nint eventRef);
-
-    [LibraryImport(CoreGraphics)]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    internal static partial void CGEventSetFlags(nint eventRef, ulong flags);
 
     [LibraryImport(CoreGraphics)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]

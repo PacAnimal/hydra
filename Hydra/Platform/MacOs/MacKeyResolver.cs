@@ -51,12 +51,7 @@ internal sealed class MacKeyResolver
 
         // key-up: replay the keyId that was emitted on key-down (modifier state may have changed)
         if (eventType == NativeMethods.KCGEventKeyUp)
-        {
-            _keyDownId.Remove(vkCode, out var downVal);
-            if (downVal.ch.HasValue) return KeyEvent.Char(KeyEventType.KeyUp, downVal.ch.Value, mods);
-            if (downVal.key.HasValue) return KeyEvent.Special(KeyEventType.KeyUp, downVal.key.Value, mods);
-            return null;
-        }
+            return KeyResolver.ReplayKeyUp(_keyDownId, vkCode, mods);
 
         // special key (function keys, arrows, modifiers, keypad)?
         if (MacSpecialKeyMap.TryGet(vkCode, out var specialKey))

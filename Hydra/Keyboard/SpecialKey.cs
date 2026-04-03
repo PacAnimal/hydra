@@ -68,6 +68,10 @@ public enum SpecialKey : uint
     F14 = 0x01FFCB,
     F15 = 0x01FFCC,
     F16 = 0x01FFCD,
+    F17 = 0x01FFCE,
+    F18 = 0x01FFCF,
+    F19 = 0x01FFD0,
+    F20 = 0x01FFD1,
 
     // media
     AudioMute = 0xE0AD,

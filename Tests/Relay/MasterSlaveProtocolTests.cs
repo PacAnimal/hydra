@@ -1,13 +1,11 @@
 using System.Text.Json;
 using Cathedral.Config;
 using Hydra.Config;
-using Hydra.Keyboard;
-using Hydra.Mouse;
-using Hydra.Platform;
 using Hydra.Relay;
 using Hydra.Screen;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Tests.Setup;
 
 namespace Tests.Relay;
 
@@ -168,28 +166,11 @@ public class MasterSlaveProtocolTests
     {
         public TestableMasterRelay() : base(
             new HydraConfig { Mode = Mode.Master },
-            NullLogger<RelayConnection>.Instance)
+            NullLogger<RelayConnection>.Instance,
+            new WorldState())
         { }
 
         public Task SimulateReceive(string host, MessageKind kind, string json) => OnReceive(host, kind, json);
-    }
-
-    private sealed class FakeRelay : IRelaySender
-    {
-        public readonly List<(string[] Targets, MessageKind Kind)> Sent = [];
-        public bool IsConnected => true;
-        public event Action<string[]>? PeersChanged;
-        public event Action<string, MessageKind, string>? MessageReceived;
-
-        public ValueTask Send(string[] targetHosts, byte[] payload)
-        {
-            var (kind, _) = MessageSerializer.Decode(payload);
-            Sent.Add((targetHosts, kind));
-            return ValueTask.CompletedTask;
-        }
-
-        public void FirePeersChanged(params string[] hosts) => PeersChanged?.Invoke(hosts);
-        public void FireMessageReceived(string host, MessageKind kind, string json) => MessageReceived?.Invoke(host, kind, json);
     }
 
     private sealed class LogCapture : ILoggerFactory
@@ -210,19 +191,5 @@ public class MasterSlaveProtocolTests
                 entries.Add((category, logLevel, formatter(state, exception)));
             }
         }
-    }
-
-    private sealed class FakePlatform : IPlatformInput
-    {
-        public bool IsOnVirtualScreen { get; set; }
-        public ScreenRect GetPrimaryScreenBounds() => new("main", "main", 0, 0, 2560, 1440, IsLocal: true);
-        public List<DetectedScreen> GetAllScreens() => [new DetectedScreen(0, 0, 2560, 1440, null, null, null)];
-        public bool IsAccessibilityTrusted() => true;
-        public void StartEventTap(Action<double, double> onMouseMove, Action<KeyEvent> onKeyEvent, Action<MouseButtonEvent> onMouseButton, Action<MouseScrollEvent> onMouseScroll) { }
-        public void StopEventTap() { }
-        public void WarpCursor(int x, int y) { }
-        public void HideCursor() { }
-        public void ShowCursor() { }
-        public void Dispose() { }
     }
 }

@@ -10,7 +10,12 @@ public class MacSpecialKeyMapTests
     public void NoDuplicateVirtualKeyCodes()
     {
         var map = MacSpecialKeyMap.All;
-        Assert.That(map, Is.Not.Empty);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(map, Is.Not.Empty);
+            // each SpecialKey should appear at most once; Reverse will have same count if no duplicates
+            Assert.That(MacSpecialKeyMap.Reverse, Has.Count.EqualTo(map.Count));
+        }
     }
 
     // kVK_* values from Carbon Events.h

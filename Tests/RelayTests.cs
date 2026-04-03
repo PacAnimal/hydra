@@ -10,7 +10,6 @@ namespace Tests;
 [TestFixture]
 public class NetworkConfigTests
 {
-    // ReSharper disable once StaticMemberInGenericType
     private static readonly JsonSerializerOptions PascalCaseOptions = new() { PropertyNamingPolicy = null };
 
     [Test]
@@ -28,13 +27,6 @@ public class NetworkConfigTests
             Assert.That(parsed.EncryptionKey, Is.EqualTo(original.EncryptionKey));
             Assert.That(parsed.Authorization, Is.EqualTo(original.Authorization));
         }
-    }
-
-    [Test]
-    public void ServerUrl_ReturnsStyxServer()
-    {
-        var config = new NetworkConfig("https://relay.example.com", "key", "auth");
-        Assert.That(config.ServerUrl, Is.EqualTo("https://relay.example.com"));
     }
 
     [Test]

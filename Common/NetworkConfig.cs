@@ -6,8 +6,6 @@ namespace Common;
 
 public record NetworkConfig(string StyxServer, string EncryptionKey, string Authorization)
 {
-    public string ServerUrl => StyxServer;
-
     public static NetworkConfig Parse(string base64)
     {
         var json = Encoding.UTF8.GetString(Convert.FromBase64String(base64));

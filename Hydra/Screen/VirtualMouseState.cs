@@ -9,13 +9,17 @@ public class VirtualMouseState
     public decimal Scale { get; private set; } = 1.0m;
     public bool IsOnVirtualScreen => CurrentScreen is not null;
 
-    public void EnterScreen(ScreenRect screen, List<ScreenRect> allScreens, int x, int y, decimal scale = 1.0m)
+    // per-screen scales from ScreenDefinitions; populated from ScreenInfo at EnterScreen
+    private Dictionary<string, decimal> _scaleMap = new(StringComparer.OrdinalIgnoreCase);
+
+    public void EnterScreen(ScreenRect screen, List<ScreenRect> allScreens, int x, int y, decimal scale = 1.0m, Dictionary<string, decimal>? scaleMap = null)
     {
         CurrentScreen = screen;
         RemoteScreens = allScreens.Count > 0 ? allScreens : [screen];
         X = x;
         Y = y;
         Scale = scale;
+        _scaleMap = scaleMap ?? new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
     }
 
     public void ApplyDelta(double dx, double dy)
@@ -30,7 +34,7 @@ public class VirtualMouseState
         var globalY = CurrentScreen.Y + candidateY;
 
         // still within current screen?
-        if (IsWithin(CurrentScreen, globalX, globalY))
+        if (CurrentScreen.Contains(globalX, globalY))
         {
             X = candidateX;
             Y = candidateY;
@@ -41,11 +45,14 @@ public class VirtualMouseState
         foreach (var screen in RemoteScreens)
         {
             if (screen == CurrentScreen) continue;
-            if (IsWithin(screen, globalX, globalY))
+            if (screen.Contains(globalX, globalY))
             {
                 CurrentScreen = screen;
                 X = globalX - screen.X;
                 Y = globalY - screen.Y;
+                // update scale for the new screen
+                if (_scaleMap.TryGetValue(screen.Name, out var newScale))
+                    Scale = newScale;
                 return;
             }
         }
@@ -61,10 +68,8 @@ public class VirtualMouseState
         X = 0;
         Y = 0;
         Scale = 1.0m;
+        _scaleMap = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
     }
-
-    private static bool IsWithin(ScreenRect s, double gx, double gy) =>
-        gx >= s.X && gx < s.X + s.Width && gy >= s.Y && gy < s.Y + s.Height;
 
     private void ClampToNearest(double globalX, double globalY)
     {
@@ -90,5 +95,7 @@ public class VirtualMouseState
         CurrentScreen = best;
         X = Math.Clamp(globalX - best!.X, 0, best.Width - 1);
         Y = Math.Clamp(globalY - best.Y, 0, best.Height - 1);
+        if (_scaleMap.TryGetValue(best.Name, out var newScale))
+            Scale = newScale;
     }
 }

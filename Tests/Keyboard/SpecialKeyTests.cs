@@ -52,7 +52,7 @@ public class SpecialKeyTests
     [Test]
     public void FunctionKeys_AreConsecutive()
     {
-        for (uint i = 0; i < 16; i++)
+        for (uint i = 0; i < 20; i++)
         {
             var expected = (uint)SpecialKey.F1 + i;
             var actual = i switch
@@ -73,6 +73,10 @@ public class SpecialKeyTests
                 13 => SpecialKey.F14,
                 14 => SpecialKey.F15,
                 15 => SpecialKey.F16,
+                16 => SpecialKey.F17,
+                17 => SpecialKey.F18,
+                18 => SpecialKey.F19,
+                19 => SpecialKey.F20,
                 _ => SpecialKey.F1,
             };
             Assert.That((uint)actual, Is.EqualTo(expected), $"F{i + 1}");

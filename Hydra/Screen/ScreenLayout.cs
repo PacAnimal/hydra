@@ -1,3 +1,4 @@
+using Cathedral.Extensions;
 using Hydra.Config;
 
 namespace Hydra.Screen;
@@ -8,7 +9,6 @@ public class ScreenLayout(List<ScreenRect> screens, List<HostConfig> configs)
     private const int NudgeDistance = 2;
 
     private readonly Dictionary<(string Name, Direction Dir), List<EdgeLink>> _graph = BuildGraph(screens, configs);
-    private readonly List<ScreenRect> _screens = screens;
 
     private static Dictionary<(string, Direction), List<EdgeLink>> BuildGraph(
         List<ScreenRect> screens, List<HostConfig> configs)
@@ -39,10 +39,10 @@ public class ScreenLayout(List<ScreenRect> screens, List<HostConfig> configs)
                 var dest = filteredDests.FirstOrDefault();
                 if (dest is null) continue;
 
-                var srcStart = neighbour.SourceStart / 100f;
-                var srcEnd = neighbour.SourceEnd / 100f;
-                var dstStart = neighbour.DestStart / 100f;
-                var dstEnd = neighbour.DestEnd / 100f;
+                var srcStart = Math.Clamp(neighbour.SourceStart, 0, 100) / 100f;
+                var srcEnd = Math.Clamp(neighbour.SourceEnd, 0, 100) / 100f;
+                var dstStart = Math.Clamp(neighbour.DestStart, 0, 100) / 100f;
+                var dstEnd = Math.Clamp(neighbour.DestEnd, 0, 100) / 100f;
 
                 foreach (var source in filteredSources)
                 {
@@ -59,11 +59,7 @@ public class ScreenLayout(List<ScreenRect> screens, List<HostConfig> configs)
 
     // case-insensitive match against screen name
     private static bool MatchesId(ScreenRect screen, string id) =>
-        screen.Name.Equals(id, StringComparison.OrdinalIgnoreCase);
-
-    // returns the screen containing global point (x, y), or null
-    public ScreenRect? GetScreenAt(int x, int y) =>
-        _screens.FirstOrDefault(s => x >= s.X && x < s.X + s.Width && y >= s.Y && y < s.Y + s.Height);
+        screen.Name.EqualsIgnoreCase(id);
 
     // checks if the cursor is in the jump zone of any edge that has a neighbour.
     // coords are 0-based within the current screen.
@@ -136,7 +132,7 @@ public class ScreenLayout(List<ScreenRect> screens, List<HostConfig> configs)
             Direction.Left => (to.Width - 1 - NudgeDistance, destPos),
             Direction.Bottom => (destPos, NudgeDistance),
             Direction.Top => (destPos, to.Height - 1 - NudgeDistance),
-            _ => (perpPos, perpPos),
+            _ => throw new ArgumentOutOfRangeException(nameof(dir), dir, null),
         };
     }
 

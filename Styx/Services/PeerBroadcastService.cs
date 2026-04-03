@@ -1,4 +1,5 @@
 using System.Threading.Channels;
+using Cathedral.Extensions;
 using Cathedral.Utils;
 using Common.Interfaces;
 using Microsoft.AspNetCore.SignalR;
@@ -51,7 +52,7 @@ public class PeerBroadcastService(IClientRegistry registry, IHubContext<StyxHub,
             var allHostNames = clients.Select(c => c.HostName).ToArray();
             foreach (var (connectionId, hostName) in clients)
             {
-                var peers = allHostNames.Where(h => h != hostName).ToArray();
+                var peers = allHostNames.Where(h => !h.EqualsIgnoreCase(hostName)).ToArray();
                 await hubContext.Clients.Client(connectionId).Peers(peers);
             }
         }

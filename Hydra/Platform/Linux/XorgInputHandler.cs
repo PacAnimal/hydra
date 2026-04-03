@@ -6,7 +6,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform.Linux;
 
-public class XorgInputHandler : IPlatformInput
+public sealed class XorgInputHandler : IPlatformInput
 {
     private readonly ILogger<XorgInputHandler> _log;
     private readonly nint _display;
@@ -54,14 +54,6 @@ public class XorgInputHandler : IPlatformInput
         _inputSink = CreateInputSink();
         _xiOpcode = DetectXI2();
         _lockKeycode = (int)NativeMethods.XKeysymToKeycode(_display, 0x006C); // XK_l
-    }
-
-    public ScreenRect GetPrimaryScreenBounds()
-    {
-        var screen = NativeMethods.XDefaultScreen(_display);
-        var w = NativeMethods.XDisplayWidth(_display, screen);
-        var h = NativeMethods.XDisplayHeight(_display, screen);
-        return new ScreenRect("main", string.Empty, 0, 0, w, h, IsLocal: true);
     }
 
     public List<DetectedScreen> GetAllScreens() => XorgDisplayHelper.GetAllScreens(_display, _rootWindow);
@@ -119,7 +111,7 @@ public class XorgInputHandler : IPlatformInput
         _onMouseButton = onMouseButton;
         _onMouseScroll = onMouseScroll;
 
-        var ready = new ManualResetEventSlim(false);
+        using var ready = new ManualResetEventSlim(false);
 
         _eventThread = new Thread(() =>
         {

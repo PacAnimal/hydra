@@ -51,4 +51,15 @@ internal static class KeyResolver
     // on incompatible pair, returns base char unchanged (dead key silently consumed).
     internal static char ComposeOrSpacing(char baseChar, char combining, char spacing) =>
         baseChar == ' ' && spacing != '\0' ? spacing : Compose(baseChar, combining);
+
+    // replay the key event that was emitted on key-down, using the stored char/special from _keyDownId.
+    // shared across all three platform resolvers (mac, xorg, win) — TKey is int or uint depending on platform.
+    internal static KeyEvent? ReplayKeyUp<TKey>(Dictionary<TKey, (char? ch, SpecialKey? key)> keyDownId, TKey key, KeyModifiers mods)
+        where TKey : notnull
+    {
+        keyDownId.Remove(key, out var downVal);
+        if (downVal.ch.HasValue) return KeyEvent.Char(KeyEventType.KeyUp, downVal.ch.Value, mods);
+        if (downVal.key.HasValue) return KeyEvent.Special(KeyEventType.KeyUp, downVal.key.Value, mods);
+        return null;
+    }
 }

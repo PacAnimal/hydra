@@ -44,6 +44,10 @@ internal static class WinSpecialKeyMap
         { WinVirtualKey.F14, SpecialKey.F14 },
         { WinVirtualKey.F15, SpecialKey.F15 },
         { WinVirtualKey.F16, SpecialKey.F16 },
+        { WinVirtualKey.F17, SpecialKey.F17 },
+        { WinVirtualKey.F18, SpecialKey.F18 },
+        { WinVirtualKey.F19, SpecialKey.F19 },
+        { WinVirtualKey.F20, SpecialKey.F20 },
 
         // keypad
         { WinVirtualKey.Numpad0, SpecialKey.KP_0 },

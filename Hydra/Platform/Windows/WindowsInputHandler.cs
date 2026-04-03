@@ -6,7 +6,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform.Windows;
 
-public class WindowsInputHandler(ILogger<WindowsInputHandler> log) : IPlatformInput
+public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log) : IPlatformInput
 {
     // stored as fields to prevent GC collection while hooks are active
     private HookProc? _mouseHookProc;
@@ -25,13 +25,6 @@ public class WindowsInputHandler(ILogger<WindowsInputHandler> log) : IPlatformIn
     private int _lastWarpY = -1;
     public bool IsOnVirtualScreen { get; set; }
 
-    public ScreenRect GetPrimaryScreenBounds()
-    {
-        var w = NativeMethods.GetSystemMetrics(NativeMethods.SM_CXSCREEN);
-        var h = NativeMethods.GetSystemMetrics(NativeMethods.SM_CYSCREEN);
-        return new ScreenRect("main", string.Empty, 0, 0, w, h, IsLocal: true);
-    }
-
     public List<DetectedScreen> GetAllScreens() => WindowsDisplayHelper.GetAllScreens();
 
     // low-level hooks work without elevation for non-elevated processes
@@ -47,16 +40,24 @@ public class WindowsInputHandler(ILogger<WindowsInputHandler> log) : IPlatformIn
     public void HideCursor()
     {
         if (_cursorHidden) return;
-        // replace the system arrow cursor with a 1x1 transparent cursor so all windows see a blank cursor.
+        // replace all system cursors with a 1x1 transparent cursor so no cursor type leaks through.
         // ShowCursor(false) alone doesn't work — other windows re-show the cursor via WM_SETCURSOR.
+        // SetSystemCursor takes ownership of each handle, so we copy the blank for each cursor type.
         unsafe
         {
             byte andMask = 0xFF; // AND=1 means no invert (transparent)
             byte xorMask = 0x00; // XOR=0 means draw nothing
             var blank = NativeMethods.CreateCursor(nint.Zero, 0, 0, 1, 1, &andMask, &xorMask);
-            if (blank != nint.Zero)
-                NativeMethods.SetSystemCursor(blank, NativeMethods.OCR_NORMAL);
-            // SetSystemCursor takes ownership of blank; do not DestroyCursor it
+            if (blank == nint.Zero) return;
+
+            foreach (var id in NativeMethods.AllCursorIds)
+            {
+                var copy = NativeMethods.CopyCursor(blank);
+                if (copy != nint.Zero)
+                    NativeMethods.SetSystemCursor(copy, id);
+            }
+
+            NativeMethods.DestroyCursor(blank);
         }
         _cursorHidden = true;
     }
@@ -84,7 +85,7 @@ public class WindowsInputHandler(ILogger<WindowsInputHandler> log) : IPlatformIn
         _mouseHookProc = MouseHookCallback;
         _keyboardHookProc = KeyboardHookCallback;
 
-        var ready = new ManualResetEventSlim(false);
+        using var ready = new ManualResetEventSlim(false);
 
         _hookThread = new Thread(() =>
         {

@@ -69,6 +69,10 @@ internal static class XorgSpecialKeyMap
         { XorgVirtualKey.F14, SpecialKey.F14 },
         { XorgVirtualKey.F15, SpecialKey.F15 },
         { XorgVirtualKey.F16, SpecialKey.F16 },
+        { XorgVirtualKey.F17, SpecialKey.F17 },
+        { XorgVirtualKey.F18, SpecialKey.F18 },
+        { XorgVirtualKey.F19, SpecialKey.F19 },
+        { XorgVirtualKey.F20, SpecialKey.F20 },
 
         // media keys (XF86 vendor keysyms)
         { XorgVirtualKey.XF86AudioMute, SpecialKey.AudioMute },

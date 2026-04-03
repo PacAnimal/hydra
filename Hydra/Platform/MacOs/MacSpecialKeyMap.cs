@@ -44,6 +44,10 @@ internal static class MacSpecialKeyMap
         { MacVirtualKey.F14, SpecialKey.F14 },
         { MacVirtualKey.F15, SpecialKey.F15 },
         { MacVirtualKey.F16, SpecialKey.F16 },
+        { MacVirtualKey.F17, SpecialKey.F17 },
+        { MacVirtualKey.F18, SpecialKey.F18 },
+        { MacVirtualKey.F19, SpecialKey.F19 },
+        { MacVirtualKey.F20, SpecialKey.F20 },
 
         // keypad
         { MacVirtualKey.Keypad0, SpecialKey.KP_0 },

@@ -5,7 +5,6 @@ namespace Hydra.Platform;
 
 public interface IPlatformOutput : IDisposable
 {
-    ScreenRect GetPrimaryScreenBounds();
     List<DetectedScreen> GetAllScreens();
     void MoveMouse(int x, int y);
     void InjectKey(KeyEventMessage msg);

@@ -95,4 +95,11 @@ public class WinSpecialKeyMapTests
         // 0x41 (VK_A) is a character key, not in the special map
         Assert.That(WinSpecialKeyMap.TryGet(0x41, out _), Is.False);
     }
+
+    [Test]
+    public void NoDuplicateSpecialKeys()
+    {
+        // Reverse construction throws if two VK codes map to the same SpecialKey
+        Assert.That(WinSpecialKeyMap.Reverse, Is.Not.Empty);
+    }
 }

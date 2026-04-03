@@ -32,13 +32,7 @@ internal sealed class XorgKeyResolver
 
         // key-up: replay the same event that was emitted on key-down
         if (evType == NativeMethods.KeyRelease)
-        {
-            if (!_keyDownId.TryGetValue(keycode, out var downVal)) return null;
-            _keyDownId.Remove(keycode);
-            if (downVal.ch.HasValue) return KeyEvent.Char(type, downVal.ch.Value, mods);
-            if (downVal.key.HasValue) return KeyEvent.Special(type, downVal.key.Value, mods);
-            return null;
-        }
+            return KeyResolver.ReplayKeyUp(_keyDownId, keycode, mods);
 
         // dead key: store combining char and its spacing form, then wait for the next character
         var (combining, spacing) = DeadKeyLookup(keysym);
@@ -137,7 +131,8 @@ internal sealed class XorgKeyResolver
         if (keysym is >= 0x0020 and <= 0x00FF)
             return (char)keysym;
 
-        if (keysym is >= 0x01000100 and <= 0x0110FFFF)
+        // unicode-extension keysyms: strip 0x01000000 flag, BMP only, excluding surrogates
+        if (keysym is >= 0x01000100 and <= 0x0100FFFF and not (>= 0x0100D800 and <= 0x0100DFFF))
             return (char)(keysym - 0x01000000);
 
         if (keysym is > 0x00FF and < 0xFF00)

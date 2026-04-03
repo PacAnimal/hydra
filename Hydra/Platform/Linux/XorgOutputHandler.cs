@@ -23,13 +23,6 @@ public sealed class XorgOutputHandler : IPlatformOutput
         _rootWindow = NativeMethods.XDefaultRootWindow(_display);
     }
 
-    public ScreenRect GetPrimaryScreenBounds()
-    {
-        var w = NativeMethods.XDisplayWidth(_display, _screen);
-        var h = NativeMethods.XDisplayHeight(_display, _screen);
-        return new ScreenRect(string.Empty, string.Empty, 0, 0, w, h, IsLocal: true);
-    }
-
     public List<DetectedScreen> GetAllScreens() => XorgDisplayHelper.GetAllScreens(_display, _rootWindow);
 
     public void MoveMouse(int x, int y)
@@ -76,29 +69,22 @@ public sealed class XorgOutputHandler : IPlatformOutput
     public void InjectMouseScroll(MouseScrollMessage msg)
     {
         // x11 scroll: buttons 4=up, 5=down, 6=left, 7=right (each press = one 120-unit click)
-        if (msg.YDelta != 0)
-        {
-            var button = msg.YDelta > 0 ? 4u : 5u;
-            var clicks = Math.Abs(msg.YDelta / 120);
-            for (var i = 0; i < clicks; i++)
-            {
-                _ = NativeMethods.XTestFakeButtonEvent(_display, button, true, 0);
-                _ = NativeMethods.XTestFakeButtonEvent(_display, button, false, 0);
-            }
-        }
-
-        if (msg.XDelta != 0)
-        {
-            var button = msg.XDelta > 0 ? 7u : 6u;
-            var clicks = Math.Abs(msg.XDelta / 120);
-            for (var i = 0; i < clicks; i++)
-            {
-                _ = NativeMethods.XTestFakeButtonEvent(_display, button, true, 0);
-                _ = NativeMethods.XTestFakeButtonEvent(_display, button, false, 0);
-            }
-        }
-
+        InjectScrollAxis(4u, 5u, msg.YDelta);
+        InjectScrollAxis(7u, 6u, msg.XDelta);
         _ = NativeMethods.XFlush(_display);
+    }
+
+    private void InjectScrollAxis(uint positiveButton, uint negativeButton, short delta)
+    {
+        if (delta == 0) return;
+        var button = delta > 0 ? positiveButton : negativeButton;
+        var clicks = Math.Abs(delta / 120);
+        if (clicks == 0) return;
+        for (var i = 0; i < clicks; i++)
+        {
+            _ = NativeMethods.XTestFakeButtonEvent(_display, button, true, 0);
+            _ = NativeMethods.XTestFakeButtonEvent(_display, button, false, 0);
+        }
     }
 
     private void InjectKeysym(ulong keysym, bool isDown)
@@ -127,6 +113,7 @@ public sealed class XorgOutputHandler : IPlatformOutput
     {
         if (_disposed) return;
         _disposed = true;
+        GC.SuppressFinalize(this);
         if (_display != nint.Zero)
             _ = NativeMethods.XCloseDisplay(_display);
     }

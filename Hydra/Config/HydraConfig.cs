@@ -50,10 +50,10 @@ public class HydraConfig
     public string ResolvedName => Name ?? Environment.MachineName.Split('.')[0];
 
     [JsonIgnore]
-    public HostConfig? LocalHost => Hosts.FirstOrDefault(s => s.Name == ResolvedName);
+    public HostConfig? LocalHost => Hosts.FirstOrDefault(s => s.Name.EqualsIgnoreCase(ResolvedName));
 
     [JsonIgnore]
-    public IEnumerable<HostConfig> RemoteHosts => Hosts.Where(s => s.Name != ResolvedName);
+    public IEnumerable<HostConfig> RemoteHosts => Hosts.Where(s => !s.Name.EqualsIgnoreCase(ResolvedName));
 
     public static HydraConfig Load(string path = "hydra.conf")
     {

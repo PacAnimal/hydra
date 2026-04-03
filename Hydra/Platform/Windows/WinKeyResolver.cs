@@ -35,12 +35,7 @@ internal sealed class WinKeyResolver
         var mods = GetModifiers();
 
         if (isKeyUp)
-        {
-            _keyDownId.Remove(vk, out var downVal);
-            if (downVal.ch.HasValue) return KeyEvent.Char(KeyEventType.KeyUp, downVal.ch.Value, mods);
-            if (downVal.key.HasValue) return KeyEvent.Special(KeyEventType.KeyUp, downVal.key.Value, mods);
-            return null;
-        }
+            return KeyResolver.ReplayKeyUp(_keyDownId, vk, mods);
 
         if (WinSpecialKeyMap.TryGet(vk, out var specialKey))
         {

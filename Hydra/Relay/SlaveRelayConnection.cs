@@ -1,4 +1,5 @@
 using Cathedral.Extensions;
+using Cathedral.Utils;
 using Hydra.Config;
 using Hydra.Platform;
 using Hydra.Screen;
@@ -12,43 +13,41 @@ public sealed class SlaveRelayConnection : RelayConnection
     private readonly SlaveLogForwarder _logForwarder;
     private readonly ILogger<RelayConnection> _log;
     private readonly HydraConfig _config;
+    private readonly IWorldState _peerState;
 
-    // local screen state (refreshed on change)
-    private List<DetectedScreen> _detectedScreens = [];
-    private List<ScreenInfoEntry> _screenEntries = [];
-    private Dictionary<string, ScreenRect> _screenMap = [];
-
-    // connected masters to re-notify on screen change
-    private readonly HashSet<string> _masters = [];
+    private readonly SemaphoreSlimValue<LocalSlaveState> _state = new(new LocalSlaveState(), disposeValue: false);
 
     // ReSharper disable once ConvertToPrimaryConstructor
 #pragma warning disable IDE0290
-    public SlaveRelayConnection(HydraConfig config, ILogger<RelayConnection> log, IPlatformOutput output, SlaveLogForwarder logForwarder)
-        : base(config, log)
+    public SlaveRelayConnection(HydraConfig config, ILogger<RelayConnection> log, IPlatformOutput output, SlaveLogForwarder logForwarder, IWorldState peerState)
+        : base(config, log, peerState)
     {
         _output = output;
         _logForwarder = logForwarder;
         _log = log;
         _config = config;
+        _peerState = peerState;
     }
 #pragma warning restore IDE0290
 
-    protected override void OnAuthenticated()
+    protected override async Task OnAuthenticated()
     {
-        RefreshScreenInfo();
-        _log.LogInformation("Local screens: {Count}", _screenEntries.Count);
+        var detected = _output.GetAllScreens();
+        using var s = await _state.WaitForDisposable();
+        RebuildScreenInfo(s.Value, detected);
+        _log.LogInformation("Local screens: {Count}", s.Value.Entries.Count);
     }
 
-    protected override Task OnReceive(string sourceHost, MessageKind kind, string json)
+    protected override async Task OnReceive(string sourceHost, MessageKind kind, string json)
     {
         switch (kind)
         {
             case MessageKind.MasterConfig:
-                HandleMasterConfig(sourceHost);
+                await HandleMasterConfig(sourceHost);
                 break;
             case MessageKind.MouseMove:
                 var move = json.FromSaneJson<MouseMoveMessage>();
-                if (move != null) HandleMouseMove(move);
+                if (move != null) await MoveToScreen(move.Screen, move.X, move.Y);
                 break;
             case MessageKind.KeyEvent:
                 var key = json.FromSaneJson<KeyEventMessage>();
@@ -64,77 +63,82 @@ public sealed class SlaveRelayConnection : RelayConnection
                 break;
             case MessageKind.EnterScreen:
                 var enter = json.FromSaneJson<EnterScreenMessage>();
-                if (enter != null) HandleEnterScreen(enter);
+                if (enter != null) await MoveToScreen(enter.Screen, enter.X, enter.Y);
                 break;
             case MessageKind.LeaveScreen:
                 break;
+            default:
+                _log.LogDebug("Unhandled message kind {Kind} from {Host}", kind, sourceHost);
+                break;
         }
-        return Task.CompletedTask;
     }
 
-    private void HandleMasterConfig(string masterHost)
+    protected override async Task OnPeers(string[] hostNames)
     {
-        _logForwarder.AddMaster(masterHost);
-        _masters.Add(masterHost);
-        SendScreenInfo(masterHost);
+        var current = new HashSet<string>(hostNames, StringComparer.OrdinalIgnoreCase);
+        await _peerState.PruneMasters(current);
+        await base.OnPeers(hostNames);
     }
 
-    private void HandleMouseMove(MouseMoveMessage move)
+    private async Task HandleMasterConfig(string masterHost)
     {
-        if (_screenMap.TryGetValue(move.Screen, out var screen))
-            _output.MoveMouse(screen.X + move.X, screen.Y + move.Y);
+        await _peerState.AddMaster(masterHost);
+        List<ScreenInfoEntry> entries;
+        using (var s = await _state.WaitForDisposable())
+            entries = s.Value.Entries;
+        SendScreenInfo(masterHost, entries);
+    }
+
+    private async Task MoveToScreen(string screenName, int x, int y)
+    {
+        ScreenRect? screen;
+        using (var s = await _state.WaitForDisposable())
+            s.Value.Map.TryGetValue(screenName, out screen);
+
+        if (screen != null)
+            _output.MoveMouse(screen.X + x, screen.Y + y);
         else
-            _output.MoveMouse(move.X, move.Y);
+            _output.MoveMouse(x, y);
     }
 
-    private void HandleEnterScreen(EnterScreenMessage enter)
+    private void SendScreenInfo(string masterHost, List<ScreenInfoEntry> entries)
     {
-        if (_screenMap.TryGetValue(enter.Screen, out var screen))
-            _output.MoveMouse(screen.X + enter.X, screen.Y + enter.Y);
-        else
-            _output.MoveMouse(enter.X, enter.Y);
-    }
-
-    private void SendScreenInfo(string masterHost)
-    {
-        _log.LogInformation("Sending screen info to {Master}: {Count} screen(s)", masterHost, _screenEntries.Count);
-        var payload = MessageSerializer.Encode(MessageKind.ScreenInfo, new ScreenInfoMessage(_screenEntries));
+        _log.LogInformation("Sending screen info to {Master}: {Count} screen(s)", masterHost, entries.Count);
+        var payload = MessageSerializer.Encode(MessageKind.ScreenInfo, new ScreenInfoMessage(entries));
         _ = Send([masterHost], payload).AsTask();
     }
 
-    // builds screen entries from OS-detected screens, matching ScreenDefinitions for scale
-    private void RefreshScreenInfo()
+    // must be called under _state lock
+    private void RebuildScreenInfo(LocalSlaveState s, List<DetectedScreen> detected)
     {
-        var detected = _output.GetAllScreens();
-        _detectedScreens = detected;
+        s.DetectedScreens = detected;
 
         if (detected.Count == 0)
         {
-            _screenEntries = [];
-            _screenMap = [];
+            s.Entries = [];
+            s.Map = new Dictionary<string, ScreenRect>(StringComparer.OrdinalIgnoreCase);
             return;
         }
 
-        // normalize positions: compute bounding rect origin
         var minX = detected.Min(d => d.X);
         var minY = detected.Min(d => d.Y);
 
-        _screenEntries = [];
-        _screenMap = [];
+        var entries = new List<ScreenInfoEntry>();
+        var map = new Dictionary<string, ScreenRect>(StringComparer.OrdinalIgnoreCase);
 
         for (var i = 0; i < detected.Count; i++)
         {
             var d = detected[i];
-            var name = detected.Count == 1 ? _config.ResolvedName : $"{_config.ResolvedName}:{i}";
+            var name = ScreenNaming.BuildScreenName(_config.ResolvedName, i, detected.Count);
             var scale = ResolveScale(d);
-
-            // normalized X/Y relative to bounding rect origin
             var nx = d.X - minX;
             var ny = d.Y - minY;
-
-            _screenEntries.Add(new ScreenInfoEntry(name, nx, ny, d.Width, d.Height, scale));
-            _screenMap[name] = new ScreenRect(name, _config.ResolvedName, d.X, d.Y, d.Width, d.Height, IsLocal: true);
+            entries.Add(new ScreenInfoEntry(name, nx, ny, d.Width, d.Height, scale));
+            map[name] = new ScreenRect(name, _config.ResolvedName, d.X, d.Y, d.Width, d.Height, IsLocal: true);
         }
+
+        s.Entries = entries;
+        s.Map = map;
     }
 
     // match a detected screen against ScreenDefinitions for per-screen scale
@@ -148,13 +152,10 @@ public sealed class SlaveRelayConnection : RelayConnection
         return 1.0m;
     }
 
-    private static bool Matches(DetectedScreen d, string match)
-    {
-        var cmp = StringComparison.OrdinalIgnoreCase;
-        return (d.DisplayName != null && d.DisplayName.Equals(match, cmp))
-            || (d.OutputName != null && d.OutputName.Equals(match, cmp))
-            || (d.PlatformId != null && d.PlatformId.Equals(match, cmp));
-    }
+    private static bool Matches(DetectedScreen d, string match) =>
+        d.DisplayName?.EqualsIgnoreCase(match) is true
+        || d.OutputName?.EqualsIgnoreCase(match) is true
+        || d.PlatformId?.EqualsIgnoreCase(match) is true;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -172,13 +173,27 @@ public sealed class SlaveRelayConnection : RelayConnection
             while (await timer.WaitForNextTickAsync(ct))
             {
                 var current = _output.GetAllScreens();
-                if (!ScreenListChanged(current, _detectedScreens))
-                    continue;
 
-                _log.LogInformation("Slave screen configuration changed — re-sending screen info");
-                RefreshScreenInfo();
-                foreach (var master in _masters)
-                    SendScreenInfo(master);
+                string[]? masters = null;
+                List<ScreenInfoEntry>? entries = null;
+                using (var s = await _state.WaitForDisposable(ct))
+                {
+                    if (ScreenListChanged(current, s.Value.DetectedScreens))
+                    {
+                        RebuildScreenInfo(s.Value, current);
+                        entries = s.Value.Entries;
+                    }
+                }
+
+                if (entries != null)
+                    masters = await _peerState.GetMasters();
+
+                if (masters != null)
+                {
+                    _log.LogInformation("Slave screen configuration changed — re-sending screen info");
+                    foreach (var master in masters)
+                        SendScreenInfo(master, entries!);
+                }
             }
         }
         catch (OperationCanceledException) { }
@@ -188,10 +203,14 @@ public sealed class SlaveRelayConnection : RelayConnection
     {
         if (a.Count != b.Count) return true;
         for (var i = 0; i < a.Count; i++)
-        {
-            if (a[i].X != b[i].X || a[i].Y != b[i].Y || a[i].Width != b[i].Width || a[i].Height != b[i].Height)
-                return true;
-        }
+            if (a[i].Bounds != b[i].Bounds) return true;
         return false;
+    }
+
+    private class LocalSlaveState
+    {
+        public List<DetectedScreen> DetectedScreens = [];
+        public List<ScreenInfoEntry> Entries = [];
+        public Dictionary<string, ScreenRect> Map = new(StringComparer.OrdinalIgnoreCase);
     }
 }

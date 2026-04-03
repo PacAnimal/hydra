@@ -13,12 +13,10 @@ internal static class MacVirtualKey
     internal const int Command = 0x37;
     internal const int RightCommand = 0x36;
     internal const int CapsLock = 0x39;
-    internal const int Function = 0x3F;
 
     // navigation
     internal const int Return = 0x24;
     internal const int Tab = 0x30;
-    internal const int Space = 0x31;
     internal const int Delete = 0x33;       // backspace
     internal const int Escape = 0x35;
     internal const int ForwardDelete = 0x75;

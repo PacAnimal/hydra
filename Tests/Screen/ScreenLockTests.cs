@@ -2,11 +2,10 @@ using System.Text.Json;
 using Cathedral.Config;
 using Hydra.Config;
 using Hydra.Keyboard;
-using Hydra.Mouse;
-using Hydra.Platform;
 using Hydra.Relay;
 using Hydra.Screen;
 using Microsoft.Extensions.Logging.Abstractions;
+using Tests.Setup;
 
 namespace Tests.Screen;
 
@@ -156,63 +155,5 @@ public class ScreenLockTests
         relay.FirePeersChanged("remote");
         var info = JsonSerializer.Serialize(new ScreenInfoMessage([new ScreenInfoEntry("screen:0", 0, 0, 2560, 1440, 1.0m)]), SaneJson.Options);
         relay.FireMessageReceived("remote", MessageKind.ScreenInfo, info);
-    }
-
-    // -- stubs --
-
-    private sealed class FakePlatform : IPlatformInput
-    {
-        private Action<double, double>? _onMouseMove;
-        private Action<KeyEvent>? _onKeyEvent;
-
-        public bool IsOnVirtualScreen { get; set; }
-        public bool HideCursorCalled { get; set; }
-        public bool ShowCursorCalled { get; set; }
-        public int WarpX { get; private set; }
-        public int WarpY { get; private set; }
-
-        public void FireMouseMove(double x, double y) => _onMouseMove?.Invoke(x, y);
-        public void FireKeyEvent(KeyEvent e) => _onKeyEvent?.Invoke(e);
-
-        public void Reset()
-        {
-            IsOnVirtualScreen = false;
-            HideCursorCalled = false;
-            ShowCursorCalled = false;
-        }
-
-        public ScreenRect GetPrimaryScreenBounds() => new("home", "home", 0, 0, 2560, 1440, IsLocal: true);
-        public List<DetectedScreen> GetAllScreens() => [new DetectedScreen(0, 0, 2560, 1440, null, null, null)];
-        public bool IsAccessibilityTrusted() => true;
-
-        public void StartEventTap(
-            Action<double, double> onMouseMove,
-            Action<KeyEvent> onKeyEvent,
-            Action<MouseButtonEvent> onMouseButton,
-            Action<MouseScrollEvent> onMouseScroll)
-        {
-            _onMouseMove = onMouseMove;
-            _onKeyEvent = onKeyEvent;
-            WarpX = 2560 / 2;
-            WarpY = 1440 / 2;
-        }
-
-        public void StopEventTap() { }
-        public void WarpCursor(int x, int y) { WarpX = x; WarpY = y; }
-        public void HideCursor() { HideCursorCalled = true; }
-        public void ShowCursor() { ShowCursorCalled = true; }
-        public void Dispose() { }
-    }
-
-    private sealed class FakeRelay : IRelaySender
-    {
-        public bool IsConnected => true;
-        public event Action<string[]>? PeersChanged;
-        public event Action<string, MessageKind, string>? MessageReceived;
-
-        public ValueTask Send(string[] targetHosts, byte[] payload) => ValueTask.CompletedTask;
-
-        public void FirePeersChanged(params string[] hosts) => PeersChanged?.Invoke(hosts);
-        public void FireMessageReceived(string host, MessageKind kind, string json) => MessageReceived?.Invoke(host, kind, json);
     }
 }

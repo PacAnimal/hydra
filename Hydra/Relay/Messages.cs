@@ -42,6 +42,7 @@ public static class MessageSerializer
 
     public static (MessageKind Kind, string Json) Decode(byte[] payload)
     {
+        if (payload.Length == 0) throw new ArgumentException("Empty payload", nameof(payload));
         var kind = (MessageKind)payload[0];
         var json = Encoding.UTF8.GetString(payload, 1, payload.Length - 1);
         return (kind, json);

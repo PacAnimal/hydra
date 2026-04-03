@@ -15,7 +15,7 @@ using TypedSignalR.Client;
 
 namespace Hydra.Relay;
 
-public class RelayConnection(HydraConfig config, ILogger<RelayConnection> log)
+public class RelayConnection(HydraConfig config, ILogger<RelayConnection> log, IWorldState peerState)
     : BackgroundService, IStyxClient, IRelaySender
 {
     private IStyxServer? _server;
@@ -105,7 +105,7 @@ public class RelayConnection(HydraConfig config, ILogger<RelayConnection> log)
 
     protected virtual Task OnKicked(string reason) => Task.CompletedTask;
     // fires after _server and _encryption are set — guaranteed connection-ready signal
-    protected virtual void OnAuthenticated() { }
+    protected virtual Task OnAuthenticated() => Task.CompletedTask;
 
     // override in tests to inject the in-memory handler; production default sets NoDelay
     protected virtual void ConfigureHubUrl(HttpConnectionOptions options)
@@ -169,7 +169,7 @@ public class RelayConnection(HydraConfig config, ILogger<RelayConnection> log)
         using var disco = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
 
         await using var con = new HubConnectionBuilder()
-            .WithUrl($"{netConfig.ServerUrl}/relay", ConfigureHubUrl)
+            .WithUrl($"{netConfig.StyxServer}/relay", ConfigureHubUrl)
             .AddJsonProtocol(hubOptions =>
             {
                 SaneJson.Configure(hubOptions.PayloadSerializerOptions);
@@ -192,7 +192,7 @@ public class RelayConnection(HydraConfig config, ILogger<RelayConnection> log)
         // set before Authenticate so messages arriving during the auth handshake aren't dropped:
         // Styx broadcasts Peers (triggering MasterConfig from master) before returning Authenticated=true,
         // so _encryption must be ready to decrypt that incoming message
-        _encryption = new RelayEncryption(netConfig.EncryptionKey);
+        _encryption = new RelayEncryption(netConfig.EncryptionKey, peerState);
         _server = server;
 
         var response = await server.Authenticate(new RelayLogin
@@ -210,7 +210,7 @@ public class RelayConnection(HydraConfig config, ILogger<RelayConnection> log)
         }
 
         log.LogInformation("Authenticated on relay as {HostName}", hostName);
-        OnAuthenticated();
+        await OnAuthenticated();
 
         // wait until the connection is closed
         await Task.Delay(Timeout.InfiniteTimeSpan, disco.Token).ConfigureAwait(false);

@@ -61,6 +61,7 @@ internal sealed class MacShieldProcess : IDisposable
     [System.Runtime.Versioning.SupportedOSPlatform("macos")]
     private void EnsureExecutable()
     {
+        if (!File.Exists(_binaryPath)) return;
         var mode = File.GetUnixFileMode(_binaryPath);
         if ((mode & UnixFileMode.UserExecute) == 0)
             File.SetUnixFileMode(_binaryPath, mode | UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute);

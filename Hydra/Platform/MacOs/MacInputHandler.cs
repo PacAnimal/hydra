@@ -6,7 +6,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform.MacOs;
 
-public class MacInputHandler(ILogger<MacInputHandler> log) : IPlatformInput
+public sealed class MacInputHandler(ILogger<MacInputHandler> log) : IPlatformInput
 {
     private readonly uint _display = NativeMethods.CGMainDisplayID();
     private readonly nint _cfBooleanTrue = GetCFBooleanTrue();
@@ -31,12 +31,6 @@ public class MacInputHandler(ILogger<MacInputHandler> log) : IPlatformInput
     private static readonly nint _selEventWithCGEvent = NativeMethods.sel_registerName("eventWithCGEvent:");
     private static readonly nint _selSubtype = NativeMethods.sel_registerName("subtype");
     private static readonly nint _selData1 = NativeMethods.sel_registerName("data1");
-
-    public ScreenRect GetPrimaryScreenBounds()
-    {
-        var bounds = NativeMethods.CGDisplayBounds(_display);
-        return new ScreenRect("main", string.Empty, 0, 0, (int)bounds.Size.X, (int)bounds.Size.Y, IsLocal: true);
-    }
 
     public List<DetectedScreen> GetAllScreens() => MacDisplayHelper.GetAllScreens();
 
@@ -91,7 +85,7 @@ public class MacInputHandler(ILogger<MacInputHandler> log) : IPlatformInput
         // callback must be stored as field -- will crash if collected
         _tapCallback = TapCallback;
 
-        var ready = new ManualResetEventSlim(false);
+        using var ready = new ManualResetEventSlim(false);
 
         _tapThread = new Thread(() =>
         {
@@ -180,7 +174,9 @@ public class MacInputHandler(ILogger<MacInputHandler> log) : IPlatformInput
             var rawDy = NativeMethods.CGEventGetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventDeltaAxis1);
             var rawDx = NativeMethods.CGEventGetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventDeltaAxis2);
             if (rawDx != 0 || rawDy != 0)
-                _onMouseScroll?.Invoke(new MouseScrollEvent((short)(rawDx * 120), (short)(rawDy * 120)));
+                _onMouseScroll?.Invoke(new MouseScrollEvent(
+                    (short)Math.Clamp(rawDx * 120, short.MinValue, short.MaxValue),
+                    (short)Math.Clamp(rawDy * 120, short.MinValue, short.MaxValue)));
             return IsOnVirtualScreen ? nint.Zero : eventRef;
         }
 
@@ -252,19 +248,12 @@ public class MacInputHandler(ILogger<MacInputHandler> log) : IPlatformInput
         _ => null,
     };
 
-    // reads kCFRunLoopCommonModes symbol pointer from CoreFoundation
-    private static nint GetCFRunLoopCommonModes()
-    {
-        var lib = NativeLibrary.Load("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation");
-        var export = NativeLibrary.GetExport(lib, "kCFRunLoopCommonModes");
-        return Marshal.ReadIntPtr(export);
-    }
+    private static nint GetCFRunLoopCommonModes() => ReadCoreFoundationSymbol("kCFRunLoopCommonModes");
+    private static nint GetCFBooleanTrue() => ReadCoreFoundationSymbol("kCFBooleanTrue");
 
-    // reads kCFBooleanTrue symbol pointer from CoreFoundation
-    private static nint GetCFBooleanTrue()
+    private static nint ReadCoreFoundationSymbol(string name)
     {
         var lib = NativeLibrary.Load("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation");
-        var export = NativeLibrary.GetExport(lib, "kCFBooleanTrue");
-        return Marshal.ReadIntPtr(export);
+        return Marshal.ReadIntPtr(NativeLibrary.GetExport(lib, name));
     }
 }

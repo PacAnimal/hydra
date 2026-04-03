@@ -21,6 +21,7 @@ builder.ConfigureServices((_, services) =>
 {
     services.AddSereneConsoleLogging(c => c.MinLogLevel = config.LogLevel);
     services.AddSingleton(config);
+    services.AddSingleton<IWorldState, WorldState>();
 
     if (config.Mode == Mode.Master)
     {
