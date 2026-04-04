@@ -229,6 +229,14 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial uint XKeysymToKeycode(nint display, ulong keysym);
 
+    // XkbUseCoreKbd = 0x0100 (use the core keyboard device)
+    internal const uint XkbUseCoreKbd = 0x0100;
+
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool XkbGetAutoRepeatRate(nint display, uint deviceSpec, out uint delay, out uint interval);
+
     // -- XRandR multi-monitor enumeration --
 
     private const string XRandR = "libXrandr.so.2";

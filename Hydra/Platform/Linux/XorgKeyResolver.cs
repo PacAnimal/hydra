@@ -34,6 +34,9 @@ internal sealed class XorgKeyResolver
         if (evType == NativeMethods.KeyRelease)
             return KeyResolver.ReplayKeyUp(_keyDownId, keycode, mods);
 
+        // suppress auto-repeat: if keycode already in _keyDownId, this is an OS repeat — drop it
+        if (_keyDownId.ContainsKey(keycode)) return null;
+
         // dead key: store combining char and its spacing form, then wait for the next character
         var (combining, spacing) = DeadKeyLookup(keysym);
         if (combining != '\0')

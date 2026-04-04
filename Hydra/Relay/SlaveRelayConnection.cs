@@ -1,6 +1,7 @@
 using Cathedral.Extensions;
 using Cathedral.Utils;
 using Hydra.Config;
+using Hydra.Keyboard;
 using Hydra.Platform;
 using Hydra.Screen;
 using Microsoft.Extensions.Logging;
@@ -16,6 +17,9 @@ public sealed class SlaveRelayConnection : RelayConnection
     private readonly IWorldState _peerState;
 
     private readonly SemaphoreSlimValue<LocalSlaveState> _state = new(new LocalSlaveState(), disposeValue: false);
+
+    // active key repeat timers keyed by (char?, SpecialKey?)
+    private readonly Dictionary<(char?, SpecialKey?), CancellationTokenSource> _repeatTimers = [];
 
     // ReSharper disable once ConvertToPrimaryConstructor
 #pragma warning disable IDE0290
@@ -51,7 +55,11 @@ public sealed class SlaveRelayConnection : RelayConnection
                 break;
             case MessageKind.KeyEvent:
                 var key = json.FromSaneJson<KeyEventMessage>();
-                if (key != null) _output.InjectKey(key);
+                if (key != null) HandleKeyEvent(key);
+                break;
+            case MessageKind.MouseMoveDelta:
+                var delta = json.FromSaneJson<MouseMoveDeltaMessage>();
+                if (delta != null) _output.MoveMouseRelative(delta.DX, delta.DY);
                 break;
             case MessageKind.MouseButton:
                 var btn = json.FromSaneJson<MouseButtonMessage>();
@@ -66,6 +74,7 @@ public sealed class SlaveRelayConnection : RelayConnection
                 if (enter != null) await MoveToScreen(enter.Screen, enter.X, enter.Y);
                 break;
             case MessageKind.LeaveScreen:
+                CancelAllRepeatTimers();
                 break;
             default:
                 _log.LogDebug("Unhandled message kind {Kind} from {Host}", kind, sourceHost);
@@ -78,6 +87,66 @@ public sealed class SlaveRelayConnection : RelayConnection
         var current = new HashSet<string>(hostNames, StringComparer.OrdinalIgnoreCase);
         await _peerState.PruneMasters(current);
         await base.OnPeers(hostNames);
+    }
+
+    private void HandleKeyEvent(KeyEventMessage msg)
+    {
+        var repeatKey = (msg.Character, msg.Key);
+
+        if (msg.Type == KeyEventType.KeyUp)
+        {
+            // cancel any active repeat timer for this key
+            if (_repeatTimers.Remove(repeatKey, out var cts))
+            {
+                cts.Cancel();
+                cts.Dispose();
+            }
+            _output.InjectKey(msg);
+            return;
+        }
+
+        // KeyDown: inject immediately, then start repeat timer if settings provided
+        _output.InjectKey(msg);
+
+        if (msg.RepeatDelayMs is not { } delayMs || msg.RepeatRateMs is not { } rateMs) return;
+
+        // cancel any existing timer for this key (shouldn't happen if master suppresses repeats, but be safe)
+        if (_repeatTimers.Remove(repeatKey, out var existingCts))
+        {
+            existingCts.Cancel();
+            existingCts.Dispose();
+        }
+
+        var repeatCts = new CancellationTokenSource();
+        _repeatTimers[repeatKey] = repeatCts;
+        var ct = repeatCts.Token;
+
+        // strip repeat settings from the repeat event (downstream doesn't need them)
+        var repeatMsg = msg with { RepeatDelayMs = null, RepeatRateMs = null };
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(delayMs, ct);
+                while (!ct.IsCancellationRequested)
+                {
+                    _output.InjectKey(repeatMsg);
+                    await Task.Delay(rateMs, ct);
+                }
+            }
+            catch (OperationCanceledException) { }
+        }, ct);
+    }
+
+    private void CancelAllRepeatTimers()
+    {
+        foreach (var cts in _repeatTimers.Values)
+        {
+            cts.Cancel();
+            cts.Dispose();
+        }
+        _repeatTimers.Clear();
     }
 
     private async Task HandleMasterConfig(string masterHost)

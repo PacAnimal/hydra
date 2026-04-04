@@ -28,7 +28,9 @@ internal static partial class NativeMethods
     internal const int KCGEventOtherMouseDown = 25;
     internal const int KCGEventOtherMouseUp = 26;
 
-    // CGEventField values for mouse button number and scroll wheel deltas
+    // CGEventField values for mouse movement deltas and button number
+    internal const int KCGMouseEventDeltaX = 5;
+    internal const int KCGMouseEventDeltaY = 6;
     internal const int KCGMouseEventButtonNumber = 3;
     internal const int KCGScrollWheelEventDeltaAxis1 = 11;        // integer line delta, vertical (positive = up)
     internal const int KCGScrollWheelEventDeltaAxis2 = 12;        // integer line delta, horizontal (positive = right)
@@ -272,6 +274,11 @@ internal static partial class NativeMethods
     [LibraryImport(ObjC, EntryPoint = "objc_msgSend")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial uint objc_msgSend_uint(nint obj, nint sel);
+
+    // receiver + selector → double (for NSTimeInterval return values like keyRepeatDelay)
+    [LibraryImport(ObjC, EntryPoint = "objc_msgSend")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial double objc_msgSend_double(nint obj, nint sel);
 
     // NX_SYSDEFINED event type constant (NSSystemDefined, subtype 8 = media key)
     internal const int KNXSysDefined = 14;

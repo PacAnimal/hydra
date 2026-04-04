@@ -53,6 +53,9 @@ internal sealed class MacKeyResolver
         if (eventType == NativeMethods.KCGEventKeyUp)
             return KeyResolver.ReplayKeyUp(_keyDownId, vkCode, mods);
 
+        // suppress auto-repeat: if vkCode already in _keyDownId, this is an OS repeat — drop it
+        if (_keyDownId.ContainsKey(vkCode)) return null;
+
         // special key (function keys, arrows, modifiers, keypad)?
         if (MacSpecialKeyMap.Instance.TryGet((ulong)vkCode, out var specialKey))
         {

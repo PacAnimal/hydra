@@ -37,6 +37,28 @@ public sealed class MacOutputHandler : IPlatformOutput
         NativeMethods.CFRelease(eventRef);
     }
 
+    public void MoveMouseRelative(int dx, int dy)
+    {
+        _mouseX += dx;
+        _mouseY += dy;
+        var pos = new CGPoint { X = _mouseX, Y = _mouseY };
+
+        var (evType, btn) = (_heldButtons.Contains(MouseButton.Left), _heldButtons.Contains(MouseButton.Right), _heldButtons.Count > 0) switch
+        {
+            (true, _, _) => (NativeMethods.KCGEventLeftMouseDragged, 0),
+            (_, true, _) => (NativeMethods.KCGEventRightMouseDragged, 1),
+            (_, _, true) => (NativeMethods.KCGEventOtherMouseDragged, MouseButtonToCg(_heldButtons.Min())),
+            _ => (NativeMethods.KCGEventMouseMoved, 0),
+        };
+
+        var eventRef = NativeMethods.CGEventCreateMouseEvent(nint.Zero, evType, pos, btn);
+        if (eventRef == nint.Zero) return;
+        NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGMouseEventDeltaX, dx);
+        NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGMouseEventDeltaY, dy);
+        NativeMethods.CGEventPost(NativeMethods.KCGHidEventTap, eventRef);
+        NativeMethods.CFRelease(eventRef);
+    }
+
     public void InjectKey(KeyEventMessage msg)
     {
         var isDown = msg.Type == KeyEventType.KeyDown;

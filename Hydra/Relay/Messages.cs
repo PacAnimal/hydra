@@ -17,13 +17,15 @@ public enum MessageKind : byte
     MasterConfig = 7,
     ScreenInfo = 8,
     SlaveLog = 9,
+    MouseMoveDelta = 10,
 }
 
 public record MouseMoveMessage(string Screen, int X, int Y);
+public record MouseMoveDeltaMessage(int DX, int DY);
 public record ScreenInfoEntry(string Name, int X, int Y, int Width, int Height, decimal Scale);
 public record ScreenInfoMessage(List<ScreenInfoEntry> Screens);
 public record SlaveLogMessage(int Level, string Category, string Message, string? Exception);
-public record KeyEventMessage(KeyEventType Type, KeyModifiers Modifiers, char? Character, SpecialKey? Key);
+public record KeyEventMessage(KeyEventType Type, KeyModifiers Modifiers, char? Character, SpecialKey? Key, int? RepeatDelayMs = null, int? RepeatRateMs = null);
 public record MouseButtonMessage(MouseButton Button, bool IsPressed);
 public record MouseScrollMessage(short XDelta, short YDelta);
 public record EnterScreenMessage(string Screen, int X, int Y, int Width, int Height);

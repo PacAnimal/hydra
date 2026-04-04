@@ -127,6 +127,11 @@ internal static partial class NativeMethods
     // SPI_SETCURSORS = restore all system cursors to their defaults
     internal const uint SPI_SETCURSORS = 0x0057;
 
+    // SPI_GETKEYBOARDDELAY: 0-3 → 250/500/750/1000ms initial repeat delay
+    internal const uint SPI_GETKEYBOARDDELAY = 0x0016;
+    // SPI_GETKEYBOARDSPEED: 0-31 → ~33ms-500ms per-repeat interval (linear; 0=fastest 31=slowest)
+    internal const uint SPI_GETKEYBOARDSPEED = 0x000A;
+
     [LibraryImport(User32)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     internal static unsafe partial nint CreateCursor(

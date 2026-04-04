@@ -28,8 +28,10 @@ public sealed class MacInputHandler(ILogger<MacInputHandler> log) : IPlatformInp
     private readonly Toggle _isOnVirtualScreen = new();
     public bool IsOnVirtualScreen { get => _isOnVirtualScreen; set => _isOnVirtualScreen.TrySet(value); }
 
-    // cached ObjC selectors for NX_SYSDEFINED media key decoding
+    // cached ObjC selectors for NX_SYSDEFINED media key decoding and repeat settings
     private static readonly nint _nsEventClass = NativeMethods.objc_getClass("NSEvent");
+    private static readonly nint _selKeyRepeatDelay = NativeMethods.sel_registerName("keyRepeatDelay");
+    private static readonly nint _selKeyRepeatInterval = NativeMethods.sel_registerName("keyRepeatInterval");
     private static readonly nint _selEventWithCGEvent = NativeMethods.sel_registerName("eventWithCGEvent:");
     private static readonly nint _selSubtype = NativeMethods.sel_registerName("subtype");
     private static readonly nint _selData1 = NativeMethods.sel_registerName("data1");
@@ -124,6 +126,14 @@ public sealed class MacInputHandler(ILogger<MacInputHandler> log) : IPlatformInp
 
         _tapThread.Start();
         ready.Wait();
+    }
+
+    public (int DelayMs, int RateMs) GetKeyRepeatSettings()
+    {
+        if (_nsEventClass == nint.Zero) return (500, 33);
+        var delaySeconds = NativeMethods.objc_msgSend_double(_nsEventClass, _selKeyRepeatDelay);
+        var rateSeconds = NativeMethods.objc_msgSend_double(_nsEventClass, _selKeyRepeatInterval);
+        return ((int)(delaySeconds * 1000), (int)(rateSeconds * 1000));
     }
 
     public void StopEventTap()

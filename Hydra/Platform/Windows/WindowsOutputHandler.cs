@@ -47,6 +47,16 @@ public sealed class WindowsOutputHandler : IPlatformOutput
         _ = NativeMethods.SendInput(1, &input, sizeof(INPUT));
     }
 
+    public unsafe void MoveMouseRelative(int dx, int dy)
+    {
+        var input = new INPUT
+        {
+            type = NativeMethods.INPUT_MOUSE,
+            mi = new MOUSEINPUT { dx = dx, dy = dy, dwFlags = NativeMethods.MOUSEEVENTF_MOVE },
+        };
+        _ = NativeMethods.SendInput(1, &input, sizeof(INPUT));
+    }
+
     public unsafe void InjectKey(KeyEventMessage msg)
     {
         var isUp = msg.Type == KeyEventType.KeyUp;

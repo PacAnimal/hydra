@@ -20,6 +20,12 @@ public class ScreenTransitionService(
     : IHostedService
 {
     private const KeyModifiers LockHotkey = KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Super;
+    private const int MaxMouseHz = 120;
+    private static readonly double MinMouseIntervalMs = 1000.0 / MaxMouseHz;
+
+    // cached key repeat settings from OS; refreshed periodically in the poll loop
+    private (int DelayMs, int RateMs) _repeatSettings = (500, 33);
+    private long _lastRepeatSettingsTick;
 
     private readonly IWorldState _peerState = peerState ?? new WorldState();
     private readonly SemaphoreSlimValue<LocalMasterState> _state = new(new LocalMasterState(), disposeValue: false);
@@ -64,6 +70,9 @@ public class ScreenTransitionService(
                 log.LogInformation("Remote screen '{Name}': waiting for peer", remote.Name);
         }
 
+        _repeatSettings = platform.GetKeyRepeatSettings();
+        _lastRepeatSettingsTick = Environment.TickCount64;
+
         relay.PeersChanged += OnPeersChanged;
         relay.MessageReceived += OnMessageReceived;
 
@@ -106,6 +115,14 @@ public class ScreenTransitionService(
                 List<ScreenRect> localScreensSnapshot;
                 using (var s = await _state.WaitForDisposable(ct))
                     localScreensSnapshot = s.Value.LocalScreens;
+
+                // refresh key repeat settings every 30 seconds
+                var now = Environment.TickCount64;
+                if (now - _lastRepeatSettingsTick >= 30_000)
+                {
+                    _repeatSettings = platform.GetKeyRepeatSettings();
+                    _lastRepeatSettingsTick = now;
+                }
 
                 if (!ScreenRect.ScreenListChanged(detected, localScreensSnapshot))
                     continue;
@@ -295,16 +312,33 @@ public class ScreenTransitionService(
         using var s = AsyncHelper.RunSync(() => _state.WaitForDisposable());
         var st = s.Value;
 
-        if (keyEvent.Type == KeyEventType.KeyDown
-            && keyEvent.Character == 'l'
-            && (keyEvent.Modifiers & LockHotkey) == LockHotkey)
+        if (keyEvent.Type == KeyEventType.KeyDown && (keyEvent.Modifiers & LockHotkey) == LockHotkey)
         {
-            st.LockedToScreen = !st.LockedToScreen;
-            log.LogInformation("Screen lock: {State}", st.LockedToScreen ? "locked" : "unlocked");
+            if (keyEvent.Character == 'l')
+            {
+                st.LockedToScreen = !st.LockedToScreen;
+                log.LogInformation("Screen lock: {State}", st.LockedToScreen ? "locked" : "unlocked");
+            }
+            else if (keyEvent.Character == 'm' && st.Mouse.IsOnVirtualScreen && st.Mouse.CurrentScreen != null)
+            {
+                var screenName = st.Mouse.CurrentScreen.Name;
+                var isNowRelative = !st.RelativeMouseScreens.GetValueOrDefault(screenName);
+                st.RelativeMouseScreens[screenName] = isNowRelative;
+                log.LogInformation("Mouse mode for '{Screen}': {Mode}", screenName, isNowRelative ? "relative" : "absolute");
+            }
         }
 
         if (st.Mouse.IsOnVirtualScreen && relay.IsConnected)
-            ForwardToVirtualScreen(st, MessageKind.KeyEvent, new KeyEventMessage(keyEvent.Type, keyEvent.Modifiers, keyEvent.Character, keyEvent.Key));
+        {
+            // include repeat settings on the first KeyDown for a key so the slave can generate local repeats
+            int? repeatDelay = null, repeatRate = null;
+            if (keyEvent.Type == KeyEventType.KeyDown)
+            {
+                repeatDelay = _repeatSettings.DelayMs;
+                repeatRate = _repeatSettings.RateMs;
+            }
+            ForwardToVirtualScreen(st, MessageKind.KeyEvent, new KeyEventMessage(keyEvent.Type, keyEvent.Modifiers, keyEvent.Character, keyEvent.Key, repeatDelay, repeatRate));
+        }
     }
 
     private void OnMouseButton(MouseButtonEvent e)
@@ -325,6 +359,44 @@ public class ScreenTransitionService(
         var st = s.Value;
         if (st.Mouse.IsOnVirtualScreen && relay.IsConnected)
             ForwardToVirtualScreen(st, MessageKind.MouseScroll, new MouseScrollMessage(e.XDelta, e.YDelta));
+    }
+
+    private void SendMousePosition(LocalMasterState st, long now)
+    {
+        if (!relay.IsConnected || st.Mouse.CurrentScreen == null) return;
+
+        var screen = st.Mouse.CurrentScreen;
+        byte[] payload;
+
+        if (st.RelativeMouseScreens.GetValueOrDefault(screen.Name))
+        {
+            // relative mode: send accumulated delta, preserve sub-pixel remainders
+            var intDX = (int)st.PendingDX;
+            var intDY = (int)st.PendingDY;
+            if (intDX == 0 && intDY == 0) return;
+            st.PendingDX -= intDX;
+            st.PendingDY -= intDY;
+            payload = MessageSerializer.Encode(MessageKind.MouseMoveDelta, new MouseMoveDeltaMessage(intDX, intDY));
+        }
+        else
+        {
+            // absolute mode: send current virtual position, discard accumulated deltas
+            st.PendingDX = 0;
+            st.PendingDY = 0;
+            payload = MessageSerializer.Encode(MessageKind.MouseMove, new MouseMoveMessage(screen.Name, (int)st.Mouse.X, (int)st.Mouse.Y));
+        }
+
+        st.LastMouseSendTick = now;
+        _ = relay.Send([screen.Host], payload).AsTask();
+    }
+
+    // flush pending delta immediately (e.g. before leaving a virtual screen)
+    private void FlushMouseDelta(LocalMasterState st)
+    {
+        if (!relay.IsConnected || st.Mouse.CurrentScreen == null) return;
+        var hasPending = st.PendingDX != 0 || st.PendingDY != 0;
+        if (!hasPending) return;
+        SendMousePosition(st, Environment.TickCount64);
     }
 
     private void ForwardToVirtualScreen<T>(LocalMasterState st, MessageKind kind, T message)
@@ -403,6 +475,10 @@ public class ScreenTransitionService(
         // bogus filter: drop delta that looks like a warp-displacement artifact
         if (Math.Abs(dx) > st.HalfW - 10 || Math.Abs(dy) > st.HalfH - 10) return;
 
+        // accumulate deltas for throttle
+        st.PendingDX += dx;
+        st.PendingDY += dy;
+
         st.Mouse.ApplyDelta(dx, dy);
 
         var now = Environment.TickCount64;
@@ -418,6 +494,9 @@ public class ScreenTransitionService(
         if (hit is not null && hit.Destination.IsLocal && !st.LockedToScreen)
         {
             var targetScreen = hit.Destination;
+
+            // flush any pending delta before leaving
+            FlushMouseDelta(st);
 
             // warp to entry in global OS coords; show is deferred to next real-screen event
             var globalX = targetScreen.X + hit.EntryX;
@@ -438,12 +517,9 @@ public class ScreenTransitionService(
             return;
         }
 
-        // forward current virtual position to remote
-        if (relay.IsConnected && st.Mouse.CurrentScreen != null)
-        {
-            var payload = MessageSerializer.Encode(MessageKind.MouseMove, new MouseMoveMessage(st.Mouse.CurrentScreen.Name, (int)st.Mouse.X, (int)st.Mouse.Y));
-            _ = relay.Send([st.Mouse.CurrentScreen.Host], payload).AsTask();
-        }
+        // throttle mouse sends to MaxMouseHz
+        if (now - st.LastMouseSendTick >= MinMouseIntervalMs)
+            SendMousePosition(st, now);
 
         // warp to center on every event
         platform.WarpCursor(st.WarpX, st.WarpY);
@@ -513,5 +589,13 @@ public class ScreenTransitionService(
         public long LastVirtualLogTick;
         public bool PendingCursorShow;
         public bool LockedToScreen;
+
+        // per-screen relative mouse mode (true = relative, false/absent = absolute)
+        public Dictionary<string, bool> RelativeMouseScreens = new(StringComparer.OrdinalIgnoreCase);
+
+        // 120Hz throttle: accumulated deltas and last send time
+        public long LastMouseSendTick;
+        public double PendingDX;
+        public double PendingDY;
     }
 }

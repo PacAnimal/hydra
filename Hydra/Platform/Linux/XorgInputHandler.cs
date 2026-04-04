@@ -141,6 +141,13 @@ public sealed class XorgInputHandler : IPlatformInput
         ready.Wait();
     }
 
+    public (int DelayMs, int RateMs) GetKeyRepeatSettings()
+    {
+        if (NativeMethods.XkbGetAutoRepeatRate(_display, NativeMethods.XkbUseCoreKbd, out var delay, out var interval))
+            return ((int)delay, (int)interval);
+        return (500, 33);
+    }
+
     public void StopEventTap()
     {
         _running = false;

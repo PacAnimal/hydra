@@ -39,13 +39,16 @@ internal sealed class WinKeyResolver
 
         if (WinSpecialKeyMap.Instance.TryGet((ulong)vk, out var specialKey))
         {
-            // suppress modifier auto-repeat — only emit on initial press, not while held
-            if (specialKey.IsModifier() && _keyDownId.ContainsKey(vk)) return null;
+            // suppress auto-repeat — only emit on initial press, not while held
+            if (_keyDownId.ContainsKey(vk)) return null;
             _pendingDeadKey = '\0';
             _pendingDeadSpacing = '\0';
             _keyDownId[vk] = (null, specialKey);
             return KeyEvent.Special(KeyEventType.KeyDown, specialKey, mods);
         }
+
+        // suppress character key auto-repeat
+        if (_keyDownId.ContainsKey(vk)) return null;
 
         return ResolveCharacter(vk, info.scanCode, info.flags, mods);
     }

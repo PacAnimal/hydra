@@ -33,6 +33,13 @@ public sealed class XorgOutputHandler : IPlatformOutput
         _ = NativeMethods.XFlush(_display);
     }
 
+    public void MoveMouseRelative(int dx, int dy)
+    {
+        // src_window=None, dest_window=None: move relative to current position
+        _ = NativeMethods.XWarpPointer(_display, nint.Zero, nint.Zero, 0, 0, 0, 0, dx, dy);
+        _ = NativeMethods.XFlush(_display);
+    }
+
     public void InjectKey(KeyEventMessage msg)
     {
         var isDown = msg.Type == KeyEventType.KeyDown;

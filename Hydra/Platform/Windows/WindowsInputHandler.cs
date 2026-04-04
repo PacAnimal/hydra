@@ -121,6 +121,19 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log) : IPla
         ready.Wait();
     }
 
+    public unsafe (int DelayMs, int RateMs) GetKeyRepeatSettings()
+    {
+        uint delay = 1, speed = 15;
+        NativeMethods.SystemParametersInfo(NativeMethods.SPI_GETKEYBOARDDELAY, 0, (nint)(&delay), 0);
+        NativeMethods.SystemParametersInfo(NativeMethods.SPI_GETKEYBOARDSPEED, 0, (nint)(&speed), 0);
+
+        // delay: 0=250ms, 1=500ms, 2=750ms, 3=1000ms
+        var delayMs = (int)((delay + 1) * 250);
+        // speed: 0=31 chars/sec (~33ms), 31=2 chars/sec (~500ms); linear interpolation
+        var rateMs = speed == 0 ? 33 : (int)(500 - (speed * (500 - 33) / 31));
+        return (delayMs, rateMs);
+    }
+
     public void StopEventTap()
     {
         if (_hookThreadId != 0)

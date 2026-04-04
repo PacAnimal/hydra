@@ -29,4 +29,7 @@ public interface IPlatformInput : IDisposable
     void StopEventTap();
     bool IsAccessibilityTrusted();
     bool IsOnVirtualScreen { get; set; }
+
+    // returns (initialDelayMs, repeatRateMs) from OS key repeat settings
+    (int DelayMs, int RateMs) GetKeyRepeatSettings();
 }
