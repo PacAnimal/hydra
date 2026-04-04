@@ -178,7 +178,7 @@ public sealed class SlaveRelayConnection : RelayConnection
                 List<ScreenInfoEntry>? entries = null;
                 using (var s = await _state.WaitForDisposable(ct))
                 {
-                    if (ScreenListChanged(current, s.Value.DetectedScreens))
+                    if (ScreenRect.ScreenListChanged(current, s.Value.DetectedScreens))
                     {
                         RebuildScreenInfo(s.Value, current);
                         entries = s.Value.Entries;
@@ -197,14 +197,6 @@ public sealed class SlaveRelayConnection : RelayConnection
             }
         }
         catch (OperationCanceledException) { }
-    }
-
-    private static bool ScreenListChanged(List<DetectedScreen> a, List<DetectedScreen> b)
-    {
-        if (a.Count != b.Count) return true;
-        for (var i = 0; i < a.Count; i++)
-            if (a[i].Bounds != b[i].Bounds) return true;
-        return false;
     }
 
     private class LocalSlaveState

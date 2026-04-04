@@ -10,6 +10,8 @@ public sealed class MacOutputHandler : IPlatformOutput
     private double _mouseX;
     private double _mouseY;
     private readonly HashSet<MouseButton> _heldButtons = [];
+    private int _scrollAccY;
+    private int _scrollAccX;
 
     public List<DetectedScreen> GetAllScreens() => MacDisplayHelper.GetAllScreens();
 
@@ -41,7 +43,7 @@ public sealed class MacOutputHandler : IPlatformOutput
 
         if (msg.Character is { } ch)
             InjectUnicodeChar(ch, isDown);
-        else if (msg.Key is { } key && MacSpecialKeyMap.Reverse.TryGetValue(key, out var vk))
+        else if (msg.Key is { } key && MacSpecialKeyMap.Instance.Reverse.TryGetValue(key, out var vk))
             InjectVirtualKey((ushort)vk, isDown);
     }
 
@@ -84,14 +86,24 @@ public sealed class MacOutputHandler : IPlatformOutput
     {
         if (msg.YDelta == 0 && msg.XDelta == 0) return;
 
-        // convert from 120-unit convention back to line units
-        var yLines = msg.YDelta / 120;
-        var xLines = msg.XDelta / 120;
-        if (yLines == 0 && xLines == 0) return;
+        // accumulate into running totals to avoid losing sub-120 remainders
+        _scrollAccY += msg.YDelta;
+        _scrollAccX += msg.XDelta;
+
+        // integer line count for line-based apps (may be zero for sub-line events)
+        var yLines = _scrollAccY / 120;
+        var xLines = _scrollAccX / 120;
+        _scrollAccY -= yLines * 120;
+        _scrollAccX -= xLines * 120;
 
         // kCGScrollEventUnitLine = 1
         var eventRef = NativeMethods.CGEventCreateScrollWheelEvent(nint.Zero, 1, 2, yLines, xLines);
         if (eventRef == nint.Zero) return;
+
+        // also set pixel delta so pixel-aware apps (browsers, etc.) get smooth sub-line scroll
+        NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventPointDeltaAxis1, msg.YDelta);
+        NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventPointDeltaAxis2, msg.XDelta);
+
         NativeMethods.CGEventPost(NativeMethods.KCGHidEventTap, eventRef);
         NativeMethods.CFRelease(eventRef);
     }

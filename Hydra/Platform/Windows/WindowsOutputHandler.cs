@@ -8,7 +8,7 @@ namespace Hydra.Platform.Windows;
 public sealed class WindowsOutputHandler : IPlatformOutput
 {
     // vk codes that require KEYEVENTF_EXTENDEDKEY (right-side modifiers, nav cluster, arrows)
-    private static readonly HashSet<int> ExtendedKeys =
+    private static readonly HashSet<ulong> ExtendedKeys =
     [
         WinVirtualKey.RControl, WinVirtualKey.RMenu,
         WinVirtualKey.Insert, WinVirtualKey.Delete,
@@ -62,7 +62,7 @@ public sealed class WindowsOutputHandler : IPlatformOutput
             };
             _ = NativeMethods.SendInput(1, &input, sizeof(INPUT));
         }
-        else if (msg.Key is { } key && WinSpecialKeyMap.Reverse.TryGetValue(key, out var vk))
+        else if (msg.Key is { } key && WinSpecialKeyMap.Instance.Reverse.TryGetValue(key, out var vk))
         {
             var flags = isUp ? NativeMethods.KEYEVENTF_KEYUP : 0u;
             if (ExtendedKeys.Contains(vk))

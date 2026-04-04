@@ -17,7 +17,7 @@ public class XorgSpecialKeyMapTests
     {
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(XorgSpecialKeyMap.TryGet(keysym, out var key), Is.True);
+            Assert.That(XorgSpecialKeyMap.Instance.TryGet(keysym, out var key), Is.True);
             Assert.That(key, Is.EqualTo(expected));
         }
     }
@@ -35,7 +35,7 @@ public class XorgSpecialKeyMapTests
     {
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(XorgSpecialKeyMap.TryGet(keysym, out var key), Is.True);
+            Assert.That(XorgSpecialKeyMap.Instance.TryGet(keysym, out var key), Is.True);
             Assert.That(key, Is.EqualTo(expected));
         }
     }
@@ -54,7 +54,7 @@ public class XorgSpecialKeyMapTests
     {
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(XorgSpecialKeyMap.TryGet(keysym, out var key), Is.True);
+            Assert.That(XorgSpecialKeyMap.Instance.TryGet(keysym, out var key), Is.True);
             Assert.That(key, Is.EqualTo(expected));
         }
     }
@@ -73,7 +73,7 @@ public class XorgSpecialKeyMapTests
     {
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(XorgSpecialKeyMap.TryGet(keysym, out var key), Is.True);
+            Assert.That(XorgSpecialKeyMap.Instance.TryGet(keysym, out var key), Is.True);
             Assert.That(key, Is.EqualTo(expected));
         }
     }
@@ -82,13 +82,13 @@ public class XorgSpecialKeyMapTests
     public void UnknownKeysym_ReturnsFalse()
     {
         // 0x0061 (XK_a) is a character key, not in the special map
-        Assert.That(XorgSpecialKeyMap.TryGet(0x0061, out _), Is.False);
+        Assert.That(XorgSpecialKeyMap.Instance.TryGet(0x0061, out _), Is.False);
     }
 
     [Test]
     public void NoDuplicateSpecialKeys()
     {
         // Reverse construction throws if two keysyms map to the same SpecialKey
-        Assert.That(XorgSpecialKeyMap.Reverse, Is.Not.Empty);
+        Assert.That(XorgSpecialKeyMap.Instance.Reverse, Is.Not.Empty);
     }
 }

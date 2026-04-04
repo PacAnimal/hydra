@@ -113,7 +113,7 @@ internal sealed class XorgKeyResolver
     // MISCELLANY keysyms (0xFF00-0xFFFF) map directly: keysym | 0x01000000 = SpecialKey value.
     private static SpecialKey? KeySymToSpecialKey(ulong keysym)
     {
-        if (XorgSpecialKeyMap.TryGet(keysym, out var special)) return special;
+        if (XorgSpecialKeyMap.Instance.TryGet(keysym, out var special)) return special;
 
         // mechanical MISCELLANY mapping for named keys not in the special map
         if (keysym is >= 0xFF00 and <= 0xFFFF)

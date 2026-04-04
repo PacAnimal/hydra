@@ -5,9 +5,11 @@ namespace Hydra.Platform.Windows;
 // maps Windows virtual key codes to SpecialKey constants.
 // only covers non-character keys (function keys, arrows, modifiers, keypad).
 // character keys are resolved via ToUnicodeEx.
-internal static class WinSpecialKeyMap
+internal sealed class WinSpecialKeyMap : SpecialKeyMap
 {
-    private static readonly Dictionary<int, SpecialKey> Map = new()
+    internal static readonly WinSpecialKeyMap Instance = new();
+
+    protected override Dictionary<ulong, SpecialKey> Map { get; } = new()
     {
         // tty
         { WinVirtualKey.Back, SpecialKey.BackSpace },
@@ -88,8 +90,4 @@ internal static class WinSpecialKeyMap
         { WinVirtualKey.MediaStop, SpecialKey.AudioStop },
         { WinVirtualKey.MediaPlayPause, SpecialKey.AudioPlay },
     };
-
-    internal static bool TryGet(int vkCode, out SpecialKey key) => Map.TryGetValue(vkCode, out key);
-
-    internal static readonly Dictionary<SpecialKey, int> Reverse = Map.ToDictionary(kvp => kvp.Value, kvp => kvp.Key);
 }

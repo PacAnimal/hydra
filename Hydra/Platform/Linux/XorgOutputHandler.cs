@@ -11,6 +11,8 @@ public sealed class XorgOutputHandler : IPlatformOutput
     private readonly int _screen;
     private readonly nint _rootWindow;
     private bool _disposed;
+    private int _scrollAccY;
+    private int _scrollAccX;
 
     public XorgOutputHandler()
     {
@@ -68,19 +70,23 @@ public sealed class XorgOutputHandler : IPlatformOutput
 
     public void InjectMouseScroll(MouseScrollMessage msg)
     {
-        // x11 scroll: buttons 4=up, 5=down, 6=left, 7=right (each press = one 120-unit click)
-        InjectScrollAxis(4u, 5u, msg.YDelta);
-        InjectScrollAxis(7u, 6u, msg.XDelta);
+        // x11 scroll: buttons 4=up, 5=down, 6=left, 7=right (each press = one 120-unit click).
+        // accumulate remainders so sub-120 deltas are not silently dropped.
+        _scrollAccY += msg.YDelta;
+        _scrollAccX += msg.XDelta;
+        InjectScrollAxis(4u, 5u, ref _scrollAccY);
+        InjectScrollAxis(7u, 6u, ref _scrollAccX);
         _ = NativeMethods.XFlush(_display);
     }
 
-    private void InjectScrollAxis(uint positiveButton, uint negativeButton, short delta)
+    private void InjectScrollAxis(uint positiveButton, uint negativeButton, ref int accumulator)
     {
-        if (delta == 0) return;
-        var button = delta > 0 ? positiveButton : negativeButton;
-        var clicks = Math.Abs(delta / 120);
+        var clicks = accumulator / 120;
         if (clicks == 0) return;
-        for (var i = 0; i < clicks; i++)
+        accumulator -= clicks * 120;
+        var button = clicks > 0 ? positiveButton : negativeButton;
+        var n = Math.Abs(clicks);
+        for (var i = 0; i < n; i++)
         {
             _ = NativeMethods.XTestFakeButtonEvent(_display, button, true, 0);
             _ = NativeMethods.XTestFakeButtonEvent(_display, button, false, 0);
@@ -98,7 +104,7 @@ public sealed class XorgOutputHandler : IPlatformOutput
     private static ulong SpecialKeyToKeysym(SpecialKey key)
     {
         // media keys and other non-MISCELLANY keys: reverse map via XorgSpecialKeyMap
-        if (XorgSpecialKeyMap.Reverse.TryGetValue(key, out var keysym))
+        if (XorgSpecialKeyMap.Instance.Reverse.TryGetValue(key, out var keysym))
             return keysym;
 
         // MISCELLANY keys: SpecialKey value encodes (keysym | 0x01000000), strip the flag

@@ -5,9 +5,11 @@ namespace Hydra.Platform.Linux;
 // maps X11 keysyms to SpecialKey constants.
 // only covers special (non-character) keys; printable keys are handled mechanically
 // in XorgKeyResolver (MISCELLANY range: keysym | 0x01000000 = SpecialKey value).
-internal static class XorgSpecialKeyMap
+internal sealed class XorgSpecialKeyMap : SpecialKeyMap
 {
-    private static readonly Dictionary<ulong, SpecialKey> Map = new()
+    internal static readonly XorgSpecialKeyMap Instance = new();
+
+    protected override Dictionary<ulong, SpecialKey> Map { get; } = new()
     {
         // tty
         { XorgVirtualKey.BackSpace, SpecialKey.BackSpace },
@@ -98,8 +100,4 @@ internal static class XorgSpecialKeyMap
         { XorgVirtualKey.Super_L, SpecialKey.Super_L },
         { XorgVirtualKey.Super_R, SpecialKey.Super_R },
     };
-
-    internal static bool TryGet(ulong keysym, out SpecialKey key) => Map.TryGetValue(keysym, out key);
-
-    internal static readonly Dictionary<SpecialKey, ulong> Reverse = Map.ToDictionary(kvp => kvp.Value, kvp => kvp.Key);
 }

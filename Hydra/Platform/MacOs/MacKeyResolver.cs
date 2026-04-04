@@ -36,7 +36,7 @@ internal sealed class MacKeyResolver
         _previousModifiers = newMods;
 
         if (changed == KeyModifiers.None) return null;
-        if (!MacSpecialKeyMap.TryGet(vkCode, out var specialKey)) return null;
+        if (!MacSpecialKeyMap.Instance.TryGet((ulong)vkCode, out var specialKey)) return null;
 
         var isPress = (newMods & changed) != 0;
         var type = isPress ? KeyEventType.KeyDown : KeyEventType.KeyUp;
@@ -54,7 +54,7 @@ internal sealed class MacKeyResolver
             return KeyResolver.ReplayKeyUp(_keyDownId, vkCode, mods);
 
         // special key (function keys, arrows, modifiers, keypad)?
-        if (MacSpecialKeyMap.TryGet(vkCode, out var specialKey))
+        if (MacSpecialKeyMap.Instance.TryGet((ulong)vkCode, out var specialKey))
         {
             _deadKeyState = 0;
             _keyDownId[vkCode] = (null, specialKey);
@@ -157,10 +157,9 @@ internal sealed class MacKeyResolver
     internal static bool DetectAltGr(char? character, bool isCommand, bool optionHeld) =>
         optionHeld && !isCommand && character.HasValue;
 
-    private static nint LoadTisPropertyKey()
-    {
-        var lib = NativeLibrary.Load("/System/Library/Frameworks/Carbon.framework/Carbon");
-        var export = NativeLibrary.GetExport(lib, "kTISPropertyUnicodeKeyLayoutData");
-        return Marshal.ReadIntPtr(export);
-    }
+    private static readonly nint _carbon =
+        NativeLibrary.Load("/System/Library/Frameworks/Carbon.framework/Carbon");
+
+    private static nint LoadTisPropertyKey() =>
+        Marshal.ReadIntPtr(NativeLibrary.GetExport(_carbon, "kTISPropertyUnicodeKeyLayoutData"));
 }

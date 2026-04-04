@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using Cathedral.Utils;
 using Hydra.Keyboard;
 using Hydra.Mouse;
 using Hydra.Screen;
@@ -23,7 +24,8 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log) : IPla
     private bool _cursorHidden;
     private int _lastWarpX = -1;
     private int _lastWarpY = -1;
-    public bool IsOnVirtualScreen { get; set; }
+    private readonly Toggle _isOnVirtualScreen = new();
+    public bool IsOnVirtualScreen { get => _isOnVirtualScreen; set => _isOnVirtualScreen.TrySet(value); }
 
     public List<DetectedScreen> GetAllScreens() => WindowsDisplayHelper.GetAllScreens();
 

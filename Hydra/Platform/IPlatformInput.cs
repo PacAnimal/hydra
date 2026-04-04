@@ -10,6 +10,7 @@ public record DetectedScreen(
     string? DisplayName,   // e.g. "DELL U2720Q", "Built-in Retina Display"
     string? OutputName,    // e.g. "HDMI-1", "eDP-1", "\\.\DISPLAY1"
     string? PlatformId)    // platform-specific ID: CGDirectDisplayID, HMONITOR, XRandR output id
+    : IBounded
 {
     public (int X, int Y, int Width, int Height) Bounds => (X, Y, Width, Height);
 }

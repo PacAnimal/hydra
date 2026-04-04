@@ -38,7 +38,7 @@ internal sealed class MacShieldProcess : IDisposable
             _process.Kill();
             _process.WaitForExit(2000);
         }
-        catch { /* already dead */ }
+        catch (Exception) { /* already dead */ }
     }
 
     public void Dispose()
@@ -55,7 +55,7 @@ internal sealed class MacShieldProcess : IDisposable
             _process.StandardInput.WriteLine(command);
             _process.StandardInput.Flush();
         }
-        catch { /* process may have just died */ }
+        catch (Exception) { /* process may have just died */ }
     }
 
     [System.Runtime.Versioning.SupportedOSPlatform("macos")]

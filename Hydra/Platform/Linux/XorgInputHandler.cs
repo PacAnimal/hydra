@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using Cathedral.Utils;
 using Hydra.Keyboard;
 using Hydra.Mouse;
 using Hydra.Screen;
@@ -23,7 +24,7 @@ public sealed class XorgInputHandler : IPlatformInput
     private Action<MouseButtonEvent>? _onMouseButton;
     private Action<MouseScrollEvent>? _onMouseScroll;
     private bool _cursorHidden;
-    private bool _isOnVirtualScreen;
+    private readonly Toggle _isOnVirtualScreen = new();
     private bool _keyboardGrabbed;
 
     // XI2 event mask for raw button press/release (15, 16) and raw motion (17).
@@ -92,7 +93,7 @@ public sealed class XorgInputHandler : IPlatformInput
         get => _isOnVirtualScreen;
         set
         {
-            _isOnVirtualScreen = value;
+            _isOnVirtualScreen.TrySet(value);
             if (value)
                 GrabKeyboard();
             else

@@ -37,7 +37,7 @@ internal sealed class WinKeyResolver
         if (isKeyUp)
             return KeyResolver.ReplayKeyUp(_keyDownId, vk, mods);
 
-        if (WinSpecialKeyMap.TryGet(vk, out var specialKey))
+        if (WinSpecialKeyMap.Instance.TryGet((ulong)vk, out var specialKey))
         {
             // suppress modifier auto-repeat — only emit on initial press, not while held
             if (specialKey.IsModifier() && _keyDownId.ContainsKey(vk)) return null;

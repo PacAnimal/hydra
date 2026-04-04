@@ -107,7 +107,7 @@ public class ScreenTransitionService(
                 using (var s = await _state.WaitForDisposable(ct))
                     localScreensSnapshot = s.Value.LocalScreens;
 
-                if (!ScreenListChanged(detected, localScreensSnapshot))
+                if (!ScreenRect.ScreenListChanged(detected, localScreensSnapshot))
                     continue;
 
                 log.LogInformation("Screen configuration changed — rebuilding layout");
@@ -134,14 +134,6 @@ public class ScreenTransitionService(
             }
         }
         catch (OperationCanceledException) { }
-    }
-
-    private static bool ScreenListChanged(List<DetectedScreen> detected, List<ScreenRect> current)
-    {
-        if (detected.Count != current.Count) return true;
-        for (var i = 0; i < detected.Count; i++)
-            if (detected[i].Bounds != current[i].Bounds) return true;
-        return false;
     }
 
     private void OnPeersChanged(string[] hostNames)
@@ -180,8 +172,7 @@ public class ScreenTransitionService(
 
         if (disconnectedHost != null)
         {
-            platform.IsOnVirtualScreen = false;
-            platform.WarpCursor(warpX, warpY);
+            ReturnToLocalScreen(warpX, warpY);
             platform.ShowCursor();
             log.LogInformation("Remote peer '{Name}' disconnected — returned to local screen", disconnectedHost);
         }
@@ -433,8 +424,7 @@ public class ScreenTransitionService(
             var globalY = targetScreen.Y + hit.EntryY;
             var leavingScreen = st.Mouse.CurrentScreen;
             st.Mouse.LeaveScreen();
-            platform.IsOnVirtualScreen = false;
-            platform.WarpCursor(globalX, globalY);
+            ReturnToLocalScreen(globalX, globalY);
             st.PendingCursorShow = true;
             st.ActiveLocalScreen = targetScreen;
             UpdateWarpPoint(st, targetScreen);
@@ -459,6 +449,12 @@ public class ScreenTransitionService(
         platform.WarpCursor(st.WarpX, st.WarpY);
         st.LastWarpX = st.WarpX;
         st.LastWarpY = st.WarpY;
+    }
+
+    private void ReturnToLocalScreen(int x, int y)
+    {
+        platform.IsOnVirtualScreen = false;
+        platform.WarpCursor(x, y);
     }
 
     private static void UpdateWarpPoint(LocalMasterState st, ScreenRect screen)

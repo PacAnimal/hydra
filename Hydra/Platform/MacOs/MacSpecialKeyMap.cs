@@ -5,9 +5,11 @@ namespace Hydra.Platform.MacOs;
 // maps macOS virtual key codes to SpecialKey constants.
 // only covers non-character keys (function keys, arrows, modifiers, keypad).
 // character keys (letters, numbers, punctuation) are resolved via UCKeyTranslate.
-internal static class MacSpecialKeyMap
+internal sealed class MacSpecialKeyMap : SpecialKeyMap
 {
-    private static readonly Dictionary<int, SpecialKey> Map = new()
+    internal static readonly MacSpecialKeyMap Instance = new();
+
+    protected override Dictionary<ulong, SpecialKey> Map { get; } = new()
     {
         // tty
         { MacVirtualKey.Delete, SpecialKey.BackSpace },
@@ -86,9 +88,5 @@ internal static class MacSpecialKeyMap
         { MacVirtualKey.CapsLock, SpecialKey.CapsLock },
     };
 
-    internal static bool TryGet(int vkCode, out SpecialKey key) => Map.TryGetValue(vkCode, out key);
-
-    internal static IReadOnlyDictionary<int, SpecialKey> All => Map;
-
-    internal static readonly Dictionary<SpecialKey, int> Reverse = Map.ToDictionary(kvp => kvp.Value, kvp => kvp.Key);
+    internal IReadOnlyDictionary<ulong, SpecialKey> All => Map;
 }

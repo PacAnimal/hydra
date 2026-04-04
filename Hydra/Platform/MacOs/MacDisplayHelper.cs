@@ -86,7 +86,7 @@ internal static class MacDisplayHelper
 
             NativeMethods.CFRelease(nsScreenNumberKey);
         }
-        catch
+        catch (Exception)
         {
             // NSScreen not available in all contexts (e.g., before NSApplication initialisation)
         }

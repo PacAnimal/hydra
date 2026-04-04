@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using Cathedral.Utils;
 using Hydra.Keyboard;
 using Hydra.Mouse;
 using Hydra.Screen;
@@ -24,7 +25,8 @@ public sealed class MacInputHandler(ILogger<MacInputHandler> log) : IPlatformInp
     private Action<MouseButtonEvent>? _onMouseButton;
     private Action<MouseScrollEvent>? _onMouseScroll;
     private bool _cursorHidden;
-    public bool IsOnVirtualScreen { get; set; }
+    private readonly Toggle _isOnVirtualScreen = new();
+    public bool IsOnVirtualScreen { get => _isOnVirtualScreen; set => _isOnVirtualScreen.TrySet(value); }
 
     // cached ObjC selectors for NX_SYSDEFINED media key decoding
     private static readonly nint _nsEventClass = NativeMethods.objc_getClass("NSEvent");
@@ -171,12 +173,14 @@ public sealed class MacInputHandler(ILogger<MacInputHandler> log) : IPlatformInp
 
         if (type == NativeMethods.KCGEventScrollWheel)
         {
-            var rawDy = NativeMethods.CGEventGetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventDeltaAxis1);
-            var rawDx = NativeMethods.CGEventGetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventDeltaAxis2);
-            if (rawDx != 0 || rawDy != 0)
+            // read 16.16 fixed-point line deltas (precision scrolling from trackpads and hi-res mice).
+            // convert to 120-unit wire format: fixedPt * 120 >> 16 (i.e. 1.0 lines = 120 wire units).
+            var fpDy = NativeMethods.CGEventGetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventFixedPtDeltaAxis1);
+            var fpDx = NativeMethods.CGEventGetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventFixedPtDeltaAxis2);
+            if (fpDx != 0 || fpDy != 0)
                 _onMouseScroll?.Invoke(new MouseScrollEvent(
-                    (short)Math.Clamp(rawDx * 120, short.MinValue, short.MaxValue),
-                    (short)Math.Clamp(rawDy * 120, short.MinValue, short.MaxValue)));
+                    (short)Math.Clamp(fpDx * 120L >> 16, short.MinValue, short.MaxValue),
+                    (short)Math.Clamp(fpDy * 120L >> 16, short.MinValue, short.MaxValue)));
             return IsOnVirtualScreen ? nint.Zero : eventRef;
         }
 
@@ -251,9 +255,9 @@ public sealed class MacInputHandler(ILogger<MacInputHandler> log) : IPlatformInp
     private static nint GetCFRunLoopCommonModes() => ReadCoreFoundationSymbol("kCFRunLoopCommonModes");
     private static nint GetCFBooleanTrue() => ReadCoreFoundationSymbol("kCFBooleanTrue");
 
-    private static nint ReadCoreFoundationSymbol(string name)
-    {
-        var lib = NativeLibrary.Load("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation");
-        return Marshal.ReadIntPtr(NativeLibrary.GetExport(lib, name));
-    }
+    private static readonly nint _coreFoundation =
+        NativeLibrary.Load("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation");
+
+    private static nint ReadCoreFoundationSymbol(string name) =>
+        Marshal.ReadIntPtr(NativeLibrary.GetExport(_coreFoundation, name));
 }
