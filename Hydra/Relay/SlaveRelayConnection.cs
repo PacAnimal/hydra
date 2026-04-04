@@ -21,6 +21,9 @@ public sealed class SlaveRelayConnection : RelayConnection
     // active key repeat timers keyed by (char?, SpecialKey?)
     private readonly Dictionary<(char?, SpecialKey?), CancellationTokenSource> _repeatTimers = [];
 
+    // keys currently held down on the slave (for release-all on screen leave)
+    private readonly HashSet<(char?, SpecialKey?)> _heldKeys = [];
+
     // ReSharper disable once ConvertToPrimaryConstructor
 #pragma warning disable IDE0290
     public SlaveRelayConnection(HydraConfig config, ILogger<RelayConnection> log, IPlatformOutput output, SlaveLogForwarder logForwarder, IWorldState peerState)
@@ -74,6 +77,7 @@ public sealed class SlaveRelayConnection : RelayConnection
                 if (enter != null) await MoveToScreen(enter.Screen, enter.X, enter.Y);
                 break;
             case MessageKind.LeaveScreen:
+                ReleaseAllKeys();
                 CancelAllRepeatTimers();
                 break;
             default:
@@ -97,25 +101,21 @@ public sealed class SlaveRelayConnection : RelayConnection
         {
             // cancel any active repeat timer for this key
             if (_repeatTimers.Remove(repeatKey, out var cts))
-            {
-                cts.Cancel();
-                cts.Dispose();
-            }
+                cts.Cancel(); // don't dispose — timer task may still be running; let GC handle it
+            _heldKeys.Remove(repeatKey);
             _output.InjectKey(msg);
             return;
         }
 
         // KeyDown: inject immediately, then start repeat timer if settings provided
+        _heldKeys.Add(repeatKey);
         _output.InjectKey(msg);
 
         if (msg.RepeatDelayMs is not { } delayMs || msg.RepeatRateMs is not { } rateMs) return;
 
         // cancel any existing timer for this key (shouldn't happen if master suppresses repeats, but be safe)
         if (_repeatTimers.Remove(repeatKey, out var existingCts))
-        {
             existingCts.Cancel();
-            existingCts.Dispose();
-        }
 
         var repeatCts = new CancellationTokenSource();
         _repeatTimers[repeatKey] = repeatCts;
@@ -139,13 +139,17 @@ public sealed class SlaveRelayConnection : RelayConnection
         }, ct);
     }
 
+    private void ReleaseAllKeys()
+    {
+        foreach (var (ch, key) in _heldKeys)
+            _output.InjectKey(new KeyEventMessage(KeyEventType.KeyUp, KeyModifiers.None, ch, key));
+        _heldKeys.Clear();
+    }
+
     private void CancelAllRepeatTimers()
     {
         foreach (var cts in _repeatTimers.Values)
-        {
-            cts.Cancel();
-            cts.Dispose();
-        }
+            cts.Cancel(); // don't dispose — timer tasks may be mid-flight; let GC handle cleanup
         _repeatTimers.Clear();
     }
 

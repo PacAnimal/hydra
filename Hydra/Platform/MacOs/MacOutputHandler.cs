@@ -1,5 +1,6 @@
 using Hydra.Keyboard;
 using Hydra.Mouse;
+using Hydra.Platform;
 using Hydra.Relay;
 using Hydra.Screen;
 
@@ -10,8 +11,8 @@ public sealed class MacOutputHandler : IPlatformOutput
     private double _mouseX;
     private double _mouseY;
     private readonly HashSet<MouseButton> _heldButtons = [];
-    private int _scrollAccY;
-    private int _scrollAccX;
+    private ScrollAccumulator _scrollAccY;
+    private ScrollAccumulator _scrollAccX;
 
     public List<DetectedScreen> GetAllScreens() => MacDisplayHelper.GetAllScreens();
 
@@ -23,15 +24,9 @@ public sealed class MacOutputHandler : IPlatformOutput
 
         // post a real event so apps and OS features (dock, hot corners) see the movement.
         // use drag event type when a button is held, otherwise plain moved
-        var (evType, btn) = (_heldButtons.Contains(MouseButton.Left), _heldButtons.Contains(MouseButton.Right), _heldButtons.Count > 0) switch
-        {
-            (true, _, _) => (NativeMethods.KCGEventLeftMouseDragged, 0),
-            (_, true, _) => (NativeMethods.KCGEventRightMouseDragged, 1),
-            (_, _, true) => (NativeMethods.KCGEventOtherMouseDragged, MouseButtonToCg(_heldButtons.Min())),
-            _ => (NativeMethods.KCGEventMouseMoved, 0),
-        };
+        var move = GetMoveEventType();
 
-        var eventRef = NativeMethods.CGEventCreateMouseEvent(nint.Zero, evType, pos, btn);
+        var eventRef = NativeMethods.CGEventCreateMouseEvent(nint.Zero, move.EventType, pos, move.Button);
         if (eventRef == nint.Zero) return;
         NativeMethods.CGEventPost(NativeMethods.KCGHidEventTap, eventRef);
         NativeMethods.CFRelease(eventRef);
@@ -39,22 +34,33 @@ public sealed class MacOutputHandler : IPlatformOutput
 
     public void MoveMouseRelative(int dx, int dy)
     {
-        _mouseX += dx;
-        _mouseY += dy;
+        // read actual cursor position before moving — avoids unbounded drift of our own tracking,
+        // and keeps _mouseX/_mouseY accurate for InjectMouseButton (matches barrier/deskflow approach)
+        var posQuery = NativeMethods.CGEventCreate(nint.Zero);
+        if (posQuery != nint.Zero)
+        {
+            var cur = NativeMethods.CGEventGetLocation(posQuery);
+            _mouseX = cur.X + dx;
+            _mouseY = cur.Y + dy;
+            NativeMethods.CFRelease(posQuery);
+        }
+        else
+        {
+            _mouseX += dx;
+            _mouseY += dy;
+        }
+
         var pos = new CGPoint { X = _mouseX, Y = _mouseY };
 
-        var (evType, btn) = (_heldButtons.Contains(MouseButton.Left), _heldButtons.Contains(MouseButton.Right), _heldButtons.Count > 0) switch
-        {
-            (true, _, _) => (NativeMethods.KCGEventLeftMouseDragged, 0),
-            (_, true, _) => (NativeMethods.KCGEventRightMouseDragged, 1),
-            (_, _, true) => (NativeMethods.KCGEventOtherMouseDragged, MouseButtonToCg(_heldButtons.Min())),
-            _ => (NativeMethods.KCGEventMouseMoved, 0),
-        };
+        var move = GetMoveEventType();
 
-        var eventRef = NativeMethods.CGEventCreateMouseEvent(nint.Zero, evType, pos, btn);
+        var eventRef = NativeMethods.CGEventCreateMouseEvent(nint.Zero, move.EventType, pos, move.Button);
         if (eventRef == nint.Zero) return;
+        // set integer AND double delta fields — some 3D apps/games read the double variant (barrier comment)
         NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGMouseEventDeltaX, dx);
         NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGMouseEventDeltaY, dy);
+        NativeMethods.CGEventSetDoubleValueField(eventRef, NativeMethods.KCGMouseEventDeltaX, dx);
+        NativeMethods.CGEventSetDoubleValueField(eventRef, NativeMethods.KCGMouseEventDeltaY, dy);
         NativeMethods.CGEventPost(NativeMethods.KCGHidEventTap, eventRef);
         NativeMethods.CFRelease(eventRef);
     }
@@ -109,14 +115,9 @@ public sealed class MacOutputHandler : IPlatformOutput
         if (msg.YDelta == 0 && msg.XDelta == 0) return;
 
         // accumulate into running totals to avoid losing sub-120 remainders
-        _scrollAccY += msg.YDelta;
-        _scrollAccX += msg.XDelta;
-
         // integer line count for line-based apps (may be zero for sub-line events)
-        var yLines = _scrollAccY / 120;
-        var xLines = _scrollAccX / 120;
-        _scrollAccY -= yLines * 120;
-        _scrollAccX -= xLines * 120;
+        var yLines = _scrollAccY.Add(msg.YDelta);
+        var xLines = _scrollAccX.Add(msg.XDelta);
 
         // kCGScrollEventUnitLine = 1
         var eventRef = NativeMethods.CGEventCreateScrollWheelEvent(nint.Zero, 1, 2, yLines, xLines);
@@ -148,6 +149,16 @@ public sealed class MacOutputHandler : IPlatformOutput
         NativeMethods.CFRelease(eventRef);
     }
 
+    // drag event type when a button is held, otherwise plain moved
+    private MoveEvent GetMoveEventType() =>
+        (_heldButtons.Contains(MouseButton.Left), _heldButtons.Contains(MouseButton.Right), _heldButtons.Count > 0) switch
+        {
+            (true, _, _) => new(NativeMethods.KCGEventLeftMouseDragged, 0),
+            (_, true, _) => new(NativeMethods.KCGEventRightMouseDragged, 1),
+            (_, _, true) => new(NativeMethods.KCGEventOtherMouseDragged, MouseButtonToCg(_heldButtons.Min())),
+            _ => new(NativeMethods.KCGEventMouseMoved, 0),
+        };
+
     // reverse of CgButtonToMouseButton (input side): 0=left, 1=right, 2=middle, 3+=extra
     private static int MouseButtonToCg(MouseButton button) => button switch
     {
@@ -159,4 +170,6 @@ public sealed class MacOutputHandler : IPlatformOutput
     };
 
     public void Dispose() { }
+
+    private record MoveEvent(int EventType, int Button);
 }

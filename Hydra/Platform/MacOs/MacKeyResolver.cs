@@ -10,7 +10,7 @@ internal sealed class MacKeyResolver
 {
     private uint _deadKeyState;
     private KeyModifiers _previousModifiers;
-    private readonly Dictionary<int, (char? ch, SpecialKey? key)> _keyDownId = [];
+    private readonly Dictionary<int, CharClassification> _keyDownId = [];
 
     // symbol pointer for kTISPropertyUnicodeKeyLayoutData (loaded once)
     private static readonly nint TisPropertyUnicodeKeyLayoutData = LoadTisPropertyKey();
@@ -60,7 +60,7 @@ internal sealed class MacKeyResolver
         if (MacSpecialKeyMap.Instance.TryGet((ulong)vkCode, out var specialKey))
         {
             _deadKeyState = 0;
-            _keyDownId[vkCode] = (null, specialKey);
+            _keyDownId[vkCode] = new CharClassification(null, specialKey);
             return KeyEvent.Special(KeyEventType.KeyDown, specialKey, mods);
         }
 
@@ -68,7 +68,7 @@ internal sealed class MacKeyResolver
         var ev = ResolveCharacter(vkCode, cgFlags, mods);
         if (ev is not null)
         {
-            _keyDownId[vkCode] = (ev.Character, ev.Key);
+            _keyDownId[vkCode] = new CharClassification(ev.Character, ev.Key);
         }
         return ev;
     }
@@ -97,8 +97,7 @@ internal sealed class MacKeyResolver
             if ((cgFlags & NativeMethods.KCGEventFlagMaskAlphaShift) != 0) ucMods |= 0x04;  // alphaLock >> 8
             if (!isCommand && (cgFlags & NativeMethods.KCGEventFlagMaskAlternate) != 0) ucMods |= 0x08;  // optionKey >> 8
 
-            char? ch;
-            SpecialKey? specialKey;
+            CharClassification classified;
             unsafe
             {
                 ushort* chars = stackalloc ushort[2];
@@ -122,18 +121,18 @@ internal sealed class MacKeyResolver
                 _deadKeyState = 0;
                 if (count == 0) return null;
 
-                (ch, specialKey) = KeyResolver.ClassifyChar((char)chars[0]);
+                classified = KeyResolver.ClassifyChar((char)chars[0]);
             }
 
-            if (!ch.HasValue && !specialKey.HasValue) return null;
+            if (!classified.Ch.HasValue && !classified.Key.HasValue) return null;
 
             // detect AltGr: option was held and produced a printable character (not a keyboard shortcut)
             bool optionHeld = (cgFlags & NativeMethods.KCGEventFlagMaskAlternate) != 0;
-            if (DetectAltGr(ch, isCommand, optionHeld))
+            if (DetectAltGr(classified.Ch, isCommand, optionHeld))
                 mods |= KeyModifiers.AltGr;
 
-            if (ch.HasValue) return KeyEvent.Char(KeyEventType.KeyDown, ch.Value, mods);
-            return KeyEvent.Special(KeyEventType.KeyDown, specialKey!.Value, mods);
+            if (classified.Ch.HasValue) return KeyEvent.Char(KeyEventType.KeyDown, classified.Ch.Value, mods);
+            return KeyEvent.Special(KeyEventType.KeyDown, classified.Key!.Value, mods);
         }
         finally
         {

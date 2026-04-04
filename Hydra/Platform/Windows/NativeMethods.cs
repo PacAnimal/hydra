@@ -129,8 +129,14 @@ internal static partial class NativeMethods
 
     // SPI_GETKEYBOARDDELAY: 0-3 → 250/500/750/1000ms initial repeat delay
     internal const uint SPI_GETKEYBOARDDELAY = 0x0016;
-    // SPI_GETKEYBOARDSPEED: 0-31 → ~33ms-500ms per-repeat interval (linear; 0=fastest 31=slowest)
+    // SPI_GETKEYBOARDSPEED: 0-31 → ~33ms-500ms per-repeat interval (linear; 0=slowest, 31=fastest)
     internal const uint SPI_GETKEYBOARDSPEED = 0x000A;
+
+    // mouse acceleration — save/restore around relative moves to get 1:1 movement (matches input-leap)
+    internal const uint SPI_GETMOUSE = 0x0003;
+    internal const uint SPI_SETMOUSE = 0x0004;
+    internal const uint SPI_GETMOUSESPEED = 0x0070;
+    internal const uint SPI_SETMOUSESPEED = 0x0071;
 
     [LibraryImport(User32)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]

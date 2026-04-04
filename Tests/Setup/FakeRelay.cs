@@ -11,8 +11,8 @@ public sealed class FakeRelay : IRelaySender
 
     public ValueTask Send(string[] targetHosts, byte[] payload)
     {
-        var (kind, json) = MessageSerializer.Decode(payload);
-        Sent.Add((targetHosts, kind, json));
+        var decoded = MessageSerializer.Decode(payload);
+        Sent.Add((targetHosts, decoded.Kind, decoded.Json));
         return ValueTask.CompletedTask;
     }
 

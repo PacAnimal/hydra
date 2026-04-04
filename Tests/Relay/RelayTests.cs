@@ -5,7 +5,7 @@ using Common;
 using Hydra.Relay;
 using Microsoft.Extensions.Logging.Abstractions;
 
-namespace Tests;
+namespace Tests.Relay;
 
 [TestFixture]
 public class NetworkConfigTests

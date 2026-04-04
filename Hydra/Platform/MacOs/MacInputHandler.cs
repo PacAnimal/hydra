@@ -128,12 +128,12 @@ public sealed class MacInputHandler(ILogger<MacInputHandler> log) : IPlatformInp
         ready.Wait();
     }
 
-    public (int DelayMs, int RateMs) GetKeyRepeatSettings()
+    public KeyRepeatSettings GetKeyRepeatSettings()
     {
-        if (_nsEventClass == nint.Zero) return (500, 33);
+        if (_nsEventClass == nint.Zero) return new KeyRepeatSettings(500, 33);
         var delaySeconds = NativeMethods.objc_msgSend_double(_nsEventClass, _selKeyRepeatDelay);
         var rateSeconds = NativeMethods.objc_msgSend_double(_nsEventClass, _selKeyRepeatInterval);
-        return ((int)(delaySeconds * 1000), (int)(rateSeconds * 1000));
+        return new KeyRepeatSettings((int)(delaySeconds * 1000), (int)(rateSeconds * 1000));
     }
 
     public void StopEventTap()

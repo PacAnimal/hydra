@@ -7,16 +7,16 @@ internal static class KeyResolver
 {
     // classifies a unicode char from platform key translation output as a printable char or SpecialKey.
     // control characters are mapped to their SpecialKey constants; other printable chars pass through.
-    internal static (char? ch, SpecialKey? key) ClassifyChar(char c) => c switch
+    internal static CharClassification ClassifyChar(char c) => c switch
     {
-        (char)3 => (null, SpecialKey.KP_Enter),
-        (char)8 => (null, SpecialKey.BackSpace),
-        (char)9 => (null, SpecialKey.Tab),
-        (char)13 => (null, SpecialKey.Return),
-        (char)27 => (null, SpecialKey.Escape),
-        (char)127 => (null, SpecialKey.Delete),
-        _ when c < 32 => (null, null),
-        _ => (c, null),
+        (char)3 => new(null, SpecialKey.KP_Enter),
+        (char)8 => new(null, SpecialKey.BackSpace),
+        (char)9 => new(null, SpecialKey.Tab),
+        (char)13 => new(null, SpecialKey.Return),
+        (char)27 => new(null, SpecialKey.Escape),
+        (char)127 => new(null, SpecialKey.Delete),
+        _ when c < 32 => new(null, null),
+        _ => new(c, null),
     };
 
     // maps spacing accent characters (the standalone form of a dead key) to their Unicode combining equivalents.
@@ -54,12 +54,14 @@ internal static class KeyResolver
 
     // replay the key event that was emitted on key-down, using the stored char/special from _keyDownId.
     // shared across all three platform resolvers (mac, xorg, win) — TKey is int or uint depending on platform.
-    internal static KeyEvent? ReplayKeyUp<TKey>(Dictionary<TKey, (char? ch, SpecialKey? key)> keyDownId, TKey key, KeyModifiers mods)
+    internal static KeyEvent? ReplayKeyUp<TKey>(Dictionary<TKey, CharClassification> keyDownId, TKey key, KeyModifiers mods)
         where TKey : notnull
     {
         keyDownId.Remove(key, out var downVal);
-        if (downVal.ch.HasValue) return KeyEvent.Char(KeyEventType.KeyUp, downVal.ch.Value, mods);
-        if (downVal.key.HasValue) return KeyEvent.Special(KeyEventType.KeyUp, downVal.key.Value, mods);
+        if (downVal?.Ch.HasValue == true) return KeyEvent.Char(KeyEventType.KeyUp, downVal.Ch.Value, mods);
+        if (downVal?.Key.HasValue == true) return KeyEvent.Special(KeyEventType.KeyUp, downVal.Key.Value, mods);
         return null;
     }
 }
+
+internal record CharClassification(char? Ch, SpecialKey? Key);

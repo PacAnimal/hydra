@@ -97,10 +97,11 @@ public class VirtualMouseStateTests
         var state = new VirtualMouseState();
         state.EnterScreen(left, all, 2559, 720); // near right edge of left screen
 
-        state.ApplyDelta(5, 0); // cross into right screen
+        var prev = state.ApplyDelta(5, 0); // cross into right screen
 
         using (Assert.EnterMultipleScope())
         {
+            Assert.That(prev, Is.EqualTo(left));
             Assert.That(state.CurrentScreen, Is.EqualTo(right));
             Assert.That(state.X, Is.EqualTo(4).Within(1)); // 2559+5 - 2560 = 4
         }
@@ -159,10 +160,11 @@ public class VirtualMouseStateTests
         var state = new VirtualMouseState();
         state.EnterScreen(right, all, 1, 720); // near left edge of right screen
 
-        state.ApplyDelta(-5, 0); // cross into left screen
+        var prev = state.ApplyDelta(-5, 0); // cross into left screen
 
         using (Assert.EnterMultipleScope())
         {
+            Assert.That(prev, Is.EqualTo(right));
             Assert.That(state.CurrentScreen, Is.EqualTo(left));
             Assert.That(state.X, Is.EqualTo(2556).Within(1)); // 2560+1-5 = 2556
         }
@@ -179,10 +181,11 @@ public class VirtualMouseStateTests
         var state = new VirtualMouseState();
         state.EnterScreen(top, all, 960, 1079); // near bottom edge of top screen
 
-        state.ApplyDelta(0, 5); // cross into bottom screen
+        var prev = state.ApplyDelta(0, 5); // cross into bottom screen
 
         using (Assert.EnterMultipleScope())
         {
+            Assert.That(prev, Is.EqualTo(top));
             Assert.That(state.CurrentScreen, Is.EqualTo(bottom));
             Assert.That(state.Y, Is.EqualTo(4).Within(1)); // -1080+1079+5 - 0 = 4
         }
@@ -199,10 +202,11 @@ public class VirtualMouseStateTests
         var state = new VirtualMouseState();
         state.EnterScreen(bottom, all, 960, 1); // near top edge of bottom screen
 
-        state.ApplyDelta(0, -5); // cross into top screen
+        var prev = state.ApplyDelta(0, -5); // cross into top screen
 
         using (Assert.EnterMultipleScope())
         {
+            Assert.That(prev, Is.EqualTo(bottom));
             Assert.That(state.CurrentScreen, Is.EqualTo(top));
             Assert.That(state.Y, Is.EqualTo(1076).Within(1)); // 0+1-5 - (-1080) = 1076
         }

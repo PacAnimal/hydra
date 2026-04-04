@@ -2,9 +2,11 @@ namespace Hydra.Screen;
 
 public enum Direction { Left, Right, Top, Bottom }
 
+public record ScreenBounds(int X, int Y, int Width, int Height);
+
 public interface IBounded
 {
-    (int X, int Y, int Width, int Height) Bounds { get; }
+    ScreenBounds Bounds { get; }
 }
 
 public record ScreenRect(
@@ -15,7 +17,7 @@ public record ScreenRect(
     bool IsLocal)     // true = local screen on this machine
     : IBounded
 {
-    public (int X, int Y, int Width, int Height) Bounds => (X, Y, Width, Height);
+    public ScreenBounds Bounds => new(X, Y, Width, Height);
 
     public bool Contains(double x, double y) =>
         x >= X && x < X + Width && y >= Y && y < Y + Height;

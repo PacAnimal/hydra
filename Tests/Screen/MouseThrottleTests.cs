@@ -1,10 +1,7 @@
 using System.Text.Json;
-using Cathedral.Config;
-using Hydra.Config;
 using Hydra.Keyboard;
 using Hydra.Relay;
 using Hydra.Screen;
-using Microsoft.Extensions.Logging.Abstractions;
 using Tests.Setup;
 
 namespace Tests.Screen;
@@ -15,25 +12,6 @@ public class MouseThrottleTests
     private FakePlatform _platform = null!;
     private FakeRelay _relay = null!;
     private ScreenTransitionService _service = null!;
-
-    private static readonly HydraConfig TestConfig = new()
-    {
-        Mode = Mode.Master,
-        Name = "home",
-        Hosts =
-        [
-            new HostConfig
-            {
-                Name = "home",
-                Neighbours = [new NeighbourConfig { Direction = Direction.Right, Name = "remote" }],
-            },
-            new HostConfig
-            {
-                Name = "remote",
-                Neighbours = [new NeighbourConfig { Direction = Direction.Left, Name = "home" }],
-            },
-        ],
-    };
 
     [SetUp]
     public async Task SetUp()
@@ -186,18 +164,9 @@ public class MouseThrottleTests
 
     // -- helpers --
 
-    private static (FakePlatform, FakeRelay, ScreenTransitionService) CreateService()
-    {
-        var platform = new FakePlatform();
-        var relay = new FakeRelay();
-        var service = new ScreenTransitionService(platform, TestConfig, relay, NullLoggerFactory.Instance, NullLogger<ScreenTransitionService>.Instance);
-        return (platform, relay, service);
-    }
+    private static TestServiceBundle CreateService() =>
+        TransitionTestHelper.CreateService();
 
-    private static void BringRemoteOnline(FakeRelay relay)
-    {
-        relay.FirePeersChanged("remote");
-        var info = JsonSerializer.Serialize(new ScreenInfoMessage([new ScreenInfoEntry("screen:0", 0, 0, 2560, 1440, 1.0m)]), SaneJson.Options);
-        relay.FireMessageReceived("remote", MessageKind.ScreenInfo, info);
-    }
+    private static void BringRemoteOnline(FakeRelay relay) =>
+        TransitionTestHelper.BringRemoteOnline(relay);
 }

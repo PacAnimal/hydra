@@ -12,8 +12,10 @@ public record DetectedScreen(
     string? PlatformId)    // platform-specific ID: CGDirectDisplayID, HMONITOR, XRandR output id
     : IBounded
 {
-    public (int X, int Y, int Width, int Height) Bounds => (X, Y, Width, Height);
+    public ScreenBounds Bounds => new(X, Y, Width, Height);
 }
+
+public record KeyRepeatSettings(int DelayMs, int RateMs);
 
 public interface IPlatformInput : IDisposable
 {
@@ -30,6 +32,5 @@ public interface IPlatformInput : IDisposable
     bool IsAccessibilityTrusted();
     bool IsOnVirtualScreen { get; set; }
 
-    // returns (initialDelayMs, repeatRateMs) from OS key repeat settings
-    (int DelayMs, int RateMs) GetKeyRepeatSettings();
+    KeyRepeatSettings GetKeyRepeatSettings();
 }

@@ -42,11 +42,13 @@ public static class MessageSerializer
         return bytes;
     }
 
-    public static (MessageKind Kind, string Json) Decode(byte[] payload)
+    public static DecodedMessage Decode(byte[] payload)
     {
         if (payload.Length == 0) throw new ArgumentException("Empty payload", nameof(payload));
         var kind = (MessageKind)payload[0];
         var json = Encoding.UTF8.GetString(payload, 1, payload.Length - 1);
-        return (kind, json);
+        return new DecodedMessage(kind, json);
     }
 }
+
+public record DecodedMessage(MessageKind Kind, string Json);

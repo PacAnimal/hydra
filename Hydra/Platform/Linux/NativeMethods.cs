@@ -219,6 +219,15 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial int XTestFakeMotionEvent(nint display, int screenNumber, int x, int y, nuint delay);
 
+    [LibraryImport(XTest)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int XTestFakeRelativeMotionEvent(nint display, int dx, int dy, nuint delay);
+
+    // allow XTest events to work even during active grabs (fullscreen games use XGrabPointer/Keyboard)
+    [LibraryImport(XTest)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int XTestGrabControl(nint display, [MarshalAs(UnmanagedType.Bool)] bool impervious);
+
     // -- Xkb keyboard --
 
     [LibraryImport(X11)]

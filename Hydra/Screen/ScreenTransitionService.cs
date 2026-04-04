@@ -20,11 +20,14 @@ public class ScreenTransitionService(
     : IHostedService
 {
     private const KeyModifiers LockHotkey = KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Super;
-    private const int MaxMouseHz = 120;
-    private static readonly double MinMouseIntervalMs = 1000.0 / MaxMouseHz;
 
-    // cached key repeat settings from OS; refreshed periodically in the poll loop
-    private (int DelayMs, int RateMs) _repeatSettings = (500, 33);
+    private const int MaxMouseHz = 125; // should divide evenly by 1000
+    private const int MinMouseIntervalMs = 1000 / MaxMouseHz;
+
+    // cached key repeat settings from OS; refreshed periodically in the poll loop.
+    // volatile: written on poll timer thread, read on event tap thread.
+    private volatile int _repeatDelayMs = 500;
+    private volatile int _repeatRateMs = 33;
     private long _lastRepeatSettingsTick;
 
     private readonly IWorldState _peerState = peerState ?? new WorldState();
@@ -70,7 +73,9 @@ public class ScreenTransitionService(
                 log.LogInformation("Remote screen '{Name}': waiting for peer", remote.Name);
         }
 
-        _repeatSettings = platform.GetKeyRepeatSettings();
+        var (delayMs, rateMs) = platform.GetKeyRepeatSettings();
+        _repeatDelayMs = delayMs;
+        _repeatRateMs = rateMs;
         _lastRepeatSettingsTick = Environment.TickCount64;
 
         relay.PeersChanged += OnPeersChanged;
@@ -120,7 +125,9 @@ public class ScreenTransitionService(
                 var now = Environment.TickCount64;
                 if (now - _lastRepeatSettingsTick >= 30_000)
                 {
-                    _repeatSettings = platform.GetKeyRepeatSettings();
+                    var (refreshDelayMs, refreshRateMs) = platform.GetKeyRepeatSettings();
+                    _repeatDelayMs = refreshDelayMs;
+                    _repeatRateMs = refreshRateMs;
                     _lastRepeatSettingsTick = now;
                 }
 
@@ -176,6 +183,8 @@ public class ScreenTransitionService(
                 if (!current.Contains(currentHost))
                 {
                     st.Mouse.LeaveScreen();
+                    st.PendingDX = 0;
+                    st.PendingDY = 0;
                     disconnectedHost = currentHost;
                     warpX = st.WarpX;
                     warpY = st.WarpY;
@@ -254,14 +263,19 @@ public class ScreenTransitionService(
         st.Layout = newLayout;
         st.ActiveLocalScreen = st.LocalScreens.FirstOrDefault(s => s.Name.EqualsIgnoreCase(st.ActiveLocalScreen.Name)) ?? st.LocalScreens.FirstOrDefault() ?? st.ActiveLocalScreen;
 
+        // prune stale relative-mode entries for screens that no longer exist
+        var validNames = new HashSet<string>(st.Screens.Select(s => s.Name), StringComparer.OrdinalIgnoreCase);
+        foreach (var key in st.RelativeMouseScreens.Keys.Where(k => !validNames.Contains(k)).ToList())
+            st.RelativeMouseScreens.Remove(key);
+
         // if the cursor is on a remote screen whose dims changed, update it
         if (st.Mouse.IsOnVirtualScreen && st.Mouse.CurrentScreen != null)
         {
             var refreshed = st.Screens.FirstOrDefault(s => s.Name.EqualsIgnoreCase(st.Mouse.CurrentScreen.Name));
             if (refreshed != null && refreshed != st.Mouse.CurrentScreen)
             {
-                var (remoteScreens, scaleMap) = GetRemoteScreensAndScales(st.Screens, peerScreens, refreshed);
-                st.Mouse.EnterScreen(refreshed, remoteScreens, (int)st.Mouse.X, (int)st.Mouse.Y, GetRemoteScale(peerScreens, refreshed), scaleMap);
+                var remoteInfo = GetRemoteScreensAndScales(st.Screens, peerScreens, refreshed);
+                st.Mouse.EnterScreen(refreshed, remoteInfo.Screens, (int)st.Mouse.X, (int)st.Mouse.Y, remoteInfo.ScaleMap.GetValueOrDefault(refreshed.Name, 1.0m), remoteInfo.ScaleMap);
             }
         }
     }
@@ -296,12 +310,12 @@ public class ScreenTransitionService(
     }
 
     // builds remoteScreens list + scaleMap for a given destination host; used when entering a remote screen
-    private static (List<ScreenRect> screens, Dictionary<string, decimal> scaleMap) GetRemoteScreensAndScales(
+    private static RemoteScreenInfo GetRemoteScreensAndScales(
         List<ScreenRect> allScreens, Dictionary<string, List<ScreenInfoEntry>> peerScreens, ScreenRect target)
     {
         var screens = allScreens.Where(s => !s.IsLocal && s.Host.EqualsIgnoreCase(target.Host)).ToList();
         var scaleMap = screens.ToDictionary(s => s.Name, s => GetRemoteScale(peerScreens, s), StringComparer.OrdinalIgnoreCase);
-        return (screens, scaleMap);
+        return new RemoteScreenInfo(screens, scaleMap);
     }
 
     private void OnKeyEvent(KeyEvent keyEvent)
@@ -312,14 +326,16 @@ public class ScreenTransitionService(
         using var s = AsyncHelper.RunSync(() => _state.WaitForDisposable());
         var st = s.Value;
 
-        if (keyEvent.Type == KeyEventType.KeyDown && (keyEvent.Modifiers & LockHotkey) == LockHotkey)
+        // consume both KeyDown and KeyUp for hotkeys so the slave never sees either half
+        var hotkeyConsumed = (keyEvent.Modifiers & LockHotkey) == LockHotkey && keyEvent.Character is 'l' or 'm';
+        if (hotkeyConsumed && keyEvent.Type == KeyEventType.KeyDown)
         {
             if (keyEvent.Character == 'l')
             {
                 st.LockedToScreen = !st.LockedToScreen;
                 log.LogInformation("Screen lock: {State}", st.LockedToScreen ? "locked" : "unlocked");
             }
-            else if (keyEvent.Character == 'm' && st.Mouse.IsOnVirtualScreen && st.Mouse.CurrentScreen != null)
+            else if (st.Mouse.IsOnVirtualScreen && st.Mouse.CurrentScreen != null)
             {
                 var screenName = st.Mouse.CurrentScreen.Name;
                 var isNowRelative = !st.RelativeMouseScreens.GetValueOrDefault(screenName);
@@ -328,14 +344,14 @@ public class ScreenTransitionService(
             }
         }
 
-        if (st.Mouse.IsOnVirtualScreen && relay.IsConnected)
+        if (!hotkeyConsumed && st.Mouse.IsOnVirtualScreen && relay.IsConnected)
         {
             // include repeat settings on the first KeyDown for a key so the slave can generate local repeats
             int? repeatDelay = null, repeatRate = null;
             if (keyEvent.Type == KeyEventType.KeyDown)
             {
-                repeatDelay = _repeatSettings.DelayMs;
-                repeatRate = _repeatSettings.RateMs;
+                repeatDelay = _repeatDelayMs;
+                repeatRate = _repeatRateMs;
             }
             ForwardToVirtualScreen(st, MessageKind.KeyEvent, new KeyEventMessage(keyEvent.Type, keyEvent.Modifiers, keyEvent.Character, keyEvent.Key, repeatDelay, repeatRate));
         }
@@ -390,12 +406,15 @@ public class ScreenTransitionService(
         _ = relay.Send([screen.Host], payload).AsTask();
     }
 
-    // flush pending delta immediately (e.g. before leaving a virtual screen)
+    // flush pending state before leaving a virtual screen.
+    // relative mode: send any accumulated delta.
+    // absolute mode: always send current position so slave cursor doesn't lag at exit point.
     private void FlushMouseDelta(LocalMasterState st)
     {
         if (!relay.IsConnected || st.Mouse.CurrentScreen == null) return;
-        var hasPending = st.PendingDX != 0 || st.PendingDY != 0;
-        if (!hasPending) return;
+        var screen = st.Mouse.CurrentScreen;
+        var isRelative = st.RelativeMouseScreens.GetValueOrDefault(screen.Name);
+        if (isRelative && st.PendingDX == 0 && st.PendingDY == 0) return;
         SendMousePosition(st, Environment.TickCount64);
     }
 
@@ -444,11 +463,13 @@ public class ScreenTransitionService(
 
         var peerScreens = AsyncHelper.RunSync(() => _peerState.GetPeerScreensSnapshot().AsTask());
         var scale = GetRemoteScale(peerScreens, hit.Destination);
-        var (remoteScreens, scaleMap) = GetRemoteScreensAndScales(st.Screens, peerScreens, hit.Destination);
+        var remoteInfo = GetRemoteScreensAndScales(st.Screens, peerScreens, hit.Destination);
 
         platform.HideCursor();
         platform.IsOnVirtualScreen = true;
-        st.Mouse.EnterScreen(hit.Destination, remoteScreens, hit.EntryX, hit.EntryY, scale, scaleMap);
+        st.Mouse.EnterScreen(hit.Destination, remoteInfo.Screens, hit.EntryX, hit.EntryY, scale, remoteInfo.ScaleMap);
+        st.PendingDX = 0;
+        st.PendingDY = 0;
         st.LastWarpX = x;
         st.LastWarpY = y;
         log.LogInformation("Entered remote screen '{Name}' → ({X}, {Y})", hit.Destination.Name, hit.EntryX, hit.EntryY);
@@ -475,11 +496,26 @@ public class ScreenTransitionService(
         // bogus filter: drop delta that looks like a warp-displacement artifact
         if (Math.Abs(dx) > st.HalfW - 10 || Math.Abs(dy) > st.HalfH - 10) return;
 
-        // accumulate deltas for throttle
-        st.PendingDX += dx;
-        st.PendingDY += dy;
-
-        st.Mouse.ApplyDelta(dx, dy);
+        var prevScreen = st.Mouse.ApplyDelta(dx, dy);
+        if (prevScreen != null)
+        {
+            // intra-host screen transition: reset accumulators and send EnterScreen for new screen
+            st.PendingDX = 0;
+            st.PendingDY = 0;
+            if (relay.IsConnected && st.Mouse.CurrentScreen != null)
+            {
+                var s = st.Mouse.CurrentScreen;
+                var enterPayload = MessageSerializer.Encode(MessageKind.EnterScreen,
+                    new EnterScreenMessage(s.Name, (int)st.Mouse.X, (int)st.Mouse.Y, s.Width, s.Height));
+                _ = relay.Send([s.Host], enterPayload).AsTask();
+            }
+        }
+        else
+        {
+            // same screen — accumulate scaled deltas for throttle
+            st.PendingDX += dx * (double)st.Mouse.Scale;
+            st.PendingDY += dy * (double)st.Mouse.Scale;
+        }
 
         var now = Environment.TickCount64;
         if (now - st.LastVirtualLogTick >= 100)
@@ -598,4 +634,6 @@ public class ScreenTransitionService(
         public double PendingDX;
         public double PendingDY;
     }
+
+    private record RemoteScreenInfo(List<ScreenRect> Screens, Dictionary<string, decimal> ScaleMap);
 }

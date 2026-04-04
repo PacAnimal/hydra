@@ -49,12 +49,34 @@ public sealed class WindowsOutputHandler : IPlatformOutput
 
     public unsafe void MoveMouseRelative(int dx, int dy)
     {
+        // disable mouse acceleration for 1:1 movement, then restore (matches input-leap approach)
+        int* oldMouse = stackalloc int[3];
+        int oldSpeed = 0;
+        var saved = NativeMethods.SystemParametersInfo(NativeMethods.SPI_GETMOUSE, 0, (nint)oldMouse, 0)
+                 && NativeMethods.SystemParametersInfo(NativeMethods.SPI_GETMOUSESPEED, 0, (nint)(&oldSpeed), 0);
+
+        if (saved)
+        {
+            int* flat = stackalloc int[3];
+            flat[0] = 0; flat[1] = 0; flat[2] = 0;
+            int flatSpeed = 1;
+            NativeMethods.SystemParametersInfo(NativeMethods.SPI_SETMOUSE, 0, (nint)flat, 0);
+            // SPI_SETMOUSESPEED takes the value directly as pvParam (not a pointer)
+            NativeMethods.SystemParametersInfo(NativeMethods.SPI_SETMOUSESPEED, 0, (nint)flatSpeed, 0);
+        }
+
         var input = new INPUT
         {
             type = NativeMethods.INPUT_MOUSE,
             mi = new MOUSEINPUT { dx = dx, dy = dy, dwFlags = NativeMethods.MOUSEEVENTF_MOVE },
         };
         _ = NativeMethods.SendInput(1, &input, sizeof(INPUT));
+
+        if (saved)
+        {
+            NativeMethods.SystemParametersInfo(NativeMethods.SPI_SETMOUSE, 0, (nint)oldMouse, 0);
+            NativeMethods.SystemParametersInfo(NativeMethods.SPI_SETMOUSESPEED, 0, (nint)oldSpeed, 0);
+        }
     }
 
     public unsafe void InjectKey(KeyEventMessage msg)

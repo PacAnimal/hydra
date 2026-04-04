@@ -14,7 +14,7 @@ internal sealed class WinKeyResolver
     // scratch buffer for ToUnicodeEx — avoid allocation on each keypress
     private readonly byte[] _resolveState = new byte[256];
 
-    private readonly Dictionary<int, (char? ch, SpecialKey? key)> _keyDownId = [];
+    private readonly Dictionary<int, CharClassification> _keyDownId = [];
 
     // pending dead key combining character (e.g. '\u0301' for acute accent)
     private char _pendingDeadKey;
@@ -43,7 +43,7 @@ internal sealed class WinKeyResolver
             if (_keyDownId.ContainsKey(vk)) return null;
             _pendingDeadKey = '\0';
             _pendingDeadSpacing = '\0';
-            _keyDownId[vk] = (null, specialKey);
+            _keyDownId[vk] = new CharClassification(null, specialKey);
             return KeyEvent.Special(KeyEventType.KeyDown, specialKey, mods);
         }
 
@@ -171,10 +171,11 @@ internal sealed class WinKeyResolver
             }
         }
 
-        var (ch, key) = KeyResolver.ClassifyChar(rawChar);
-        if (!ch.HasValue && !key.HasValue) return null;
+        var classified = KeyResolver.ClassifyChar(rawChar);
+        if (!classified.Ch.HasValue && !classified.Key.HasValue) return null;
 
         // apply pending dead key composition
+        var ch = classified.Ch;
         if (_pendingDeadKey != '\0' && ch.HasValue)
         {
             var dead = _pendingDeadKey;
@@ -186,12 +187,12 @@ internal sealed class WinKeyResolver
 
         if (ch.HasValue)
         {
-            _keyDownId[vk] = (ch, null);
+            _keyDownId[vk] = new CharClassification(ch, null);
             return KeyEvent.Char(KeyEventType.KeyDown, ch.Value, mods);
         }
 
-        _keyDownId[vk] = (null, key);
-        return KeyEvent.Special(KeyEventType.KeyDown, key!.Value, mods);
+        _keyDownId[vk] = new CharClassification(null, classified.Key);
+        return KeyEvent.Special(KeyEventType.KeyDown, classified.Key!.Value, mods);
     }
 
     // gets the keyboard layout associated with the foreground window's thread.

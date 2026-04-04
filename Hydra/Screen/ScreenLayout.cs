@@ -108,12 +108,12 @@ public class ScreenLayout(List<ScreenRect> screens, List<HostConfig> configs)
         }
         if (dest.Width == 0) return null;
 
-        var (entryX, entryY) = MapEntry(dest, dir.Value, perpPos, edgeLen, match);
-        return new EdgeHit(dest, dir.Value, entryX, entryY);
+        var entry = MapEntry(dest, dir.Value, perpPos, edgeLen, match);
+        return new EdgeHit(dest, dir.Value, entry.X, entry.Y);
     }
 
     // maps cursor position from source edge range to dest entry coords with nudge
-    private static (int entryX, int entryY) MapEntry(
+    private static EntryPoint MapEntry(
         ScreenRect to, Direction dir, int perpPos, int srcEdgeLen, EdgeLink link)
     {
         int destEdgeLen = dir is Direction.Left or Direction.Right ? to.Height : to.Width;
@@ -128,13 +128,15 @@ public class ScreenLayout(List<ScreenRect> screens, List<HostConfig> configs)
 
         return dir switch
         {
-            Direction.Right => (NudgeDistance, destPos),
-            Direction.Left => (to.Width - 1 - NudgeDistance, destPos),
-            Direction.Bottom => (destPos, NudgeDistance),
-            Direction.Top => (destPos, to.Height - 1 - NudgeDistance),
+            Direction.Right => new(NudgeDistance, destPos),
+            Direction.Left => new(to.Width - 1 - NudgeDistance, destPos),
+            Direction.Bottom => new(destPos, NudgeDistance),
+            Direction.Top => new(destPos, to.Height - 1 - NudgeDistance),
             _ => throw new ArgumentOutOfRangeException(nameof(dir), dir, null),
         };
     }
+
+    private record EntryPoint(int X, int Y);
 
     // one entry per edge segment connection
     private record EdgeLink(

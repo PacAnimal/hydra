@@ -22,10 +22,12 @@ public class VirtualMouseState
         _scaleMap = scaleMap ?? new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
     }
 
-    public void ApplyDelta(double dx, double dy)
+    // returns the previous screen if a screen transition occurred, null otherwise
+    public ScreenRect? ApplyDelta(double dx, double dy)
     {
-        if (CurrentScreen is null) return;
+        if (CurrentScreen is null) return null;
 
+        var prev = CurrentScreen;
         var candidateX = X + dx * (double)Scale;
         var candidateY = Y + dy * (double)Scale;
 
@@ -38,7 +40,7 @@ public class VirtualMouseState
         {
             X = candidateX;
             Y = candidateY;
-            return;
+            return null;
         }
 
         // check if another remote screen contains this global position
@@ -53,12 +55,13 @@ public class VirtualMouseState
                 // update scale for the new screen
                 if (_scaleMap.TryGetValue(screen.Name, out var newScale))
                     Scale = newScale;
-                return;
+                return prev;
             }
         }
 
         // dead zone — clamp to nearest valid screen position
         ClampToNearest(globalX, globalY);
+        return CurrentScreen != prev ? prev : null;
     }
 
     public void LeaveScreen()
@@ -68,7 +71,7 @@ public class VirtualMouseState
         X = 0;
         Y = 0;
         Scale = 1.0m;
-        _scaleMap = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+        _scaleMap.Clear();
     }
 
     private void ClampToNearest(double globalX, double globalY)

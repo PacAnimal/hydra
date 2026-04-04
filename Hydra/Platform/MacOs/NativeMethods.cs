@@ -139,9 +139,19 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void CGEventPost(int tap, nint eventRef);
 
+    // create a blank event (used to query current cursor position before relative move)
+    [LibraryImport(CoreGraphics)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint CGEventCreate(nint source);
+
     [LibraryImport(CoreGraphics)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void CGEventSetIntegerValueField(nint eventRef, int field, long value);
+
+    // set double delta field — required for some 3D apps that read CGEventGetDoubleValueField (barrier/deskflow comment)
+    [LibraryImport(CoreGraphics)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void CGEventSetDoubleValueField(nint eventRef, int field, double value);
 
     [LibraryImport(CoreGraphics)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]

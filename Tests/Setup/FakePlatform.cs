@@ -49,7 +49,7 @@ public sealed class FakePlatform : IPlatformInput
         WarpY = 1440 / 2;
     }
 
-    public (int DelayMs, int RateMs) GetKeyRepeatSettings() => (500, 33);
+    public KeyRepeatSettings GetKeyRepeatSettings() => new(500, 33);
     public void StopEventTap() { }
     public void WarpCursor(int x, int y) { WarpX = x; WarpY = y; }
     public void HideCursor() { HideCursorCalled = true; }

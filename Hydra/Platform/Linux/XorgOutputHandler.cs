@@ -11,8 +11,8 @@ public sealed class XorgOutputHandler : IPlatformOutput
     private readonly int _screen;
     private readonly nint _rootWindow;
     private bool _disposed;
-    private int _scrollAccY;
-    private int _scrollAccX;
+    private ScrollAccumulator _scrollAccY;
+    private ScrollAccumulator _scrollAccX;
 
     public XorgOutputHandler()
     {
@@ -23,6 +23,8 @@ public sealed class XorgOutputHandler : IPlatformOutput
 
         _screen = NativeMethods.XDefaultScreen(_display);
         _rootWindow = NativeMethods.XDefaultRootWindow(_display);
+        // allow XTest events during active grabs (e.g. fullscreen games)
+        _ = NativeMethods.XTestGrabControl(_display, true);
     }
 
     public List<DetectedScreen> GetAllScreens() => XorgDisplayHelper.GetAllScreens(_display, _rootWindow);
@@ -35,8 +37,9 @@ public sealed class XorgOutputHandler : IPlatformOutput
 
     public void MoveMouseRelative(int dx, int dy)
     {
-        // src_window=None, dest_window=None: move relative to current position
-        _ = NativeMethods.XWarpPointer(_display, nint.Zero, nint.Zero, 0, 0, 0, 0, dx, dy);
+        // XTestFakeRelativeMotionEvent generates a proper raw input event (XI_RawMotion),
+        // which games see. XWarpPointer is a cursor warp only and is invisible to raw input.
+        _ = NativeMethods.XTestFakeRelativeMotionEvent(_display, dx, dy, 0);
         _ = NativeMethods.XFlush(_display);
     }
 
@@ -79,18 +82,14 @@ public sealed class XorgOutputHandler : IPlatformOutput
     {
         // x11 scroll: buttons 4=up, 5=down, 6=left, 7=right (each press = one 120-unit click).
         // accumulate remainders so sub-120 deltas are not silently dropped.
-        _scrollAccY += msg.YDelta;
-        _scrollAccX += msg.XDelta;
-        InjectScrollAxis(4u, 5u, ref _scrollAccY);
-        InjectScrollAxis(7u, 6u, ref _scrollAccX);
+        InjectScrollAxis(4u, 5u, _scrollAccY.Add(msg.YDelta));
+        InjectScrollAxis(7u, 6u, _scrollAccX.Add(msg.XDelta));
         _ = NativeMethods.XFlush(_display);
     }
 
-    private void InjectScrollAxis(uint positiveButton, uint negativeButton, ref int accumulator)
+    private void InjectScrollAxis(uint positiveButton, uint negativeButton, int clicks)
     {
-        var clicks = accumulator / 120;
         if (clicks == 0) return;
-        accumulator -= clicks * 120;
         var button = clicks > 0 ? positiveButton : negativeButton;
         var n = Math.Abs(clicks);
         for (var i = 0; i < n; i++)
