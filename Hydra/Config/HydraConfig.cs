@@ -44,6 +44,8 @@ public class HydraConfig
 
     public string? NetworkConfig { get; init; }
 
+    public bool AutoUpdate { get; init; } = true;
+
     // optional — defaults to machine hostname without domain
     public string? Name { get; init; }
 

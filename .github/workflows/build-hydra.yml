@@ -7,6 +7,30 @@ on:
     branches: [main]
 
 jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+
+    steps:
+      - name: Determine version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if [ "${{ github.event_name }}" == "push" ]; then
+            latest=$(gh release list --limit 1 --json tagName --jq '.[0].tagName // empty')
+            if [ -z "$latest" ]; then
+              echo "version=0.0.1" >> "$GITHUB_OUTPUT"
+            else
+              patch=$(echo "$latest" | sed 's/^v\?0\.0\.//')
+              echo "version=0.0.$((patch + 1))" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "version=0.0.0" >> "$GITHUB_OUTPUT"
+          fi
+
   test:
     runs-on: ubuntu-latest
 
@@ -26,6 +50,7 @@ jobs:
 
   build:
     runs-on: macos-latest
+    needs: [version]
 
     strategy:
       matrix:
@@ -40,45 +65,31 @@ jobs:
           dotnet-version: "10.0.x"
 
       - name: Publish Hydra (${{ matrix.rid }})
-        run: dotnet publish Hydra --runtime ${{ matrix.rid }} --self-contained
+        run: dotnet publish Hydra --runtime ${{ matrix.rid }} --self-contained -p:Version=${{ needs.version.outputs.version }}
 
       - name: Package artifact
         run: |
           cd Hydra/bin/Release/net10.0/${{ matrix.rid }}/publish
+          tar czf ${{ github.workspace }}/hydra-${{ matrix.rid }}.tar.gz .
           if [[ "${{ matrix.rid }}" == win-* ]]; then
             zip -r ${{ github.workspace }}/hydra-${{ matrix.rid }}.zip .
-          else
-            tar czf ${{ github.workspace }}/hydra-${{ matrix.rid }}.tar.gz .
           fi
 
       - name: Upload artifact
+        if: github.event_name == 'push'
         uses: actions/upload-artifact@v4
         with:
           name: hydra-${{ matrix.rid }}
           path: hydra-${{ matrix.rid }}.*
 
   release:
-    needs: [build, test]
+    needs: [build, test, version]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write
 
     steps:
-      - name: Determine next version
-        id: version
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          latest=$(gh release list --limit 1 --json tagName --jq '.[0].tagName // empty')
-          if [ -z "$latest" ]; then
-            echo "version=0.0.1" >> "$GITHUB_OUTPUT"
-          else
-            patch=$(echo "$latest" | sed 's/^v\?0\.0\.//')
-            echo "version=0.0.$((patch + 1))" >> "$GITHUB_OUTPUT"
-          fi
-
       - uses: actions/download-artifact@v4
 
       - name: Create release
@@ -86,10 +97,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          gh release create "v${{ steps.version.outputs.version }}" \
-            --title "Hydra ${{ steps.version.outputs.version }}" \
+          gh release create "v${{ needs.version.outputs.version }}" \
+            --title "Hydra ${{ needs.version.outputs.version }}" \
             --generate-notes \
             hydra-osx-arm64/hydra-osx-arm64.tar.gz \
+            hydra-win-x64/hydra-win-x64.tar.gz \
             hydra-win-x64/hydra-win-x64.zip \
             hydra-linux-x64/hydra-linux-x64.tar.gz
 

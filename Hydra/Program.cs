@@ -9,6 +9,7 @@ using Hydra.Platform.MacOs;
 using Hydra.Platform.Windows;
 using Hydra.Relay;
 using Hydra.Screen;
+using Hydra.Update;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 
@@ -77,6 +78,8 @@ builder.ConfigureServices((_, services) =>
         services.AddSereneCustomLogging(e => forwarder.ForwardAsync(e).AsTask(), c => c.MinLogLevel = config.LogLevel);
         services.AddHostedService<SlaveLogSender>();
     }
+
+    services.AddHostedService<SelfUpdater>();
 
     if (config.NetworkConfig != null)
     {
