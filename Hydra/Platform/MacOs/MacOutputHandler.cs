@@ -14,6 +14,9 @@ public sealed class MacOutputHandler : IPlatformOutput
     private ScrollAccumulator _scrollAccY;
     private ScrollAccumulator _scrollAccX;
 
+    // char produced by each vk code (no modifiers) — used to find the correct vk for character injection
+    private static readonly Dictionary<char, ushort> _charToVk = BuildCharToVkMap();
+
     public List<DetectedScreen> GetAllScreens() => MacDisplayHelper.GetAllScreens();
 
     public void MoveMouse(int x, int y)
@@ -68,11 +71,20 @@ public sealed class MacOutputHandler : IPlatformOutput
     public void InjectKey(KeyEventMessage msg)
     {
         var isDown = msg.Type == KeyEventType.KeyDown;
+        var flags = MapModifiersToFlags(msg.Modifiers);
 
         if (msg.Character is { } ch)
-            InjectUnicodeChar(ch, isDown);
+        {
+            InjectCharacter(ch, isDown, flags);
+        }
         else if (msg.Key is { } key && MacSpecialKeyMap.Instance.Reverse.TryGetValue(key, out var vk))
-            InjectVirtualKey((ushort)vk, isDown);
+        {
+            var eventRef = NativeMethods.CGEventCreateKeyboardEvent(nint.Zero, (ushort)vk, isDown);
+            if (eventRef == nint.Zero) return;
+            NativeMethods.CGEventSetFlags(eventRef, flags);
+            NativeMethods.CGEventPost(NativeMethods.KCGHidEventTap, eventRef);
+            NativeMethods.CFRelease(eventRef);
+        }
     }
 
     public void InjectMouseButton(MouseButtonMessage msg)
@@ -131,22 +143,92 @@ public sealed class MacOutputHandler : IPlatformOutput
         NativeMethods.CFRelease(eventRef);
     }
 
-    private static unsafe void InjectUnicodeChar(char ch, bool isDown)
+    // inject a character key event.
+    // look up the vk code for the base character so macOS shortcut processing sees the right key.
+    // fall back to vk=0 with unicode string for chars with no mapping (foreign/composed chars).
+    private static unsafe void InjectCharacter(char ch, bool isDown, ulong flags)
     {
-        var eventRef = NativeMethods.CGEventCreateKeyboardEvent(nint.Zero, 0, isDown);
+        var vk = _charToVk.TryGetValue(char.ToLowerInvariant(ch), out var mappedVk) ? mappedVk : (ushort)0;
+        var eventRef = NativeMethods.CGEventCreateKeyboardEvent(nint.Zero, vk, isDown);
         if (eventRef == nint.Zero) return;
+        NativeMethods.CGEventSetFlags(eventRef, flags);
         var utf16 = (ushort)ch;
         NativeMethods.CGEventKeyboardSetUnicodeString(eventRef, 1, &utf16);
         NativeMethods.CGEventPost(NativeMethods.KCGHidEventTap, eventRef);
         NativeMethods.CFRelease(eventRef);
     }
 
-    private static void InjectVirtualKey(ushort vk, bool isDown)
+    // build reverse map: unshifted character → vk code, from current keyboard layout.
+    // iterates vk 0–127 via UCKeyTranslate with no modifiers. mirrors MacKeyResolver.ResolveCharacter().
+    private static unsafe Dictionary<char, ushort> BuildCharToVkMap()
     {
-        var eventRef = NativeMethods.CGEventCreateKeyboardEvent(nint.Zero, vk, isDown);
-        if (eventRef == nint.Zero) return;
-        NativeMethods.CGEventPost(NativeMethods.KCGHidEventTap, eventRef);
-        NativeMethods.CFRelease(eventRef);
+        var map = new Dictionary<char, ushort>();
+
+        var layoutSource = NativeMethods.TISCopyCurrentKeyboardLayoutInputSource();
+        if (layoutSource == nint.Zero) return map;
+
+        try
+        {
+            var layoutData = NativeMethods.TISGetInputSourceProperty(layoutSource, LoadTisPropertyKey());
+            if (layoutData == nint.Zero) return map;
+
+            var layoutPtr = NativeMethods.CFDataGetBytePtr(layoutData);
+            if (layoutPtr == nint.Zero) return map;
+
+            var kbdType = NativeMethods.LMGetKbdType();
+            uint deadKeyState = 0;
+            ushort* chars = stackalloc ushort[2];
+
+            for (ushort vk = 0; vk < 128; vk++)
+            {
+                deadKeyState = 0;
+                var status = NativeMethods.UCKeyTranslate(
+                    layoutPtr,
+                    vk,
+                    NativeMethods.KUCKeyActionDown,
+                    0, // no modifiers
+                    kbdType,
+                    1, // kUCKeyTranslateNoDeadKeysBit — skip dead key composition
+                    ref deadKeyState,
+                    2,
+                    out var count,
+                    chars);
+
+                if (status != 0 || count == 0) continue;
+
+                var ch = (char)chars[0];
+                // only map printable chars, skip control chars; first mapping wins
+                if (ch >= 0x20 && !map.ContainsKey(ch))
+                    map[ch] = vk;
+            }
+        }
+        finally
+        {
+            NativeMethods.CFRelease(layoutSource);
+        }
+
+        return map;
+    }
+
+    private static nint LoadTisPropertyKey()
+    {
+        var carbon = System.Runtime.InteropServices.NativeLibrary.Load(
+            "/System/Library/Frameworks/Carbon.framework/Carbon");
+        return System.Runtime.InteropServices.Marshal.ReadIntPtr(
+            System.Runtime.InteropServices.NativeLibrary.GetExport(carbon, "kTISPropertyUnicodeKeyLayoutData"));
+    }
+
+    // reverse of MacKeyResolver.MapModifiers(): KeyModifiers → CGEventFlags
+    private static ulong MapModifiersToFlags(KeyModifiers mods)
+    {
+        ulong flags = 0;
+        if ((mods & KeyModifiers.Shift) != 0) flags |= NativeMethods.KCGEventFlagMaskShift;
+        if ((mods & KeyModifiers.Control) != 0) flags |= NativeMethods.KCGEventFlagMaskControl;
+        if ((mods & KeyModifiers.Alt) != 0) flags |= NativeMethods.KCGEventFlagMaskAlternate;
+        if ((mods & KeyModifiers.Super) != 0) flags |= NativeMethods.KCGEventFlagMaskCommand;
+        if ((mods & KeyModifiers.CapsLock) != 0) flags |= NativeMethods.KCGEventFlagMaskAlphaShift;
+        if ((mods & KeyModifiers.NumLock) != 0) flags |= NativeMethods.KCGEventFlagMaskNumericPad;
+        return flags;
     }
 
     // drag event type when a button is held, otherwise plain moved
