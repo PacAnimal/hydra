@@ -1,15 +1,19 @@
 using Hydra.Config;
 using Hydra.Screen;
+using Microsoft.Extensions.Configuration;
 
 namespace Tests.Config;
 
 [TestFixture]
 public class HydraConfigTests
 {
+    private static IConfiguration ConfigFor(string path) =>
+        new ConfigurationBuilder().AddInMemoryCollection([new("CONFIG", path)]).Build();
+
     [Test]
     public void Load_ReturnsValidConfig()
     {
-        var config = HydraConfig.Load("test.conf");
+        var config = HydraConfig.Load(ConfigFor("test.conf"));
         Assert.That(config, Is.Not.Null);
         Assert.That(config.Hosts, Is.Not.Empty);
     }
@@ -17,14 +21,14 @@ public class HydraConfigTests
     [Test]
     public void Load_HasMainHost()
     {
-        var config = HydraConfig.Load("test.conf");
+        var config = HydraConfig.Load(ConfigFor("test.conf"));
         Assert.That(config.Hosts.Any(s => s.Name == "main"), Is.True);
     }
 
     [Test]
     public void Load_MainHost_HasNeighbour()
     {
-        var config = HydraConfig.Load("test.conf");
+        var config = HydraConfig.Load(ConfigFor("test.conf"));
         var main = config.Hosts.First(s => s.Name == "main");
         Assert.That(main.Neighbours, Is.Not.Empty);
     }
@@ -32,7 +36,7 @@ public class HydraConfigTests
     [Test]
     public void Load_Neighbour_HasDirection()
     {
-        var config = HydraConfig.Load("test.conf");
+        var config = HydraConfig.Load(ConfigFor("test.conf"));
         var main = config.Hosts.First(s => s.Name == "main");
         var neighbour = main.Neighbours.First();
         Assert.That(neighbour.Direction, Is.EqualTo(Direction.Right));
@@ -41,7 +45,7 @@ public class HydraConfigTests
     [Test]
     public void Load_Neighbour_RangeDefaultsToFullEdge()
     {
-        var config = HydraConfig.Load("test.conf");
+        var config = HydraConfig.Load(ConfigFor("test.conf"));
         var main = config.Hosts.First(s => s.Name == "main");
         var neighbour = main.Neighbours.First();
         using (Assert.EnterMultipleScope())
@@ -56,7 +60,7 @@ public class HydraConfigTests
     [Test]
     public void Load_Neighbour_ScreenIdentifiersDefaultToNull()
     {
-        var config = HydraConfig.Load("test.conf");
+        var config = HydraConfig.Load(ConfigFor("test.conf"));
         var main = config.Hosts.First(s => s.Name == "main");
         var neighbour = main.Neighbours.First();
         using (Assert.EnterMultipleScope())
@@ -69,7 +73,7 @@ public class HydraConfigTests
     [Test]
     public void Load_ScreenDefinitions_Deserialized()
     {
-        var config = HydraConfig.Load("test.conf");
+        var config = HydraConfig.Load(ConfigFor("test.conf"));
         Assert.That(config.ScreenDefinitions, Has.Count.EqualTo(2));
         using (Assert.EnterMultipleScope())
         {

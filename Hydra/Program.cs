@@ -1,6 +1,7 @@
 using System.Text;
 using Cathedral.Extensions;
 using Cathedral.Logging;
+using Cathedral.Utils;
 using Hydra.Config;
 using Hydra.Platform;
 using Hydra.Platform.Linux;
@@ -14,11 +15,12 @@ using Microsoft.Extensions.Hosting;
 // ensure console can display non-ASCII characters (e.g. '€', 'ø') in debug logs
 Console.OutputEncoding = Encoding.UTF8;
 
-var config = HydraConfig.Load();
+var config = HydraConfig.Load(Env.Config);
 var builder = Host.CreateDefaultBuilder(args).DisableEventLog();
 
 builder.ConfigureServices((_, services) =>
 {
+    services.AddEnvironmentConfiguration();
     services.AddSereneConsoleLogging(c => c.MinLogLevel = config.LogLevel);
     services.AddSingleton(config);
     services.AddSingleton<IWorldState, WorldState>();

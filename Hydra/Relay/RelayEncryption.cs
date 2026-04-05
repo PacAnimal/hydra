@@ -26,7 +26,7 @@ public class RelayEncryption(string key, IWorldState? peerState = null)
         catch (Exception ex)
         {
             // salt mismatch or auth failure — remote peer may have reconnected with a new key
-            log.LogDebug(ex, "Decrypt failed with cached remote key for {SourceHost} — re-deriving from message salt", sourceHost);
+            log.LogDebug("Decrypt failed with cached remote key for {SourceHost} — re-deriving from message salt", sourceHost);
             try
             {
                 remoteKey = SimpleAes.ExtractKey(key, payload);

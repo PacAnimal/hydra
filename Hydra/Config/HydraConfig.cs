@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Cathedral.Extensions;
 using Hydra.Screen;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
 namespace Hydra.Config;
@@ -55,11 +56,13 @@ public class HydraConfig
     [JsonIgnore]
     public IEnumerable<HostConfig> RemoteHosts => Hosts.Where(s => !s.Name.EqualsIgnoreCase(ResolvedName));
 
-    public static HydraConfig Load(string path = "hydra.conf")
+    public static HydraConfig Load(IConfiguration config)
     {
+        var path = config.GetStringOrNull("CONFIG")
+            ?? Path.Combine(AppContext.BaseDirectory, "hydra.conf");
         var json = File.ReadAllText(path);
         return json.FromSaneJson<HydraConfig>()
-            ?? throw new InvalidOperationException("Failed to deserialize hydra.conf");
+            ?? throw new InvalidOperationException($"Failed to deserialize {path}");
     }
 
     // maps SereneLogger short names (trce/dbug/info/warn/fail/crit) to LogLevel
