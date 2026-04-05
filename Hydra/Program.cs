@@ -58,6 +58,9 @@ builder.ConfigureServices((_, services) =>
         else
             throw new PlatformNotSupportedException($"Unsupported OS: {Environment.OSVersion}");
 
+        services.AddSingleton<ICursorVisibility>(sp => (ICursorVisibility)sp.GetRequiredService<IPlatformOutput>());
+        services.AddSingleton<SlaveCursorHider>();
+
         // forwarder buffers log entries; SlaveLogSender drains them to masters
         var forwarder = new SlaveLogForwarder();
         services.AddSingleton(forwarder);

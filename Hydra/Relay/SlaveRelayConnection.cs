@@ -14,6 +14,7 @@ public sealed class SlaveRelayConnection : RelayConnection
     private readonly ILogger<RelayConnection> _log;
     private readonly IScreenDetector _screens;
     private readonly IWorldState _peerState;
+    private readonly SlaveCursorHider _cursorHider;
 
     // active key repeat timers keyed by (char?, SpecialKey?)
     private readonly Dictionary<(char?, SpecialKey?), CancellationTokenSource> _repeatTimers = [];
@@ -23,7 +24,7 @@ public sealed class SlaveRelayConnection : RelayConnection
 
     // ReSharper disable once ConvertToPrimaryConstructor
 #pragma warning disable IDE0290
-    public SlaveRelayConnection(HydraConfig config, ILogger<RelayConnection> log, IPlatformOutput output, SlaveLogForwarder logForwarder, IScreenDetector screens, IWorldState peerState)
+    public SlaveRelayConnection(HydraConfig config, ILogger<RelayConnection> log, IPlatformOutput output, SlaveLogForwarder logForwarder, IScreenDetector screens, IWorldState peerState, SlaveCursorHider cursorHider)
         : base(config, log, peerState)
     {
         _output = output;
@@ -31,6 +32,7 @@ public sealed class SlaveRelayConnection : RelayConnection
         _log = log;
         _screens = screens;
         _peerState = peerState;
+        _cursorHider = cursorHider;
 
         _screens.ScreensChanged += async snapshot =>
         {
@@ -80,11 +82,16 @@ public sealed class SlaveRelayConnection : RelayConnection
                 break;
             case MessageKind.EnterScreen:
                 var enter = json.FromSaneJson<EnterScreenMessage>();
-                if (enter != null) await MoveToScreen(enter.Screen, enter.X, enter.Y);
+                if (enter != null)
+                {
+                    await MoveToScreen(enter.Screen, enter.X, enter.Y);
+                    _cursorHider.OnEnterScreen();
+                }
                 break;
             case MessageKind.LeaveScreen:
                 ReleaseAllKeys();
                 CancelAllRepeatTimers();
+                _cursorHider.OnLeaveScreen();
                 break;
             default:
                 _log.LogDebug("Unhandled message kind {Kind} from {Host}", kind, sourceHost);
@@ -95,7 +102,12 @@ public sealed class SlaveRelayConnection : RelayConnection
     protected override async Task OnPeers(string[] hostNames)
     {
         var current = new HashSet<string>(hostNames, StringComparer.OrdinalIgnoreCase);
+        var before = await _peerState.GetMasters();
         await _peerState.PruneMasters(current);
+        var after = await _peerState.GetMasters();
+        var afterSet = new HashSet<string>(after, StringComparer.OrdinalIgnoreCase);
+        foreach (var _ in before.Where(h => !afterSet.Contains(h)))
+            _cursorHider.OnMasterDisconnected();
         await base.OnPeers(hostNames);
     }
 
@@ -164,7 +176,12 @@ public sealed class SlaveRelayConnection : RelayConnection
 
     private async Task HandleMasterConfig(string masterHost)
     {
+        var before = await _peerState.GetMasters();
         await _peerState.AddMaster(masterHost);
+        var after = await _peerState.GetMasters();
+        // only signal connected if this is a genuinely new master
+        if (after.Length > before.Length)
+            _cursorHider.OnMasterConnected();
         var snapshot = await _screens.Get();
         SendScreenInfo(masterHost, snapshot.Entries);
     }

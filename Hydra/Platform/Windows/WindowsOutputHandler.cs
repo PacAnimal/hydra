@@ -1,12 +1,14 @@
 using Hydra.Keyboard;
 using Hydra.Mouse;
+using Hydra.Platform;
 using Hydra.Relay;
 using Hydra.Screen;
 
 namespace Hydra.Platform.Windows;
 
-public sealed class WindowsOutputHandler : IPlatformOutput
+public sealed class WindowsOutputHandler : IPlatformOutput, ICursorVisibility
 {
+    private bool _cursorHidden;
     // vk codes that require KEYEVENTF_EXTENDEDKEY (right-side modifiers, nav cluster, arrows)
     private static readonly HashSet<ulong> ExtendedKeys =
     [
@@ -156,5 +158,39 @@ public sealed class WindowsOutputHandler : IPlatformOutput
         }
     }
 
-    public void Dispose() { }
+    public unsafe void HideCursor()
+    {
+        if (_cursorHidden) return;
+        byte andMask = 0xFF;
+        byte xorMask = 0x00;
+        var blank = NativeMethods.CreateCursor(nint.Zero, 0, 0, 1, 1, &andMask, &xorMask);
+        if (blank == nint.Zero) return;
+        foreach (var id in NativeMethods.AllCursorIds)
+        {
+            var copy = NativeMethods.CopyCursor(blank);
+            if (copy != nint.Zero)
+                NativeMethods.SetSystemCursor(copy, id);
+        }
+        NativeMethods.DestroyCursor(blank);
+        _cursorHidden = true;
+    }
+
+    public void ShowCursor()
+    {
+        if (!_cursorHidden) return;
+        NativeMethods.SystemParametersInfo(NativeMethods.SPI_SETCURSORS, 0, nint.Zero, 0);
+        _cursorHidden = false;
+    }
+
+    public CursorPosition GetCursorPosition()
+    {
+        NativeMethods.GetCursorPos(out var pt);
+        return new CursorPosition(pt.x, pt.y);
+    }
+
+    public void Dispose()
+    {
+        if (_cursorHidden)
+            NativeMethods.SystemParametersInfo(NativeMethods.SPI_SETCURSORS, 0, nint.Zero, 0);
+    }
 }

@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Hydra.Keyboard;
 using Hydra.Mouse;
 using Hydra.Platform;
@@ -6,13 +7,21 @@ using Hydra.Screen;
 
 namespace Hydra.Platform.MacOs;
 
-public sealed class MacOutputHandler : IPlatformOutput
+public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
 {
     private double _mouseX;
     private double _mouseY;
     private readonly HashSet<MouseButton> _heldButtons = [];
     private ScrollAccumulator _scrollAccY;
     private ScrollAccumulator _scrollAccX;
+    private readonly uint _display = NativeMethods.CGMainDisplayID();
+    private bool _cursorHidden;
+
+    // kCFBooleanTrue for CGSSetConnectionProperty("SetsCursorInBackground")
+    private static readonly nint _cfBooleanTrue = Marshal.ReadIntPtr(
+        NativeLibrary.GetExport(
+            NativeLibrary.Load("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"),
+            "kCFBooleanTrue"));
 
     // char produced by each vk code (no modifiers) — used to find the correct vk for character injection
     private static readonly Dictionary<char, ushort> _charToVk = BuildCharToVkMap();
@@ -250,7 +259,39 @@ public sealed class MacOutputHandler : IPlatformOutput
         _ => 4,
     };
 
-    public void Dispose() { }
+    public void HideCursor()
+    {
+        if (_cursorHidden) return;
+        // allow cursor manipulation from background (private CGS API — matches master + synergy)
+        var cid = NativeMethods.CGSMainConnectionID();
+        var key = NativeMethods.CFStringCreateWithCString(nint.Zero, "SetsCursorInBackground", NativeMethods.KCFStringEncodingUtf8);
+        _ = NativeMethods.CGSSetConnectionProperty(cid, cid, key, _cfBooleanTrue);
+        NativeMethods.CFRelease(key);
+        _ = NativeMethods.CGDisplayHideCursor(_display);
+        _cursorHidden = true;
+    }
+
+    public void ShowCursor()
+    {
+        if (!_cursorHidden) return;
+        _ = NativeMethods.CGDisplayShowCursor(_display);
+        _cursorHidden = false;
+    }
+
+    public CursorPosition GetCursorPosition()
+    {
+        var evt = NativeMethods.CGEventCreate(nint.Zero);
+        if (evt == nint.Zero) return new CursorPosition(0, 0);
+        var pos = NativeMethods.CGEventGetLocation(evt);
+        NativeMethods.CFRelease(evt);
+        return new CursorPosition((int)pos.X, (int)pos.Y);
+    }
+
+    public void Dispose()
+    {
+        if (_cursorHidden)
+            _ = NativeMethods.CGDisplayShowCursor(_display);
+    }
 
     private record MoveEvent(int EventType, int Button);
 }

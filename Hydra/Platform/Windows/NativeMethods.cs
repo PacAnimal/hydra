@@ -102,6 +102,11 @@ internal static partial class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool SetCursorPos(int x, int y);
 
+    [LibraryImport(User32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool GetCursorPos(out WINPOINT lpPoint);
+
     // OCR_* = standard system cursor ids for SetSystemCursor
     internal const uint OCR_NORMAL = 32512;
     internal const uint OCR_IBEAM = 32513;

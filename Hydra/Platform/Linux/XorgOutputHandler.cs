@@ -1,12 +1,14 @@
 using Hydra.Keyboard;
 using Hydra.Mouse;
+using Hydra.Platform;
 using Hydra.Relay;
 using Hydra.Screen;
 
 namespace Hydra.Platform.Linux;
 
-public sealed class XorgOutputHandler : IPlatformOutput
+public sealed class XorgOutputHandler : IPlatformOutput, ICursorVisibility
 {
+    private bool _cursorHidden;
     private readonly nint _display;
     private readonly int _screen;
     private readonly nint _rootWindow;
@@ -120,12 +122,39 @@ public sealed class XorgOutputHandler : IPlatformOutput
         return 0;
     }
 
+    public void HideCursor()
+    {
+        if (_cursorHidden) return;
+        NativeMethods.XFixesHideCursor(_display, _rootWindow);
+        _ = NativeMethods.XFlush(_display);
+        _cursorHidden = true;
+    }
+
+    public void ShowCursor()
+    {
+        if (!_cursorHidden) return;
+        NativeMethods.XFixesShowCursor(_display, _rootWindow);
+        _ = NativeMethods.XFlush(_display);
+        _cursorHidden = false;
+    }
+
+    public CursorPosition GetCursorPosition()
+    {
+        NativeMethods.XQueryPointer(_display, _rootWindow,
+            out _, out _, out var rootX, out var rootY, out _, out _, out uint _);
+        return new CursorPosition(rootX, rootY);
+    }
+
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
         GC.SuppressFinalize(this);
         if (_display != nint.Zero)
+        {
+            if (_cursorHidden)
+                NativeMethods.XFixesShowCursor(_display, _rootWindow);
             _ = NativeMethods.XCloseDisplay(_display);
+        }
     }
 }
