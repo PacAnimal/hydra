@@ -144,12 +144,30 @@ internal sealed class SelfUpdater(HydraConfig config, ILogger<SelfUpdater> log) 
 
     private static void Restart()
     {
-        var info = new ProcessStartInfo { FileName = Environment.ProcessPath!, UseShellExecute = false };
-        foreach (var arg in Environment.GetCommandLineArgs().Skip(1))
-            info.ArgumentList.Add(arg);
-        Process.Start(info);
-        Environment.Exit(0);
+        var exePath = Environment.ProcessPath!;
+
+        if (OperatingSystem.IsWindows())
+        {
+            // windows has no exec() — start a new process and exit
+            var info = new ProcessStartInfo { FileName = exePath, UseShellExecute = false };
+            foreach (var arg in Environment.GetCommandLineArgs().Skip(1))
+                info.ArgumentList.Add(arg);
+            Process.Start(info);
+            Environment.Exit(0);
+        }
+        else
+        {
+            // exec() replaces the process image in-place — same PID, same process group, terminal grip preserved
+            var args = Environment.GetCommandLineArgs();
+            var argv = new string?[args.Length + 1]; // null-terminated
+            Array.Copy(args, argv, args.Length);
+            execv(exePath, argv);
+            Environment.Exit(1); // execv only returns on failure
+        }
     }
+
+    [System.Runtime.InteropServices.DllImport("libc", EntryPoint = "execv", SetLastError = true)]
+    private static extern int execv(string pathname, string?[] argv);
 
     private static void Cleanup()
     {

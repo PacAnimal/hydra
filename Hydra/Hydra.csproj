@@ -14,7 +14,7 @@
     </PropertyGroup>
 
     <PropertyGroup>
-        <Version>0.1.0</Version>
+        <Version>0.0.0</Version>
         <AssemblyTitle>Hydra</AssemblyTitle>
         <Product>Hydra</Product>
         <Company>Cathedral</Company>

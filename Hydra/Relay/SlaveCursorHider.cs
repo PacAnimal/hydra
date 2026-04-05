@@ -11,13 +11,13 @@ public enum SlaveCursorState
     LocalActive,
 }
 
-public sealed class SlaveCursorHider : IDisposable
+public sealed class SlaveCursorHider(ICursorVisibility cursor, ILogger<SlaveCursorHider> log, int pollIntervalMs = 100, int localTimeoutMs = 5000) : IDisposable
 {
-    private readonly ICursorVisibility _cursor;
-    private readonly ILogger<SlaveCursorHider> _log;
-    private readonly int _pollIntervalMs;
-    private readonly int _localTimeoutMs;
-    private readonly object _lock = new();
+    private readonly ICursorVisibility _cursor = cursor;
+    private readonly ILogger<SlaveCursorHider> _log = log;
+    private readonly int _pollIntervalMs = pollIntervalMs;
+    private readonly int _localTimeoutMs = localTimeoutMs;
+    private readonly Lock _lock = new();
 
     private SlaveCursorState _state = SlaveCursorState.NoMaster;
     private CursorPosition? _lastPolledPosition;
@@ -26,14 +26,6 @@ public sealed class SlaveCursorHider : IDisposable
     private int _masterCount;
 
     public SlaveCursorState State { get { lock (_lock) return _state; } }
-
-    public SlaveCursorHider(ICursorVisibility cursor, ILogger<SlaveCursorHider> log, int pollIntervalMs = 100, int localTimeoutMs = 5000)
-    {
-        _cursor = cursor;
-        _log = log;
-        _pollIntervalMs = pollIntervalMs;
-        _localTimeoutMs = localTimeoutMs;
-    }
 
     public void OnMasterConnected()
     {

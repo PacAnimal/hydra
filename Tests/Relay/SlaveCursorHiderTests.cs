@@ -24,8 +24,11 @@ public class SlaveCursorHiderTests
     [Test]
     public void Initial_State_Is_NoMaster_Cursor_Visible()
     {
-        Assert.That(_hider.State, Is.EqualTo(SlaveCursorState.NoMaster));
-        Assert.That(_cursor.IsHidden, Is.False);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(_hider.State, Is.EqualTo(SlaveCursorState.NoMaster));
+            Assert.That(_cursor.IsHidden, Is.False);
+        }
     }
 
     [Test]
@@ -33,8 +36,11 @@ public class SlaveCursorHiderTests
     {
         _hider.OnMasterConnected();
 
-        Assert.That(_hider.State, Is.EqualTo(SlaveCursorState.Hidden));
-        Assert.That(_cursor.IsHidden, Is.True);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(_hider.State, Is.EqualTo(SlaveCursorState.Hidden));
+            Assert.That(_cursor.IsHidden, Is.True);
+        }
     }
 
     [Test]
@@ -43,8 +49,11 @@ public class SlaveCursorHiderTests
         _hider.OnMasterConnected();
         _hider.OnEnterScreen();
 
-        Assert.That(_hider.State, Is.EqualTo(SlaveCursorState.MasterActive));
-        Assert.That(_cursor.IsHidden, Is.False);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(_hider.State, Is.EqualTo(SlaveCursorState.MasterActive));
+            Assert.That(_cursor.IsHidden, Is.False);
+        }
     }
 
     [Test]
@@ -54,8 +63,11 @@ public class SlaveCursorHiderTests
         _hider.OnEnterScreen();
         _hider.OnLeaveScreen();
 
-        Assert.That(_hider.State, Is.EqualTo(SlaveCursorState.Hidden));
-        Assert.That(_cursor.IsHidden, Is.True);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(_hider.State, Is.EqualTo(SlaveCursorState.Hidden));
+            Assert.That(_cursor.IsHidden, Is.True);
+        }
     }
 
     [Test]
@@ -64,8 +76,11 @@ public class SlaveCursorHiderTests
         _hider.OnMasterConnected();
         _hider.OnMasterDisconnected();
 
-        Assert.That(_hider.State, Is.EqualTo(SlaveCursorState.NoMaster));
-        Assert.That(_cursor.IsHidden, Is.False);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(_hider.State, Is.EqualTo(SlaveCursorState.NoMaster));
+            Assert.That(_cursor.IsHidden, Is.False);
+        }
     }
 
     [Test]
@@ -75,13 +90,19 @@ public class SlaveCursorHiderTests
         _hider.OnMasterConnected();
         _hider.OnMasterDisconnected();
 
-        Assert.That(_hider.State, Is.EqualTo(SlaveCursorState.Hidden));
-        Assert.That(_cursor.IsHidden, Is.True);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(_hider.State, Is.EqualTo(SlaveCursorState.Hidden));
+            Assert.That(_cursor.IsHidden, Is.True);
+        }
 
         _hider.OnMasterDisconnected();
 
-        Assert.That(_hider.State, Is.EqualTo(SlaveCursorState.NoMaster));
-        Assert.That(_cursor.IsHidden, Is.False);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(_hider.State, Is.EqualTo(SlaveCursorState.NoMaster));
+            Assert.That(_cursor.IsHidden, Is.False);
+        }
     }
 
     [Test]
@@ -95,8 +116,11 @@ public class SlaveCursorHiderTests
 
         await Task.Delay(100); // several polls at 20ms — well before 300ms timeout
 
-        Assert.That(_hider.State, Is.EqualTo(SlaveCursorState.LocalActive));
-        Assert.That(_cursor.IsHidden, Is.False);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(_hider.State, Is.EqualTo(SlaveCursorState.LocalActive));
+            Assert.That(_cursor.IsHidden, Is.False);
+        }
     }
 
     [Test]
@@ -110,8 +134,11 @@ public class SlaveCursorHiderTests
 
         await Task.Delay(500); // 300ms timeout fires with buffer
 
-        Assert.That(_hider.State, Is.EqualTo(SlaveCursorState.Hidden));
-        Assert.That(_cursor.IsHidden, Is.True);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(_hider.State, Is.EqualTo(SlaveCursorState.Hidden));
+            Assert.That(_cursor.IsHidden, Is.True);
+        }
     }
 
     [Test]
@@ -165,8 +192,11 @@ public class SlaveCursorHiderTests
         _hider.OnMasterConnected();
         _hider.OnMasterConnected(); // second master
 
-        Assert.That(_hider.State, Is.EqualTo(SlaveCursorState.Hidden));
-        Assert.That(_cursor.HideCount, Is.EqualTo(1)); // only hidden once
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(_hider.State, Is.EqualTo(SlaveCursorState.Hidden));
+            Assert.That(_cursor.HideCount, Is.EqualTo(1)); // only hidden once
+        }
     }
 }
 

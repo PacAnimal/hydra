@@ -37,7 +37,7 @@ internal static partial class NativeMethods
 
     // -- event mask constants (for XGrabPointer) --
 
-    internal const uint ButtonPressMask   = 0x04;
+    internal const uint ButtonPressMask = 0x04;
     internal const uint ButtonReleaseMask = 0x08;
     internal const uint PointerMotionMask = 0x40;
 

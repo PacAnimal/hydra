@@ -32,7 +32,7 @@ public sealed class FakePlatform : IPlatformInput
         WarpY = 1440 / 2;
     }
 
-    public List<DetectedScreen> GetAllScreens() => [new DetectedScreen(0, 0, 2560, 1440, null, null, null)];
+    public static List<DetectedScreen> GetAllScreens() => [new DetectedScreen(0, 0, 2560, 1440, null, null, null)];
     public bool IsAccessibilityTrusted() => true;
 
     public void StartEventTap(
