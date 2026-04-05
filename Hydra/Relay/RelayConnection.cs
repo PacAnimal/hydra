@@ -149,6 +149,10 @@ public class RelayConnection(HydraConfig config, ILogger<RelayConnection> log, I
             {
                 break;
             }
+            catch (OperationCanceledException)
+            {
+                log.LogWarning("Relay connection lost — retrying in 15s");
+            }
             catch (Exception ex)
             {
                 log.LogError(ex, "Relay connection failed — retrying in 15s");
