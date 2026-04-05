@@ -23,7 +23,7 @@ public class RelayEncryption(string key, IWorldState? peerState = null)
         {
             return await _aes.Decrypt(payload, remoteKey, false, cancel);
         }
-        catch (Exception ex)
+        catch (Exception)
         {
             // salt mismatch or auth failure — remote peer may have reconnected with a new key
             log.LogDebug("Decrypt failed with cached remote key for {SourceHost} — re-deriving from message salt", sourceHost);

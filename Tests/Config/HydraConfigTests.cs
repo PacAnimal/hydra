@@ -85,6 +85,14 @@ public class HydraConfigTests
     }
 
     [Test]
+    public void Load_ThrowsFileNotFound_WhenNoConfigFound()
+    {
+        var config = new ConfigurationBuilder().Build(); // no CONFIG set, no hydra.conf on disk
+        Assert.That(() => HydraConfig.Load(config), Throws.InstanceOf<FileNotFoundException>()
+            .With.Message.Contains("CONFIG="));
+    }
+
+    [Test]
     public void LocalHost_ReturnsMatchingHost()
     {
         var config = new HydraConfig

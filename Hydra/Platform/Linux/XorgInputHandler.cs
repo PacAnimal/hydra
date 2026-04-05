@@ -170,6 +170,14 @@ public sealed class XorgInputHandler : IPlatformInput
         // standard keyboard events from XGrabKeyboard or XGrabKey
         if (ev.Type is NativeMethods.KeyPress or NativeMethods.KeyRelease)
         {
+            // X11 auto-repeat emits KeyRelease immediately followed by KeyPress for the same keycode.
+            // detect this by peeking: if the next queued event is a KeyPress with the same keycode, skip this KeyRelease.
+            if (ev.Type == NativeMethods.KeyRelease && NativeMethods.XPending(_display) > 0)
+            {
+                NativeMethods.XPeekEvent(_display, out var next);
+                if (next.Type == NativeMethods.KeyPress && next.XKeyKeycode == ev.XKeyKeycode)
+                    return;
+            }
             var keyEvent = _keyResolver.Resolve(ev.Type, ev.XKeyKeycode, ev.XKeyState, _display);
             if (keyEvent is not null)
                 _onKeyEvent?.Invoke(keyEvent);

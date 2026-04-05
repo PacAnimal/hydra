@@ -95,6 +95,9 @@ public sealed class SlaveRelayConnection : RelayConnection
 
     private void HandleKeyEvent(KeyEventMessage msg)
     {
+        var label = msg.Character.HasValue ? $" '{msg.Character}'" : msg.Key.HasValue ? $" {msg.Key}" : "";
+        _log.LogDebug("Key: {Type}{Label} mods={Modifiers}", msg.Type, label, msg.Modifiers);
+
         var repeatKey = (msg.Character, msg.Key);
 
         if (msg.Type == KeyEventType.KeyUp)

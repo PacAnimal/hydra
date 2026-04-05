@@ -58,12 +58,17 @@ public class HydraConfig
 
     public static HydraConfig Load(IConfiguration config)
     {
+        var binaryDir = Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory;
         var path = config.GetStringOrNull("CONFIG")
-            ?? Path.Combine(AppContext.BaseDirectory, "hydra.conf");
+            ?? FindConfig(Path.Combine(binaryDir, "hydra.conf"))
+            ?? FindConfig(Path.Combine(Directory.GetCurrentDirectory(), "hydra.conf"))
+            ?? throw new FileNotFoundException("No hydra.conf found. Set CONFIG=/path/to/hydra.conf and try again.");
         var json = File.ReadAllText(path);
         return json.FromSaneJson<HydraConfig>()
             ?? throw new InvalidOperationException($"Failed to deserialize {path}");
     }
+
+    private static string? FindConfig(string path) => File.Exists(path) ? path : null;
 
     // maps SereneLogger short names (trce/dbug/info/warn/fail/crit) to LogLevel
     private sealed class LogLevelConverter : JsonConverter<LogLevel>

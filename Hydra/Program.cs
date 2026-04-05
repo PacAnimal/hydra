@@ -15,7 +15,16 @@ using Microsoft.Extensions.Hosting;
 // ensure console can display non-ASCII characters (e.g. '€', 'ø') in debug logs
 Console.OutputEncoding = Encoding.UTF8;
 
-var config = HydraConfig.Load(Env.Config);
+HydraConfig config;
+try
+{
+    config = HydraConfig.Load(Env.Config);
+}
+catch (FileNotFoundException ex)
+{
+    Console.Error.WriteLine(ex.Message);
+    return;
+}
 var builder = Host.CreateDefaultBuilder(args).DisableEventLog();
 
 builder.ConfigureServices((_, services) =>
