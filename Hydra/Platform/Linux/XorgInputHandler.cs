@@ -26,6 +26,7 @@ public sealed class XorgInputHandler : IPlatformInput
     private bool _cursorHidden;
     private readonly Toggle _isOnVirtualScreen = new();
     private bool _keyboardGrabbed;
+    private bool _pointerGrabbed;
 
     // XI2 event mask for raw button press/release (15, 16) and raw motion (17).
     // XISetMask(mask, n) = mask[n>>3] |= 1 << (n&7)
@@ -94,9 +95,15 @@ public sealed class XorgInputHandler : IPlatformInput
         {
             _isOnVirtualScreen.TrySet(value);
             if (value)
+            {
+                GrabPointer();
                 GrabKeyboard();
+            }
             else
+            {
                 UngrabKeyboard();
+                UngrabPointer();
+            }
         }
     }
 
@@ -157,6 +164,7 @@ public sealed class XorgInputHandler : IPlatformInput
     {
         StopEventTap();
         UngrabKeyboard();
+        UngrabPointer();
         UngrabLockHotkey();
         if (_cursorHidden) ShowCursor();
         if (_inputSink != nint.Zero) _ = NativeMethods.XDestroyWindow(_display, _inputSink);
@@ -256,6 +264,28 @@ public sealed class XorgInputHandler : IPlatformInput
         _ = NativeMethods.XUngrabKeyboard(_display, NativeMethods.CurrentTime);
         _ = NativeMethods.XFlush(_display);
         _keyboardGrabbed = false;
+    }
+
+    private void GrabPointer()
+    {
+        if (_pointerGrabbed) return;
+        var result = NativeMethods.XGrabPointer(_display, _inputSink, false,
+            NativeMethods.ButtonPressMask | NativeMethods.ButtonReleaseMask | NativeMethods.PointerMotionMask,
+            NativeMethods.GrabModeAsync, NativeMethods.GrabModeAsync,
+            nint.Zero, nint.Zero, NativeMethods.CurrentTime);
+        if (result == NativeMethods.GrabSuccess)
+            _pointerGrabbed = true;
+        else
+            _log.LogWarning("XGrabPointer failed (result={Result})", result);
+        _ = NativeMethods.XFlush(_display);
+    }
+
+    private void UngrabPointer()
+    {
+        if (!_pointerGrabbed) return;
+        _ = NativeMethods.XUngrabPointer(_display, NativeMethods.CurrentTime);
+        _ = NativeMethods.XFlush(_display);
+        _pointerGrabbed = false;
     }
 
     // passive grab for Ctrl+Alt+Super+L — 4 variants for NumLock/CapsLock combinations

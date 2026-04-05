@@ -34,6 +34,16 @@ builder.ConfigureServices((_, services) =>
     services.AddSingleton(config);
     services.AddSingleton<IWorldState, WorldState>();
 
+    // screen detector must be registered before any service that awaits IScreenDetector.Get() at startup
+    if (OperatingSystem.IsMacOS())
+        services.AddHostedService<IScreenDetector, MacScreenDetector>();
+    else if (OperatingSystem.IsWindows())
+        services.AddHostedService<IScreenDetector, WindowsScreenDetector>();
+    else if (OperatingSystem.IsLinux())
+        services.AddHostedService<IScreenDetector, XorgScreenDetector>();
+    else
+        throw new PlatformNotSupportedException($"Unsupported OS: {Environment.OSVersion}");
+
     if (config.Mode == Mode.Master)
     {
         if (OperatingSystem.IsMacOS())
@@ -67,15 +77,6 @@ builder.ConfigureServices((_, services) =>
         services.AddSereneCustomLogging(e => forwarder.ForwardAsync(e).AsTask(), c => c.MinLogLevel = config.LogLevel);
         services.AddHostedService<SlaveLogSender>();
     }
-
-    if (OperatingSystem.IsMacOS())
-        services.AddHostedService<IScreenDetector, MacScreenDetector>();
-    else if (OperatingSystem.IsWindows())
-        services.AddHostedService<IScreenDetector, WindowsScreenDetector>();
-    else if (OperatingSystem.IsLinux())
-        services.AddHostedService<IScreenDetector, XorgScreenDetector>();
-    else
-        throw new PlatformNotSupportedException($"Unsupported OS: {Environment.OSVersion}");
 
     if (config.NetworkConfig != null)
     {

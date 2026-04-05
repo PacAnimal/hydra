@@ -35,6 +35,12 @@ internal static partial class NativeMethods
     internal const int GrabModeAsync = 1;
     internal const int GrabSuccess = 0;
 
+    // -- event mask constants (for XGrabPointer) --
+
+    internal const uint ButtonPressMask   = 0x04;
+    internal const uint ButtonReleaseMask = 0x08;
+    internal const uint PointerMotionMask = 0x40;
+
     // -- modifier mask constants (X.h) --
 
     internal const uint ShiftMask = 0x01;
@@ -197,6 +203,19 @@ internal static partial class NativeMethods
     [LibraryImport(X11)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial int XUngrabKey(nint display, int keycode, uint modifiers, nint grabWindow);
+
+    // -- pointer grab --
+
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int XGrabPointer(nint display, nint grabWindow,
+        [MarshalAs(UnmanagedType.Bool)] bool ownerEvents,
+        uint eventMask, int pointerMode, int keyboardMode,
+        nint confineWindow, nint cursor, nuint time);
+
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int XUngrabPointer(nint display, nuint time);
 
     // -- cursor (XFixes) --
 
