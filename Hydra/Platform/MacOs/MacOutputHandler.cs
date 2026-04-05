@@ -4,11 +4,14 @@ using Hydra.Mouse;
 using Hydra.Platform;
 using Hydra.Relay;
 using Hydra.Screen;
+using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform.MacOs;
 
 public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
 {
+    private readonly ILogger<MacOutputHandler> _log;
+
     private double _mouseX;
     private double _mouseY;
     private readonly HashSet<MouseButton> _heldButtons = [];
@@ -17,15 +20,37 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
     private readonly uint _display = NativeMethods.CGMainDisplayID();
     private bool _cursorHidden;
 
+    // accumulated modifier state — updated on each modifier keydown/up
+    private ulong _modifierFlags;        // generic CGEventFlag masks (e.g. kCGEventFlagMaskCommand)
+    private uint _deviceModifierFlags;   // device-dependent NX masks (e.g. NX_DEVICELCMDKEYMASK)
+
+    // IOKit HID driver connection (deskflow's getEventDriver() pattern)
+    private uint _hidConnection;
+
+    // ReSharper disable once ConvertToPrimaryConstructor
+#pragma warning disable IDE0290
+    public MacOutputHandler(ILogger<MacOutputHandler> log)
+    {
+        _log = log;
+    }
+#pragma warning restore IDE0290
+
+    // mach_task_self_ is a global variable in libSystem — read it by dereferencing the export address,
+    // NOT by calling it as a function (calling a data segment address as code causes a crash).
+    private static readonly uint _machTaskSelf = (uint)Marshal.ReadInt32(
+        NativeLibrary.GetExport(NativeLibrary.Load("/usr/lib/libSystem.B.dylib"), "mach_task_self_"));
+
     // kCFBooleanTrue for CGSSetConnectionProperty("SetsCursorInBackground")
     private static readonly nint _cfBooleanTrue = Marshal.ReadIntPtr(
         NativeLibrary.GetExport(
             NativeLibrary.Load("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"),
             "kCFBooleanTrue"));
 
+    // combined session state source — used for mouse events and CGEvent fallback paths
+    private static readonly nint _eventSource = NativeMethods.CGEventSourceCreate(NativeMethods.KCGEventSourceStateCombinedSessionState);
+
     // char produced by each vk code (no modifiers) — used to find the correct vk for character injection
     private static readonly Dictionary<char, ushort> _charToVk = BuildCharToVkMap();
-
 
     public void MoveMouse(int x, int y)
     {
@@ -37,7 +62,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
         // use drag event type when a button is held, otherwise plain moved
         var move = GetMoveEventType();
 
-        var eventRef = NativeMethods.CGEventCreateMouseEvent(nint.Zero, move.EventType, pos, move.Button);
+        var eventRef = NativeMethods.CGEventCreateMouseEvent(_eventSource, move.EventType, pos, move.Button);
         if (eventRef == nint.Zero) return;
         NativeMethods.CGEventPost(NativeMethods.KCGHidEventTap, eventRef);
         NativeMethods.CFRelease(eventRef);
@@ -65,7 +90,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
 
         var move = GetMoveEventType();
 
-        var eventRef = NativeMethods.CGEventCreateMouseEvent(nint.Zero, move.EventType, pos, move.Button);
+        var eventRef = NativeMethods.CGEventCreateMouseEvent(_eventSource, move.EventType, pos, move.Button);
         if (eventRef == nint.Zero) return;
         // set integer AND double delta fields — some 3D apps/games read the double variant (barrier comment)
         NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGMouseEventDeltaX, dx);
@@ -81,17 +106,38 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
         var isDown = msg.Type == KeyEventType.KeyDown;
         var flags = MapModifiersToFlags(msg.Modifiers);
 
-        if (msg.Character is { } ch)
+        if (msg.Key is { } key && key.IsModifier() && MacSpecialKeyMap.Instance.Reverse.TryGetValue(key, out var modVk))
         {
-            InjectCharacter(ch, isDown, flags);
+            // update accumulated modifier state, then inject via IOHIDPostEvent (NX_FLAGSCHANGED) to update
+            // the system-wide HID modifier state read by [NSEvent modifierFlags] class method (what Chromium queries).
+            // falls back to CGEventPost when IOKit unavailable.
+            var (generic, device) = VkToModifierMasks((ushort)modVk);
+            if (isDown) { _modifierFlags |= generic; _deviceModifierFlags |= device; }
+            else { _modifierFlags &= ~generic; _deviceModifierFlags &= ~device; }
+
+            if (!PostHidModifier((ushort)modVk))
+                PostFlagsChanged((ushort)modVk, isDown);
         }
-        else if (msg.Key is { } key && MacSpecialKeyMap.Instance.Reverse.TryGetValue(key, out var vk))
+        else if (msg.Character is { } ch)
         {
-            var eventRef = NativeMethods.CGEventCreateKeyboardEvent(nint.Zero, (ushort)vk, isDown);
-            if (eventRef == nint.Zero) return;
-            NativeMethods.CGEventSetFlags(eventRef, flags);
-            NativeMethods.CGEventPost(NativeMethods.KCGHidEventTap, eventRef);
-            NativeMethods.CFRelease(eventRef);
+            // deskflow approach: inject via IOHIDPostEvent (NX_KEYDOWN/UP, flags=0) so the system uses the
+            // current HID modifier state for shortcut resolution. fall back to CGEventPost with unicode
+            // string for chars with no VK mapping (foreign/composed characters).
+            if (_charToVk.TryGetValue(char.ToLowerInvariant(ch), out var charVk))
+            {
+                if (!PostHidKey(charVk, isDown))
+                    PostCGKey(charVk, isDown, flags);
+            }
+            else
+            {
+                InjectCharacter(ch, isDown, flags);
+            }
+        }
+        else if (msg.Key is { } key2 && MacSpecialKeyMap.Instance.Reverse.TryGetValue(key2, out var vk))
+        {
+            // non-modifier special key: same IOHIDPostEvent-first approach
+            if (!PostHidKey((ushort)vk, isDown))
+                PostCGKey((ushort)vk, isDown, flags);
         }
     }
 
@@ -120,7 +166,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
         else _heldButtons.Remove(msg.Button);
 
         var pos = new CGPoint { X = _mouseX, Y = _mouseY };
-        var eventRef = NativeMethods.CGEventCreateMouseEvent(nint.Zero, mouseType, pos, mouseButton);
+        var eventRef = NativeMethods.CGEventCreateMouseEvent(_eventSource, mouseType, pos, mouseButton);
         if (eventRef == nint.Zero) return;
 
         if (msg.Button is not MouseButton.Left and not MouseButton.Right)
@@ -140,7 +186,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
         var xLines = _scrollAccX.Add(msg.XDelta);
 
         // kCGScrollEventUnitLine = 1
-        var eventRef = NativeMethods.CGEventCreateScrollWheelEvent(nint.Zero, 1, 2, yLines, xLines);
+        var eventRef = NativeMethods.CGEventCreateScrollWheelEvent(_eventSource, 1, 2, yLines, xLines);
         if (eventRef == nint.Zero) return;
 
         // also set pixel delta so pixel-aware apps (browsers, etc.) get smooth sub-line scroll
@@ -151,13 +197,120 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
         NativeMethods.CFRelease(eventRef);
     }
 
-    // inject a character key event.
-    // look up the vk code for the base character so macOS shortcut processing sees the right key.
-    // fall back to vk=0 with unicode string for chars with no mapping (foreign/composed chars).
+    // post a CG keyboard event — used for non-modifier special keys and as fallback for modifiers.
+    private static void PostCGKey(ushort vk, bool isDown, ulong flags)
+    {
+        var eventRef = NativeMethods.CGEventCreateKeyboardEvent(_eventSource, vk, isDown);
+        if (eventRef == nint.Zero) return;
+        NativeMethods.CGEventSetFlags(eventRef, flags);
+        NativeMethods.CGEventPost(NativeMethods.KCGHidEventTap, eventRef);
+        NativeMethods.CFRelease(eventRef);
+    }
+
+    // post NX_FLAGSCHANGED via IOHIDPostEvent — updates system-wide modifier state so
+    // [NSEvent modifierFlags] (class method) reflects held keys. mirrors deskflow's postHIDVirtualKey().
+    private bool PostHidModifier(ushort vk)
+    {
+        var conn = GetHidConnection();
+        if (conn == 0) return false;
+
+        var eventData = new NXEventData { KeyCode = vk };
+        var eventFlags = (uint)_modifierFlags | _deviceModifierFlags;
+        var kr = NativeMethods.IOHIDPostEvent(conn, NativeMethods.NxFlagsChanged, default, in eventData,
+            NativeMethods.KNxEventDataVersion, eventFlags, 1); // 1 = kIOHIDSetGlobalEventFlags
+        if (kr != 0)
+            _log.LogWarning("IOHIDPostEvent(NX_FLAGSCHANGED) failed: kr={Kr} vk=0x{Vk:x2}", kr, vk);
+        return kr == 0;
+    }
+
+    // post NX_KEYDOWN/NX_KEYUP via IOHIDPostEvent — flags=0 so system uses current HID modifier state.
+    // mirrors deskflow's postHIDVirtualKey() for non-modifier keys.
+    private bool PostHidKey(ushort vk, bool isDown)
+    {
+        var conn = GetHidConnection();
+        if (conn == 0) return false;
+
+        var eventData = new NXEventData { KeyCode = vk };
+        var eventType = isDown ? NativeMethods.NxKeyDown : NativeMethods.NxKeyUp;
+        var kr = NativeMethods.IOHIDPostEvent(conn, eventType, default, in eventData,
+            NativeMethods.KNxEventDataVersion, 0, 0);
+        if (kr != 0)
+            _log.LogWarning("IOHIDPostEvent(NX_KEY{Dir}) failed: kr={Kr} vk=0x{Vk:x2}", isDown ? "DOWN" : "UP", kr, vk);
+        return kr == 0;
+    }
+
+    // lazy-init IOKit HID driver connection. mirrors deskflow's getEventDriver().
+    private uint GetHidConnection()
+    {
+        if (_hidConnection != 0) return _hidConnection;
+
+        NativeMethods.IOMasterPort(0, out var masterPort);
+        var matching = NativeMethods.IOServiceMatching("IOHIDSystem");
+        if (matching == nint.Zero)
+        {
+            _log.LogWarning("IOServiceMatching(IOHIDSystem) returned null — IOHIDPostEvent unavailable");
+            return 0;
+        }
+
+        if (NativeMethods.IOServiceGetMatchingServices(masterPort, matching, out var iter) != 0)
+        {
+            _log.LogWarning("IOServiceGetMatchingServices failed — IOHIDPostEvent unavailable");
+            return 0;
+        }
+
+        var service = NativeMethods.IOIteratorNext(iter);
+        _ = NativeMethods.IOObjectRelease(iter);
+        if (service == 0)
+        {
+            _log.LogWarning("IOIteratorNext returned no IOHIDSystem service — IOHIDPostEvent unavailable");
+            return 0;
+        }
+
+        var kr = NativeMethods.IOServiceOpen(service, _machTaskSelf, NativeMethods.KIoHidParamConnectType, out var conn);
+        _ = NativeMethods.IOObjectRelease(service);
+        if (kr != 0)
+        {
+            _log.LogWarning("IOServiceOpen failed: kr={Kr} — IOHIDPostEvent unavailable", kr);
+            return 0;
+        }
+
+        _log.LogInformation("IOKit HID connection established (conn={Conn})", conn);
+        _hidConnection = conn;
+        return _hidConnection;
+    }
+
+    // fallback: post kCGEventFlagsChanged via CGEventPost when IOHIDPostEvent unavailable.
+    // mirrors deskflow's postKeyboardKey() fallback path.
+    private void PostFlagsChanged(ushort vk, bool isDown)
+    {
+        var eventRef = NativeMethods.CGEventCreateKeyboardEvent(_eventSource, vk, isDown);
+        if (eventRef == nint.Zero) return;
+        NativeMethods.CGEventSetType(eventRef, NativeMethods.KCGEventFlagsChanged);
+        NativeMethods.CGEventSetFlags(eventRef, _modifierFlags);
+        NativeMethods.CGEventPost(NativeMethods.KCGHidEventTap, eventRef);
+        NativeMethods.CFRelease(eventRef);
+    }
+
+    // maps a macOS virtual key code to (generic CGEventFlag mask, device-dependent NX mask).
+    private static (ulong generic, uint device) VkToModifierMasks(ushort vk) => (ulong)vk switch
+    {
+        MacVirtualKey.Command or MacVirtualKey.RightCommand =>
+            (NativeMethods.KCGEventFlagMaskCommand, NativeMethods.NxDeviceLCmdKeyMask),
+        MacVirtualKey.Shift or MacVirtualKey.RightShift =>
+            (NativeMethods.KCGEventFlagMaskShift, NativeMethods.NxDeviceLShiftKeyMask),
+        MacVirtualKey.Control or MacVirtualKey.RightControl =>
+            (NativeMethods.KCGEventFlagMaskControl, NativeMethods.NxDeviceLCtlKeyMask),
+        MacVirtualKey.Option or MacVirtualKey.RightOption =>
+            (NativeMethods.KCGEventFlagMaskAlternate, NativeMethods.NxDeviceLAltKeyMask),
+        MacVirtualKey.CapsLock => (NativeMethods.KCGEventFlagMaskAlphaShift, 0),
+        _ => (0, 0)
+    };
+
+    // fallback character injection for chars with no VK mapping (foreign/composed chars).
+    // vk=0 with explicit unicode string — only reached when _charToVk has no entry for the char.
     private static unsafe void InjectCharacter(char ch, bool isDown, ulong flags)
     {
-        var vk = _charToVk.TryGetValue(char.ToLowerInvariant(ch), out var mappedVk) ? mappedVk : (ushort)0;
-        var eventRef = NativeMethods.CGEventCreateKeyboardEvent(nint.Zero, vk, isDown);
+        var eventRef = NativeMethods.CGEventCreateKeyboardEvent(_eventSource, 0, isDown);
         if (eventRef == nint.Zero) return;
         NativeMethods.CGEventSetFlags(eventRef, flags);
         var utf16 = (ushort)ch;
@@ -226,8 +379,12 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
             System.Runtime.InteropServices.NativeLibrary.GetExport(carbon, "kTISPropertyUnicodeKeyLayoutData"));
     }
 
-    // reverse of MacKeyResolver.MapModifiers(): KeyModifiers → CGEventFlags
-    private static ulong MapModifiersToFlags(KeyModifiers mods)
+    // reverse of MacKeyResolver.MapModifiers(): KeyModifiers → CGEventFlags.
+    // note: KeyModifiers.NumLock is NOT mapped to kCGEventFlagMaskNumericPad here.
+    // on Linux, NumLock is a system-wide lock state present on all key events.
+    // on macOS, kCGEventFlagMaskNumericPad means "this key is a numpad key" — a per-key identity.
+    // injecting it on regular keys (e.g. 'a') causes Chromium-based apps to reject the event.
+    internal static ulong MapModifiersToFlags(KeyModifiers mods)
     {
         ulong flags = 0;
         if ((mods & KeyModifiers.Shift) != 0) flags |= NativeMethods.KCGEventFlagMaskShift;
@@ -235,7 +392,6 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
         if ((mods & KeyModifiers.Alt) != 0) flags |= NativeMethods.KCGEventFlagMaskAlternate;
         if ((mods & KeyModifiers.Super) != 0) flags |= NativeMethods.KCGEventFlagMaskCommand;
         if ((mods & KeyModifiers.CapsLock) != 0) flags |= NativeMethods.KCGEventFlagMaskAlphaShift;
-        if ((mods & KeyModifiers.NumLock) != 0) flags |= NativeMethods.KCGEventFlagMaskNumericPad;
         return flags;
     }
 
@@ -291,6 +447,8 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
     {
         if (_cursorHidden)
             _ = NativeMethods.CGDisplayShowCursor(_display);
+        if (_hidConnection != 0)
+            _ = NativeMethods.IOObjectRelease(_hidConnection);
     }
 
     private record MoveEvent(int EventType, int Button);

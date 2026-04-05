@@ -14,6 +14,37 @@ public class MacModifierMappingTests
     private const ulong Command = 0x00100000;
     private const ulong NumericPad = 0x00200000;
 
+    // -- output direction: KeyModifiers → CGEventFlags --
+
+    [Test]
+    public void MapToFlags_SuperOnly_ReturnsCommandFlag() =>
+        Assert.That(MacOutputHandler.MapModifiersToFlags(KeyModifiers.Super), Is.EqualTo(Command));
+
+    [Test]
+    public void MapToFlags_NumLock_NotMappedToNumericPad()
+    {
+        // Linux NumLock is a system-wide lock state; macOS NumericPad is a per-key identity flag.
+        // Injecting NumericPad on regular keys (e.g. 'a') breaks Cmd+A in Chromium-based apps.
+        var flags = MacOutputHandler.MapModifiersToFlags(KeyModifiers.NumLock);
+        Assert.That((flags & NumericPad), Is.Zero);
+    }
+
+    [Test]
+    public void MapToFlags_SuperWithNumLock_NoNumericPad()
+    {
+        // Win+A on Linux master → Cmd+A on Mac slave must NOT have NumericPad set
+        var flags = MacOutputHandler.MapModifiersToFlags(KeyModifiers.Super | KeyModifiers.NumLock);
+        Assert.That(flags, Is.EqualTo(Command));
+    }
+
+    [Test]
+    public void MapToFlags_AllModifiers_RoundTrip()
+    {
+        var mods = KeyModifiers.Shift | KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Super | KeyModifiers.CapsLock;
+        var flags = MacOutputHandler.MapModifiersToFlags(mods);
+        Assert.That(flags, Is.EqualTo(Shift | Control | Alternate | Command | AlphaShift));
+    }
+
     [Test]
     public void NoFlags_ReturnsNone() =>
         Assert.That(MacKeyResolver.MapModifiers(0), Is.EqualTo(KeyModifiers.None));

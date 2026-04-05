@@ -125,6 +125,18 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void CGEventSetFlags(nint eventRef, ulong flags);
 
+    [LibraryImport(CoreGraphics)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void CGEventSetType(nint eventRef, int eventType);
+
+    // kCGEventSourceStateCombinedSessionState = 0: posted events update the session-level modifier
+    // tracking, which is what [NSEvent modifierFlags] (class method) reads.
+    internal const int KCGEventSourceStateCombinedSessionState = 0;
+
+    [LibraryImport(CoreGraphics)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint CGEventSourceCreate(int stateID);
+
     // -- CoreGraphics: event creation and injection --
 
     [LibraryImport(CoreGraphics)]
@@ -309,6 +321,59 @@ internal static partial class NativeMethods
     internal const uint NXKeytypePrevious = 18;
     internal const uint NXKeytypeFast = 19;
     internal const uint NXKeytypeRewind = 20;
+
+    // -- IOKit: HID system event injection (deskflow/barrier approach) --
+    // IOHIDPostEvent posts events at the IOKit HID driver level, below CoreGraphics.
+    // This updates the system-wide modifier state read by [NSEvent modifierFlags] class method,
+    // which CGEventPost alone does not do. Deprecated since macOS 11 but still functional.
+
+    private const string IOKit = "/System/Library/Frameworks/IOKit.framework/IOKit";
+
+    // NX event types (IOLLEvent.h) — same numeric values as the CG equivalents
+    internal const uint NxFlagsChanged = 12;
+    internal const uint NxKeyDown = 10;
+    internal const uint NxKeyUp = 11;
+
+    // kNXEventDataVersion (IOLLEvent.h)
+    internal const uint KNxEventDataVersion = 2;
+
+    // kIOHIDParamConnectType (IOHIDShared.h) — connection type for IOServiceOpen
+    internal const uint KIoHidParamConnectType = 1;
+
+    // device-dependent modifier masks (IOLLEvent.h) — combined with generic CGEventFlag masks
+    internal const uint NxDeviceLCmdKeyMask = 0x00000008;
+    internal const uint NxDeviceLShiftKeyMask = 0x00000002;
+    internal const uint NxDeviceLCtlKeyMask = 0x00000001;
+    internal const uint NxDeviceLAltKeyMask = 0x00000020;
+
+    [LibraryImport(IOKit)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int IOMasterPort(uint bootstrapPort, out uint masterPort);
+
+    [LibraryImport(IOKit, StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint IOServiceMatching(string name);
+
+    [LibraryImport(IOKit)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int IOServiceGetMatchingServices(uint masterPort, nint matching, out uint iterator);
+
+    [LibraryImport(IOKit)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial uint IOIteratorNext(uint iterator);
+
+    [LibraryImport(IOKit)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int IOServiceOpen(uint service, uint owningTask, uint type, out uint connect);
+
+    [LibraryImport(IOKit)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int IOObjectRelease(uint obj);
+
+    [LibraryImport(IOKit)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int IOHIDPostEvent(uint connect, uint eventType, IOGPoint location, in NXEventData eventData, uint eventDataVersion, uint eventFlags, uint options);
+
 }
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
@@ -327,3 +392,20 @@ internal struct CGRect
     internal CGPoint Origin;
     internal CGPoint Size;
 }
+
+// IOGPoint: cursor location passed to IOHIDPostEvent — verified sizeof=4 via SDK header
+[StructLayout(LayoutKind.Sequential)]
+internal struct IOGPoint
+{
+    internal short X;
+    internal short Y;
+}
+
+// NXEventData: union from IOLLEvent.h — verified sizeof=48, keyCode at offset 8 via SDK header
+[StructLayout(LayoutKind.Explicit, Size = 48)]
+internal struct NXEventData
+{
+    [FieldOffset(8)]
+    internal ushort KeyCode;
+}
+
