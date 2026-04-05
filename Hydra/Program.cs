@@ -58,6 +58,8 @@ builder.ConfigureServices((_, services) =>
         else
             throw new PlatformNotSupportedException($"Unsupported OS: {Environment.OSVersion}");
 
+        services.AddHostedService<ILocalScreenService, LocalScreenService>();
+
         // forwarder buffers log entries; SlaveLogSender drains them to masters
         var forwarder = new SlaveLogForwarder();
         services.AddSingleton(forwarder);
