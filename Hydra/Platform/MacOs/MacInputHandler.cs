@@ -36,7 +36,6 @@ public sealed class MacInputHandler(ILogger<MacInputHandler> log) : IPlatformInp
     private static readonly nint _selSubtype = NativeMethods.sel_registerName("subtype");
     private static readonly nint _selData1 = NativeMethods.sel_registerName("data1");
 
-    public List<DetectedScreen> GetAllScreens() => MacDisplayHelper.GetAllScreens();
 
     public bool IsAccessibilityTrusted() => NativeMethods.AXIsProcessTrusted();
 

@@ -19,7 +19,6 @@ public record KeyRepeatSettings(int DelayMs, int RateMs);
 
 public interface IPlatformInput : IDisposable
 {
-    List<DetectedScreen> GetAllScreens();
     void WarpCursor(int x, int y);
     void HideCursor();
     void ShowCursor();

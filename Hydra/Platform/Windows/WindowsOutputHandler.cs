@@ -19,7 +19,6 @@ public sealed class WindowsOutputHandler : IPlatformOutput
         WinVirtualKey.Divide,   // numpad /
     ];
 
-    public List<DetectedScreen> GetAllScreens() => WindowsDisplayHelper.GetAllScreens();
 
     public unsafe void MoveMouse(int x, int y)
     {

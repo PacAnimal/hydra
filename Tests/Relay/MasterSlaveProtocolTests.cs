@@ -60,7 +60,7 @@ public class MasterSlaveProtocolTests
         var config = MakeConfig("slave-pc");
         var relay = new FakeRelay();
         var logs = new LogCapture();
-        var service = new ScreenTransitionService(new FakePlatform(), config, relay, logs, NullLogger<ScreenTransitionService>.Instance);
+        var service = new ScreenTransitionService(new FakePlatform(), config, relay, new FakeScreenDetector(), logs, NullLogger<ScreenTransitionService>.Instance);
         await service.StartAsync(CancellationToken.None);
 
         var msg = new SlaveLogMessage((int)LogLevel.Warning, "MyService", "something went wrong", null);
@@ -83,7 +83,7 @@ public class MasterSlaveProtocolTests
         var config = MakeConfig("slave-pc");
         var relay = new FakeRelay();
         var logs = new LogCapture();
-        var service = new ScreenTransitionService(new FakePlatform(), config, relay, logs, NullLogger<ScreenTransitionService>.Instance);
+        var service = new ScreenTransitionService(new FakePlatform(), config, relay, new FakeScreenDetector(), logs, NullLogger<ScreenTransitionService>.Instance);
         await service.StartAsync(CancellationToken.None);
 
         var msg = new SlaveLogMessage((int)LogLevel.Error, "Crasher", "boom", "System.Exception: kaboom");
@@ -157,7 +157,7 @@ public class MasterSlaveProtocolTests
     };
 
     private static ScreenTransitionService MakeService(HydraConfig config, IRelaySender relay) =>
-        new(new FakePlatform(), config, relay, NullLoggerFactory.Instance, NullLogger<ScreenTransitionService>.Instance);
+        new(new FakePlatform(), config, relay, new FakeScreenDetector(), NullLoggerFactory.Instance, NullLogger<ScreenTransitionService>.Instance);
 
     private static List<string> MasterConfigTargets(FakeRelay relay) =>
         [.. relay.Sent.Where(s => s.Kind == MessageKind.MasterConfig).SelectMany(s => s.Targets)];

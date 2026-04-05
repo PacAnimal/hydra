@@ -27,7 +27,6 @@ public sealed class XorgOutputHandler : IPlatformOutput
         _ = NativeMethods.XTestGrabControl(_display, true);
     }
 
-    public List<DetectedScreen> GetAllScreens() => XorgDisplayHelper.GetAllScreens(_display, _rootWindow);
 
     public void MoveMouse(int x, int y)
     {

@@ -58,14 +58,21 @@ builder.ConfigureServices((_, services) =>
         else
             throw new PlatformNotSupportedException($"Unsupported OS: {Environment.OSVersion}");
 
-        services.AddHostedService<ILocalScreenService, LocalScreenService>();
-
         // forwarder buffers log entries; SlaveLogSender drains them to masters
         var forwarder = new SlaveLogForwarder();
         services.AddSingleton(forwarder);
         services.AddSereneCustomLogging(e => forwarder.ForwardAsync(e).AsTask(), c => c.MinLogLevel = config.LogLevel);
         services.AddHostedService<SlaveLogSender>();
     }
+
+    if (OperatingSystem.IsMacOS())
+        services.AddHostedService<IScreenDetector, MacScreenDetector>();
+    else if (OperatingSystem.IsWindows())
+        services.AddHostedService<IScreenDetector, WindowsScreenDetector>();
+    else if (OperatingSystem.IsLinux())
+        services.AddHostedService<IScreenDetector, XorgScreenDetector>();
+    else
+        throw new PlatformNotSupportedException($"Unsupported OS: {Environment.OSVersion}");
 
     if (config.NetworkConfig != null)
     {

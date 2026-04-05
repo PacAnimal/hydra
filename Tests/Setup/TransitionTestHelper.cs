@@ -33,7 +33,8 @@ public static class TransitionTestHelper
     {
         var platform = new FakePlatform();
         var relay = new FakeRelay();
-        var service = new ScreenTransitionService(platform, TestConfig, relay, NullLoggerFactory.Instance, NullLogger<ScreenTransitionService>.Instance);
+        var screens = new FakeScreenDetector();
+        var service = new ScreenTransitionService(platform, TestConfig, relay, screens, NullLoggerFactory.Instance, NullLogger<ScreenTransitionService>.Instance);
         return new TestServiceBundle(platform, relay, service);
     }
 

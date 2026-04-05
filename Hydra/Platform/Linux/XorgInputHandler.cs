@@ -57,7 +57,6 @@ public sealed class XorgInputHandler : IPlatformInput
         _lockKeycode = (int)NativeMethods.XKeysymToKeycode(_display, 0x006C); // XK_l
     }
 
-    public List<DetectedScreen> GetAllScreens() => XorgDisplayHelper.GetAllScreens(_display, _rootWindow);
 
     // X11 requires no special accessibility permission (unlike macOS)
     public bool IsAccessibilityTrusted() => true;

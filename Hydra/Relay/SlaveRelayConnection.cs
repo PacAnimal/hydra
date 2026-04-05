@@ -12,7 +12,7 @@ public sealed class SlaveRelayConnection : RelayConnection
     private readonly IPlatformOutput _output;
     private readonly SlaveLogForwarder _logForwarder;
     private readonly ILogger<RelayConnection> _log;
-    private readonly ILocalScreenService _screens;
+    private readonly IScreenDetector _screens;
     private readonly IWorldState _peerState;
 
     // active key repeat timers keyed by (char?, SpecialKey?)
@@ -23,7 +23,7 @@ public sealed class SlaveRelayConnection : RelayConnection
 
     // ReSharper disable once ConvertToPrimaryConstructor
 #pragma warning disable IDE0290
-    public SlaveRelayConnection(HydraConfig config, ILogger<RelayConnection> log, IPlatformOutput output, SlaveLogForwarder logForwarder, ILocalScreenService screens, IWorldState peerState)
+    public SlaveRelayConnection(HydraConfig config, ILogger<RelayConnection> log, IPlatformOutput output, SlaveLogForwarder logForwarder, IScreenDetector screens, IWorldState peerState)
         : base(config, log, peerState)
     {
         _output = output;
@@ -48,7 +48,7 @@ public sealed class SlaveRelayConnection : RelayConnection
     protected override async Task OnAuthenticated()
     {
         var snapshot = await _screens.Get();
-        _log.LogInformation("Local screens: {Count}", snapshot.Entries.Count);
+        _log.LogInformation("Local screens: {Count}", snapshot.Screens.Count);
     }
 
     protected override async Task OnReceive(string sourceHost, MessageKind kind, string json)
@@ -172,7 +172,8 @@ public sealed class SlaveRelayConnection : RelayConnection
     private async Task MoveToScreen(string screenName, int x, int y)
     {
         var snapshot = await _screens.Get();
-        if (snapshot.Map.TryGetValue(screenName, out var screen))
+        var screen = snapshot.Screens.FirstOrDefault(s => s.Name.EqualsIgnoreCase(screenName));
+        if (screen != null)
             _output.MoveMouse(screen.X + x, screen.Y + y);
         else
             _output.MoveMouse(x, y);

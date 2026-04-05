@@ -17,7 +17,6 @@ public sealed class MacOutputHandler : IPlatformOutput
     // char produced by each vk code (no modifiers) — used to find the correct vk for character injection
     private static readonly Dictionary<char, ushort> _charToVk = BuildCharToVkMap();
 
-    public List<DetectedScreen> GetAllScreens() => MacDisplayHelper.GetAllScreens();
 
     public void MoveMouse(int x, int y)
     {

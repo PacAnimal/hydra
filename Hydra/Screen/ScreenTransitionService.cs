@@ -14,6 +14,7 @@ public class ScreenTransitionService(
     IPlatformInput platform,
     HydraConfig config,
     IRelaySender relay,
+    IScreenDetector screens,
     ILoggerFactory loggerFactory,
     ILogger<ScreenTransitionService> log,
     IWorldState? peerState = null)
@@ -50,13 +51,13 @@ public class ScreenTransitionService(
             return;
         }
 
-        var detected = platform.GetAllScreens();
-        LogDetectedScreens(detected);
+        var snapshot = await screens.Get(cancellationToken);
+        LogDetectedScreens(snapshot.Screens);
 
         using (var s = await _state.WaitForDisposable(cancellationToken))
         {
             var st = s.Value;
-            st.LocalScreens = BuildLocalScreens(detected);
+            st.LocalScreens = snapshot.Screens;
             st.ActiveLocalScreen = st.LocalScreens.FirstOrDefault();
 
             if (st.ActiveLocalScreen == null)
@@ -80,11 +81,12 @@ public class ScreenTransitionService(
 
         relay.PeersChanged += OnPeersChanged;
         relay.MessageReceived += OnMessageReceived;
+        screens.ScreensChanged += OnScreensChanged;
 
         platform.StartEventTap((x, y) => OnMouseMove(x, y), OnKeyEvent, OnMouseButton, OnMouseScroll);
 
         _pollCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        _ = PollScreenChangesAsync(_pollCts.Token);
+        _ = RefreshKeyRepeatAsync(_pollCts.Token);
     }
 
     public async Task StopAsync(CancellationToken cancellationToken)
@@ -93,6 +95,7 @@ public class ScreenTransitionService(
         _pollCts?.Dispose();
         relay.PeersChanged -= OnPeersChanged;
         relay.MessageReceived -= OnMessageReceived;
+        screens.ScreensChanged -= OnScreensChanged;
 
         platform.StopEventTap();
 
@@ -108,53 +111,38 @@ public class ScreenTransitionService(
         }
     }
 
-    private async Task PollScreenChangesAsync(CancellationToken ct)
+    private void OnScreensChanged(LocalScreenSnapshot snapshot)
     {
-        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(2));
+        log.LogInformation("Screen configuration changed — rebuilding layout");
+        LogDetectedScreens(snapshot.Screens);
+        var newScreens = BuildAllScreens(snapshot.Screens, config);
+        var peerScreens = AsyncHelper.RunSync(() => _peerState.GetPeerScreensSnapshot().AsTask());
+
+        using var s = AsyncHelper.RunSync(() => _state.WaitForDisposable());
+        var st = s.Value;
+        ApplyPeerScreenSizes(peerScreens, newScreens);
+        st.LocalScreens = snapshot.Screens;
+        st.Screens = newScreens;
+        st.Layout = new ScreenLayout(newScreens, config.Hosts);
+
+        if (!st.Mouse.IsOnVirtualScreen)
+        {
+            st.ActiveLocalScreen = st.LocalScreens.FirstOrDefault() ?? st.ActiveLocalScreen;
+            if (st.ActiveLocalScreen != null) UpdateWarpPoint(st, st.ActiveLocalScreen);
+        }
+    }
+
+    private async Task RefreshKeyRepeatAsync(CancellationToken ct)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(30));
         try
         {
             while (await timer.WaitForNextTickAsync(ct))
             {
-                var detected = platform.GetAllScreens();
-
-                List<ScreenRect> localScreensSnapshot;
-                using (var s = await _state.WaitForDisposable(ct))
-                    localScreensSnapshot = s.Value.LocalScreens;
-
-                // refresh key repeat settings every 30 seconds
-                var now = Environment.TickCount64;
-                if (now - _lastRepeatSettingsTick >= 30_000)
-                {
-                    var (refreshDelayMs, refreshRateMs) = platform.GetKeyRepeatSettings();
-                    _repeatDelayMs = refreshDelayMs;
-                    _repeatRateMs = refreshRateMs;
-                    _lastRepeatSettingsTick = now;
-                }
-
-                if (!ScreenRect.ScreenListChanged(detected, localScreensSnapshot))
-                    continue;
-
-                log.LogInformation("Screen configuration changed — rebuilding layout");
-                LogDetectedScreens(detected);
-                var newLocal = BuildLocalScreens(detected);
-                var newScreens = BuildAllScreens(newLocal, config);
-                var peerScreens = await _peerState.GetPeerScreensSnapshot();
-
-                using (var s = await _state.WaitForDisposable(ct))
-                {
-                    var st = s.Value;
-                    ApplyPeerScreenSizes(peerScreens, newScreens);
-                    var newLayout = new ScreenLayout(newScreens, config.Hosts);
-                    st.LocalScreens = newLocal;
-                    st.Screens = newScreens;
-                    st.Layout = newLayout;
-
-                    if (!st.Mouse.IsOnVirtualScreen)
-                    {
-                        st.ActiveLocalScreen = st.LocalScreens.FirstOrDefault() ?? st.ActiveLocalScreen;
-                        if (st.ActiveLocalScreen != null) UpdateWarpPoint(st, st.ActiveLocalScreen);
-                    }
-                }
+                var (delayMs, rateMs) = platform.GetKeyRepeatSettings();
+                _repeatDelayMs = delayMs;
+                _repeatRateMs = rateMs;
+                _lastRepeatSettingsTick = Environment.TickCount64;
             }
         }
         catch (OperationCanceledException) { }
@@ -580,28 +568,14 @@ public class ScreenTransitionService(
     private static ScreenRect? FindLocalScreenAt(LocalMasterState st, int x, int y) =>
         st.LocalScreens.FirstOrDefault(s => s.Contains(x, y));
 
-    private void LogDetectedScreens(List<DetectedScreen> detected)
+    private void LogDetectedScreens(List<ScreenRect> screens)
     {
-        log.LogInformation("Detected {Count} local screen(s):", detected.Count);
-        for (var i = 0; i < detected.Count; i++)
+        log.LogInformation("Detected {Count} local screen(s):", screens.Count);
+        for (var i = 0; i < screens.Count; i++)
         {
-            var d = detected[i];
-            log.LogInformation("  Screen {I}: {W}x{H} @ ({X},{Y}) output={Output} name={Name}",
-                i, d.Width, d.Height, d.X, d.Y, d.OutputName ?? "?", d.DisplayName ?? "?");
+            var s = screens[i];
+            log.LogInformation("  Screen {I}: {W}x{H} @ ({X},{Y}) name={Name}", i, s.Width, s.Height, s.X, s.Y, s.Name);
         }
-    }
-
-    // converts OS-detected screens to ScreenRects, naming single-screen = hostname, multi = hostname:N
-    private List<ScreenRect> BuildLocalScreens(List<DetectedScreen> detected)
-    {
-        var result = new List<ScreenRect>();
-        for (var i = 0; i < detected.Count; i++)
-        {
-            var d = detected[i];
-            var name = ScreenNaming.BuildScreenName(config.ResolvedName, i, detected.Count);
-            result.Add(new ScreenRect(name, config.ResolvedName, d.X, d.Y, d.Width, d.Height, IsLocal: true));
-        }
-        return result;
     }
 
     // combines local screens with placeholder remote screens (Width=0 until ScreenInfo arrives)

@@ -27,7 +27,6 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log) : IPla
     private readonly Toggle _isOnVirtualScreen = new();
     public bool IsOnVirtualScreen { get => _isOnVirtualScreen; set => _isOnVirtualScreen.TrySet(value); }
 
-    public List<DetectedScreen> GetAllScreens() => WindowsDisplayHelper.GetAllScreens();
 
     // low-level hooks work without elevation for non-elevated processes
     public bool IsAccessibilityTrusted() => true;

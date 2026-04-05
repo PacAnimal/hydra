@@ -27,7 +27,7 @@ public class ScreenStartupTests
         var logs = new ErrorCapture();
         var service = new ScreenTransitionService(
             new FakePlatform(), config, new NullRelaySender(),
-            NullLoggerFactory.Instance, logs.CreateLogger());
+            new FakeScreenDetector(), NullLoggerFactory.Instance, logs.CreateLogger());
 
         // must not throw
         await service.StartAsync(CancellationToken.None);

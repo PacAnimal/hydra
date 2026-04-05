@@ -7,23 +7,35 @@ using Microsoft.Extensions.Logging;
 
 namespace Hydra.Screen;
 
-public interface ILocalScreenService
+public interface IScreenDetector
 {
     Task<LocalScreenSnapshot> Get(CancellationToken ct = default);
     event Action<LocalScreenSnapshot>? ScreensChanged;
 }
 
-public record LocalScreenSnapshot(List<ScreenInfoEntry> Entries, Dictionary<string, ScreenRect> Map);
+public record LocalScreenSnapshot(List<ScreenRect> Screens, List<ScreenInfoEntry> Entries);
 
-public class LocalScreenService(IPlatformOutput output, HydraConfig config, ILogger<LocalScreenService> log)
-    : SimpleHostedService(log, loopTime: TimeSpan.FromSeconds(2)), ILocalScreenService
+public abstract class ScreenDetector : SimpleHostedService, IScreenDetector
 {
+    private readonly HydraConfig _config;
+    private readonly ILogger _log;
     private readonly SemaphoreSlim _lock = new(1, 1);
     private List<DetectedScreen> _detected = [];
     private LocalScreenSnapshot? _current;
     private readonly TaskCompletionSource _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public event Action<LocalScreenSnapshot>? ScreensChanged;
+
+    // ReSharper disable once ConvertToPrimaryConstructor
+#pragma warning disable IDE0290
+    protected ScreenDetector(HydraConfig config, ILogger log) : base(log, loopTime: TimeSpan.FromSeconds(2))
+    {
+        _config = config;
+        _log = log;
+    }
+#pragma warning restore IDE0290
+
+    protected abstract List<DetectedScreen> Detect();
 
     public async Task<LocalScreenSnapshot> Get(CancellationToken ct = default)
     {
@@ -33,7 +45,7 @@ public class LocalScreenService(IPlatformOutput output, HydraConfig config, ILog
 
     protected override async Task Execute(CancellationToken cancel)
     {
-        var detected = output.GetAllScreens();
+        var detected = Detect();
         LocalScreenSnapshot? snapshot = null;
 
         using (await _lock.WaitForDisposable(cancel))
@@ -50,7 +62,7 @@ public class LocalScreenService(IPlatformOutput output, HydraConfig config, ILog
 
         if (snapshot != null)
         {
-            log.LogInformation("Local screens: {Count}", snapshot.Entries.Count);
+            _log.LogInformation("Local screens: {Count}", snapshot.Screens.Count);
             ScreensChanged?.Invoke(snapshot);
         }
     }
@@ -58,31 +70,29 @@ public class LocalScreenService(IPlatformOutput output, HydraConfig config, ILog
     private LocalScreenSnapshot Build(List<DetectedScreen> detected)
     {
         if (detected.Count == 0)
-            return new LocalScreenSnapshot([], new Dictionary<string, ScreenRect>(StringComparer.OrdinalIgnoreCase));
+            return new LocalScreenSnapshot([], []);
 
         var minX = detected.Min(d => d.X);
         var minY = detected.Min(d => d.Y);
 
+        var screens = new List<ScreenRect>();
         var entries = new List<ScreenInfoEntry>();
-        var map = new Dictionary<string, ScreenRect>(StringComparer.OrdinalIgnoreCase);
 
         for (var i = 0; i < detected.Count; i++)
         {
             var d = detected[i];
-            var name = ScreenNaming.BuildScreenName(config.ResolvedName, i, detected.Count);
+            var name = ScreenNaming.BuildScreenName(_config.ResolvedName, i, detected.Count);
             var scale = ResolveScale(d);
-            var nx = d.X - minX;
-            var ny = d.Y - minY;
-            entries.Add(new ScreenInfoEntry(name, nx, ny, d.Width, d.Height, scale));
-            map[name] = new ScreenRect(name, config.ResolvedName, d.X, d.Y, d.Width, d.Height, IsLocal: true);
+            screens.Add(new ScreenRect(name, _config.ResolvedName, d.X, d.Y, d.Width, d.Height, IsLocal: true));
+            entries.Add(new ScreenInfoEntry(name, d.X - minX, d.Y - minY, d.Width, d.Height, scale));
         }
 
-        return new LocalScreenSnapshot(entries, map);
+        return new LocalScreenSnapshot(screens, entries);
     }
 
     private decimal ResolveScale(DetectedScreen d)
     {
-        foreach (var def in config.ScreenDefinitions)
+        foreach (var def in _config.ScreenDefinitions)
         {
             if (Matches(d, def.Match))
                 return def.Scale;
