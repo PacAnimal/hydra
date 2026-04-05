@@ -10,9 +10,10 @@ using Microsoft.Extensions.Logging;
 
 namespace Hydra.Update;
 
-internal sealed class SelfUpdater(HydraConfig config, ILogger<SelfUpdater> log) : SimpleHostedService(log)
+internal sealed partial class SelfUpdater(HydraConfig config, ILogger<SelfUpdater> log) : SimpleHostedService(log, TimeSpan.FromHours(1))
 {
     private const string Repo = "pacanimal/hydra";
+    private readonly Toggle _warned = new();
 
     protected override async Task Execute(CancellationToken cancel)
     {
@@ -20,13 +21,13 @@ internal sealed class SelfUpdater(HydraConfig config, ILogger<SelfUpdater> log) 
 
         if (!config.AutoUpdate)
         {
-            log.LogDebug("auto-update disabled");
+            if (_warned.TrySet()) log.LogDebug("auto-update disabled");
             return;
         }
 
         if (Debugger.IsAttached)
         {
-            log.LogInformation("auto-update skipped (debugger attached)");
+            if (_warned.TrySet()) log.LogInformation("auto-update skipped (debugger attached)");
             return;
         }
 
@@ -166,8 +167,8 @@ internal sealed class SelfUpdater(HydraConfig config, ILogger<SelfUpdater> log) 
         }
     }
 
-    [System.Runtime.InteropServices.DllImport("libc", EntryPoint = "execv", SetLastError = true)]
-    private static extern int execv(string pathname, string?[] argv);
+    [LibraryImport("libc", EntryPoint = "execv", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+    private static partial int execv(string pathname, string?[] argv);
 
     private static void Cleanup()
     {
