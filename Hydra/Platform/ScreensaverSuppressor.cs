@@ -15,18 +15,30 @@ internal sealed class ScreensaverSuppressor(HydraConfig config, ILogger<Screensa
 {
     private volatile bool _suppressing;
 
-    public void Suppress() => _suppressing = config.SyncScreensaver;
+    public void Suppress()
+    {
+        var was = _suppressing;
+        _suppressing = config.SyncScreensaver;
+        if (_suppressing && !was)
+            log.LogDebug("Screensaver suppression enabled");
+        else if (!_suppressing)
+            log.LogDebug("Screensaver suppression skipped — SyncScreensaver is disabled");
+    }
 
     public void Restore()
     {
         _suppressing = false;
         platform.Restore();
+        log.LogDebug("Screensaver suppression restored");
     }
 
     protected override Task Execute(CancellationToken cancel)
     {
         if (_suppressing)
+        {
+            log.LogDebug("Refreshing screensaver suppression");
             platform.Suppress();
+        }
         return Task.CompletedTask;
     }
 

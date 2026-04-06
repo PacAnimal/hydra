@@ -121,6 +121,7 @@ public class SlaveRelayConnection : RelayConnection
                 var ss = json.FromSaneJson<ScreensaverSyncMessage>();
                 if (ss != null)
                 {
+                    _log.LogInformation("Screensaver sync from {Host}: active={Active}", sourceHost, ss.Active);
                     if (ss.Active) _screenSaverSync.Activate();
                     else _screenSaverSync.Deactivate();
                 }

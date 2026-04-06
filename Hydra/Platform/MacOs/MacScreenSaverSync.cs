@@ -1,9 +1,10 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform.MacOs;
 
-public sealed partial class MacScreenSaverSync : IScreenSaverSync
+public sealed partial class MacScreenSaverSync(ILogger<MacScreenSaverSync> log) : IScreenSaverSync
 {
     // distributed notification names posted by ScreenSaverEngine
     private const string DidStart = "com.apple.screensaver.didstart";
@@ -19,14 +20,28 @@ public sealed partial class MacScreenSaverSync : IScreenSaverSync
     public void StartWatching(Action onActivated, Action onDeactivated)
     {
         _center = NativeMethods.CFNotificationCenterGetDistributedCenter();
-        if (_center == nint.Zero) return;
+        if (_center == nint.Zero)
+        {
+            log.LogWarning("Failed to get CFNotificationCenter — screensaver watching disabled");
+            return;
+        }
+
+        log.LogInformation("Watching for screensaver notifications");
 
         _callback = (_, _, name, _, _) =>
         {
             // resolve CFStringRef name to a managed string for comparison
             var str = CFStringToString(name);
-            if (str == DidStart) onActivated();
-            else if (str == DidStop) onDeactivated();
+            if (str == DidStart)
+            {
+                log.LogInformation("Screensaver started (notification received)");
+                onActivated();
+            }
+            else if (str == DidStop)
+            {
+                log.LogInformation("Screensaver stopped (notification received)");
+                onDeactivated();
+            }
         };
 
         var nameStart = NativeMethods.CFStringCreateWithCString(nint.Zero, DidStart, NativeMethods.KCFStringEncodingUtf8);
@@ -45,6 +60,7 @@ public sealed partial class MacScreenSaverSync : IScreenSaverSync
     public void StopWatching()
     {
         if (_center == nint.Zero) return;
+        log.LogInformation("Stopped watching for screensaver notifications");
 
         var nameStart = NativeMethods.CFStringCreateWithCString(nint.Zero, DidStart, NativeMethods.KCFStringEncodingUtf8);
         var nameStop = NativeMethods.CFStringCreateWithCString(nint.Zero, DidStop, NativeMethods.KCFStringEncodingUtf8);
@@ -59,13 +75,15 @@ public sealed partial class MacScreenSaverSync : IScreenSaverSync
 
     public void Activate()
     {
+        log.LogInformation("Activating screensaver");
         // launch ScreenSaverEngine directly
         try { Process.Start("open", ["-a", "ScreenSaverEngine"]); }
-        catch { /* best-effort */ }
+        catch (Exception ex) { log.LogWarning(ex, "Failed to launch ScreenSaverEngine"); }
     }
 
     public void Deactivate()
     {
+        log.LogInformation("Deactivating screensaver");
         // a synthetic mouse move dismisses the screensaver reliably
         var src = NativeMethods.CGEventSourceCreate(NativeMethods.KCGEventSourceStateCombinedSessionState);
         var evt = NativeMethods.CGEventCreateMouseEvent(src, NativeMethods.KCGEventMouseMoved,
@@ -80,18 +98,27 @@ public sealed partial class MacScreenSaverSync : IScreenSaverSync
 
     public void Suppress()
     {
-        if (_assertionId != 0) return;
+        if (_assertionId != 0)
+        {
+            log.LogDebug("IOPMAssertion already active (id={Id})", _assertionId);
+            return;
+        }
         var typeStr = NativeMethods.CFStringCreateWithCString(nint.Zero, AssertionType, NativeMethods.KCFStringEncodingUtf8);
         var nameStr = NativeMethods.CFStringCreateWithCString(nint.Zero, AssertionReason, NativeMethods.KCFStringEncodingUtf8);
-        NativeMethods.IOPMAssertionCreateWithName(typeStr, NativeMethods.KIOPMAssertionLevelOn, nameStr, out _assertionId);
+        var result = NativeMethods.IOPMAssertionCreateWithName(typeStr, NativeMethods.KIOPMAssertionLevelOn, nameStr, out _assertionId);
         NativeMethods.CFRelease(typeStr);
         NativeMethods.CFRelease(nameStr);
+        if (result == 0)
+            log.LogDebug("IOPMAssertion created (id={Id})", _assertionId);
+        else
+            log.LogWarning("IOPMAssertionCreateWithName failed (result={Result})", result);
     }
 
     public void Restore()
     {
         if (_assertionId == 0) return;
-        _ = NativeMethods.IOPMAssertionRelease(_assertionId);
+        var result = NativeMethods.IOPMAssertionRelease(_assertionId);
+        log.LogDebug("IOPMAssertion released (id={Id}, result={Result})", _assertionId, result);
         _assertionId = 0;
     }
 

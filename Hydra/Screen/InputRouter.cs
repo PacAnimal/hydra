@@ -277,7 +277,7 @@ public class InputRouter(
         }
 
         BroadcastScreensaverSync(true);
-        log.LogDebug("Screensaver activated — synced to slaves");
+        log.LogInformation("Screensaver activated — synced to slaves");
     }
 
     private void OnScreensaverDeactivated()
@@ -297,7 +297,7 @@ public class InputRouter(
         }
 
         BroadcastScreensaverSync(false);
-        log.LogDebug("Screensaver deactivated — synced to slaves");
+        log.LogInformation("Screensaver deactivated — synced to slaves");
 
         // best-effort cursor restore: re-enter saved remote screen if still connected and accessible
         if (savedScreen != null && relay.IsConnected)
@@ -320,7 +320,7 @@ public class InputRouter(
                 var enterPayload = MessageSerializer.Encode(MessageKind.EnterScreen,
                     new EnterScreenMessage(dest.Name, savedX, savedY, dest.Width, dest.Height));
                 _ = relay.Send([dest.Host], enterPayload).AsTask();
-                log.LogDebug("Restored cursor to '{Screen}' after screensaver", savedScreen);
+                log.LogInformation("Restored cursor to '{Screen}' after screensaver", savedScreen);
             }
         }
     }
