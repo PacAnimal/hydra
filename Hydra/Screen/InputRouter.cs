@@ -90,8 +90,7 @@ public class InputRouter(
 
         platform.StartEventTap((x, y) => OnMouseMove(x, y), OnKeyEvent, OnMouseButton, OnMouseScroll);
 
-        if (config.SyncScreensaver)
-            _screenSaverSync.StartWatching(OnScreensaverActivated, OnScreensaverDeactivated);
+        _screenSaverSync.StartWatching(OnScreensaverActivated, OnScreensaverDeactivated);
 
         _pollCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         _ = RefreshKeyRepeatAsync(_pollCts.Token);
@@ -106,8 +105,7 @@ public class InputRouter(
         relay.Disconnected -= OnRelayDisconnected;
         screens.ScreensChanged -= OnScreensChanged;
 
-        if (config.SyncScreensaver)
-            _screenSaverSync.StopWatching();
+        _screenSaverSync.StopWatching();
         platform.StopEventTap();
 
 #pragma warning disable CA2016 // intentionally not propagated — cleanup must always run
