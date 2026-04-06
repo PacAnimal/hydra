@@ -21,6 +21,9 @@ public interface IWorldState
     // -- shared (encryption) --
     ValueTask SetRemoteKey(string host, SimpleAesKey key);
     ValueTask<SimpleAesKey?> GetRemoteKey(string host);
+
+    // -- master-side (relay reconnect) --
+    ValueTask ClearPeers();
 }
 
 public class WorldState : IWorldState
@@ -98,6 +101,15 @@ public class WorldState : IWorldState
     {
         using var s = await _slave.WaitForDisposable();
         s.Value.Masters.RemoveWhere(h => !activePeers.Contains(h));
+    }
+
+    public async ValueTask ClearPeers()
+    {
+        using var m = await _master.WaitForDisposable();
+        var s = m.Value;
+        s.KnownPeers.Clear();
+        s.PeerScreens.Clear();
+        _loggers.Clear();
     }
 
     public async ValueTask SetRemoteKey(string host, SimpleAesKey key)

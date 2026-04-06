@@ -6,9 +6,9 @@ public sealed class FakeRelay : IRelaySender
 {
     public readonly List<(string[] Targets, MessageKind Kind, string Json)> Sent = [];
     public bool IsConnected { get; set; } = true;
-    public event Action<string[]>? PeersChanged;
-    public event Action<string, MessageKind, string>? MessageReceived;
-    public event Action? Disconnected;
+    public event Func<string[], Task>? PeersChanged;
+    public event Func<string, MessageKind, string, Task>? MessageReceived;
+    public event Func<Task>? Disconnected;
 
     public ValueTask Send(string[] targetHosts, byte[] payload)
     {
@@ -17,7 +17,18 @@ public sealed class FakeRelay : IRelaySender
         return ValueTask.CompletedTask;
     }
 
-    public void FirePeersChanged(params string[] hosts) => PeersChanged?.Invoke(hosts);
-    public void FireMessageReceived(string host, MessageKind kind, string json) => MessageReceived?.Invoke(host, kind, json);
-    public void FireDisconnected() => Disconnected?.Invoke();
+    public async Task FirePeersChanged(params string[] hosts)
+    {
+        if (PeersChanged != null) await PeersChanged(hosts);
+    }
+
+    public async Task FireMessageReceived(string host, MessageKind kind, string json)
+    {
+        if (MessageReceived != null) await MessageReceived(host, kind, json);
+    }
+
+    public async Task FireDisconnected()
+    {
+        if (Disconnected != null) await Disconnected();
+    }
 }

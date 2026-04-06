@@ -15,7 +15,7 @@ public class RelayDisconnectTests
     {
         (_platform, _relay, _service) = TransitionTestHelper.CreateService();
         await _service.StartAsync(CancellationToken.None);
-        TransitionTestHelper.BringRemoteOnline(_relay);
+        await TransitionTestHelper.BringRemoteOnline(_relay);
     }
 
     [TearDown]
@@ -26,7 +26,7 @@ public class RelayDisconnectTests
     }
 
     [Test]
-    public void RelayDisconnect_WhileOnVirtualScreen_SnapsBackAndShowsCursor()
+    public async Task RelayDisconnect_WhileOnVirtualScreen_SnapsBackAndShowsCursor()
     {
         // enter virtual screen
         _platform.FireMouseMove(2559, 720);
@@ -34,7 +34,7 @@ public class RelayDisconnectTests
 
         _platform.ShowCursorCalled = false;
 
-        _relay.FireDisconnected();
+        await _relay.FireDisconnected();
 
         using (Assert.EnterMultipleScope())
         {
@@ -44,12 +44,12 @@ public class RelayDisconnectTests
     }
 
     [Test]
-    public void RelayDisconnect_WhileOnLocalScreen_NoEffect()
+    public async Task RelayDisconnect_WhileOnLocalScreen_NoEffect()
     {
         Assert.That(_platform.IsOnVirtualScreen, Is.False);
         _platform.ShowCursorCalled = false;
 
-        _relay.FireDisconnected();
+        await _relay.FireDisconnected();
 
         using (Assert.EnterMultipleScope())
         {

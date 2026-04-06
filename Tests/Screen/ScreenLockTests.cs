@@ -16,7 +16,7 @@ public class ScreenLockTests
     {
         (_platform, _relay, _service) = CreateService();
         await _service.StartAsync(CancellationToken.None);
-        BringRemoteOnline(_relay);
+        await BringRemoteOnline(_relay);
     }
 
     [TearDown]
@@ -45,7 +45,7 @@ public class ScreenLockTests
         // restart fresh
         (_platform, _relay, _service) = CreateService();
         _service.StartAsync(CancellationToken.None).Wait();
-        BringRemoteOnline(_relay);
+        TransitionTestHelper.BringRemoteOnline(_relay).Wait();
 
         // lock
         _platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyDown, 'l',
@@ -120,6 +120,6 @@ public class ScreenLockTests
     private static TestServiceBundle CreateService() =>
         TransitionTestHelper.CreateService();
 
-    private static void BringRemoteOnline(FakeRelay relay) =>
+    private static Task BringRemoteOnline(FakeRelay relay) =>
         TransitionTestHelper.BringRemoteOnline(relay);
 }

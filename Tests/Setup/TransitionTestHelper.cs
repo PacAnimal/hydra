@@ -39,11 +39,11 @@ public static class TransitionTestHelper
         return new TestServiceBundle(platform, relay, service);
     }
 
-    public static void BringRemoteOnline(FakeRelay relay)
+    public static async Task BringRemoteOnline(FakeRelay relay)
     {
-        relay.FirePeersChanged("remote");
+        await relay.FirePeersChanged("remote");
         var info = JsonSerializer.Serialize(new ScreenInfoMessage([new ScreenInfoEntry("screen:0", 0, 0, 2560, 1440, 1.0m)]), SaneJson.Options);
-        relay.FireMessageReceived("remote", MessageKind.ScreenInfo, info);
+        await relay.FireMessageReceived("remote", MessageKind.ScreenInfo, info);
     }
 }
 

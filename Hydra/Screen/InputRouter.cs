@@ -122,14 +122,14 @@ public class InputRouter(
         }
     }
 
-    private void OnScreensChanged(LocalScreenSnapshot snapshot)
+    private async Task OnScreensChanged(LocalScreenSnapshot snapshot)
     {
         log.LogInformation("Screen configuration changed — rebuilding layout");
         LogDetectedScreens(snapshot.Screens);
         var newScreens = BuildAllScreens(snapshot.Screens, config);
-        var peerScreens = AsyncHelper.RunSync(() => _peerState.GetPeerScreensSnapshot().AsTask());
+        var peerScreens = await _peerState.GetPeerScreensSnapshot();
 
-        using var s = AsyncHelper.RunSync(() => _state.WaitForDisposable());
+        using var s = await _state.WaitForDisposable();
         var st = s.Value;
         ApplyPeerScreenSizes(peerScreens, newScreens);
         st.LocalScreens = snapshot.Screens;
@@ -159,19 +159,19 @@ public class InputRouter(
         catch (OperationCanceledException) { }
     }
 
-    private void OnPeersChanged(string[] hostNames)
+    private async Task OnPeersChanged(string[] hostNames)
     {
         var current = new HashSet<string>(hostNames, StringComparer.OrdinalIgnoreCase);
         var configuredSlaves = config.RemoteHosts
             .Select(s => s.Name)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        var delta = AsyncHelper.RunSync(() => _peerState.UpdatePeers(current, configuredSlaves).AsTask());
+        var delta = await _peerState.UpdatePeers(current, configuredSlaves);
 
         string? disconnectedHost = null;
         int warpX = 0, warpY = 0;
 
-        using (var s = AsyncHelper.RunSync(() => _state.WaitForDisposable()))
+        using (var s = await _state.WaitForDisposable())
         {
             var st = s.Value;
 
@@ -211,12 +211,12 @@ public class InputRouter(
         }
     }
 
-    private void OnRelayDisconnected()
+    private async Task OnRelayDisconnected()
     {
         string? disconnectedHost = null;
         int warpX = 0, warpY = 0;
 
-        using (var s = AsyncHelper.RunSync(() => _state.WaitForDisposable()))
+        using (var s = await _state.WaitForDisposable())
         {
             var st = s.Value;
             if (st.Mouse.IsOnVirtualScreen && st.Mouse.CurrentScreen != null)
@@ -230,6 +230,9 @@ public class InputRouter(
                 st.PendingCursorShow = false;
             }
         }
+
+        // reset known peers so all slaves get a fresh MasterConfig on reconnect
+        await _peerState.ClearPeers();
 
         if (disconnectedHost != null)
         {
@@ -334,7 +337,7 @@ public class InputRouter(
         _ = relay.Send(hosts, payload).AsTask();
     }
 
-    private void OnMessageReceived(string sourceHost, MessageKind kind, string json)
+    private async Task OnMessageReceived(string sourceHost, MessageKind kind, string json)
     {
         switch (kind)
         {
@@ -342,9 +345,9 @@ public class InputRouter(
                 var info = json.FromSaneJson<ScreenInfoMessage>();
                 if (info != null && info.Screens.Count > 0)
                 {
-                    AsyncHelper.RunSync(() => _peerState.SetPeerScreens(sourceHost, info.Screens).AsTask());
-                    var snapshot = AsyncHelper.RunSync(() => _peerState.GetPeerScreensSnapshot().AsTask());
-                    using (var s = AsyncHelper.RunSync(() => _state.WaitForDisposable()))
+                    await _peerState.SetPeerScreens(sourceHost, info.Screens);
+                    var snapshot = await _peerState.GetPeerScreensSnapshot();
+                    using (var s = await _state.WaitForDisposable())
                         RebuildLayout(s.Value, snapshot);
                     log.LogInformation("Screen info from {Host}: {Count} screen(s)", sourceHost, info.Screens.Count);
                 }

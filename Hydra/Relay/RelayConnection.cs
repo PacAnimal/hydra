@@ -23,9 +23,9 @@ public class RelayConnection(HydraConfig config, ILogger<RelayConnection> log, I
 
     // IRelaySender
     public bool IsConnected => _server != null;
-    public event Action<string[]>? PeersChanged;
-    public event Action<string, MessageKind, string>? MessageReceived;
-    public event Action? Disconnected;
+    public event Func<string[], Task>? PeersChanged;
+    public event Func<string, MessageKind, string, Task>? MessageReceived;
+    public event Func<Task>? Disconnected;
 
     public async ValueTask Send(string[] targetHosts, byte[] payload)
     {
@@ -83,16 +83,16 @@ public class RelayConnection(HydraConfig config, ILogger<RelayConnection> log, I
     }
 
     // override in subclasses (e.g. tests, slave mode)
-    protected virtual Task OnReceive(string sourceHost, MessageKind kind, string json)
+    protected virtual async Task OnReceive(string sourceHost, MessageKind kind, string json)
     {
-        MessageReceived?.Invoke(sourceHost, kind, json);
-        return Task.CompletedTask;
+        if (MessageReceived != null) await MessageReceived(sourceHost, kind, json);
+        else await ValueTask.CompletedTask;
     }
 
-    protected virtual Task OnPeers(string[] hostNames)
+    protected virtual async Task OnPeers(string[] hostNames)
     {
-        PeersChanged?.Invoke(hostNames);
-        return Task.CompletedTask;
+        if (PeersChanged != null) await PeersChanged(hostNames);
+        else await ValueTask.CompletedTask;
     }
 
     protected virtual Task OnKicked(string reason) => Task.CompletedTask;
@@ -159,7 +159,7 @@ public class RelayConnection(HydraConfig config, ILogger<RelayConnection> log, I
                 if (wasConnected)
                 {
                     await OnDisconnected();
-                    Disconnected?.Invoke();
+                    if (Disconnected != null) await Disconnected();
                 }
             }
 

@@ -18,7 +18,7 @@ public class MouseThrottleTests
     {
         (_platform, _relay, _service) = CreateService();
         await _service.StartAsync(CancellationToken.None);
-        BringRemoteOnline(_relay);
+        await BringRemoteOnline(_relay);
     }
 
     [TearDown]
@@ -167,6 +167,6 @@ public class MouseThrottleTests
     private static TestServiceBundle CreateService() =>
         TransitionTestHelper.CreateService();
 
-    private static void BringRemoteOnline(FakeRelay relay) =>
+    private static Task BringRemoteOnline(FakeRelay relay) =>
         TransitionTestHelper.BringRemoteOnline(relay);
 }

@@ -20,7 +20,7 @@ public class MasterSlaveProtocolTests
     {
         var relay = new TestableMasterRelay();
         var received = new List<MessageKind>();
-        relay.MessageReceived += (_, kind, _) => received.Add(kind);
+        relay.MessageReceived += async (_, kind, _) => { received.Add(kind); await ValueTask.CompletedTask; };
 
         var msg = new SlaveLogMessage(2, "cat", "hello", null);
         await relay.SimulateReceive("slave-pc", MessageKind.SlaveLog, JsonSerializer.Serialize(msg, SaneJson.Options));
@@ -33,7 +33,7 @@ public class MasterSlaveProtocolTests
     {
         var relay = new TestableMasterRelay();
         var received = new List<MessageKind>();
-        relay.MessageReceived += (_, kind, _) => received.Add(kind);
+        relay.MessageReceived += async (_, kind, _) => { received.Add(kind); await ValueTask.CompletedTask; };
 
         await relay.SimulateReceive("other-master", MessageKind.MasterConfig, "{}");
 
@@ -45,7 +45,7 @@ public class MasterSlaveProtocolTests
     {
         var relay = new TestableMasterRelay();
         var received = new List<MessageKind>();
-        relay.MessageReceived += (_, kind, _) => received.Add(kind);
+        relay.MessageReceived += async (_, kind, _) => { received.Add(kind); await ValueTask.CompletedTask; };
 
         var info = new ScreenInfoMessage([new ScreenInfoEntry("screen:0", 0, 0, 1920, 1080, 1.0m)]);
         await relay.SimulateReceive("slave-pc", MessageKind.ScreenInfo, JsonSerializer.Serialize(info, SaneJson.Options));
@@ -65,7 +65,7 @@ public class MasterSlaveProtocolTests
         await service.StartAsync(CancellationToken.None);
 
         var msg = new SlaveLogMessage((int)LogLevel.Warning, "MyService", "something went wrong", null);
-        relay.FireMessageReceived("slave-pc", MessageKind.SlaveLog, JsonSerializer.Serialize(msg, SaneJson.Options));
+        await relay.FireMessageReceived("slave-pc", MessageKind.SlaveLog, JsonSerializer.Serialize(msg, SaneJson.Options));
 
         var (Category, Level, Message) = logs.Entries.Single(e => e.Category.StartsWith("slave:"));
         using (Assert.EnterMultipleScope())
@@ -88,7 +88,7 @@ public class MasterSlaveProtocolTests
         await service.StartAsync(CancellationToken.None);
 
         var msg = new SlaveLogMessage((int)LogLevel.Error, "Crasher", "boom", "System.Exception: kaboom");
-        relay.FireMessageReceived("slave-pc", MessageKind.SlaveLog, JsonSerializer.Serialize(msg, SaneJson.Options));
+        await relay.FireMessageReceived("slave-pc", MessageKind.SlaveLog, JsonSerializer.Serialize(msg, SaneJson.Options));
 
         var (Category, Level, Message) = logs.Entries.Single(e => e.Category.StartsWith("slave:"));
         Assert.That(Message, Does.Contain("kaboom"));
@@ -106,7 +106,7 @@ public class MasterSlaveProtocolTests
         var service = MakeService(config, relay);
         await service.StartAsync(CancellationToken.None);
 
-        relay.FirePeersChanged("slave-pc", "other-master");
+        await relay.FirePeersChanged("slave-pc", "other-master");
 
         Assert.That(MasterConfigTargets(relay), Is.EqualTo(["slave-pc"]));
 
@@ -121,10 +121,10 @@ public class MasterSlaveProtocolTests
         var service = MakeService(config, relay);
         await service.StartAsync(CancellationToken.None);
 
-        relay.FirePeersChanged("slave-pc");
-        relay.FirePeersChanged();           // slave disappears
+        await relay.FirePeersChanged("slave-pc");
+        await relay.FirePeersChanged();           // slave disappears
         relay.Sent.Clear();
-        relay.FirePeersChanged("slave-pc"); // slave reappears
+        await relay.FirePeersChanged("slave-pc"); // slave reappears
 
         Assert.That(MasterConfigTargets(relay), Is.EqualTo(["slave-pc"]));
 
@@ -139,9 +139,9 @@ public class MasterSlaveProtocolTests
         var service = MakeService(config, relay);
         await service.StartAsync(CancellationToken.None);
 
-        relay.FirePeersChanged("slave-pc");
+        await relay.FirePeersChanged("slave-pc");
         relay.Sent.Clear();
-        relay.FirePeersChanged("slave-pc", "another-peer"); // slave still present
+        await relay.FirePeersChanged("slave-pc", "another-peer"); // slave still present
 
         Assert.That(MasterConfigTargets(relay), Is.Empty);
 

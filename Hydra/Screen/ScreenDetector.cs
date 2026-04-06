@@ -12,7 +12,7 @@ namespace Hydra.Screen;
 public interface IScreenDetector
 {
     Task<LocalScreenSnapshot> Get(CancellationToken ct = default);
-    event Action<LocalScreenSnapshot>? ScreensChanged;
+    event Func<LocalScreenSnapshot, Task>? ScreensChanged;
 }
 
 public record LocalScreenSnapshot(List<ScreenRect> Screens, List<ScreenInfoEntry> Entries);
@@ -31,7 +31,7 @@ public abstract class ScreenDetector : SimpleHostedService, IScreenDetector
     private LocalScreenSnapshot? _current;
     private readonly TaskCompletionSource _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    public event Action<LocalScreenSnapshot>? ScreensChanged;
+    public event Func<LocalScreenSnapshot, Task>? ScreensChanged;
 
     // ReSharper disable once ConvertToPrimaryConstructor
 #pragma warning disable IDE0290
@@ -73,7 +73,7 @@ public abstract class ScreenDetector : SimpleHostedService, IScreenDetector
             for (var i = 0; i < snapshot.Screens.Count; i++)
                 if (snapshot.Screens[i].Identity != null)
                     _log.LogInformation("  Screen {I}: {Json}", i, JsonSerializer.Serialize(snapshot.Screens[i].Identity, _jsonOptions));
-            ScreensChanged?.Invoke(snapshot);
+            if (ScreensChanged != null) await ScreensChanged(snapshot);
         }
     }
 

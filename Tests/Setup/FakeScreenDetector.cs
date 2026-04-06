@@ -9,9 +9,12 @@ public class FakeScreenDetector : IScreenDetector
         [new ScreenRect("home:0", "home", 0, 0, 2560, 1440, IsLocal: true)],
         [new ScreenInfoEntry("home:0", 0, 0, 2560, 1440, 1.0m)]);
 
-    public event Action<LocalScreenSnapshot>? ScreensChanged;
+    public event Func<LocalScreenSnapshot, Task>? ScreensChanged;
 
     public Task<LocalScreenSnapshot> Get(CancellationToken ct = default) => Task.FromResult(Snapshot);
 
-    public void FireChange() => ScreensChanged?.Invoke(Snapshot);
+    public async Task FireChange()
+    {
+        if (ScreensChanged != null) await ScreensChanged(Snapshot);
+    }
 }
