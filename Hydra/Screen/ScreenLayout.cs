@@ -1,17 +1,18 @@
 using Cathedral.Extensions;
 using Hydra.Config;
+using Microsoft.Extensions.Logging;
 
 namespace Hydra.Screen;
 
-public class ScreenLayout(List<ScreenRect> screens, List<HostConfig> configs)
+public class ScreenLayout(List<ScreenRect> screens, List<HostConfig> configs, ILogger log)
 {
     private const int JumpZone = 1;
     private const int NudgeDistance = 2;
 
-    private readonly Dictionary<(string Name, Direction Dir), List<EdgeLink>> _graph = BuildGraph(screens, configs);
+    private readonly Dictionary<(string Name, Direction Dir), List<EdgeLink>> _graph = BuildGraph(screens, configs, log);
 
     private static Dictionary<(string, Direction), List<EdgeLink>> BuildGraph(
-        List<ScreenRect> screens, List<HostConfig> configs)
+        List<ScreenRect> screens, List<HostConfig> configs, ILogger log)
     {
         // group screens by host name for fast lookup
         var byHost = screens.ToLookup(s => s.Host, StringComparer.OrdinalIgnoreCase);
@@ -36,6 +37,20 @@ public class ScreenLayout(List<ScreenRect> screens, List<HostConfig> configs)
                     ? destScreens
                     : [.. destScreens.Where(s => MatchesId(s, neighbour.DestScreen))];
 
+                if (neighbour.SourceScreen != null && filteredSources.Count > 1)
+                {
+                    log.LogWarning("Neighbour sourceScreen '{Id}' matches multiple screens ({Names}) — ignoring neighbour",
+                        neighbour.SourceScreen, string.Join(", ", filteredSources.Select(s => s.Name)));
+                    continue;
+                }
+
+                if (neighbour.DestScreen != null && filteredDests.Count > 1)
+                {
+                    log.LogWarning("Neighbour destScreen '{Id}' matches multiple screens ({Names}) — ignoring neighbour",
+                        neighbour.DestScreen, string.Join(", ", filteredDests.Select(s => s.Name)));
+                    continue;
+                }
+
                 var dest = filteredDests.FirstOrDefault();
                 if (dest is null) continue;
 
@@ -57,9 +72,8 @@ public class ScreenLayout(List<ScreenRect> screens, List<HostConfig> configs)
         return graph;
     }
 
-    // case-insensitive match against screen name
     private static bool MatchesId(ScreenRect screen, string id) =>
-        screen.Name.EqualsIgnoreCase(id);
+        screen.Identity?.Matches(id) ?? screen.Name.EqualsIgnoreCase(id);
 
     // checks if the cursor is in the jump zone of any edge that has a neighbour.
     // coords are 0-based within the current screen.

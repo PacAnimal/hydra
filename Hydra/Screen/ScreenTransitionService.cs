@@ -1,3 +1,5 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Cathedral.Extensions;
 using Cathedral.Utils;
 using Hydra.Config;
@@ -70,7 +72,7 @@ public class ScreenTransitionService(
 
             UpdateWarpPoint(st, st.ActiveLocalScreen);
             st.Screens = BuildAllScreens(st.LocalScreens, config);
-            st.Layout = new ScreenLayout(st.Screens, config.Hosts);
+            st.Layout = new ScreenLayout(st.Screens, config.Hosts, log);
 
             foreach (var remote in st.Screens.Where(r => !r.IsLocal))
                 log.LogInformation("Remote screen '{Name}': waiting for peer", remote.Name);
@@ -130,7 +132,7 @@ public class ScreenTransitionService(
         ApplyPeerScreenSizes(peerScreens, newScreens);
         st.LocalScreens = snapshot.Screens;
         st.Screens = newScreens;
-        st.Layout = new ScreenLayout(newScreens, config.Hosts);
+        st.Layout = new ScreenLayout(newScreens, config.Hosts, log);
 
         if (!st.Mouse.IsOnVirtualScreen)
         {
@@ -350,7 +352,7 @@ public class ScreenTransitionService(
 
         var newScreens = BuildAllScreens(st.LocalScreens, config);
         ApplyPeerScreenSizes(peerScreens, newScreens);
-        var newLayout = new ScreenLayout(newScreens, config.Hosts);
+        var newLayout = new ScreenLayout(newScreens, config.Hosts, log);
         st.Screens = newScreens;
         st.Layout = newLayout;
         st.ActiveLocalScreen = st.LocalScreens.FirstOrDefault(s => s.Name.EqualsIgnoreCase(st.ActiveLocalScreen.Name)) ?? st.LocalScreens.FirstOrDefault() ?? st.ActiveLocalScreen;
@@ -614,7 +616,10 @@ public class ScreenTransitionService(
         if (now - st.LastVirtualLogTick >= 100)
         {
             st.LastVirtualLogTick = now;
-            log.LogDebug("Virtual: ({X}, {Y})", (int)st.Mouse.X, (int)st.Mouse.Y);
+            if (st.Mouse.CurrentScreen != null && st.RelativeMouseScreens.GetValueOrDefault(st.Mouse.CurrentScreen.Name))
+                log.LogDebug("Mouse: ({X}, {Y})  Offset: ({DX}, {DY})", (int)st.Mouse.X, (int)st.Mouse.Y, (int)st.PendingDX, (int)st.PendingDY);
+            else
+                log.LogDebug("Mouse: ({X}, {Y})", (int)st.Mouse.X, (int)st.Mouse.Y);
         }
 
         // check if we've crossed back to a local screen
@@ -673,14 +678,17 @@ public class ScreenTransitionService(
     private static ScreenRect? FindLocalScreenAt(LocalMasterState st, int x, int y) =>
         st.LocalScreens.FirstOrDefault(s => s.Contains(x, y));
 
+    private static readonly JsonSerializerOptions _jsonOptions = new()
+    {
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+    };
+
     private void LogDetectedScreens(List<ScreenRect> screens)
     {
         log.LogInformation("Detected {Count} local screen(s):", screens.Count);
         for (var i = 0; i < screens.Count; i++)
-        {
-            var s = screens[i];
-            log.LogInformation("  Screen {I}: {W}x{H} @ ({X},{Y}) name={Name}", i, s.Width, s.Height, s.X, s.Y, s.Name);
-        }
+            if (screens[i].Identity != null)
+                log.LogInformation("  Screen {I}: {Json}", i, JsonSerializer.Serialize(screens[i].Identity, _jsonOptions));
     }
 
     // combines local screens with placeholder remote screens (Width=0 until ScreenInfo arrives)

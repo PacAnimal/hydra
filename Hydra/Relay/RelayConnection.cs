@@ -59,17 +59,8 @@ public class RelayConnection(HydraConfig config, ILogger<RelayConnection> log, I
         try
         {
             var decoded = MessageSerializer.Decode(decrypted);
-            switch (decoded.Kind)
-            {
-                case MessageKind.MouseMove:
-                case MessageKind.SlaveLog:
-                    if (log.IsEnabled(LogLevel.Trace))
-                        log.LogTrace("Received {Kind} from {SourceHost} ({Bytes} bytes)", decoded.Kind, sourceHost, payload.Length);
-                    break;
-                default:
-                    log.LogDebug("Received {Kind} from {SourceHost} ({Bytes} bytes)", decoded.Kind, sourceHost, payload.Length);
-                    break;
-            }
+            if (log.IsEnabled(LogLevel.Trace))
+                log.LogTrace("Received {Kind} from {SourceHost} ({Bytes} bytes)", decoded.Kind, sourceHost, payload.Length);
             await OnReceive(sourceHost, decoded.Kind, decoded.Json);
         }
         catch (Exception ex)

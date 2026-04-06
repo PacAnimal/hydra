@@ -1,5 +1,6 @@
 using Hydra.Config;
 using Hydra.Screen;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Tests.Screen;
 
@@ -15,7 +16,8 @@ public class ScreenLayoutTests
         [
             new HostConfig { Name = "home", Neighbours = [new NeighbourConfig { Direction = Direction.Right, Name = "remote" }] },
             new HostConfig { Name = "remote", Neighbours = [new NeighbourConfig { Direction = Direction.Left, Name = "home" }] },
-        ]);
+        ],
+        NullLogger.Instance);
 
     // -- edge detection --
 
@@ -121,7 +123,8 @@ public class ScreenLayoutTests
                 new HostConfig { Name = "a", Neighbours = [new NeighbourConfig { Direction = Direction.Right, Name = "b" }] },
                 new HostConfig { Name = "b", Neighbours = [new NeighbourConfig { Direction = Direction.Right, Name = "c" }] },
                 new HostConfig { Name = "c", Neighbours = [] },
-            ]);
+            ],
+            NullLogger.Instance);
 
         var hit = layout.DetectEdgeExit(a, 2559, 720);
         Assert.That(hit, Is.Not.Null);
@@ -142,7 +145,8 @@ public class ScreenLayoutTests
                 new HostConfig { Name = "a", Neighbours = [new NeighbourConfig { Direction = Direction.Right, Name = "b" }] },
                 new HostConfig { Name = "b", Neighbours = [new NeighbourConfig { Direction = Direction.Right, Name = "c" }] },
                 new HostConfig { Name = "c", Neighbours = [] },
-            ]);
+            ],
+            NullLogger.Instance);
 
         var hit = layout.DetectEdgeExit(a, 2559, 720);
         Assert.That(hit, Is.Null);
@@ -168,7 +172,8 @@ public class ScreenLayoutTests
                     SourceStart = 0, SourceEnd = 50,
                     DestStart = 50, DestEnd = 100,
                 }],
-            }]);
+            }],
+            NullLogger.Instance);
 
         // cursor at 25% down (360px of 1440) → should map to 75% down on dest (75% of 1440 = 1080)
         var hit = layout.DetectEdgeExit(home, 2559, 360);
@@ -193,7 +198,8 @@ public class ScreenLayoutTests
                     Direction = Direction.Right, Name = "remote",
                     SourceStart = 50, SourceEnd = 100,
                 }],
-            }]);
+            }],
+            NullLogger.Instance);
 
         // cursor in top 25% — outside the source range
         var hit = layout.DetectEdgeExit(home, 2559, 200);
@@ -218,7 +224,8 @@ public class ScreenLayoutTests
                     new NeighbourConfig { Direction = Direction.Right, Name = "hostB", SourceStart = 0, SourceEnd = 50 },
                     new NeighbourConfig { Direction = Direction.Right, Name = "hostC", SourceStart = 50, SourceEnd = 100 },
                 ],
-            }]);
+            }],
+            NullLogger.Instance);
 
         var topHit = layout.DetectEdgeExit(home, 2559, 200);   // top 14% → hostB
         var bottomHit = layout.DetectEdgeExit(home, 2559, 1200); // bottom 83% → hostC
@@ -263,7 +270,8 @@ public class ScreenLayoutTests
                     SourceStart = 50, SourceEnd = 100,
                     DestStart = 0, DestEnd = 25,
                 }],
-            }]);
+            }],
+            NullLogger.Instance);
 
         // cursor in right 75% (1440px of 1920) — within source range (50-100%)
         var hit = layout.DetectEdgeExit(top, 1440, 1079);
@@ -293,7 +301,8 @@ public class ScreenLayoutTests
                     SourceStart = 0, SourceEnd = 50,
                     DestStart = 50, DestEnd = 100,
                 }],
-            }]);
+            }],
+            NullLogger.Instance);
 
         // cursor at x=400 (left 20%, within 0-50% range) → maps to right half of dest
         var hit = layout.DetectEdgeExit(bottom, 400, 0);
@@ -329,7 +338,7 @@ public class ScreenLayoutTests
             configs.Add(new HostConfig { Name = $"offline{i}", Neighbours = [new NeighbourConfig { Direction = Direction.Right, Name = $"offline{i + 1}" }] });
         configs.Add(new HostConfig { Name = "offline10", Neighbours = [] });
 
-        var layout = new ScreenLayout(screens, configs);
+        var layout = new ScreenLayout(screens, configs, NullLogger.Instance);
         var hit = layout.DetectEdgeExit(screens[0], 2559, 720);
         Assert.That(hit, Is.Null);
     }

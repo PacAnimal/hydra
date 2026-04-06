@@ -1,3 +1,5 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Cathedral.Extensions;
 using Cathedral.Utils;
 using Hydra.Config;
@@ -17,6 +19,11 @@ public record LocalScreenSnapshot(List<ScreenRect> Screens, List<ScreenInfoEntry
 
 public abstract class ScreenDetector : SimpleHostedService, IScreenDetector
 {
+    private static readonly JsonSerializerOptions _jsonOptions = new()
+    {
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+    };
+
     private readonly HydraConfig _config;
     private readonly ILogger _log;
     private readonly SemaphoreSlim _lock = new(1, 1);
@@ -63,16 +70,9 @@ public abstract class ScreenDetector : SimpleHostedService, IScreenDetector
         if (snapshot != null)
         {
             _log.LogInformation("Local screens: {Count}", snapshot.Screens.Count);
-            for (var i = 0; i < detected.Count; i++)
-            {
-                var d = detected[i];
-                var parts = new List<string>();
-                if (d.OutputName != null) parts.Add($"output={d.OutputName}");
-                if (d.DisplayName != null) parts.Add($"name={d.DisplayName}");
-                if (d.PlatformId != null) parts.Add($"id={d.PlatformId}");
-                _log.LogInformation("  Screen {Index}: {W}x{H} @ ({X},{Y})  {Ids}",
-                    i, d.Width, d.Height, d.X, d.Y, string.Join("  ", parts));
-            }
+            for (var i = 0; i < snapshot.Screens.Count; i++)
+                if (snapshot.Screens[i].Identity != null)
+                    _log.LogInformation("  Screen {I}: {Json}", i, JsonSerializer.Serialize(snapshot.Screens[i].Identity, _jsonOptions));
             ScreensChanged?.Invoke(snapshot);
         }
     }
@@ -93,7 +93,14 @@ public abstract class ScreenDetector : SimpleHostedService, IScreenDetector
             var d = detected[i];
             var name = ScreenNaming.BuildScreenName(_config.ResolvedName, i, detected.Count);
             var scale = ResolveScale(d);
-            screens.Add(new ScreenRect(name, _config.ResolvedName, d.X, d.Y, d.Width, d.Height, IsLocal: true));
+            var identity = new ScreenIdentity
+            {
+                ScreenName = name,
+                Output = d.OutputName,
+                DisplayName = d.DisplayName,
+                PlatformId = d.PlatformId,
+            };
+            screens.Add(new ScreenRect(name, _config.ResolvedName, d.X, d.Y, d.Width, d.Height, IsLocal: true, Identity: identity));
             entries.Add(new ScreenInfoEntry(name, d.X - minX, d.Y - minY, d.Width, d.Height, scale));
         }
 

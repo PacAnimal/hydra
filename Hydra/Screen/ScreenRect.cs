@@ -1,6 +1,22 @@
+using Cathedral.Extensions;
+
 namespace Hydra.Screen;
 
 public enum Direction { Left, Right, Top, Bottom }
+
+public class ScreenIdentity
+{
+    public required string ScreenName { get; init; }
+    public string? Output { get; init; }
+    public string? DisplayName { get; init; }
+    public string? PlatformId { get; init; }
+
+    public bool Matches(string id) =>
+        ScreenName.EqualsIgnoreCase(id)
+        || Output?.EqualsIgnoreCase(id) is true
+        || DisplayName?.EqualsIgnoreCase(id) is true
+        || PlatformId?.EqualsIgnoreCase(id) is true;
+}
 
 public record ScreenBounds(int X, int Y, int Width, int Height);
 
@@ -14,7 +30,8 @@ public record ScreenRect(
     string Host,      // hostname for relay routing
     int X, int Y,     // top-left in host coordinate space
     int Width, int Height,
-    bool IsLocal)     // true = local screen on this machine
+    bool IsLocal,     // true = local screen on this machine
+    ScreenIdentity? Identity = null)
     : IBounded
 {
     public ScreenBounds Bounds => new(X, Y, Width, Height);

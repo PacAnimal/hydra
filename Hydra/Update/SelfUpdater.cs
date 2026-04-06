@@ -11,7 +11,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Hydra.Update;
 
-internal sealed class SelfUpdater(HydraConfig config, ILogger<SelfUpdater> log) : SimpleHostedService(log, TimeSpan.FromHours(1))
+internal sealed class SelfUpdater(HydraConfig config, ILogger<SelfUpdater> log) : SimpleHostedService(log, TimeSpan.FromMinutes(30))
 {
     private const string Repo = "pacanimal/hydra";
     private readonly Toggle _warned = new();
@@ -45,7 +45,7 @@ internal sealed class SelfUpdater(HydraConfig config, ILogger<SelfUpdater> log) 
     private async Task CheckAndUpdate(CancellationToken cancel)
     {
         var current = CurrentVersion();
-        log.LogDebug("checking for updates (current: {Version})", current);
+        log.LogInformation("checking for updates (current: {Version})", current);
 
         using var http = new HttpClient();
         http.DefaultRequestHeaders.UserAgent.ParseAdd("Hydra");
@@ -60,7 +60,7 @@ internal sealed class SelfUpdater(HydraConfig config, ILogger<SelfUpdater> log) 
 
         if (latest <= current)
         {
-            log.LogDebug("already up to date ({Version})", current);
+            log.LogInformation("already up to date ({Version})", current);
             return;
         }
 

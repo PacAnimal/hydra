@@ -85,8 +85,8 @@ Supported directions: `left`, `right`, `up`, `down`.
 | `sourceEnd` | `100` | End of the source edge range (0–100%), inclusive |
 | `destStart` | `0` | Start of the destination edge range (0–100%) |
 | `destEnd` | `100` | End of the destination edge range (0–100%) |
-| `sourceScreen` | `null` | Restrict to a specific local screen (by display name or output name) |
-| `destScreen` | `null` | Target a specific screen on the remote host |
+| `sourceScreen` | `null` | Restrict to a specific local screen — match by `screenName`, `displayName`, `output`, or `platformId` |
+| `destScreen` | `null` | Target a specific screen on the remote host — same identifiers as `sourceScreen` |
 
 **Range-based neighbours** let you split an edge to route to different hosts depending on where the cursor crosses:
 
@@ -110,11 +110,11 @@ Local screens are **auto-detected from the OS** — no config is required. On st
 
 ```
 Local screens: 2
-  Screen 0: 2560x1600 @ (0,0)  output=eDP-1  name=Built-in Retina Display
-  Screen 1: 3840x2160 @ (2560,0)  output=HDMI-1  name=DELL U2720Q
+  Screen 0: {"screenName":"laptop:0","displayName":"Built-in Retina Display","platformId":"1"}
+  Screen 1: {"screenName":"laptop:1","displayName":"DELL U2720Q","output":"HDMI-1","platformId":"2"}
 ```
 
-Use these identifiers in `screenDefinitions` to set per-screen options, and in `sourceScreen`/`destScreen` to target specific monitors in neighbour rules.
+Use these identifiers in `sourceScreen`/`destScreen` to target specific monitors in neighbour rules, and in `screenDefinitions` to set per-screen options. Only non-null properties are shown — `output` is omitted on platforms that don't expose connector names.
 
 ### Screen definitions
 
