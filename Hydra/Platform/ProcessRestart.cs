@@ -29,6 +29,6 @@ internal static partial class ProcessRestart
         }
     }
 
-    [LibraryImport("libc", EntryPoint = "execv", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+    [LibraryImport("libc", EntryPoint = "execv", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
     private static partial int execv(string pathname, string?[] argv);
 }
