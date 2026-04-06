@@ -66,36 +66,56 @@ public sealed class SlaveRelayConnection : RelayConnection
                 break;
             case MessageKind.MouseMove:
                 var move = json.FromSaneJson<MouseMoveMessage>();
-                if (move != null) await MoveToScreen(move.Screen, move.X, move.Y);
+                if (move != null)
+                {
+                    _cursorHider.OnMasterActivity(sourceHost);
+                    await MoveToScreen(move.Screen, move.X, move.Y);
+                }
                 break;
             case MessageKind.KeyEvent:
                 var key = json.FromSaneJson<KeyEventMessage>();
-                if (key != null) HandleKeyEvent(key);
+                if (key != null)
+                {
+                    _cursorHider.OnMasterActivity(sourceHost);
+                    HandleKeyEvent(key);
+                }
                 break;
             case MessageKind.MouseMoveDelta:
                 var delta = json.FromSaneJson<MouseMoveDeltaMessage>();
-                if (delta != null) _output.MoveMouseRelative(delta.DX, delta.DY);
+                if (delta != null)
+                {
+                    _cursorHider.OnMasterActivity(sourceHost);
+                    _output.MoveMouseRelative(delta.DX, delta.DY);
+                }
                 break;
             case MessageKind.MouseButton:
                 var btn = json.FromSaneJson<MouseButtonMessage>();
-                if (btn != null) _output.InjectMouseButton(btn);
+                if (btn != null)
+                {
+                    _cursorHider.OnMasterActivity(sourceHost);
+                    _output.InjectMouseButton(btn);
+                }
                 break;
             case MessageKind.MouseScroll:
                 var scroll = json.FromSaneJson<MouseScrollMessage>();
-                if (scroll != null) _output.InjectMouseScroll(scroll);
+                if (scroll != null)
+                {
+                    _cursorHider.OnMasterActivity(sourceHost);
+                    _output.InjectMouseScroll(scroll);
+                }
                 break;
             case MessageKind.EnterScreen:
                 var enter = json.FromSaneJson<EnterScreenMessage>();
                 if (enter != null)
                 {
                     await MoveToScreen(enter.Screen, enter.X, enter.Y);
-                    _cursorHider.OnEnterScreen();
+                    _cursorHider.OnEnterScreen(sourceHost);
                 }
                 break;
             case MessageKind.LeaveScreen:
                 ReleaseAllKeys();
                 CancelAllRepeatTimers();
-                _cursorHider.OnLeaveScreen();
+                _cursorHider.OnLeaveScreen(sourceHost);
                 break;
             case MessageKind.ScreensaverSync:
                 var ss = json.FromSaneJson<ScreensaverSyncMessage>();
@@ -119,9 +139,9 @@ public sealed class SlaveRelayConnection : RelayConnection
         var after = await _peerState.GetMasters();
         var afterSet = new HashSet<string>(after, StringComparer.OrdinalIgnoreCase);
         var anyMasterLeft = false;
-        foreach (var _ in before.Where(h => !afterSet.Contains(h)))
+        foreach (var departed in before.Where(h => !afterSet.Contains(h)))
         {
-            _cursorHider.OnMasterDisconnected();
+            _cursorHider.OnMasterDisconnected(departed);
             anyMasterLeft = true;
         }
         // restore screensaver suppression when all masters have disconnected

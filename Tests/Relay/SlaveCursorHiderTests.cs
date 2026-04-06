@@ -47,7 +47,7 @@ public class SlaveCursorHiderTests
     public void EnterScreen_Shows_Cursor()
     {
         _hider.OnMasterConnected();
-        _hider.OnEnterScreen();
+        _hider.OnEnterScreen("A");
 
         using (Assert.EnterMultipleScope())
         {
@@ -60,8 +60,8 @@ public class SlaveCursorHiderTests
     public void LeaveScreen_Hides_Cursor()
     {
         _hider.OnMasterConnected();
-        _hider.OnEnterScreen();
-        _hider.OnLeaveScreen();
+        _hider.OnEnterScreen("A");
+        _hider.OnLeaveScreen("A");
 
         using (Assert.EnterMultipleScope())
         {
@@ -74,7 +74,7 @@ public class SlaveCursorHiderTests
     public void AllMastersDisconnected_Shows_Cursor()
     {
         _hider.OnMasterConnected();
-        _hider.OnMasterDisconnected();
+        _hider.OnMasterDisconnected("A");
 
         using (Assert.EnterMultipleScope())
         {
@@ -88,7 +88,7 @@ public class SlaveCursorHiderTests
     {
         _hider.OnMasterConnected();
         _hider.OnMasterConnected();
-        _hider.OnMasterDisconnected();
+        _hider.OnMasterDisconnected("A");
 
         using (Assert.EnterMultipleScope())
         {
@@ -96,7 +96,7 @@ public class SlaveCursorHiderTests
             Assert.That(_cursor.IsHidden, Is.True);
         }
 
-        _hider.OnMasterDisconnected();
+        _hider.OnMasterDisconnected("C");
 
         using (Assert.EnterMultipleScope())
         {
@@ -168,9 +168,9 @@ public class SlaveCursorHiderTests
     {
         _hider.OnMasterConnected();
         // manually simulate LocalActive by calling methods directly
-        _hider.OnLeaveScreen(); // no-op from Hidden
-        _hider.OnEnterScreen(); // Hidden -> MasterActive
-        _hider.OnLeaveScreen(); // MasterActive -> Hidden
+        _hider.OnLeaveScreen("A"); // no-op from Hidden (A not on screen)
+        _hider.OnEnterScreen("A"); // Hidden -> MasterActive
+        _hider.OnLeaveScreen("A"); // MasterActive -> Hidden
 
         Assert.That(_hider.State, Is.EqualTo(SlaveCursorState.Hidden));
     }
@@ -197,6 +197,98 @@ public class SlaveCursorHiderTests
             Assert.That(_hider.State, Is.EqualTo(SlaveCursorState.Hidden));
             Assert.That(_cursor.HideCount, Is.EqualTo(1)); // only hidden once
         }
+    }
+
+    // -- multi-master active-master tracking --
+
+    [Test]
+    public void NonActiveMaster_Leaving_Does_Not_Hide_Cursor()
+    {
+        // A enters; C enters (C becomes active); A sends activity (A becomes active again); C leaves — A is active so cursor stays
+        _hider.OnMasterConnected();
+        _hider.OnMasterConnected();
+        _hider.OnEnterScreen("A");
+        _hider.OnEnterScreen("C"); // C active
+        _hider.OnMasterActivity("A"); // A reclaims active
+        _hider.OnLeaveScreen("C"); // C leaves but is not active
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(_hider.State, Is.EqualTo(SlaveCursorState.MasterActive));
+            Assert.That(_cursor.IsHidden, Is.False);
+        }
+    }
+
+    [Test]
+    public void ActiveMaster_Leaving_Hides_Cursor_Even_When_Other_Masters_Present()
+    {
+        // A enters then idles; C enters (becomes active); C leaves — cursor hides even though A is on screen
+        _hider.OnMasterConnected();
+        _hider.OnMasterConnected();
+        _hider.OnEnterScreen("A");
+        _hider.OnEnterScreen("C"); // C is now active
+        _hider.OnLeaveScreen("C");
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(_hider.State, Is.EqualTo(SlaveCursorState.Hidden));
+            Assert.That(_cursor.IsHidden, Is.True);
+        }
+    }
+
+    [Test]
+    public void MasterActivity_From_OnScreen_Master_Restores_Cursor_Without_Reenter()
+    {
+        // A enters; C enters and becomes active; C leaves → hidden; A sends input → cursor shows
+        _hider.OnMasterConnected();
+        _hider.OnMasterConnected();
+        _hider.OnEnterScreen("A");
+        _hider.OnEnterScreen("C");
+        _hider.OnLeaveScreen("C"); // cursor hidden
+
+        Assert.That(_hider.State, Is.EqualTo(SlaveCursorState.Hidden));
+
+        _hider.OnMasterActivity("A"); // A resumes without re-entering
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(_hider.State, Is.EqualTo(SlaveCursorState.MasterActive));
+            Assert.That(_cursor.IsHidden, Is.False);
+        }
+    }
+
+    [Test]
+    public void MasterActivity_From_OffScreen_Master_Does_Nothing()
+    {
+        // C is not on screen — its activity should not show the cursor
+        _hider.OnMasterConnected();
+        _hider.OnMasterActivity("C");
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(_hider.State, Is.EqualTo(SlaveCursorState.Hidden));
+            Assert.That(_cursor.IsHidden, Is.True);
+        }
+    }
+
+    [Test]
+    public void MasterDisconnect_Cleans_Up_OnScreen_Tracking()
+    {
+        // A is on screen and then disconnects — should not leave stale on-screen entry
+        _hider.OnMasterConnected();
+        _hider.OnEnterScreen("A");
+        _hider.OnMasterDisconnected("A");
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(_hider.State, Is.EqualTo(SlaveCursorState.NoMaster));
+            Assert.That(_cursor.IsHidden, Is.False);
+        }
+
+        // C reconnects — A's stale entry must not affect anything
+        _hider.OnMasterConnected();
+        _hider.OnMasterActivity("A"); // A is gone — no effect
+        Assert.That(_hider.State, Is.EqualTo(SlaveCursorState.Hidden));
     }
 }
 

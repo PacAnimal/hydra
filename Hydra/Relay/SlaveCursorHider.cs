@@ -25,6 +25,10 @@ public sealed class SlaveCursorHider(ICursorVisibility cursor, ILogger<SlaveCurs
     private Timer? _localTimeoutTimer;
     private int _masterCount;
 
+    // which masters are currently on this screen (entered but not left)
+    private readonly HashSet<string> _onScreenMasters = new(StringComparer.OrdinalIgnoreCase);
+    private string? _activeMaster;
+
     public SlaveCursorState State { get { lock (_lock) return _state; } }
 
     public void OnMasterConnected()
@@ -37,31 +41,49 @@ public sealed class SlaveCursorHider(ICursorVisibility cursor, ILogger<SlaveCurs
         }
     }
 
-    public void OnMasterDisconnected()
+    public void OnMasterDisconnected(string masterHost)
     {
         lock (_lock)
         {
+            _onScreenMasters.Remove(masterHost);
+            if (string.Equals(_activeMaster, masterHost, StringComparison.OrdinalIgnoreCase))
+                _activeMaster = null;
             if (_masterCount > 0) _masterCount--;
             if (_masterCount == 0)
                 EnterNoMaster();
         }
     }
 
-    public void OnEnterScreen()
+    public void OnEnterScreen(string masterHost)
     {
         lock (_lock)
         {
+            _onScreenMasters.Add(masterHost);
+            _activeMaster = masterHost;
             if (_state is SlaveCursorState.Hidden or SlaveCursorState.LocalActive)
                 EnterMasterActive();
         }
     }
 
-    public void OnLeaveScreen()
+    public void OnLeaveScreen(string masterHost)
     {
         lock (_lock)
         {
-            if (_state == SlaveCursorState.MasterActive)
+            _onScreenMasters.Remove(masterHost);
+            if (string.Equals(_activeMaster, masterHost, StringComparison.OrdinalIgnoreCase) && _state == SlaveCursorState.MasterActive)
                 EnterHidden();
+        }
+    }
+
+    // called on every input message from a master — if it's on-screen and we're hidden, make it active and show cursor
+    public void OnMasterActivity(string masterHost)
+    {
+        lock (_lock)
+        {
+            if (!_onScreenMasters.Contains(masterHost)) return;
+            _activeMaster = masterHost;
+            if (_state is SlaveCursorState.Hidden or SlaveCursorState.LocalActive)
+                EnterMasterActive();
         }
     }
 
@@ -99,6 +121,8 @@ public sealed class SlaveCursorHider(ICursorVisibility cursor, ILogger<SlaveCurs
     {
         StopLocalTimeout();
         StopPoll();
+        _onScreenMasters.Clear();
+        _activeMaster = null;
         _cursor.ShowCursor();
         _state = SlaveCursorState.NoMaster;
         _log.LogDebug("Slave cursor visible (no master)");
