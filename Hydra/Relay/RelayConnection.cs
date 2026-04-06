@@ -25,6 +25,7 @@ public class RelayConnection(HydraConfig config, ILogger<RelayConnection> log, I
     public bool IsConnected => _server != null;
     public event Action<string[]>? PeersChanged;
     public event Action<string, MessageKind, string>? MessageReceived;
+    public event Action? Disconnected;
 
     public async ValueTask Send(string[] targetHosts, byte[] payload)
     {
@@ -97,6 +98,8 @@ public class RelayConnection(HydraConfig config, ILogger<RelayConnection> log, I
     protected virtual Task OnKicked(string reason) => Task.CompletedTask;
     // fires after _server and _encryption are set — guaranteed connection-ready signal
     protected virtual Task OnAuthenticated() => Task.CompletedTask;
+    // fires when a live connection drops (not on auth failure or clean shutdown)
+    protected virtual Task OnDisconnected() => Task.CompletedTask;
 
     // override in tests to inject the in-memory handler; production default sets NoDelay
     protected virtual void ConfigureHubUrl(HttpConnectionOptions options)
@@ -150,8 +153,14 @@ public class RelayConnection(HydraConfig config, ILogger<RelayConnection> log, I
             }
             finally
             {
+                var wasConnected = _server != null;
                 _server = null;
                 _encryption = null;
+                if (wasConnected)
+                {
+                    await OnDisconnected();
+                    Disconnected?.Invoke();
+                }
             }
 
             if (!stoppingToken.IsCancellationRequested)

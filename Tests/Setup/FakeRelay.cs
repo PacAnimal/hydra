@@ -5,9 +5,10 @@ namespace Tests.Setup;
 public sealed class FakeRelay : IRelaySender
 {
     public readonly List<(string[] Targets, MessageKind Kind, string Json)> Sent = [];
-    public bool IsConnected => true;
+    public bool IsConnected { get; set; } = true;
     public event Action<string[]>? PeersChanged;
     public event Action<string, MessageKind, string>? MessageReceived;
+    public event Action? Disconnected;
 
     public ValueTask Send(string[] targetHosts, byte[] payload)
     {
@@ -18,4 +19,5 @@ public sealed class FakeRelay : IRelaySender
 
     public void FirePeersChanged(params string[] hosts) => PeersChanged?.Invoke(hosts);
     public void FireMessageReceived(string host, MessageKind kind, string json) => MessageReceived?.Invoke(host, kind, json);
+    public void FireDisconnected() => Disconnected?.Invoke();
 }

@@ -148,6 +148,51 @@ public class MasterSlaveProtocolTests
         await service.StopAsync(CancellationToken.None);
     }
 
+    // -- slave relay disconnect --
+
+    [Test]
+    public async Task SlaveRelay_OnDisconnected_EntersNoMasterState()
+    {
+        var cursor = new FakeCursorVisibility();
+        var hider = new SlaveCursorHider(cursor, NullLogger<SlaveCursorHider>.Instance);
+        var slave = new TestableSlaveRelay(hider);
+
+        await slave.SimulateMasterConfig("master-pc");
+        Assert.That(hider.State, Is.EqualTo(SlaveCursorState.Hidden), "pre-condition: cursor hidden when master connected");
+
+        await slave.SimulateDisconnected();
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(hider.State, Is.EqualTo(SlaveCursorState.NoMaster));
+            Assert.That(cursor.IsHidden, Is.False);
+        }
+
+        hider.Dispose();
+    }
+
+    [Test]
+    public async Task SlaveRelay_OnDisconnected_ClearsStateForReconnect()
+    {
+        var cursor = new FakeCursorVisibility();
+        var hider = new SlaveCursorHider(cursor, NullLogger<SlaveCursorHider>.Instance);
+        var slave = new TestableSlaveRelay(hider);
+
+        await slave.SimulateMasterConfig("master-pc");
+        await slave.SimulateDisconnected();
+
+        // master reconnects — cursor should hide again (master count goes from 0 to 1)
+        await slave.SimulateMasterConfig("master-pc");
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(hider.State, Is.EqualTo(SlaveCursorState.Hidden));
+            Assert.That(cursor.IsHidden, Is.True);
+        }
+
+        hider.Dispose();
+    }
+
     // -- helpers --
 
     private static HydraConfig MakeConfig(params string[] slaveNames) => new()
@@ -162,6 +207,37 @@ public class MasterSlaveProtocolTests
 
     private static List<string> MasterConfigTargets(FakeRelay relay) =>
         [.. relay.Sent.Where(s => s.Kind == MessageKind.MasterConfig).SelectMany(s => s.Targets)];
+
+    private sealed class TestableSlaveRelay(SlaveCursorHider hider) : SlaveRelayConnection(
+        new HydraConfig { Mode = Mode.Slave },
+        NullLogger<RelayConnection>.Instance,
+        new NullPlatformOutput(),
+        new SlaveLogForwarder(),
+        new FakeScreenDetector(),
+        new WorldState(),
+        hider,
+        new NullScreenSaverSync(),
+        new NullScreensaverSuppressor())
+    {
+        public Task SimulateMasterConfig(string host) => OnReceive(host, MessageKind.MasterConfig, "{}");
+        public Task SimulateDisconnected() => OnDisconnected();
+    }
+
+    private sealed class NullPlatformOutput : IPlatformOutput
+    {
+        public void MoveMouse(int x, int y) { }
+        public void MoveMouseRelative(int dx, int dy) { }
+        public void InjectKey(KeyEventMessage msg) { }
+        public void InjectMouseButton(MouseButtonMessage msg) { }
+        public void InjectMouseScroll(MouseScrollMessage msg) { }
+        public void Dispose() { }
+    }
+
+    private sealed class NullScreensaverSuppressor : IScreensaverSuppressor
+    {
+        public void Suppress() { }
+        public void Restore() { }
+    }
 
     private sealed class TestableMasterRelay : MasterRelayConnection
     {

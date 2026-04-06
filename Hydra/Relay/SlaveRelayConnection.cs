@@ -7,7 +7,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Hydra.Relay;
 
-public sealed class SlaveRelayConnection : RelayConnection
+public class SlaveRelayConnection : RelayConnection
 {
     private readonly IPlatformOutput _output;
     private readonly SlaveLogForwarder _logForwarder;
@@ -129,6 +129,19 @@ public sealed class SlaveRelayConnection : RelayConnection
                 _log.LogDebug("Unhandled message kind {Kind} from {Host}", kind, sourceHost);
                 break;
         }
+    }
+
+    protected override async Task OnDisconnected()
+    {
+        var masters = await _peerState.GetMasters();
+        foreach (var master in masters)
+            _cursorHider.OnMasterDisconnected(master);
+        ReleaseAllKeys();
+        CancelAllRepeatTimers();
+        if (masters.Length > 0)
+            _screensaverSuppressor.Restore();
+        await _peerState.PruneMasters([]);
+        _log.LogWarning("Relay connection lost — cursor restored on slave");
     }
 
     protected override async Task OnPeers(string[] hostNames)

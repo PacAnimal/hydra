@@ -85,6 +85,7 @@ public class ScreenTransitionService(
 
         relay.PeersChanged += OnPeersChanged;
         relay.MessageReceived += OnMessageReceived;
+        relay.Disconnected += OnRelayDisconnected;
         screens.ScreensChanged += OnScreensChanged;
 
         platform.StartEventTap((x, y) => OnMouseMove(x, y), OnKeyEvent, OnMouseButton, OnMouseScroll);
@@ -102,6 +103,7 @@ public class ScreenTransitionService(
         _pollCts?.Dispose();
         relay.PeersChanged -= OnPeersChanged;
         relay.MessageReceived -= OnMessageReceived;
+        relay.Disconnected -= OnRelayDisconnected;
         screens.ScreensChanged -= OnScreensChanged;
 
         if (config.SyncScreensaver)
@@ -206,6 +208,34 @@ public class ScreenTransitionService(
             var payload = MessageSerializer.Encode(MessageKind.MasterConfig, new { });
             _ = relay.Send([host], payload).AsTask();
             log.LogDebug("Sent MasterConfig to {Host}", host);
+        }
+    }
+
+    private void OnRelayDisconnected()
+    {
+        string? disconnectedHost = null;
+        int warpX = 0, warpY = 0;
+
+        using (var s = AsyncHelper.RunSync(() => _state.WaitForDisposable()))
+        {
+            var st = s.Value;
+            if (st.Mouse.IsOnVirtualScreen && st.Mouse.CurrentScreen != null)
+            {
+                disconnectedHost = st.Mouse.CurrentScreen.Host;
+                st.Mouse.LeaveScreen();
+                st.PendingDX = 0;
+                st.PendingDY = 0;
+                warpX = st.WarpX;
+                warpY = st.WarpY;
+                st.PendingCursorShow = false;
+            }
+        }
+
+        if (disconnectedHost != null)
+        {
+            ReturnToLocalScreen(warpX, warpY);
+            platform.ShowCursor();
+            log.LogWarning("Relay disconnected — returned to local screen from '{Host}'", disconnectedHost);
         }
     }
 
@@ -556,6 +586,7 @@ public class ScreenTransitionService(
         var localY = (int)y - screen.Y;
         var hit = st.Layout!.DetectEdgeExit(screen, localX, localY);
         if (hit is null) return;
+        if (!relay.IsConnected) return;
 
         var peerScreens = AsyncHelper.RunSync(() => _peerState.GetPeerScreensSnapshot().AsTask());
         var scale = GetRemoteScale(peerScreens, hit.Destination);
