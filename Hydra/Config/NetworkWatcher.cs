@@ -70,7 +70,7 @@ internal sealed class NetworkWatcher : SimpleHostedService
         _lastNetworks = active;
 
         // skip restart logic if no config has a network condition (unconditional single config always matches)
-        if (_configs.All(c => c.Condition == null)) return;
+        if (!HydraConfig.HasConditions(_configs)) return;
 
         var resolved = HydraConfig.Resolve(_configs, active);
         if (resolved == _activeConfig) return;

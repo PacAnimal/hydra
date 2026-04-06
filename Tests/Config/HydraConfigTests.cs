@@ -1,4 +1,5 @@
 using Hydra.Config;
+using Hydra.Platform;
 using Hydra.Screen;
 using Microsoft.Extensions.Configuration;
 
@@ -9,6 +10,12 @@ public class HydraConfigTests
 {
     private static IConfiguration ConfigFor(string path) =>
         new ConfigurationBuilder().AddInMemoryCollection([new("CONFIG", path)]).Build();
+
+    private static HydraConfig MakeConfig(Mode mode = Mode.Master, ConfigCondition? condition = null, string? ssid = null) =>
+        new() { Mode = mode, Condition = condition, Ssid = ssid };
+
+    private static NetworkState Wired() => new(ConfigCondition.Wired, null);
+    private static NetworkState Wifi(string ssid) => new(ConfigCondition.Ssid, ssid);
 
     [Test]
     public void Load_ReturnsValidConfig()
@@ -91,6 +98,152 @@ public class HydraConfigTests
         Assert.That(() => HydraConfig.Load(config), Throws.InstanceOf<FileNotFoundException>()
             .With.Message.Contains("CONFIG="));
     }
+
+    // HasConditions
+
+    [Test]
+    public void HasConditions_ReturnsFalse_WhenSingleUnconditionalConfig()
+    {
+        var configs = new List<HydraConfig> { MakeConfig() };
+        Assert.That(HydraConfig.HasConditions(configs), Is.False);
+    }
+
+    [Test]
+    public void HasConditions_ReturnsTrue_WhenAnyConditionalConfig()
+    {
+        var configs = new List<HydraConfig> { MakeConfig(), MakeConfig(condition: ConfigCondition.Wired) };
+        Assert.That(HydraConfig.HasConditions(configs), Is.True);
+    }
+
+    // Resolve
+
+    [Test]
+    public void Resolve_SingleUnconditional_ReturnsItRegardlessOfNetwork()
+    {
+        var cfg = MakeConfig();
+        var configs = new List<HydraConfig> { cfg };
+        // no network at all — should still pick the unconditional config
+        Assert.That(HydraConfig.Resolve(configs, []), Is.SameAs(cfg));
+    }
+
+    [Test]
+    public void Resolve_WiredCondition_MatchesWiredNetwork()
+    {
+        var wired = MakeConfig(condition: ConfigCondition.Wired);
+        var fallback = MakeConfig(Mode.Slave);
+        var configs = new List<HydraConfig> { wired, fallback };
+        Assert.That(HydraConfig.Resolve(configs, [Wired()]), Is.SameAs(wired));
+    }
+
+    [Test]
+    public void Resolve_WiredCondition_FallsBackWhenNotWired()
+    {
+        var wired = MakeConfig(condition: ConfigCondition.Wired);
+        var fallback = MakeConfig(Mode.Slave);
+        var configs = new List<HydraConfig> { wired, fallback };
+        Assert.That(HydraConfig.Resolve(configs, [Wifi("home")]), Is.SameAs(fallback));
+    }
+
+    [Test]
+    public void Resolve_SsidCondition_MatchesCorrectSsid()
+    {
+        var home = MakeConfig(condition: ConfigCondition.Ssid, ssid: "HomeNet");
+        var fallback = MakeConfig(Mode.Slave);
+        var configs = new List<HydraConfig> { home, fallback };
+        Assert.That(HydraConfig.Resolve(configs, [Wifi("HomeNet")]), Is.SameAs(home));
+    }
+
+    [Test]
+    public void Resolve_SsidCondition_IsCaseInsensitive()
+    {
+        var home = MakeConfig(condition: ConfigCondition.Ssid, ssid: "HomeNet");
+        var configs = new List<HydraConfig> { home };
+        Assert.That(HydraConfig.Resolve(configs, [Wifi("homenet")]), Is.SameAs(home));
+    }
+
+    [Test]
+    public void Resolve_SsidCondition_DoesNotMatchDifferentSsid()
+    {
+        var home = MakeConfig(condition: ConfigCondition.Ssid, ssid: "HomeNet");
+        var configs = new List<HydraConfig> { home };
+        Assert.That(HydraConfig.Resolve(configs, [Wifi("OfficeNet")]), Is.Null);
+    }
+
+    [Test]
+    public void Resolve_FallsBackToUnconditional_WhenNoConditionMatches()
+    {
+        var ssid = MakeConfig(condition: ConfigCondition.Ssid, ssid: "HomeNet");
+        var fallback = MakeConfig(Mode.Slave);
+        var configs = new List<HydraConfig> { ssid, fallback };
+        Assert.That(HydraConfig.Resolve(configs, [Wifi("OfficeNet")]), Is.SameAs(fallback));
+    }
+
+    [Test]
+    public void Resolve_ReturnsNull_WhenNoMatchAndNoFallback()
+    {
+        var ssid = MakeConfig(condition: ConfigCondition.Ssid, ssid: "HomeNet");
+        var configs = new List<HydraConfig> { ssid };
+        Assert.That(HydraConfig.Resolve(configs, []), Is.Null);
+    }
+
+    // Validate
+
+    [Test]
+    public void Validate_Throws_OnMultipleDefaults()
+    {
+        var json = """[{"mode":"Master"},{"mode":"Slave"}]""";
+        Assert.That(() => HydraConfig.ParseAndValidate(json),
+            Throws.InvalidOperationException.With.Message.Contains("multiple default"));
+    }
+
+    [Test]
+    public void Validate_Throws_OnDuplicateSsid()
+    {
+        var json = """
+            [
+              {"mode":"Master","condition":"Ssid","ssid":"Home"},
+              {"mode":"Slave","condition":"Ssid","ssid":"Home"}
+            ]
+            """;
+        Assert.That(() => HydraConfig.ParseAndValidate(json),
+            Throws.InvalidOperationException.With.Message.Contains("duplicate SSID"));
+    }
+
+    [Test]
+    public void Validate_Throws_OnMultipleWired()
+    {
+        var json = """
+            [
+              {"mode":"Master","condition":"Wired"},
+              {"mode":"Slave","condition":"Wired"}
+            ]
+            """;
+        Assert.That(() => HydraConfig.ParseAndValidate(json),
+            Throws.InvalidOperationException.With.Message.Contains("multiple Wired"));
+    }
+
+    [Test]
+    public void Validate_Throws_WhenSsidConditionMissesSsidField()
+    {
+        var json = """[{"mode":"Master","condition":"Ssid"}]""";
+        Assert.That(() => HydraConfig.ParseAndValidate(json),
+            Throws.InvalidOperationException.With.Message.Contains("non-empty 'ssid'"));
+    }
+
+    [Test]
+    public void Validate_Accepts_MultipleConditionalConfigs()
+    {
+        var json = """
+            [
+              {"mode":"Master","condition":"Wired"},
+              {"mode":"Master","condition":"Ssid","ssid":"Home"},
+              {"mode":"Slave"}
+            ]
+            """;
+        Assert.That(() => HydraConfig.ParseAndValidate(json), Throws.Nothing);
+    }
+
+    // LocalHost / RemoteHosts
 
     [Test]
     public void LocalHost_ReturnsMatchingHost()

@@ -90,6 +90,9 @@ public class HydraConfig
         return (configs, path);
     }
 
+    // true if any config has a network condition — if false, the single unconditional config is always active
+    public static bool HasConditions(List<HydraConfig> configs) => configs.Any(c => c.Condition != null);
+
     // resolves the active config from the list based on current network state.
     // returns null if no config matches (hydra should idle until network changes)
     public static HydraConfig? Resolve(List<HydraConfig> configs, List<NetworkState> active)
@@ -113,6 +116,14 @@ public class HydraConfig
         }
 
         return fallback;
+    }
+
+    // parses and validates a JSON string — used in tests to exercise validation logic directly
+    internal static List<HydraConfig> ParseAndValidate(string json)
+    {
+        var configs = ParseConfigs(json, "<test>");
+        Validate(configs);
+        return configs;
     }
 
     private static List<HydraConfig> ParseConfigs(string json, string path)

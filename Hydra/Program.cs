@@ -53,8 +53,14 @@ services.AddSereneConsoleLogging(c => c.MinLogLevel = configs[0].LogLevel);
 
 // detect current network and resolve which config to use
 var detector = await CreateDetector(macNetworkState, services);
-var activeNetworks = await detector.GetActiveNetworks();
-var config = HydraConfig.Resolve(configs, activeNetworks);
+HydraConfig? config;
+if (!HydraConfig.HasConditions(configs))
+    config = configs[0]; // single unconditional config — no network check needed
+else
+{
+    var activeNetworks = await detector.GetActiveNetworks();
+    config = HydraConfig.Resolve(configs, activeNetworks);
+}
 
 // shared services always registered
 services.AddSingleton(configs);
