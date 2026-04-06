@@ -453,12 +453,13 @@ public class ScreenTransitionService(
 
     private void OnMouseButton(MouseButtonEvent e)
     {
-        log.LogDebug("Mouse: {Type} {Button}", e.IsPressed ? "down" : "up", e.Button);
-
         using var s = AsyncHelper.RunSync(() => _state.WaitForDisposable());
         var st = s.Value;
         if (st.Mouse.IsOnVirtualScreen && relay.IsConnected)
+        {
+            log.LogDebug("Mouse: {Type} {Button}", e.IsPressed ? "down" : "up", e.Button);
             ForwardToVirtualScreen(st, MessageKind.MouseButton, new MouseButtonMessage(e.Button, e.IsPressed));
+        }
     }
 
     private void OnMouseScroll(MouseScrollEvent e)

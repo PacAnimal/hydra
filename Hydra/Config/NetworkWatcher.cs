@@ -49,6 +49,9 @@ internal sealed class NetworkWatcher : SimpleHostedService
 
     private async Task CheckNetwork(CancellationToken cancel)
     {
+        // no conditional configs — nothing to check
+        if (!HydraConfig.HasConditions(_configs)) return;
+
         // debounce rapid-fire events
         var now = DateTime.UtcNow;
         if (now - _lastCheck < Debounce) return;
@@ -68,9 +71,6 @@ internal sealed class NetworkWatcher : SimpleHostedService
         // log transition (null on first check = startup)
         LogTransition(_lastNetworks, active);
         _lastNetworks = active;
-
-        // skip restart logic if no config has a network condition (unconditional single config always matches)
-        if (!HydraConfig.HasConditions(_configs)) return;
 
         var resolved = HydraConfig.Resolve(_configs, active);
         if (resolved == _activeConfig) return;
