@@ -53,7 +53,7 @@ public class MasterSlaveProtocolTests
         Assert.That(received, Is.EqualTo([MessageKind.ScreenInfo]));
     }
 
-    // -- slave log end-to-end through ScreenTransitionService --
+    // -- slave log end-to-end through InputRouter --
 
     [Test]
     public async Task SlaveLog_AppearsInMasterLoggerWithSlavePrefix()
@@ -61,7 +61,7 @@ public class MasterSlaveProtocolTests
         var config = MakeConfig("slave-pc");
         var relay = new FakeRelay();
         var logs = new LogCapture();
-        var service = new ScreenTransitionService(new FakePlatform(), config, relay, new FakeScreenDetector(), logs, NullLogger<ScreenTransitionService>.Instance, new NullScreenSaverSync());
+        var service = new InputRouter(new FakePlatform(), config, relay, new FakeScreenDetector(), logs, NullLogger<InputRouter>.Instance, new NullScreenSaverSync());
         await service.StartAsync(CancellationToken.None);
 
         var msg = new SlaveLogMessage((int)LogLevel.Warning, "MyService", "something went wrong", null);
@@ -84,7 +84,7 @@ public class MasterSlaveProtocolTests
         var config = MakeConfig("slave-pc");
         var relay = new FakeRelay();
         var logs = new LogCapture();
-        var service = new ScreenTransitionService(new FakePlatform(), config, relay, new FakeScreenDetector(), logs, NullLogger<ScreenTransitionService>.Instance, new NullScreenSaverSync());
+        var service = new InputRouter(new FakePlatform(), config, relay, new FakeScreenDetector(), logs, NullLogger<InputRouter>.Instance, new NullScreenSaverSync());
         await service.StartAsync(CancellationToken.None);
 
         var msg = new SlaveLogMessage((int)LogLevel.Error, "Crasher", "boom", "System.Exception: kaboom");
@@ -96,7 +96,7 @@ public class MasterSlaveProtocolTests
         await service.StopAsync(CancellationToken.None);
     }
 
-    // -- ScreenTransitionService MasterConfig gating --
+    // -- InputRouter MasterConfig gating --
 
     [Test]
     public async Task OnPeersChanged_SendsMasterConfigOnlyToConfiguredSlaves()
@@ -202,8 +202,8 @@ public class MasterSlaveProtocolTests
         Hosts = [new HostConfig { Name = "main" }, .. slaveNames.Select(n => new HostConfig { Name = n })],
     };
 
-    private static ScreenTransitionService MakeService(HydraConfig config, IRelaySender relay) =>
-        new(new FakePlatform(), config, relay, new FakeScreenDetector(), NullLoggerFactory.Instance, NullLogger<ScreenTransitionService>.Instance, new NullScreenSaverSync());
+    private static InputRouter MakeService(HydraConfig config, IRelaySender relay) =>
+        new(new FakePlatform(), config, relay, new FakeScreenDetector(), NullLoggerFactory.Instance, NullLogger<InputRouter>.Instance, new NullScreenSaverSync());
 
     private static List<string> MasterConfigTargets(FakeRelay relay) =>
         [.. relay.Sent.Where(s => s.Kind == MessageKind.MasterConfig).SelectMany(s => s.Targets)];

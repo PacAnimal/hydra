@@ -109,7 +109,7 @@ if (config != null)
         else
             throw new PlatformNotSupportedException($"Unsupported OS: {Environment.OSVersion}");
 
-        services.AddHostedService<ScreenTransitionService>();
+        services.AddHostedService<InputRouter>();
     }
     else if (config.Mode == Mode.Slave)
     {

@@ -26,7 +26,7 @@ public class ScreenStartupTests
         };
 
         var logs = new ErrorCapture();
-        var service = new ScreenTransitionService(
+        var service = new InputRouter(
             new FakePlatform(), config, new NullRelaySender(),
             new FakeScreenDetector(), NullLoggerFactory.Instance, logs.CreateLogger(), new NullScreenSaverSync());
 
@@ -42,9 +42,9 @@ public class ScreenStartupTests
     {
         public bool HasError { get; private set; }
 
-        public ILogger<ScreenTransitionService> CreateLogger() => new ErrorLogger(this);
+        public ILogger<InputRouter> CreateLogger() => new ErrorLogger(this);
 
-        private sealed class ErrorLogger(ErrorCapture capture) : ILogger<ScreenTransitionService>
+        private sealed class ErrorLogger(ErrorCapture capture) : ILogger<InputRouter>
         {
             public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
             public bool IsEnabled(LogLevel logLevel) => true;

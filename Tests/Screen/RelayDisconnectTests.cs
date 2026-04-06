@@ -8,7 +8,7 @@ public class RelayDisconnectTests
 {
     private FakePlatform _platform = null!;
     private FakeRelay _relay = null!;
-    private ScreenTransitionService _service = null!;
+    private InputRouter _service = null!;
 
     [SetUp]
     public async Task SetUp()

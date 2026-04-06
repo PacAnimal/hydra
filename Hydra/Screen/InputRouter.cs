@@ -12,13 +12,13 @@ using Microsoft.Extensions.Logging;
 
 namespace Hydra.Screen;
 
-public class ScreenTransitionService(
+public class InputRouter(
     IPlatformInput platform,
     HydraConfig config,
     IRelaySender relay,
     IScreenDetector screens,
     ILoggerFactory loggerFactory,
-    ILogger<ScreenTransitionService> log,
+    ILogger<InputRouter> log,
     IScreenSaverSync screenSaverSync,
     IWorldState? peerState = null)
     : IHostedService
