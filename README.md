@@ -56,6 +56,7 @@ Edit `hydra.conf` (sits next to the binary):
 - `networkConfig` — base64 relay config string from Styx (required when using the relay)
 - `hosts` — list of host entries for the neighbour graph (master only; slaves don't need this)
 - `screenDefinitions` — optional per-screen configuration for scale (used on any machine)
+- `deadCorners` — percentage dead zone at screen corners where transitions are blocked (0–100, default `0`). Can also be set per-host to override.
 - `condition` — optional network condition: `Wired` or `Ssid` (see [Network-aware config](#network-aware-config))
 - `ssid` — the WiFi network name to match; required when `condition` is `Ssid`
 
@@ -101,6 +102,36 @@ Supported directions: `left`, `right`, `up`, `down`.
 ```
 
 When cursor crosses the right edge in the top half (0–50%), it goes to `workstation`; bottom half goes to `monitor-host`.
+
+### Dead corners
+
+`deadCorners` defines a dead zone at each corner of the screen where outbound transitions are blocked, regardless of neighbour config. The value is a percentage of the edge length — `5` means the cursor must be more than 5% away from a corner to trigger a transition.
+
+Set at the root level to apply to all hosts:
+
+```json
+{
+  "mode": "Master",
+  "deadCorners": 5,
+  "hosts": [...]
+}
+```
+
+Override per-host (takes precedence over the root value):
+
+```json
+{
+  "hosts": [
+    {
+      "name": "laptop",
+      "deadCorners": 10,
+      "neighbours": [...]
+    }
+  ]
+}
+```
+
+Transitions into a host through a corner are unaffected — dead corners only block outbound transitions.
 
 **Missing hosts**: if a peer is offline, Hydra skips through to the next machine in the same direction (if configured). This lets you maintain a logical layout even when a machine in the middle of the chain is down.
 

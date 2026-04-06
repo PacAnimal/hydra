@@ -4,12 +4,13 @@ using Microsoft.Extensions.Logging;
 
 namespace Hydra.Screen;
 
-public class ScreenLayout(List<ScreenRect> screens, List<HostConfig> configs, ILogger log)
+public class ScreenLayout(List<ScreenRect> screens, List<HostConfig> configs, int? defaultDeadCorners, ILogger log)
 {
     private const int JumpZone = 1;
     private const int NudgeDistance = 2;
 
     private readonly Dictionary<(string Name, Direction Dir), List<EdgeLink>> _graph = BuildGraph(screens, configs, log);
+    private readonly Dictionary<string, float> _deadCorners = BuildDeadCorners(configs, defaultDeadCorners);
 
     private static Dictionary<(string, Direction), List<EdgeLink>> BuildGraph(
         List<ScreenRect> screens, List<HostConfig> configs, ILogger log)
@@ -72,6 +73,17 @@ public class ScreenLayout(List<ScreenRect> screens, List<HostConfig> configs, IL
         return graph;
     }
 
+    private static Dictionary<string, float> BuildDeadCorners(List<HostConfig> configs, int? defaultDeadCorners)
+    {
+        var result = new Dictionary<string, float>(StringComparer.OrdinalIgnoreCase);
+        foreach (var config in configs)
+        {
+            var raw = config.DeadCorners ?? defaultDeadCorners ?? 0;
+            result[config.Name] = Math.Clamp(raw, 0, 100) / 100f;
+        }
+        return result;
+    }
+
     private static bool MatchesId(ScreenRect screen, string id) =>
         screen.Identity?.Matches(id) ?? screen.Name.EqualsIgnoreCase(id);
 
@@ -98,6 +110,13 @@ public class ScreenLayout(List<ScreenRect> screens, List<HostConfig> configs, IL
 
         // normalized position along the edge [0,1]
         var normalized = edgeLen > 0 ? (perpPos + 0.5f) / edgeLen : 0f;
+
+        // dead corners: block outbound transitions near either end of the edge
+        if (_deadCorners.TryGetValue(current.Host, out var hc) && hc > 0f)
+        {
+            if (normalized < hc || normalized > 1f - hc)
+                return null;
+        }
 
         // find the link whose source range contains this position
         EdgeLink? match = null;

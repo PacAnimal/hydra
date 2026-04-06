@@ -72,7 +72,7 @@ public class ScreenTransitionService(
 
             UpdateWarpPoint(st, st.ActiveLocalScreen);
             st.Screens = BuildAllScreens(st.LocalScreens, config);
-            st.Layout = new ScreenLayout(st.Screens, config.Hosts, log);
+            st.Layout = new ScreenLayout(st.Screens, config.Hosts, config.DeadCorners, log);
 
             foreach (var remote in st.Screens.Where(r => !r.IsLocal))
                 log.LogInformation("Remote screen '{Name}': waiting for peer", remote.Name);
@@ -132,7 +132,7 @@ public class ScreenTransitionService(
         ApplyPeerScreenSizes(peerScreens, newScreens);
         st.LocalScreens = snapshot.Screens;
         st.Screens = newScreens;
-        st.Layout = new ScreenLayout(newScreens, config.Hosts, log);
+        st.Layout = new ScreenLayout(newScreens, config.Hosts, config.DeadCorners, log);
 
         if (!st.Mouse.IsOnVirtualScreen)
         {
@@ -352,7 +352,7 @@ public class ScreenTransitionService(
 
         var newScreens = BuildAllScreens(st.LocalScreens, config);
         ApplyPeerScreenSizes(peerScreens, newScreens);
-        var newLayout = new ScreenLayout(newScreens, config.Hosts, log);
+        var newLayout = new ScreenLayout(newScreens, config.Hosts, config.DeadCorners, log);
         st.Screens = newScreens;
         st.Layout = newLayout;
         st.ActiveLocalScreen = st.LocalScreens.FirstOrDefault(s => s.Name.EqualsIgnoreCase(st.ActiveLocalScreen.Name)) ?? st.LocalScreens.FirstOrDefault() ?? st.ActiveLocalScreen;

@@ -12,6 +12,7 @@ public class HostConfig
 {
     public required string Name { get; init; }
     public List<NeighbourConfig> Neighbours { get; init; } = [];
+    public int? DeadCorners { get; init; }  // % dead zone at screen corners (0-100); overrides root-level setting
 }
 
 public class NeighbourConfig
@@ -47,6 +48,7 @@ public class HydraConfig
 
     public bool AutoUpdate { get; init; } = true;
     public bool SyncScreensaver { get; init; } = true;
+    public int? DeadCorners { get; init; }  // % dead zone at screen corners (0-100); per-host setting overrides this
 
     // optional — defaults to machine hostname without domain
     public string? Name { get; init; }
