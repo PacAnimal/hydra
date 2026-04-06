@@ -36,8 +36,6 @@ internal static partial class NativeMethods
     internal const int KCGScrollWheelEventDeltaAxis2 = 12;        // integer line delta, horizontal (positive = right)
     internal const int KCGScrollWheelEventFixedPtDeltaAxis1 = 93; // 16.16 fixed-point line delta, vertical
     internal const int KCGScrollWheelEventFixedPtDeltaAxis2 = 94; // 16.16 fixed-point line delta, horizontal
-    internal const int KCGScrollWheelEventPointDeltaAxis1 = 96;   // pixel delta, vertical
-    internal const int KCGScrollWheelEventPointDeltaAxis2 = 97;   // pixel delta, horizontal
 
     // -- CoreGraphics private APIs (CGS) --
 

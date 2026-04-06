@@ -13,9 +13,6 @@ public sealed class XorgOutputHandler : IPlatformOutput, ICursorVisibility
     private readonly int _screen;
     private readonly nint _rootWindow;
     private bool _disposed;
-    private ScrollAccumulator _scrollAccY;
-    private ScrollAccumulator _scrollAccX;
-
     public XorgOutputHandler()
     {
         _ = NativeMethods.XInitThreads();
@@ -81,10 +78,9 @@ public sealed class XorgOutputHandler : IPlatformOutput, ICursorVisibility
 
     public void InjectMouseScroll(MouseScrollMessage msg)
     {
-        // x11 scroll: buttons 4=up, 5=down, 6=left, 7=right (each press = one 120-unit click).
-        // accumulate remainders so sub-120 deltas are not silently dropped.
-        InjectScrollAxis(4u, 5u, _scrollAccY.Add(msg.YDelta));
-        InjectScrollAxis(7u, 6u, _scrollAccX.Add(msg.XDelta));
+        // x11 scroll: buttons 4=up, 5=down, 6=left, 7=right (each press = one 120-unit click)
+        InjectScrollAxis(4u, 5u, msg.YDelta / 120);
+        InjectScrollAxis(7u, 6u, msg.XDelta / 120);
         _ = NativeMethods.XFlush(_display);
     }
 

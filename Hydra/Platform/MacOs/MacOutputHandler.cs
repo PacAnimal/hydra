@@ -15,8 +15,6 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
     private double _mouseX;
     private double _mouseY;
     private readonly HashSet<MouseButton> _heldButtons = [];
-    private ScrollAccumulator _scrollAccY;
-    private ScrollAccumulator _scrollAccX;
     private readonly uint _display = NativeMethods.CGMainDisplayID();
     private bool _cursorHidden;
 
@@ -180,18 +178,14 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
     {
         if (msg.YDelta == 0 && msg.XDelta == 0) return;
 
-        // accumulate into running totals to avoid losing sub-120 remainders
-        // integer line count for line-based apps (may be zero for sub-line events)
-        var yLines = _scrollAccY.Add(msg.YDelta);
-        var xLines = _scrollAccX.Add(msg.XDelta);
-
+        // wire format: 120 = 1 line. convert to integer line counts for the event constructor.
         // kCGScrollEventUnitLine = 1
-        var eventRef = NativeMethods.CGEventCreateScrollWheelEvent(_eventSource, 1, 2, yLines, xLines);
+        var eventRef = NativeMethods.CGEventCreateScrollWheelEvent(_eventSource, 1, 2, msg.YDelta / 120, msg.XDelta / 120);
         if (eventRef == nint.Zero) return;
 
-        // also set pixel delta so pixel-aware apps (browsers, etc.) get smooth sub-line scroll
-        NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventPointDeltaAxis1, msg.YDelta);
-        NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventPointDeltaAxis2, msg.XDelta);
+        // set 16.16 fixed-point line deltas for sub-line precision (reverses input handler's fpDelta * 120 >> 16)
+        NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventFixedPtDeltaAxis1, (long)msg.YDelta * 65536 / 120);
+        NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventFixedPtDeltaAxis2, (long)msg.XDelta * 65536 / 120);
 
         NativeMethods.CGEventPost(NativeMethods.KCGHidEventTap, eventRef);
         NativeMethods.CFRelease(eventRef);
