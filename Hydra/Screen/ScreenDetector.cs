@@ -63,6 +63,16 @@ public abstract class ScreenDetector : SimpleHostedService, IScreenDetector
         if (snapshot != null)
         {
             _log.LogInformation("Local screens: {Count}", snapshot.Screens.Count);
+            for (var i = 0; i < detected.Count; i++)
+            {
+                var d = detected[i];
+                var parts = new List<string>();
+                if (d.OutputName != null) parts.Add($"output={d.OutputName}");
+                if (d.DisplayName != null) parts.Add($"name={d.DisplayName}");
+                if (d.PlatformId != null) parts.Add($"id={d.PlatformId}");
+                _log.LogInformation("  Screen {Index}: {W}x{H} @ ({X},{Y})  {Ids}",
+                    i, d.Width, d.Height, d.X, d.Y, string.Join("  ", parts));
+            }
             ScreensChanged?.Invoke(snapshot);
         }
     }

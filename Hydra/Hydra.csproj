@@ -50,13 +50,23 @@
     </ItemGroup>
 
     <ItemGroup>
-        <Content Include="Resources/MacShield/hydra-shield" CopyToOutputDirectory="PreserveNewest"
-                 Condition="$([MSBuild]::IsOSPlatform('OSX'))" />
+        <!-- app bundle for Location Services identity — macOS requires a proper bundle to show auth dialogs -->
+        <Content Include="Resources/MacShield/hydra-shield.app/Contents/MacOS/hydra-shield"
+                 CopyToOutputDirectory="PreserveNewest" Condition="$([MSBuild]::IsOSPlatform('OSX'))" />
+        <Content Include="Resources/MacShield/hydra-shield.app/Contents/Info.plist"
+                 CopyToOutputDirectory="PreserveNewest" Condition="$([MSBuild]::IsOSPlatform('OSX'))" />
     </ItemGroup>
 
-    <!-- compile the Swift shield helper before content files are copied; only runs on macOS where swiftc is available -->
-    <Target Name="CompileMacShield" BeforeTargets="_CopyOutOfDateSourceItemsToOutputDirectory" Condition="$([MSBuild]::IsOSPlatform('OSX'))">
-        <Exec Command="xcrun swiftc -O -o &quot;$(MSBuildProjectDirectory)/Resources/MacShield/hydra-shield&quot; &quot;$(MSBuildProjectDirectory)/Resources/MacShield/main.swift&quot;" />
+    <!-- compile the Swift shield helper into a proper .app bundle; only runs on macOS where swiftc is available -->
+    <Target Name="CompileMacShield" BeforeTargets="Build"
+            Inputs="$(MSBuildProjectDirectory)/Resources/MacShield/main.swift;$(MSBuildProjectDirectory)/Resources/MacShield/ShieldInfo.plist"
+            Outputs="$(MSBuildProjectDirectory)/Resources/MacShield/hydra-shield.app/Contents/MacOS/hydra-shield"
+            Condition="$([MSBuild]::IsOSPlatform('OSX'))">
+        <MakeDir Directories="$(MSBuildProjectDirectory)/Resources/MacShield/hydra-shield.app/Contents/MacOS" />
+        <Copy SourceFiles="$(MSBuildProjectDirectory)/Resources/MacShield/ShieldInfo.plist"
+              DestinationFiles="$(MSBuildProjectDirectory)/Resources/MacShield/hydra-shield.app/Contents/Info.plist" />
+        <Exec Command="xcrun swiftc -O -framework Network -framework CoreWLAN -framework CoreLocation -o &quot;$(MSBuildProjectDirectory)/Resources/MacShield/hydra-shield.app/Contents/MacOS/hydra-shield&quot; &quot;$(MSBuildProjectDirectory)/Resources/MacShield/main.swift&quot;" />
+        <Exec Command="codesign --force --sign - &quot;$(MSBuildProjectDirectory)/Resources/MacShield/hydra-shield.app&quot;" />
     </Target>
 
 </Project>

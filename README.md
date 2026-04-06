@@ -56,6 +56,8 @@ Edit `hydra.conf` (sits next to the binary):
 - `networkConfig` — base64 relay config string from Styx (required when using the relay)
 - `hosts` — list of host entries for the neighbour graph (master only; slaves don't need this)
 - `screenDefinitions` — optional per-screen configuration for scale (used on any machine)
+- `condition` — optional network condition: `Wired` or `Ssid` (see [Network-aware config](#network-aware-config))
+- `ssid` — the WiFi network name to match; required when `condition` is `Ssid`
 
 ### Screen layout
 
@@ -107,9 +109,9 @@ When cursor crosses the right edge in the top half (0–50%), it goes to `workst
 Local screens are **auto-detected from the OS** — no config is required. On startup, Hydra logs all detected screens with their identifiers:
 
 ```
-Detected 2 local screen(s):
-  Screen 0: 2560x1600 @ (0,0)     output=eDP-1    name=Built-in Retina Display
-  Screen 1: 3840x2160 @ (2560,0)  output=HDMI-1   name=DELL U2720Q
+Local screens: 2
+  Screen 0: 2560x1600 @ (0,0)  output=eDP-1  name=Built-in Retina Display
+  Screen 1: 3840x2160 @ (2560,0)  output=HDMI-1  name=DELL U2720Q
 ```
 
 Use these identifiers in `screenDefinitions` to set per-screen options, and in `sourceScreen`/`destScreen` to target specific monitors in neighbour rules.
@@ -134,6 +136,38 @@ Use these identifiers in `screenDefinitions` to set per-screen options, and in `
 | `scale` | `1.0` | Cursor speed multiplier on this screen |
 
 Screens with no matching definition use default scale (1.0).
+
+### Network-aware config
+
+If you move your machine between networks (e.g. home vs. office), `hydra.conf` can be an **array** of configs, each gated on the current network. Hydra picks the first matching config and restarts automatically when the network changes.
+
+```json
+[
+  {
+    "mode": "Master",
+    "condition": "Ssid",
+    "ssid": "OfficeWifi",
+    "name": "laptop",
+    "networkConfig": "<base64 string>",
+    "hosts": [
+      { "name": "laptop", "neighbours": [{ "direction": "right", "name": "desktop" }] },
+      { "name": "desktop", "neighbours": [{ "direction": "left", "name": "laptop" }] }
+    ]
+  },
+  {
+    "mode": "Slave",
+    "name": "laptop"
+  }
+]
+```
+
+- `condition: "Ssid"` — activates when connected to the named WiFi network (`ssid` field required)
+- `condition: "Wired"` — activates when connected via Ethernet
+- No `condition` — fallback, matches any network not covered by other entries
+
+A config without a `condition` is the default fallback. If no config matches the current network (and there is no fallback), Hydra idles silently until the network changes.
+
+Rules: at most one default, no duplicate SSIDs, no duplicate `Wired` entries — validated at startup.
 
 ### Lock hotkey
 

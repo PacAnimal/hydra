@@ -461,12 +461,13 @@ public class ScreenTransitionService(
 
     private void OnMouseScroll(MouseScrollEvent e)
     {
-        log.LogDebug("Scroll: x={X} y={Y}", e.XDelta, e.YDelta);
-
         using var s = AsyncHelper.RunSync(() => _state.WaitForDisposable());
         var st = s.Value;
         if (st.Mouse.IsOnVirtualScreen && relay.IsConnected)
+        {
+            log.LogDebug("Scroll: x={X} y={Y}", e.XDelta, e.YDelta);
             ForwardToVirtualScreen(st, MessageKind.MouseScroll, new MouseScrollMessage(e.XDelta, e.YDelta));
+        }
     }
 
     private void SendMousePosition(LocalMasterState st, long now)

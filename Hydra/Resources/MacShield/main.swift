@@ -1,10 +1,23 @@
 import AppKit
+import Network
+import CoreWLAN
+import CoreLocation
 
 // tiny shield app — places a topmost window over the cursor park position (main screen center)
 // to absorb hover events while the KVM cursor is hidden there.
 // no dock icon, no menu bar. controlled via stdin: "0" = hide, "1" = show (invisible), "2" = show (visible red, debug).
 // automatically suppresses itself while a fullscreen app (e.g. a game) is running.
 // runs until killed by the parent process.
+//
+// also handles macOS network state detection on behalf of the Hydra parent:
+//   stdout "ssid:NetworkName" — current WiFi SSID (empty = not connected / not authorized)
+//   stdout "wired:1" / "wired:0" — wired Ethernet presence
+// emitted on startup and whenever state changes.
+
+// writes a line to stdout, flushing immediately so the parent process receives it without buffering.
+func writeState(_ line: String) {
+    FileHandle.standardOutput.write(Data((line + "\n").utf8))
+}
 
 // full-coverage view that participates in hit testing and swallows all mouse events
 class AbsorberView: NSView {
@@ -28,10 +41,14 @@ class AbsorberView: NSView {
     override func mouseUp(with event: NSEvent) {}
 }
 
-class ShieldDelegate: NSObject, NSApplicationDelegate {
+class ShieldDelegate: NSObject, NSApplicationDelegate, CLLocationManagerDelegate, CWEventDelegate {
     var window: NSWindow?
     var desiredAbsorb = false
     var debugMode = false
+
+    private var pathMonitor: NWPathMonitor?
+    private var locationManager: CLLocationManager?
+    private var reportedWired: Bool? = nil // nil = not yet reported
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard let screen = NSScreen.main else { return }
@@ -83,7 +100,79 @@ class ShieldDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
+
+        startNetworkMonitoring()
     }
+
+    // MARK: - Network monitoring
+
+    private func startNetworkMonitoring() {
+        startWiredMonitoring()
+        startWifiMonitoring()
+    }
+
+    // NWPathMonitor watches wired Ethernet — no permissions required
+    private func startWiredMonitoring() {
+        let monitor = NWPathMonitor(requiredInterfaceType: .wiredEthernet)
+        monitor.pathUpdateHandler = { [weak self] path in
+            let wired = path.status == .satisfied
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if self.reportedWired != wired {
+                    self.reportedWired = wired
+                    writeState("wired:\(wired ? 1 : 0)")
+                }
+            }
+        }
+        monitor.start(queue: DispatchQueue.global(qos: .background))
+        pathMonitor = monitor
+    }
+
+    // CLLocationManager + CWWiFiClient for SSID — requires Location Services authorization
+    private func startWifiMonitoring() {
+        let mgr = CLLocationManager()
+        mgr.delegate = self
+        locationManager = mgr
+
+        let status = mgr.authorizationStatus
+        writeState("wifiauth:\(status.rawValue)") // 0=notDetermined 1=restricted 2=denied 3=authorized 4=authorizedAlways
+        switch status {
+        case .notDetermined:
+            mgr.requestAlwaysAuthorization()
+        case .authorized, .authorizedAlways:
+            startCoreWlan()
+        default:
+            writeState("ssid:")
+        }
+    }
+
+    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        writeState("wifiauth:\(manager.authorizationStatus.rawValue)")
+        switch manager.authorizationStatus {
+        case .authorized, .authorizedAlways:
+            startCoreWlan()
+        default:
+            writeState("ssid:")
+        }
+    }
+
+    private func startCoreWlan() {
+        let client = CWWiFiClient.shared()
+        client.delegate = self
+        try? client.startMonitoringEvent(with: .ssidDidChange)
+        reportSsid()
+    }
+
+    func ssidDidChangeForWiFiInterface(withName interfaceName: String) {
+        reportSsid()
+    }
+
+    private func reportSsid() {
+        let ssid = CWWiFiClient.shared().interface()?.ssid() ?? ""
+        writeState("ssid:\(ssid)")
+    }
+
+    // MARK: - Shield window
 
     func applyState() {
         guard let w = window else { return }

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Cathedral.Extensions;
+using Hydra.Platform;
 using Hydra.Screen;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -50,6 +51,11 @@ public class HydraConfig
     // optional — defaults to machine hostname without domain
     public string? Name { get; init; }
 
+    // optional — if set, this config only activates when the specified network condition is met
+    public ConfigCondition? Condition { get; init; }
+    // required when Condition == Ssid — the WiFi network name to match
+    public string? Ssid { get; init; }
+
     [JsonIgnore]
     public string ResolvedName => Name ?? Environment.MachineName.Split('.')[0];
 
@@ -59,16 +65,95 @@ public class HydraConfig
     [JsonIgnore]
     public IEnumerable<HostConfig> RemoteHosts => Hosts.Where(s => !s.Name.EqualsIgnoreCase(ResolvedName));
 
+    // convenience method for single-config scenarios (tests, simple setups)
+    // throws if the file contains multiple configs — use LoadAll() in that case
     public static HydraConfig Load(IConfiguration config)
+    {
+        var (configs, _) = LoadAll(config);
+        if (configs.Count != 1)
+            throw new InvalidOperationException("Config file contains multiple configs. Use HydraConfig.LoadAll() instead.");
+        return configs[0];
+    }
+
+    // loads all configs from file, validates, and returns the list
+    public static (List<HydraConfig> configs, string path) LoadAll(IConfiguration config)
     {
         var binaryDir = Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory;
         var path = config.GetStringOrNull("CONFIG")
             ?? FindConfig(Path.Combine(binaryDir, "hydra.conf"))
             ?? FindConfig(Path.Combine(Directory.GetCurrentDirectory(), "hydra.conf"))
             ?? throw new FileNotFoundException("No hydra.conf found. Set CONFIG=/path/to/hydra.conf and try again.");
+
         var json = File.ReadAllText(path);
-        return json.FromSaneJson<HydraConfig>()
+        var configs = ParseConfigs(json, path);
+        Validate(configs);
+        return (configs, path);
+    }
+
+    // resolves the active config from the list based on current network state.
+    // returns null if no config matches (hydra should idle until network changes)
+    public static HydraConfig? Resolve(List<HydraConfig> configs, List<NetworkState> active)
+    {
+        HydraConfig? fallback = null;
+
+        foreach (var cfg in configs)
+        {
+            if (cfg.Condition == null)
+            {
+                fallback = cfg;
+                continue;
+            }
+
+            if (cfg.Condition == ConfigCondition.Wired && active.Any(n => n.Type == ConfigCondition.Wired))
+                return cfg;
+
+            if (cfg.Condition == ConfigCondition.Ssid && active.Any(n => n.Type == ConfigCondition.Ssid &&
+                    (n.Ssid?.EqualsIgnoreCase(cfg.Ssid) ?? false)))
+                return cfg;
+        }
+
+        return fallback;
+    }
+
+    private static List<HydraConfig> ParseConfigs(string json, string path)
+    {
+        // try array first, fall back to single object
+        try
+        {
+            var list = json.FromSaneJson<List<HydraConfig>>();
+            if (list is { Count: > 0 })
+                return list;
+        }
+        catch (JsonException) { }
+
+        var single = json.FromSaneJson<HydraConfig>()
             ?? throw new InvalidOperationException($"Failed to deserialize {path}");
+        return [single];
+    }
+
+    private static void Validate(List<HydraConfig> configs)
+    {
+        var defaults = configs.Count(c => c.Condition == null);
+        if (defaults > 1)
+            throw new InvalidOperationException("hydra.conf has multiple default configs (configs without a 'condition' field). Only one is allowed.");
+
+        var ssids = configs
+            .Where(c => c.Condition == ConfigCondition.Ssid)
+            .Select(c => c.Ssid?.ToLowerInvariant())
+            .ToList();
+        var duplicateSsid = ssids.GroupBy(s => s).FirstOrDefault(g => g.Count() > 1);
+        if (duplicateSsid != null)
+            throw new InvalidOperationException($"hydra.conf has duplicate SSID config for '{duplicateSsid.Key}'.");
+
+        var wiredCount = configs.Count(c => c.Condition == ConfigCondition.Wired);
+        if (wiredCount > 1)
+            throw new InvalidOperationException("hydra.conf has multiple Wired configs. Only one is allowed.");
+
+        foreach (var cfg in configs.Where(c => c.Condition == ConfigCondition.Ssid))
+        {
+            if (string.IsNullOrWhiteSpace(cfg.Ssid))
+                throw new InvalidOperationException("A config with 'condition: Ssid' must have a non-empty 'ssid' field.");
+        }
     }
 
     private static string? FindConfig(string path) => File.Exists(path) ? path : null;

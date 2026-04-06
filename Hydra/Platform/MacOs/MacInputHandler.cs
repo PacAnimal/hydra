@@ -7,12 +7,12 @@ using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform.MacOs;
 
-public sealed class MacInputHandler(ILogger<MacInputHandler> log) : IPlatformInput
+internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldProcess shield) : IPlatformInput
 {
+    private readonly MacShieldProcess _shield = shield;
     private readonly uint _display = NativeMethods.CGMainDisplayID();
     private readonly nint _cfBooleanTrue = GetCFBooleanTrue();
     private readonly MacKeyResolver _keyResolver = new();
-    private readonly MacShieldProcess _shield = new();
 
     // stored as fields to prevent GC collection while the tap is active
     private CGEventTapCallBack? _tapCallback;
@@ -79,7 +79,6 @@ public sealed class MacInputHandler(ILogger<MacInputHandler> log) : IPlatformInp
         Action<MouseButtonEvent> onMouseButton,
         Action<MouseScrollEvent> onMouseScroll)
     {
-        _shield.Start();
         _onMouseMove = onMouseMove;
         _onKeyEvent = onKeyEvent;
         _onMouseButton = onMouseButton;
@@ -146,7 +145,6 @@ public sealed class MacInputHandler(ILogger<MacInputHandler> log) : IPlatformInp
     {
         StopEventTap();
         if (_cursorHidden) ShowCursor();
-        _shield.Dispose();
         GC.SuppressFinalize(this);
     }
 

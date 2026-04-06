@@ -1,6 +1,5 @@
 using Cathedral.Extensions;
 using Cathedral.Utils;
-using Microsoft.Extensions.Logging;
 
 namespace Styx.Services;
 

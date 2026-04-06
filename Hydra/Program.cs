@@ -12,28 +12,83 @@ using Hydra.Screen;
 using Hydra.Update;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 // ensure console can display non-ASCII characters (e.g. '€', 'ø') in debug logs
 Console.OutputEncoding = Encoding.UTF8;
 
-HydraConfig config;
+List<HydraConfig> configs;
+string configPath;
 try
 {
-    config = HydraConfig.Load(Env.Config);
+    (configs, configPath) = HydraConfig.LoadAll(Env.Config);
 }
 catch (FileNotFoundException ex)
 {
     Console.Error.WriteLine(ex.Message);
     return;
 }
+catch (InvalidOperationException ex)
+{
+    Console.Error.WriteLine(ex.Message);
+    return;
+}
+
+// on macOS, pre-start the shield before DI so network state is available for config resolution.
+// the shield (NSApplication) can show the Location Services dialog and uses NWPathMonitor + CoreWLAN.
+MacNetworkState? macNetworkState = null;
+MacShieldProcess? macShield = null;
+if (OperatingSystem.IsMacOS())
+{
+    macNetworkState = new MacNetworkState();
+    macShield = new MacShieldProcess(macNetworkState);
+    await macShield.WaitForInitialState(TimeSpan.FromSeconds(3));
+}
+
+// detect current network and resolve which config to use
+var detector = CreateDetector(macNetworkState);
+var activeNetworks = await detector.GetActiveNetworks();
+var config = HydraConfig.Resolve(configs, activeNetworks);
+
 var builder = Host.CreateDefaultBuilder(args).DisableEventLog();
 
 builder.ConfigureServices((_, services) =>
 {
     services.AddEnvironmentConfiguration();
-    services.AddSereneConsoleLogging(c => c.MinLogLevel = config.LogLevel);
-    services.AddSingleton(config);
+
+    var logLevel = config?.LogLevel ?? configs[0].LogLevel;
+    services.AddSereneConsoleLogging(c => c.MinLogLevel = logLevel);
+
+    // shared services always registered
+    services.AddSingleton(configs);
+    services.AddSingleton<ICmdRunner, CmdRunner>();
+    services.AddSingleton<INetworkDetector>(_ => detector);
     services.AddSingleton<IWorldState, WorldState>();
+
+    // shield always runs on macOS — handles cursor shielding + network state detection
+    if (OperatingSystem.IsMacOS() && macShield != null && macNetworkState != null)
+    {
+        services.AddSingleton(macNetworkState);
+        services.AddSingleton(macShield);
+        services.AddHostedService(_ => macShield);
+    }
+
+    // network watcher always runs — logs state on startup, triggers restarts on change
+    services.AddSingleton(sp => new NetworkWatcher(
+        sp.GetRequiredService<INetworkDetector>(),
+        configs,
+        config,
+        sp.GetRequiredService<ILogger<NetworkWatcher>>()));
+    services.AddHostedService(sp => sp.GetRequiredService<NetworkWatcher>());
+
+    if (config == null)
+    {
+        // no matching config for current network — idle until network changes
+        return;
+    }
+
+    services.AddSingleton(config);
 
     // screen detector must be registered before any service that awaits IScreenDetector.Get() at startup
     if (OperatingSystem.IsMacOS())
@@ -105,4 +160,27 @@ builder.ConfigureServices((_, services) =>
 
 var app = builder.Build();
 
+if (macShield != null)
+{
+    var shieldLog = app.Services.GetRequiredService<ILogger<MacShieldProcess>>();
+    macShield.Log = shieldLog;
+    shieldLog.LogInformation("shield: auth={Auth} ssid={Ssid} wired={Wired}",
+        macNetworkState!.WifiAuthStatus switch { 0 => "notDetermined", 1 => "restricted", 2 => "denied", 3 or 4 => "authorized", _ => "?" },
+        macNetworkState.Ssid ?? "(none)",
+        macNetworkState.Wired);
+
+    // wire shield state changes to immediate network re-check
+    macShield.OnNetworkStateChanged = () => app.Services.GetRequiredService<NetworkWatcher>().TriggerCheck();
+}
+
 app.Run();
+
+// creates the platform-specific network detector for use before DI is set up
+static INetworkDetector CreateDetector(MacNetworkState? macNetworkState)
+{
+    if (OperatingSystem.IsMacOS()) return new MacNetworkDetector(macNetworkState);
+    var cmdRunner = new CmdRunner(NullLogger<CmdRunner>.Instance);
+    if (OperatingSystem.IsWindows()) return new WindowsNetworkDetector();
+    if (OperatingSystem.IsLinux()) return new LinuxNetworkDetector(cmdRunner);
+    throw new PlatformNotSupportedException($"Unsupported OS: {Environment.OSVersion}");
+}

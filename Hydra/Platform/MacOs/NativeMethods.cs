@@ -387,6 +387,30 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial int IOPMAssertionRelease(uint assertionID);
 
+    // -- SystemConfiguration: dynamic store (SSID detection without Location Services) --
+
+    private const string SystemConfiguration = "/System/Library/Frameworks/SystemConfiguration.framework/SystemConfiguration";
+
+    [LibraryImport(SystemConfiguration)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint SCDynamicStoreCreate(nint allocator, nint name, nint callout, nint context);
+
+    [LibraryImport(SystemConfiguration)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint SCDynamicStoreCopyValue(nint store, nint key);
+
+    // -- CoreFoundation: dictionary --
+
+    [LibraryImport(CoreFoundation)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint CFDictionaryGetValue(nint dict, nint key);
+
+    // -- CoreFoundation: data (length) --
+
+    [LibraryImport(CoreFoundation)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint CFDataGetLength(nint theData);
+
     // -- CoreFoundation: distributed notification center --
 
     [LibraryImport(CoreFoundation)]
