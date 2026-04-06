@@ -2,7 +2,7 @@ using Cathedral.Extensions;
 
 namespace Hydra.Screen;
 
-public enum Direction { Left, Right, Top, Bottom }
+public enum Direction { Left, Right, Up, Down }
 
 public class ScreenIdentity
 {

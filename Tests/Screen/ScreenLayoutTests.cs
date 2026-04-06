@@ -272,7 +272,7 @@ public class ScreenLayoutTests
                 Name = "top",
                 Neighbours = [new NeighbourConfig
                 {
-                    Direction = Direction.Bottom, Name = "below",
+                    Direction = Direction.Down, Name = "below",
                     SourceStart = 50, SourceEnd = 100,
                     DestStart = 0, DestEnd = 25,
                 }],
@@ -304,7 +304,7 @@ public class ScreenLayoutTests
                 Name = "bottom",
                 Neighbours = [new NeighbourConfig
                 {
-                    Direction = Direction.Top, Name = "above",
+                    Direction = Direction.Up, Name = "above",
                     SourceStart = 0, SourceEnd = 50,
                     DestStart = 50, DestEnd = 100,
                 }],
@@ -433,7 +433,7 @@ public class ScreenLayoutTests
             {
                 Name = "top",
                 DeadCorners = 10,
-                Neighbours = [new NeighbourConfig { Direction = Direction.Bottom, Name = "below" }],
+                Neighbours = [new NeighbourConfig { Direction = Direction.Down, Name = "below" }],
             }],
             null,
             NullLogger.Instance);

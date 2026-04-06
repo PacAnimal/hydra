@@ -93,7 +93,7 @@ public class ScreenLayout(List<ScreenRect> screens, List<HostConfig> configs, in
     public EdgeHit? DetectEdgeExit(ScreenRect current, int x, int y)
     {
         Direction? dir = null;
-        int perpPos = 0; // position along the crossed edge (height for left/right, width for top/bottom)
+        int perpPos = 0; // position along the crossed edge (height for left/right, width for up/down)
         int edgeLen = 0;
 
         if (x <= JumpZone - 1)
@@ -101,9 +101,9 @@ public class ScreenLayout(List<ScreenRect> screens, List<HostConfig> configs, in
         else if (x >= current.Width - JumpZone)
         { dir = Direction.Right; perpPos = y; edgeLen = current.Height; }
         else if (y <= JumpZone - 1)
-        { dir = Direction.Top; perpPos = x; edgeLen = current.Width; }
+        { dir = Direction.Up; perpPos = x; edgeLen = current.Width; }
         else if (y >= current.Height - JumpZone)
-        { dir = Direction.Bottom; perpPos = x; edgeLen = current.Width; }
+        { dir = Direction.Down; perpPos = x; edgeLen = current.Width; }
 
         if (dir is null) return null;
         if (!_graph.TryGetValue((current.Name, dir.Value), out var links)) return null;
@@ -163,8 +163,8 @@ public class ScreenLayout(List<ScreenRect> screens, List<HostConfig> configs, in
         {
             Direction.Right => new(NudgeDistance, destPos),
             Direction.Left => new(to.Width - 1 - NudgeDistance, destPos),
-            Direction.Bottom => new(destPos, NudgeDistance),
-            Direction.Top => new(destPos, to.Height - 1 - NudgeDistance),
+            Direction.Down => new(destPos, NudgeDistance),
+            Direction.Up => new(destPos, to.Height - 1 - NudgeDistance),
             _ => throw new ArgumentOutOfRangeException(nameof(dir), dir, null),
         };
     }
