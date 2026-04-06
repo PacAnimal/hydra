@@ -374,10 +374,45 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial int IOHIDPostEvent(uint connect, uint eventType, IOGPoint location, in NXEventData eventData, uint eventDataVersion, uint eventFlags, uint options);
 
+    // -- IOKit: power management assertions (used for screensaver suppression) --
+
+    // kIOPMAssertionLevelOn = 255
+    internal const uint KIOPMAssertionLevelOn = 255;
+
+    [LibraryImport(IOKit)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int IOPMAssertionCreateWithName(nint assertionType, uint assertionLevel, nint assertionName, out uint assertionID);
+
+    [LibraryImport(IOKit)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int IOPMAssertionRelease(uint assertionID);
+
+    // -- CoreFoundation: distributed notification center --
+
+    [LibraryImport(CoreFoundation)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint CFNotificationCenterGetDistributedCenter();
+
+    // suspensionBehavior: CFNotificationSuspensionBehaviorDeliverImmediately = 4
+    internal const int CFNotificationSuspensionBehaviorDeliverImmediately = 4;
+
+    [LibraryImport(CoreFoundation)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void CFNotificationCenterAddObserver(
+        nint center, nint observer, CFNotificationCallback callBack,
+        nint name, nint obj, int suspensionBehavior);
+
+    [LibraryImport(CoreFoundation)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void CFNotificationCenterRemoveObserver(nint center, nint observer, nint name, nint obj);
+
 }
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
 internal delegate nint CGEventTapCallBack(nint proxy, int type, nint eventRef, nint userInfo);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+internal delegate void CFNotificationCallback(nint center, nint observer, nint name, nint obj, nint userInfo);
 
 [StructLayout(LayoutKind.Sequential)]
 internal struct CGPoint

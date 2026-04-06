@@ -77,7 +77,18 @@ builder.ConfigureServices((_, services) =>
         services.AddSingleton(forwarder);
         services.AddSereneCustomLogging(e => forwarder.ForwardAsync(e).AsTask(), c => c.MinLogLevel = config.LogLevel);
         services.AddHostedService<SlaveLogSender>();
+
+        services.AddHostedService<IScreensaverSuppressor, ScreensaverSuppressor>();
     }
+
+    if (OperatingSystem.IsMacOS())
+        services.AddSingleton<IScreenSaverSync, MacScreenSaverSync>();
+    else if (OperatingSystem.IsWindows())
+        services.AddSingleton<IScreenSaverSync, WindowsScreenSaverSync>();
+    else if (OperatingSystem.IsLinux())
+        services.AddSingleton<IScreenSaverSync, XorgScreenSaverSync>();
+    else
+        services.AddSingleton<IScreenSaverSync, NullScreenSaverSync>();
 
     services.AddHostedService<SelfUpdater>();
 

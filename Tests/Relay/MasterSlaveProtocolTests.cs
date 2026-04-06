@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Cathedral.Config;
 using Hydra.Config;
+using Hydra.Platform;
 using Hydra.Relay;
 using Hydra.Screen;
 using Microsoft.Extensions.Logging;
@@ -60,7 +61,7 @@ public class MasterSlaveProtocolTests
         var config = MakeConfig("slave-pc");
         var relay = new FakeRelay();
         var logs = new LogCapture();
-        var service = new ScreenTransitionService(new FakePlatform(), config, relay, new FakeScreenDetector(), logs, NullLogger<ScreenTransitionService>.Instance);
+        var service = new ScreenTransitionService(new FakePlatform(), config, relay, new FakeScreenDetector(), logs, NullLogger<ScreenTransitionService>.Instance, new NullScreenSaverSync());
         await service.StartAsync(CancellationToken.None);
 
         var msg = new SlaveLogMessage((int)LogLevel.Warning, "MyService", "something went wrong", null);
@@ -83,7 +84,7 @@ public class MasterSlaveProtocolTests
         var config = MakeConfig("slave-pc");
         var relay = new FakeRelay();
         var logs = new LogCapture();
-        var service = new ScreenTransitionService(new FakePlatform(), config, relay, new FakeScreenDetector(), logs, NullLogger<ScreenTransitionService>.Instance);
+        var service = new ScreenTransitionService(new FakePlatform(), config, relay, new FakeScreenDetector(), logs, NullLogger<ScreenTransitionService>.Instance, new NullScreenSaverSync());
         await service.StartAsync(CancellationToken.None);
 
         var msg = new SlaveLogMessage((int)LogLevel.Error, "Crasher", "boom", "System.Exception: kaboom");
@@ -157,7 +158,7 @@ public class MasterSlaveProtocolTests
     };
 
     private static ScreenTransitionService MakeService(HydraConfig config, IRelaySender relay) =>
-        new(new FakePlatform(), config, relay, new FakeScreenDetector(), NullLoggerFactory.Instance, NullLogger<ScreenTransitionService>.Instance);
+        new(new FakePlatform(), config, relay, new FakeScreenDetector(), NullLoggerFactory.Instance, NullLogger<ScreenTransitionService>.Instance, new NullScreenSaverSync());
 
     private static List<string> MasterConfigTargets(FakeRelay relay) =>
         [.. relay.Sent.Where(s => s.Kind == MessageKind.MasterConfig).SelectMany(s => s.Targets)];

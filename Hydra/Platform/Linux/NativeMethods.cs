@@ -300,6 +300,72 @@ internal static partial class NativeMethods
     [LibraryImport(XRandR)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void XRRFreeCrtcInfo(nint crtcInfo);
+
+    // -- screensaver extension (libXss) --
+
+    private const string Xss = "libXss.so.1";
+
+    [LibraryImport(Xss)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool XScreenSaverQueryExtension(nint display, out int eventBase, out int errorBase);
+
+    // returns heap-allocated XScreenSaverInfo* — caller must XFree
+    [LibraryImport(Xss)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint XScreenSaverAllocInfo();
+
+    // returns 0 on failure; fills saver_info in-place
+    [LibraryImport(Xss)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int XScreenSaverQueryInfo(nint display, nint drawable, nint saverInfo);
+
+    // XScreenSaverInfo.state values
+    internal const int ScreenSaverOff = 0;
+    internal const int ScreenSaverOn = 1;
+
+    // -- screensaver control (libX11) --
+
+    // mode: ScreenSaverActive=1, ScreenSaverReset=0
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int XForceScreenSaver(nint display, int mode);
+
+    internal const int ScreenSaverActive = 1;
+    internal const int ScreenSaverReset = 0;
+
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int XResetScreenSaver(nint display);
+
+    // -- DPMS extension (libXext) --
+
+    private const string XExt = "libXext.so.6";
+
+    [LibraryImport(XExt)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool DPMSQueryExtension(nint display, out int eventBase, out int errorBase);
+
+    // power_level: DPMSModeOn=0, DPMSModeStandby=1, DPMSModeSuspend=2, DPMSModeOff=3
+    // state: true=DPMS enabled, false=disabled
+    [LibraryImport(XExt)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool DPMSInfo(nint display, out ushort powerLevel, [MarshalAs(UnmanagedType.Bool)] out bool state);
+
+    [LibraryImport(XExt)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int DPMSForceLevel(nint display, ushort level);
+
+    internal const ushort DPMSModeOn = 0;
+    internal const ushort DPMSModeStandby = 1;
+
+    // -- XFree --
+
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int XFree(nint data);
 }
 
 // struct pollfd for use with poll()

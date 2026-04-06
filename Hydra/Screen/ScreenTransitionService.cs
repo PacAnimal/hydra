@@ -17,6 +17,7 @@ public class ScreenTransitionService(
     IScreenDetector screens,
     ILoggerFactory loggerFactory,
     ILogger<ScreenTransitionService> log,
+    IScreenSaverSync screenSaverSync,
     IWorldState? peerState = null)
     : IHostedService
 {
@@ -34,6 +35,7 @@ public class ScreenTransitionService(
     private readonly IWorldState _peerState = peerState ?? new WorldState();
     private readonly SemaphoreSlimValue<LocalMasterState> _state = new(new LocalMasterState(), disposeValue: false);
     private CancellationTokenSource? _pollCts;
+    private readonly IScreenSaverSync _screenSaverSync = screenSaverSync;
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
@@ -85,6 +87,9 @@ public class ScreenTransitionService(
 
         platform.StartEventTap((x, y) => OnMouseMove(x, y), OnKeyEvent, OnMouseButton, OnMouseScroll);
 
+        if (config.SyncScreensaver)
+            _screenSaverSync.StartWatching(OnScreensaverActivated, OnScreensaverDeactivated);
+
         _pollCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         _ = RefreshKeyRepeatAsync(_pollCts.Token);
     }
@@ -97,6 +102,8 @@ public class ScreenTransitionService(
         relay.MessageReceived -= OnMessageReceived;
         screens.ScreensChanged -= OnScreensChanged;
 
+        if (config.SyncScreensaver)
+            _screenSaverSync.StopWatching();
         platform.StopEventTap();
 
 #pragma warning disable CA2016 // intentionally not propagated — cleanup must always run
@@ -200,6 +207,101 @@ public class ScreenTransitionService(
         }
     }
 
+    private void OnScreensaverActivated()
+    {
+        string? disconnectedHost = null;
+        int warpX = 0, warpY = 0;
+
+        using (var s = AsyncHelper.RunSync(() => _state.WaitForDisposable()))
+        {
+            var st = s.Value;
+            if (st.ScreensaverActive) return;
+            st.ScreensaverActive = true;
+
+            // save cursor location so we can restore after screensaver dismissal
+            if (st.Mouse.IsOnVirtualScreen && st.Mouse.CurrentScreen != null)
+            {
+                st.SavedScreenName = st.Mouse.CurrentScreen.Name;
+                st.SavedCursorX = (int)st.Mouse.X;
+                st.SavedCursorY = (int)st.Mouse.Y;
+
+                FlushMouseDelta(st);
+                disconnectedHost = st.Mouse.CurrentScreen.Host;
+                st.Mouse.LeaveScreen();
+                st.PendingDX = 0;
+                st.PendingDY = 0;
+                warpX = st.WarpX;
+                warpY = st.WarpY;
+                st.PendingCursorShow = false;
+            }
+        }
+
+        if (disconnectedHost != null)
+        {
+            var leavePayload = MessageSerializer.Encode(MessageKind.LeaveScreen, new { });
+            _ = relay.Send([disconnectedHost], leavePayload).AsTask();
+            ReturnToLocalScreen(warpX, warpY);
+            platform.ShowCursor();
+        }
+
+        BroadcastScreensaverSync(true);
+        log.LogDebug("Screensaver activated — synced to slaves");
+    }
+
+    private void OnScreensaverDeactivated()
+    {
+        string? savedScreen = null;
+        int savedX = 0, savedY = 0;
+
+        using (var s = AsyncHelper.RunSync(() => _state.WaitForDisposable()))
+        {
+            var st = s.Value;
+            if (!st.ScreensaverActive) return;
+            st.ScreensaverActive = false;
+            savedScreen = st.SavedScreenName;
+            savedX = st.SavedCursorX;
+            savedY = st.SavedCursorY;
+            st.SavedScreenName = null;
+        }
+
+        BroadcastScreensaverSync(false);
+        log.LogDebug("Screensaver deactivated — synced to slaves");
+
+        // best-effort cursor restore: re-enter saved remote screen if still connected and accessible
+        if (savedScreen != null && relay.IsConnected)
+        {
+            using var s = AsyncHelper.RunSync(() => _state.WaitForDisposable());
+            var st = s.Value;
+            var dest = st.Screens.FirstOrDefault(sc => !sc.IsLocal && sc.Name.EqualsIgnoreCase(savedScreen));
+            if (dest != null && dest.Width > 0)
+            {
+                var peerScreens = AsyncHelper.RunSync(() => _peerState.GetPeerScreensSnapshot().AsTask());
+                var remoteInfo = GetRemoteScreensAndScales(st.Screens, peerScreens, dest);
+                var scale = GetRemoteScale(peerScreens, dest);
+                platform.HideCursor();
+                platform.IsOnVirtualScreen = true;
+                st.Mouse.EnterScreen(dest, remoteInfo.Screens, savedX, savedY, scale, remoteInfo.ScaleMap);
+                st.PendingDX = 0;
+                st.PendingDY = 0;
+                st.LastWarpX = st.WarpX;
+                st.LastWarpY = st.WarpY;
+                var enterPayload = MessageSerializer.Encode(MessageKind.EnterScreen,
+                    new EnterScreenMessage(dest.Name, savedX, savedY, dest.Width, dest.Height));
+                _ = relay.Send([dest.Host], enterPayload).AsTask();
+                log.LogDebug("Restored cursor to '{Screen}' after screensaver", savedScreen);
+            }
+        }
+    }
+
+    private void BroadcastScreensaverSync(bool active)
+    {
+        var peerScreens = AsyncHelper.RunSync(() => _peerState.GetPeerScreensSnapshot().AsTask());
+        var hosts = peerScreens.Keys.ToArray();
+        if (hosts.Length == 0) return;
+        var payload = MessageSerializer.Encode(MessageKind.ScreensaverSync, new ScreensaverSyncMessage(active));
+        _ = relay.Send(hosts, payload).AsTask();
+    }
+
     private void OnMessageReceived(string sourceHost, MessageKind kind, string json)
     {
         switch (kind)
@@ -219,6 +321,8 @@ public class ScreenTransitionService(
                 var entry = json.FromSaneJson<SlaveLogMessage>();
                 if (entry != null) ForwardSlaveLog(sourceHost, entry);
                 break;
+            case MessageKind.ScreensaverSync:
+                break; // master never acts on screensaver sync messages
             default:
                 log.LogDebug("Unhandled message kind {Kind} from {Host}", kind, sourceHost);
                 break;
@@ -602,6 +706,11 @@ public class ScreenTransitionService(
 
         // per-screen relative mouse mode (true = relative, false/absent = absolute)
         public Dictionary<string, bool> RelativeMouseScreens = new(StringComparer.OrdinalIgnoreCase);
+
+        // screensaver sync: saved cursor location before screensaver snap-back
+        public bool ScreensaverActive;
+        public string? SavedScreenName;
+        public int SavedCursorX, SavedCursorY;
 
         // 120Hz throttle: accumulated deltas and last send time
         public long LastMouseSendTick;

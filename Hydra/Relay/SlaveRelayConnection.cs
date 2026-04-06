@@ -15,6 +15,8 @@ public sealed class SlaveRelayConnection : RelayConnection
     private readonly IScreenDetector _screens;
     private readonly IWorldState _peerState;
     private readonly SlaveCursorHider _cursorHider;
+    private readonly IScreenSaverSync _screenSaverSync;
+    private readonly IScreensaverSuppressor _screensaverSuppressor;
 
     // active key repeat timers keyed by (char?, SpecialKey?)
     private readonly Dictionary<(char?, SpecialKey?), CancellationTokenSource> _repeatTimers = [];
@@ -24,7 +26,7 @@ public sealed class SlaveRelayConnection : RelayConnection
 
     // ReSharper disable once ConvertToPrimaryConstructor
 #pragma warning disable IDE0290
-    public SlaveRelayConnection(HydraConfig config, ILogger<RelayConnection> log, IPlatformOutput output, SlaveLogForwarder logForwarder, IScreenDetector screens, IWorldState peerState, SlaveCursorHider cursorHider)
+    public SlaveRelayConnection(HydraConfig config, ILogger<RelayConnection> log, IPlatformOutput output, SlaveLogForwarder logForwarder, IScreenDetector screens, IWorldState peerState, SlaveCursorHider cursorHider, IScreenSaverSync screenSaverSync, IScreensaverSuppressor screensaverSuppressor)
         : base(config, log, peerState)
     {
         _output = output;
@@ -33,6 +35,8 @@ public sealed class SlaveRelayConnection : RelayConnection
         _screens = screens;
         _peerState = peerState;
         _cursorHider = cursorHider;
+        _screenSaverSync = screenSaverSync;
+        _screensaverSuppressor = screensaverSuppressor;
 
         _screens.ScreensChanged += async snapshot =>
         {
@@ -93,6 +97,14 @@ public sealed class SlaveRelayConnection : RelayConnection
                 CancelAllRepeatTimers();
                 _cursorHider.OnLeaveScreen();
                 break;
+            case MessageKind.ScreensaverSync:
+                var ss = json.FromSaneJson<ScreensaverSyncMessage>();
+                if (ss != null)
+                {
+                    if (ss.Active) _screenSaverSync.Activate();
+                    else _screenSaverSync.Deactivate();
+                }
+                break;
             default:
                 _log.LogDebug("Unhandled message kind {Kind} from {Host}", kind, sourceHost);
                 break;
@@ -106,8 +118,15 @@ public sealed class SlaveRelayConnection : RelayConnection
         await _peerState.PruneMasters(current);
         var after = await _peerState.GetMasters();
         var afterSet = new HashSet<string>(after, StringComparer.OrdinalIgnoreCase);
+        var anyMasterLeft = false;
         foreach (var _ in before.Where(h => !afterSet.Contains(h)))
+        {
             _cursorHider.OnMasterDisconnected();
+            anyMasterLeft = true;
+        }
+        // restore screensaver suppression when all masters have disconnected
+        if (anyMasterLeft && after.Length == 0)
+            _screensaverSuppressor.Restore();
         await base.OnPeers(hostNames);
     }
 
@@ -181,7 +200,10 @@ public sealed class SlaveRelayConnection : RelayConnection
         var after = await _peerState.GetMasters();
         // only signal connected if this is a genuinely new master
         if (after.Length > before.Length)
+        {
             _cursorHider.OnMasterConnected();
+            _screensaverSuppressor.Suppress();
+        }
         var snapshot = await _screens.Get();
         SendScreenInfo(masterHost, snapshot.Entries);
     }

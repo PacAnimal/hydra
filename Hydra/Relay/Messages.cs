@@ -18,6 +18,7 @@ public enum MessageKind : byte
     ScreenInfo = 8,
     SlaveLog = 9,
     MouseMoveDelta = 10,
+    ScreensaverSync = 11,
 }
 
 public record MouseMoveMessage(string Screen, int X, int Y);
@@ -29,6 +30,7 @@ public record KeyEventMessage(KeyEventType Type, KeyModifiers Modifiers, char? C
 public record MouseButtonMessage(MouseButton Button, bool IsPressed);
 public record MouseScrollMessage(short XDelta, short YDelta);
 public record EnterScreenMessage(string Screen, int X, int Y, int Width, int Height);
+public record ScreensaverSyncMessage(bool Active);
 
 public static class MessageSerializer
 {

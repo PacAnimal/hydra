@@ -1,4 +1,5 @@
 using Hydra.Config;
+using Hydra.Platform;
 using Hydra.Relay;
 using Hydra.Screen;
 using Microsoft.Extensions.Logging;
@@ -27,7 +28,7 @@ public class ScreenStartupTests
         var logs = new ErrorCapture();
         var service = new ScreenTransitionService(
             new FakePlatform(), config, new NullRelaySender(),
-            new FakeScreenDetector(), NullLoggerFactory.Instance, logs.CreateLogger());
+            new FakeScreenDetector(), NullLoggerFactory.Instance, logs.CreateLogger(), new NullScreenSaverSync());
 
         // must not throw
         await service.StartAsync(CancellationToken.None);

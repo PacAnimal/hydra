@@ -244,6 +244,33 @@ internal static partial class NativeMethods
     [LibraryImport(User32)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     internal static partial short GetKeyState(int nVirtKey);
+
+    // -- screensaver sync --
+
+    // SPI_GETSCREENSAVERRUNNING: pvParam receives BOOL (1 if screensaver is running)
+    internal const uint SPI_GETSCREENSAVERRUNNING = 0x0072;
+    // SPI_SETSCREENSAVEACTIVE: uiParam = 1 to enable, 0 to disable
+    internal const uint SPI_SETSCREENSAVEACTIVE = 0x0011;
+
+    internal const uint WM_SYSCOMMAND = 0x0112;
+    internal const nint SC_SCREENSAVE = 0xF140;
+    internal const uint WM_CLOSE = 0x0010;
+
+    [LibraryImport(User32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial nint GetDesktopWindow();
+
+    [LibraryImport(User32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool PostMessage(nint hWnd, uint msg, nint wParam, nint lParam);
+
+    // SetThreadExecutionState: prevents sleep/screensaver
+    internal const uint ES_DISPLAY_REQUIRED = 0x00000002;
+
+    [LibraryImport(Kernel32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial uint SetThreadExecutionState(uint esFlags);
 }
 
 [System.Runtime.InteropServices.UnmanagedFunctionPointer(System.Runtime.InteropServices.CallingConvention.StdCall)]

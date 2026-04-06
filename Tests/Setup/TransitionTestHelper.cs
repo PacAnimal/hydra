@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Cathedral.Config;
 using Hydra.Config;
+using Hydra.Platform;
 using Hydra.Relay;
 using Hydra.Screen;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -34,7 +35,7 @@ public static class TransitionTestHelper
         var platform = new FakePlatform();
         var relay = new FakeRelay();
         var screens = new FakeScreenDetector();
-        var service = new ScreenTransitionService(platform, TestConfig, relay, screens, NullLoggerFactory.Instance, NullLogger<ScreenTransitionService>.Instance);
+        var service = new ScreenTransitionService(platform, TestConfig, relay, screens, NullLoggerFactory.Instance, NullLogger<ScreenTransitionService>.Instance, new NullScreenSaverSync());
         return new TestServiceBundle(platform, relay, service);
     }
 
