@@ -45,7 +45,7 @@ internal sealed class LinuxNetworkDetector(ICmdRunner cmd, ILogger<LinuxNetworkD
             var ssid = output.ToString().Trim();
             return string.IsNullOrEmpty(ssid) ? null : ssid;
         }
-        catch (Exception e) { log.LogWarning("failed to get ssid from iwgetid: {Message}", e.Message); }
+        catch (Exception e) { log.LogWarning("Failed to get ssid from iwgetid: {Message}", e.Message); }
         return null;
     }
 

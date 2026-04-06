@@ -18,7 +18,7 @@ internal sealed class MacShieldProcess(MacNetworkState networkState) : IHostedSe
     private bool _receivedWired;
 
     // assigned after DI builds so post-startup state changes are logged through the normal pipeline
-    internal ILogger<MacShieldProcess>? Log { get; set; }
+    internal ILogger? Log { get; set; }
 
     // fired when network state changes after initial startup — allows NetworkWatcher to react immediately
     internal Action? OnNetworkStateChanged;
@@ -128,7 +128,7 @@ internal sealed class MacShieldProcess(MacNetworkState networkState) : IHostedSe
             else if (line.StartsWith("wifiauth:", StringComparison.Ordinal) && int.TryParse(line["wifiauth:".Length..], out var authStatus))
             {
                 networkState.WifiAuthStatus = authStatus;
-                Log?.LogDebug("location services auth: {Status}", authStatus switch
+                Log?.LogDebug("Location services auth: {Status}", authStatus switch
                 {
                     0 => "notDetermined",
                     1 => "restricted",

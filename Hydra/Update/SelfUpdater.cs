@@ -22,13 +22,13 @@ internal sealed class SelfUpdater(HydraConfig config, ILogger<SelfUpdater> log) 
 
         if (!config.AutoUpdate)
         {
-            if (_warned.TrySet()) log.LogDebug("auto-update disabled");
+            if (_warned.TrySet()) log.LogDebug("Auto-update disabled");
             return;
         }
 
         if (Debugger.IsAttached)
         {
-            if (_warned.TrySet()) log.LogInformation("auto-update skipped (debugger attached)");
+            if (_warned.TrySet()) log.LogInformation("Auto-update skipped (debugger attached)");
             return;
         }
 
@@ -38,14 +38,14 @@ internal sealed class SelfUpdater(HydraConfig config, ILogger<SelfUpdater> log) 
         }
         catch (Exception e) when (e is not OperationCanceledException)
         {
-            log.LogWarning(e, "auto-update failed, continuing with current version");
+            log.LogWarning(e, "Auto-update failed, continuing with current version");
         }
     }
 
     private async Task CheckAndUpdate(CancellationToken cancel)
     {
         var current = CurrentVersion();
-        log.LogInformation("checking for updates (current: {Version})", current);
+        log.LogInformation("Checking for updates (current: {Version})", current);
 
         using var http = new HttpClient();
         http.DefaultRequestHeaders.UserAgent.ParseAdd("Hydra");
@@ -60,16 +60,16 @@ internal sealed class SelfUpdater(HydraConfig config, ILogger<SelfUpdater> log) 
 
         if (latest <= current)
         {
-            log.LogInformation("already up to date ({Version})", current);
+            log.LogInformation("Already up to date ({Version})", current);
             return;
         }
 
-        log.LogInformation("update available: {Current} → {Latest}", current, latest);
+        log.LogInformation("Update available: {Current} → {Latest}", current, latest);
 
         var rid = Rid();
         if (rid == null)
         {
-            log.LogWarning("unsupported platform for auto-update");
+            log.LogWarning("Unsupported platform for auto-update");
             return;
         }
 
@@ -86,11 +86,11 @@ internal sealed class SelfUpdater(HydraConfig config, ILogger<SelfUpdater> log) 
 
         if (downloadUrl == null)
         {
-            log.LogWarning("no asset found for {Asset}", assetName);
+            log.LogWarning("No asset found for {Asset}", assetName);
             return;
         }
 
-        log.LogInformation("downloading {Asset}", assetName);
+        log.LogInformation("Downloading {Asset}", assetName);
         await DownloadAndApply(http, downloadUrl, cancel);
     }
 
@@ -140,7 +140,7 @@ internal sealed class SelfUpdater(HydraConfig config, ILogger<SelfUpdater> log) 
             File.SetUnixFileMode(exePath, mode | UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute);
         }
 
-        log.LogInformation("update applied, restarting");
+        log.LogInformation("Update applied, restarting");
         ProcessRestart.Restart();
     }
 

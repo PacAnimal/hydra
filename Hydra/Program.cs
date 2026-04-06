@@ -160,9 +160,9 @@ var app = builder.Build();
 
 if (macShield != null)
 {
-    var shieldLog = app.Services.GetRequiredService<ILogger<MacShieldProcess>>();
+    var shieldLog = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Shield");
     macShield.Log = shieldLog;
-    shieldLog.LogInformation("shield: auth={Auth} ssid={Ssid} wired={Wired}",
+    shieldLog.LogInformation("auth={Auth} ssid={Ssid} wired={Wired}",
         macNetworkState!.WifiAuthStatus switch { 0 => "notDetermined", 1 => "restricted", 2 => "denied", 3 or 4 => "authorized", _ => "?" },
         macNetworkState.Ssid ?? "(none)",
         macNetworkState.Wired);

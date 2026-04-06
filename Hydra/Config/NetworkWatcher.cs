@@ -77,7 +77,7 @@ internal sealed class NetworkWatcher : SimpleHostedService
 
         var from = _activeConfig != null ? $"{_activeConfig.Mode}" : "idle";
         var to = resolved != null ? $"{resolved.Mode}" : "idle";
-        _log.LogInformation("network change: switching from {From} to {To}, restarting", from, to);
+        _log.LogInformation("Network change: switching from {From} to {To}, restarting", from, to);
         ProcessRestart.Restart();
     }
 
@@ -86,7 +86,7 @@ internal sealed class NetworkWatcher : SimpleHostedService
         var prevStr = FormatNetworks(previous);
         var currStr = FormatNetworks(current);
         if (prevStr == currStr) return;
-        _log.LogInformation("network: {Previous} → {Current}", prevStr, currStr);
+        _log.LogInformation("Network: {Previous} → {Current}", prevStr, currStr);
     }
 
     private static string FormatNetworks(List<NetworkState>? networks)
