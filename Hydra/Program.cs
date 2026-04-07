@@ -191,6 +191,7 @@ if (macShield != null)
 }
 
 app.Run();
+GC.KeepAlive(processLock); // prevent premature GC of the lock while app is running
 
 // creates the platform-specific network detector for use before DI is set up
 static async Task<INetworkDetector> CreateDetector(MacNetworkState? macNetworkState, IServiceCollection logServices)
