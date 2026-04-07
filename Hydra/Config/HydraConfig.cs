@@ -12,7 +12,7 @@ public class HostConfig
 {
     public required string Name { get; init; }
     public List<NeighbourConfig> Neighbours { get; init; } = [];
-    public int? DeadCorners { get; init; }  // % dead zone at screen corners (0-100); overrides root-level setting
+    public int? DeadCorners { get; init; }  // pixel dead zone at screen corners; overrides root-level setting
 }
 
 public class NeighbourConfig
@@ -29,7 +29,9 @@ public class NeighbourConfig
 
 public class ScreenDefinition
 {
-    public required string Match { get; init; }  // screen identifier: display name, output connector, or platform id
+    public string? DisplayName { get; init; }  // matches DetectedScreen.DisplayName (e.g. "DELL U2720Q")
+    public string? OutputName { get; init; }   // matches DetectedScreen.OutputName (e.g. "HDMI-1")
+    public string? PlatformId { get; init; }   // matches DetectedScreen.PlatformId
     public decimal Scale { get; init; } = 1.0m;  // cursor speed multiplier for this screen
 }
 
@@ -48,7 +50,7 @@ public class HydraConfig
 
     public bool AutoUpdate { get; init; } = true;
     public bool SyncScreensaver { get; init; } = true;
-    public int? DeadCorners { get; init; }  // % dead zone at screen corners (0-100); per-host setting overrides this
+    public int? DeadCorners { get; init; }  // pixel dead zone at screen corners; scaled by screen scale; per-host setting overrides this
 
     // optional — defaults to machine hostname without domain
     public string? Name { get; init; }
@@ -166,6 +168,15 @@ public class HydraConfig
         {
             if (string.IsNullOrWhiteSpace(cfg.Ssid))
                 throw new InvalidOperationException("A config with 'condition: Ssid' must have a non-empty 'ssid' field.");
+        }
+
+        foreach (var cfg in configs)
+        {
+            foreach (var def in cfg.ScreenDefinitions)
+            {
+                if (def.DisplayName == null && def.OutputName == null && def.PlatformId == null)
+                    throw new InvalidOperationException("A screenDefinition entry has no matching criteria (displayName, outputName, platformId are all null) — it can never match any screen.");
+            }
         }
     }
 

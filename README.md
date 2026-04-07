@@ -56,7 +56,7 @@ Edit `hydra.conf` (sits next to the binary):
 - `networkConfig` — base64 relay config string from Styx (required when using the relay)
 - `hosts` — list of host entries for the neighbour graph (master only; slaves don't need this)
 - `screenDefinitions` — optional per-screen configuration for scale (used on any machine)
-- `deadCorners` — percentage dead zone at screen corners where transitions are blocked (0–100, default `0`). Can also be set per-host to override.
+- `deadCorners` — pixel dead zone at screen corners where transitions are blocked (default `0`, `50` is a reasonable starting value). Scaled by the screen's `scale` setting. Can also be set per-host to override.
 - `condition` — optional network condition: `Wired` or `Ssid` (see [Network-aware config](#network-aware-config))
 - `ssid` — the WiFi network name to match; required when `condition` is `Ssid`
 
@@ -105,14 +105,14 @@ When cursor crosses the right edge in the top half (0–50%), it goes to `workst
 
 ### Dead corners
 
-`deadCorners` defines a dead zone at each corner of the screen where outbound transitions are blocked, regardless of neighbour config. The value is a percentage of the edge length — `5` means the cursor must be more than 5% away from a corner to trigger a transition.
+`deadCorners` defines a pixel dead zone at each corner of the screen where outbound transitions are blocked, regardless of neighbour config. The value is in pixels — `50` means the cursor must be more than 50 pixels away from a corner to trigger a transition. The pixel value is multiplied by the screen's `scale` setting, so a high-DPI screen with `scale: 2` and `deadCorners: 50` gets an effective 100-pixel dead zone.
 
 Set at the root level to apply to all hosts:
 
 ```json
 {
   "mode": "Master",
-  "deadCorners": 5,
+  "deadCorners": 50,
   "hosts": [...]
 }
 ```
@@ -124,7 +124,7 @@ Override per-host (takes precedence over the root value):
   "hosts": [
     {
       "name": "laptop",
-      "deadCorners": 10,
+      "deadCorners": 80,
       "neighbours": [...]
     }
   ]
@@ -149,24 +149,26 @@ Use these identifiers in `sourceScreen`/`destScreen` to target specific monitors
 
 ### Screen definitions
 
-`screenDefinitions` is available on both master and slave. The `match` field is compared against the display name, output connector name, or platform ID of each detected screen (case-insensitive).
+`screenDefinitions` is available on both master and slave. Each entry specifies one or more match criteria — all specified criteria must match (case-insensitive). Use the identifiers shown at startup to build match entries.
 
 ```json
 {
   "screenDefinitions": [
-    { "match": "DELL U2720Q",              "scale": 1.5 },
-    { "match": "Built-in Retina Display",  "scale": 1.0 },
-    { "match": "HDMI-1",                   "scale": 0.8 }
+    { "displayName": "DELL U2720Q",             "scale": 1.5 },
+    { "displayName": "Built-in Retina Display", "scale": 1.0 },
+    { "outputName": "HDMI-1",                   "scale": 0.8 }
   ]
 }
 ```
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `match` | required | Screen identifier (display name, output name, or platform ID) |
+| `displayName` | — | Match by display/monitor name (e.g. `"DELL U2720Q"`) |
+| `outputName` | — | Match by output connector name (e.g. `"HDMI-1"`) |
+| `platformId` | — | Match by platform-specific ID |
 | `scale` | `1.0` | Cursor speed multiplier on this screen |
 
-Screens with no matching definition use default scale (1.0).
+At least one match field must be set. Screens with no matching definition use default scale (1.0).
 
 ### Network-aware config
 
@@ -231,7 +233,7 @@ On the slave machine:
   "logLevel": "info",
   "networkConfig": "<same base64 string as master>",
   "screenDefinitions": [
-    { "match": "DELL U2720Q", "scale": 1.5 }
+    { "displayName": "DELL U2720Q", "scale": 1.5 }
   ]
 }
 ```

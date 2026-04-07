@@ -62,6 +62,7 @@ public class InputRouter(
         {
             var st = s.Value;
             st.LocalScreens = snapshot.Screens;
+            st.LocalScreenEntries = snapshot.Entries;
             st.ActiveLocalScreen = st.LocalScreens.FirstOrDefault();
 
             if (st.ActiveLocalScreen == null)
@@ -72,7 +73,7 @@ public class InputRouter(
 
             UpdateWarpPoint(st, st.ActiveLocalScreen);
             st.Screens = BuildAllScreens(st.LocalScreens, config);
-            st.Layout = new ScreenLayout(st.Screens, config.Hosts, config.DeadCorners, log);
+            st.Layout = new ScreenLayout(st.Screens, config.Hosts, config.DeadCorners, BuildScaleMap(st.LocalScreenEntries, []), log);
 
             foreach (var remote in st.Screens.Where(r => !r.IsLocal))
                 log.LogInformation("Remote screen '{Name}': waiting for peer", remote.Name);
@@ -131,8 +132,9 @@ public class InputRouter(
         var st = s.Value;
         ApplyPeerScreenSizes(peerScreens, newScreens);
         st.LocalScreens = snapshot.Screens;
+        st.LocalScreenEntries = snapshot.Entries;
         st.Screens = newScreens;
-        st.Layout = new ScreenLayout(newScreens, config.Hosts, config.DeadCorners, log);
+        st.Layout = new ScreenLayout(newScreens, config.Hosts, config.DeadCorners, BuildScaleMap(st.LocalScreenEntries, peerScreens), log);
 
         if (!st.Mouse.IsOnVirtualScreen)
         {
@@ -383,7 +385,7 @@ public class InputRouter(
 
         var newScreens = BuildAllScreens(st.LocalScreens, config);
         ApplyPeerScreenSizes(peerScreens, newScreens);
-        var newLayout = new ScreenLayout(newScreens, config.Hosts, config.DeadCorners, log);
+        var newLayout = new ScreenLayout(newScreens, config.Hosts, config.DeadCorners, BuildScaleMap(st.LocalScreenEntries, peerScreens), log);
         st.Screens = newScreens;
         st.Layout = newLayout;
         st.ActiveLocalScreen = st.LocalScreens.FirstOrDefault(s => s.Name.EqualsIgnoreCase(st.ActiveLocalScreen.Name)) ?? st.LocalScreens.FirstOrDefault() ?? st.ActiveLocalScreen;
@@ -403,6 +405,18 @@ public class InputRouter(
                 st.Mouse.EnterScreen(refreshed, remoteInfo.Screens, (int)st.Mouse.X, (int)st.Mouse.Y, remoteInfo.ScaleMap.GetValueOrDefault(refreshed.Name, 1.0m), remoteInfo.ScaleMap);
             }
         }
+    }
+
+    private static Dictionary<string, decimal> BuildScaleMap(
+        List<ScreenInfoEntry> localEntries, Dictionary<string, List<ScreenInfoEntry>> peerScreens)
+    {
+        var map = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+        foreach (var e in localEntries)
+            map[e.Name] = e.Scale;
+        foreach (var entries in peerScreens.Values)
+            foreach (var e in entries)
+                map[e.Name] = e.Scale;
+        return map;
     }
 
     // replaces per-host placeholders with actual per-screen entries from ScreenInfo; must be called under lock
@@ -737,6 +751,7 @@ public class InputRouter(
     {
         public List<ScreenRect> Screens = [];
         public List<ScreenRect> LocalScreens = [];
+        public List<ScreenInfoEntry> LocalScreenEntries = [];
         public ScreenRect? ActiveLocalScreen;
         public ScreenLayout? Layout;
         public VirtualMouseState Mouse = new();

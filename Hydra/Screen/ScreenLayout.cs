@@ -4,13 +4,13 @@ using Microsoft.Extensions.Logging;
 
 namespace Hydra.Screen;
 
-public class ScreenLayout(List<ScreenRect> screens, List<HostConfig> configs, int? defaultDeadCorners, ILogger log)
+public class ScreenLayout(List<ScreenRect> screens, List<HostConfig> configs, int? defaultDeadCorners, Dictionary<string, decimal> screenScales, ILogger log)
 {
     private const int JumpZone = 1;
     private const int NudgeDistance = 2;
 
     private readonly Dictionary<(string Name, Direction Dir), List<EdgeLink>> _graph = BuildGraph(screens, configs, log);
-    private readonly Dictionary<string, float> _deadCorners = BuildDeadCorners(configs, defaultDeadCorners);
+    private readonly Dictionary<string, int> _deadCorners = BuildDeadCorners(screens, configs, defaultDeadCorners, screenScales);
 
     private static Dictionary<(string, Direction), List<EdgeLink>> BuildGraph(
         List<ScreenRect> screens, List<HostConfig> configs, ILogger log)
@@ -73,13 +73,17 @@ public class ScreenLayout(List<ScreenRect> screens, List<HostConfig> configs, in
         return graph;
     }
 
-    private static Dictionary<string, float> BuildDeadCorners(List<HostConfig> configs, int? defaultDeadCorners)
+    private static Dictionary<string, int> BuildDeadCorners(
+        List<ScreenRect> screens, List<HostConfig> configs, int? defaultDeadCorners, Dictionary<string, decimal> screenScales)
     {
-        var result = new Dictionary<string, float>(StringComparer.OrdinalIgnoreCase);
-        foreach (var config in configs)
+        var byHost = configs.ToDictionary(c => c.Name, StringComparer.OrdinalIgnoreCase);
+        var result = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var screen in screens)
         {
-            var raw = config.DeadCorners ?? defaultDeadCorners ?? 0;
-            result[config.Name] = Math.Clamp(raw, 0, 100) / 100f;
+            var pixels = (byHost.TryGetValue(screen.Host, out var cfg) ? cfg.DeadCorners : null) ?? defaultDeadCorners ?? 0;
+            if (pixels <= 0) continue;
+            var scale = screenScales.GetValueOrDefault(screen.Name, 1.0m);
+            result[screen.Name] = (int)Math.Round(pixels * (double)scale);
         }
         return result;
     }
@@ -112,11 +116,8 @@ public class ScreenLayout(List<ScreenRect> screens, List<HostConfig> configs, in
         var normalized = edgeLen > 0 ? (perpPos + 0.5f) / edgeLen : 0f;
 
         // dead corners: block outbound transitions near either end of the edge
-        if (_deadCorners.TryGetValue(current.Host, out var hc) && hc > 0f)
-        {
-            if (normalized < hc || normalized > 1f - hc)
-                return null;
-        }
+        if (_deadCorners.TryGetValue(current.Name, out var dc) && (perpPos < dc || perpPos >= edgeLen - dc))
+            return null;
 
         // find the link whose source range contains this position
         EdgeLink? match = null;

@@ -111,14 +111,14 @@ public abstract class ScreenDetector : SimpleHostedService, IScreenDetector
     {
         foreach (var def in _config.ScreenDefinitions)
         {
-            if (Matches(d, def.Match))
+            if (Matches(d, def))
                 return def.Scale;
         }
         return 1.0m;
     }
 
-    private static bool Matches(DetectedScreen d, string match) =>
-        d.DisplayName?.EqualsIgnoreCase(match) is true
-        || d.OutputName?.EqualsIgnoreCase(match) is true
-        || d.PlatformId?.EqualsIgnoreCase(match) is true;
+    private static bool Matches(DetectedScreen d, ScreenDefinition def) =>
+        (def.DisplayName == null || d.DisplayName?.EqualsIgnoreCase(def.DisplayName) is true)
+        && (def.OutputName == null || d.OutputName?.EqualsIgnoreCase(def.OutputName) is true)
+        && (def.PlatformId == null || d.PlatformId?.EqualsIgnoreCase(def.PlatformId) is true);
 }

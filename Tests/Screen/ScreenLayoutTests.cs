@@ -18,6 +18,7 @@ public class ScreenLayoutTests
             new HostConfig { Name = "remote", Neighbours = [new NeighbourConfig { Direction = Direction.Left, Name = "home" }] },
         ],
         null,
+        [],
         NullLogger.Instance);
 
     // -- edge detection --
@@ -126,6 +127,7 @@ public class ScreenLayoutTests
                 new HostConfig { Name = "c", Neighbours = [] },
             ],
             null,
+            [],
             NullLogger.Instance);
 
         var hit = layout.DetectEdgeExit(a, 2559, 720);
@@ -149,6 +151,7 @@ public class ScreenLayoutTests
                 new HostConfig { Name = "c", Neighbours = [] },
             ],
             null,
+            [],
             NullLogger.Instance);
 
         var hit = layout.DetectEdgeExit(a, 2559, 720);
@@ -177,6 +180,7 @@ public class ScreenLayoutTests
                 }],
             }],
             null,
+            [],
             NullLogger.Instance);
 
         // cursor at 25% down (360px of 1440) → should map to 75% down on dest (75% of 1440 = 1080)
@@ -204,6 +208,7 @@ public class ScreenLayoutTests
                 }],
             }],
             null,
+            [],
             NullLogger.Instance);
 
         // cursor in top 25% — outside the source range
@@ -231,6 +236,7 @@ public class ScreenLayoutTests
                 ],
             }],
             null,
+            [],
             NullLogger.Instance);
 
         var topHit = layout.DetectEdgeExit(home, 2559, 200);   // top 14% → hostB
@@ -278,6 +284,7 @@ public class ScreenLayoutTests
                 }],
             }],
             null,
+            [],
             NullLogger.Instance);
 
         // cursor in right 75% (1440px of 1920) — within source range (50-100%)
@@ -310,6 +317,7 @@ public class ScreenLayoutTests
                 }],
             }],
             null,
+            [],
             NullLogger.Instance);
 
         // cursor at x=400 (left 20%, within 0-50% range) → maps to right half of dest
@@ -346,14 +354,14 @@ public class ScreenLayoutTests
             configs.Add(new HostConfig { Name = $"offline{i}", Neighbours = [new NeighbourConfig { Direction = Direction.Right, Name = $"offline{i + 1}" }] });
         configs.Add(new HostConfig { Name = "offline10", Neighbours = [] });
 
-        var layout = new ScreenLayout(screens, configs, null, NullLogger.Instance);
+        var layout = new ScreenLayout(screens, configs, null, [], NullLogger.Instance);
         var hit = layout.DetectEdgeExit(screens[0], 2559, 720);
         Assert.That(hit, Is.Null);
     }
 
     // -- dead corners --
 
-    private static ScreenLayout DeadCornersLayout(int? rootDeadCorners = null, int? hostDeadCorners = null)
+    private static ScreenLayout DeadCornersLayout(int? rootDeadCorners = null, int? hostDeadCorners = null, Dictionary<string, decimal>? scales = null)
     {
         return new ScreenLayout(
             [Home, Remote],
@@ -362,6 +370,7 @@ public class ScreenLayoutTests
                 new HostConfig { Name = "remote", Neighbours = [new NeighbourConfig { Direction = Direction.Left, Name = "home" }] },
             ],
             rootDeadCorners,
+            scales ?? [],
             NullLogger.Instance);
     }
 
@@ -377,26 +386,26 @@ public class ScreenLayoutTests
     [Test]
     public void DeadCorners_BlocksNearTopCorner()
     {
-        // deadCorners=10 — cursor at ~3% from top of right edge is blocked
-        var layout = DeadCornersLayout(rootDeadCorners: 10);
-        var hit = layout.DetectEdgeExit(Home, 2559, 40);  // 40/1440 ≈ 2.8%
+        // deadCorners=144px — cursor at y=40 is within the dead zone and blocked
+        var layout = DeadCornersLayout(rootDeadCorners: 144);
+        var hit = layout.DetectEdgeExit(Home, 2559, 40);
         Assert.That(hit, Is.Null);
     }
 
     [Test]
     public void DeadCorners_BlocksNearBottomCorner()
     {
-        // deadCorners=10 — cursor at ~97% from top of right edge is blocked
-        var layout = DeadCornersLayout(rootDeadCorners: 10);
-        var hit = layout.DetectEdgeExit(Home, 2559, 1400);  // 1400/1440 ≈ 97.3%
+        // deadCorners=144px — cursor at y=1400 is within 144px of the bottom (1440-1400=40 < 144)
+        var layout = DeadCornersLayout(rootDeadCorners: 144);
+        var hit = layout.DetectEdgeExit(Home, 2559, 1400);
         Assert.That(hit, Is.Null);
     }
 
     [Test]
     public void DeadCorners_AllowsMiddle()
     {
-        // deadCorners=10 — cursor at 50% transitions normally
-        var layout = DeadCornersLayout(rootDeadCorners: 10);
+        // deadCorners=144px — cursor at y=720 is well clear of both ends
+        var layout = DeadCornersLayout(rootDeadCorners: 144);
         var hit = layout.DetectEdgeExit(Home, 2559, 720);
         Assert.That(hit, Is.Not.Null);
         Assert.That(hit!.Destination.Name, Is.EqualTo("remote"));
@@ -405,25 +414,25 @@ public class ScreenLayoutTests
     [Test]
     public void DeadCorners_PerHost_OverridesRoot()
     {
-        // root=0, host=20 — cursor at ~3% should be blocked by host setting
-        var layout = DeadCornersLayout(rootDeadCorners: 0, hostDeadCorners: 20);
-        var hit = layout.DetectEdgeExit(Home, 2559, 40);  // ~2.8%, within host's 20% dead zone
+        // root=0, host=288px — cursor at y=40 is within the host's dead zone
+        var layout = DeadCornersLayout(rootDeadCorners: 0, hostDeadCorners: 288);
+        var hit = layout.DetectEdgeExit(Home, 2559, 40);
         Assert.That(hit, Is.Null);
     }
 
     [Test]
     public void DeadCorners_PerHost_NullInheritsRoot()
     {
-        // root=15, host has no override (null) — cursor near top corner should be blocked
-        var layout = DeadCornersLayout(rootDeadCorners: 15);
-        var hit = layout.DetectEdgeExit(Home, 2559, 40);  // ~2.8%, within root's 15% dead zone
+        // root=216px, host has no override (null) — cursor at y=40 is within root's dead zone
+        var layout = DeadCornersLayout(rootDeadCorners: 216);
+        var hit = layout.DetectEdgeExit(Home, 2559, 40);
         Assert.That(hit, Is.Null);
     }
 
     [Test]
     public void DeadCorners_HorizontalEdge_BlocksNearCorners()
     {
-        // deadCorners=10 on a bottom edge — corners are at left and right ends
+        // deadCorners=192px on a bottom edge (1920px wide) — corners are at left and right ends
         var top = new ScreenRect("top", "top", 0, 0, 1920, 1080, IsLocal: true);
         var below = new ScreenRect("below", "below", 0, 0, 1920, 1080, IsLocal: false);
 
@@ -432,15 +441,16 @@ public class ScreenLayoutTests
             [new HostConfig
             {
                 Name = "top",
-                DeadCorners = 10,
+                DeadCorners = 192,
                 Neighbours = [new NeighbourConfig { Direction = Direction.Down, Name = "below" }],
             }],
             null,
+            [],
             NullLogger.Instance);
 
-        // cursor near left corner (~2.6% along bottom edge) — blocked
+        // cursor at x=50 — within 192px of left edge, blocked
         var leftCorner = layout.DetectEdgeExit(top, 50, 1079);
-        // cursor in middle (~50%) — allowed
+        // cursor at x=960 — well clear of both ends, allowed
         var middle = layout.DetectEdgeExit(top, 960, 1079);
 
         using (Assert.EnterMultipleScope())
@@ -453,14 +463,50 @@ public class ScreenLayoutTests
     [Test]
     public void DeadCorners_InboundNotBlocked()
     {
-        // host "home" has deadCorners=20, but transitions INTO home from remote should still work.
+        // host "home" has deadCorners=288px, but transitions INTO home from remote should still work.
         // dead corners only blocks outbound transitions (leaving the current host).
-        var layout = DeadCornersLayout(hostDeadCorners: 20);
+        var layout = DeadCornersLayout(hostDeadCorners: 288);
 
-        // cursor on remote at left edge near top corner (y=40, ~2.8%) — returning to home
+        // cursor on remote at left edge near top corner (y=40) — returning to home
         // remote has no deadCorners, so its outbound transition is fine
         var hit = layout.DetectEdgeExit(Remote, 0, 40);
         Assert.That(hit, Is.Not.Null);
         Assert.That(hit!.Destination.Name, Is.EqualTo("home"));
+    }
+
+    [Test]
+    public void DeadCorners_ScaledByScreenScale()
+    {
+        // deadCorners=50px, home screen has scale=2.0 → effective dead zone is 100px
+        // cursor at y=80 is within 100px → blocked; cursor at y=120 is outside → allowed
+        var scales = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase) { ["home"] = 2.0m };
+        var layout = DeadCornersLayout(rootDeadCorners: 50, scales: scales);
+
+        var blocked = layout.DetectEdgeExit(Home, 2559, 80);
+        var allowed = layout.DetectEdgeExit(Home, 2559, 120);
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(blocked, Is.Null);
+            Assert.That(allowed, Is.Not.Null);
+        }
+    }
+
+    [Test]
+    public void DeadCorners_DifferentScalesPerScreen()
+    {
+        // home: deadCorners=50, scale=1.0 → effective 50px; remote: deadCorners=50, scale=2.0 → effective 100px
+        // cursor at y=60 on home: 60 >= 50 → allowed; cursor at y=60 on remote: 60 < 100 → blocked
+        var scales = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase) { ["home"] = 1.0m, ["remote"] = 2.0m };
+        var layout = DeadCornersLayout(rootDeadCorners: 50, scales: scales);
+
+        var homeAllowed = layout.DetectEdgeExit(Home, 2559, 60);
+        var remoteBlocked = layout.DetectEdgeExit(Remote, 0, 60);
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(homeAllowed, Is.Not.Null);
+            Assert.That(remoteBlocked, Is.Null);
+        }
     }
 }
