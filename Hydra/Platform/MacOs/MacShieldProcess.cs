@@ -20,6 +20,9 @@ internal sealed class MacShieldProcess(MacNetworkState networkState) : IHostedSe
     // assigned after DI builds so post-startup state changes are logged through the normal pipeline
     internal ILogger? Log { get; set; }
 
+    // set after config is resolved — controls visible debug shield + cursor visibility
+    internal bool DebugShield { get; set; }
+
     // fired when network state changes after initial startup — allows NetworkWatcher to react immediately
     internal Action? OnNetworkStateChanged;
 
@@ -46,7 +49,7 @@ internal sealed class MacShieldProcess(MacNetworkState networkState) : IHostedSe
         return Task.CompletedTask;
     }
 
-    internal void Show() => Send(Debugger.IsAttached ? "2" : "1");
+    internal void Show() => Send(DebugShield ? "2" : "1");
     internal void Hide() => Send("0");
 
     public void Dispose()

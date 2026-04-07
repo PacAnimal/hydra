@@ -70,6 +70,7 @@ services.AddSingleton<IWorldState, WorldState>();
 // shield always runs on macOS — handles cursor shielding + network state detection
 if (OperatingSystem.IsMacOS() && macShield != null && macNetworkState != null)
 {
+    if (config != null) macShield.DebugShield = config.DebugShield;
     services.AddSingleton(macNetworkState);
     services.AddSingleton(macShield);
     services.AddHostedService(_ => macShield);

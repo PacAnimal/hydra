@@ -55,7 +55,8 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
         _ = NativeMethods.CGSSetConnectionProperty(cid, cid, key, _cfBooleanTrue);
         NativeMethods.CFRelease(key);
 
-        _ = NativeMethods.CGDisplayHideCursor(_display);
+        if (!_shield.DebugShield)
+            _ = NativeMethods.CGDisplayHideCursor(_display);
         _ = NativeMethods.CGAssociateMouseAndMouseCursorPosition(true);
         // near-zero suppression interval prevents CGWarpMouseCursorPosition from resetting acceleration
         NativeMethods.CGSetLocalEventsSuppressionInterval(0.0001);
@@ -66,7 +67,8 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
     {
         if (!_cursorHidden) return;
         _shield.Hide();
-        _ = NativeMethods.CGDisplayShowCursor(_display);
+        if (!_shield.DebugShield)
+            _ = NativeMethods.CGDisplayShowCursor(_display);
         _ = NativeMethods.CGAssociateMouseAndMouseCursorPosition(true);
         NativeMethods.CGSetLocalEventsSuppressionInterval(0.0);
         _cursorHidden = false;

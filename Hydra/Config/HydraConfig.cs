@@ -50,6 +50,7 @@ public class HydraConfig
 
     public bool AutoUpdate { get; init; } = true;
     public bool SyncScreensaver { get; init; } = true;
+    public bool DebugShield { get; init; } = false;
     public int? DeadCorners { get; init; }  // pixel dead zone at screen corners; scaled by screen scale; per-host setting overrides this
 
     // optional — defaults to machine hostname without domain
