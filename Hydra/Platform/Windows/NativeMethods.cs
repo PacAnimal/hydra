@@ -219,6 +219,11 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     internal static partial nint GetKeyboardLayout(uint idThread);
 
+    // returns VK in low byte, shift state in high byte; -1 if no mapping
+    [LibraryImport(User32, EntryPoint = "VkKeyScanW")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial short VkKeyScanW(ushort ch);
+
     [LibraryImport(User32)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     internal static unsafe partial int ToUnicodeEx(

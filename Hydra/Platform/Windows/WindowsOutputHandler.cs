@@ -84,14 +84,32 @@ public sealed class WindowsOutputHandler : IPlatformOutput, ICursorVisibility
 
         if (msg.Character is { } ch)
         {
-            // inject via unicode scan code — no vk mapping needed
-            var flags = NativeMethods.KEYEVENTF_UNICODE | (isUp ? NativeMethods.KEYEVENTF_KEYUP : 0);
-            var input = new INPUT
+            // when shortcut modifiers are held, inject via vk so WM_KEYDOWN fires and apps see the shortcut.
+            // KEYEVENTF_UNICODE generates WM_CHAR which bypasses shortcut detection entirely.
+            const KeyModifiers shortcutMods = KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Super;
+            var scan = NativeMethods.VkKeyScanW(ch); // char implicit-converts to ushort
+            if ((msg.Modifiers & shortcutMods) != 0 && scan != -1)
             {
-                type = NativeMethods.INPUT_KEYBOARD,
-                ki = new KEYBDINPUT { wVk = 0, wScan = ch, dwFlags = flags },
-            };
-            _ = NativeMethods.SendInput(1, &input, sizeof(INPUT));
+                var vk = (ushort)(scan & 0xFF);
+                var flags = isUp ? NativeMethods.KEYEVENTF_KEYUP : 0u;
+                var input = new INPUT
+                {
+                    type = NativeMethods.INPUT_KEYBOARD,
+                    ki = new KEYBDINPUT { wVk = vk, dwFlags = flags },
+                };
+                _ = NativeMethods.SendInput(1, &input, sizeof(INPUT));
+            }
+            else
+            {
+                // normal typing — unicode scan code, no vk mapping needed
+                var flags = NativeMethods.KEYEVENTF_UNICODE | (isUp ? NativeMethods.KEYEVENTF_KEYUP : 0);
+                var input = new INPUT
+                {
+                    type = NativeMethods.INPUT_KEYBOARD,
+                    ki = new KEYBDINPUT { wVk = 0, wScan = ch, dwFlags = flags },
+                };
+                _ = NativeMethods.SendInput(1, &input, sizeof(INPUT));
+            }
         }
         else if (msg.Key is { } key && WinSpecialKeyMap.Instance.Reverse.TryGetValue(key, out var vk))
         {
