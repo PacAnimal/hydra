@@ -55,8 +55,8 @@ class ShieldDelegate: NSObject, NSApplicationDelegate, CLLocationManagerDelegate
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard let screen = NSScreen.main else { return }
         let level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.maximumWindow)))
-        let w10 = screen.frame.width * 0.1
-        let h10 = screen.frame.height * 0.1
+        let w10 = screen.frame.width * 0.2
+        let h10 = screen.frame.height * 0.2
         let frame = NSRect(x: screen.frame.midX - w10 / 2, y: screen.frame.midY - h10 / 2, width: w10, height: h10)
 
         let w = NSWindow(
