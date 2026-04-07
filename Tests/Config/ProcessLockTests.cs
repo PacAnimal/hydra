@@ -61,4 +61,22 @@ public class ProcessLockTests
         if (!OperatingSystem.IsWindows())
             Assert.That(ProcessLock.TryReadPid(_path), Is.EqualTo(Environment.ProcessId));
     }
+
+    [Test]
+    public void Dispose_DeletesLockFile()
+    {
+        var l = ProcessLock.Acquire(_path);
+        l.Dispose();
+        Assert.That(File.Exists(_path), Is.False);
+    }
+
+    [Test]
+    public void Dispose_SecondAcquireWorksAfterDispose()
+    {
+        var first = ProcessLock.Acquire(_path);
+        first.Dispose();
+        // Acquire uses OpenOrCreate, so it works whether the file was deleted or not
+        using var second = ProcessLock.Acquire(_path);
+        Assert.Pass();
+    }
 }

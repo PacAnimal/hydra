@@ -14,10 +14,32 @@ namespace Hydra.Platform;
 internal sealed partial class ProcessLock : IDisposable
 {
     private readonly FileStream _stream;
+    private readonly string _path;
 
-    private ProcessLock(FileStream stream) => _stream = stream;
+    private ProcessLock(FileStream stream, string path)
+    {
+        _stream = stream;
+        _path = path;
+    }
 
-    public void Dispose() => _stream.Dispose();
+    public void Dispose()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            // close first, then attempt delete — if another process grabbed the lock
+            // between here and the delete, File.Delete will throw IOException (FileShare.None
+            // blocks the internal handle open), which we swallow
+            _stream.Dispose();
+            try { File.Delete(_path); } catch { }
+        }
+        else
+        {
+            // on unix, unlink while we still hold the lock — race-free, inode stays
+            // alive for our fd and a new process will create a fresh file at the path
+            try { File.Delete(_path); } catch { }
+            _stream.Dispose();
+        }
+    }
 
     public static ProcessLock Acquire(string path)
     {
@@ -37,7 +59,7 @@ internal sealed partial class ProcessLock : IDisposable
         writer.Flush();
         stream.Flush();
 
-        return new ProcessLock(stream);
+        return new ProcessLock(stream, path);
     }
 
     // internal for testing
