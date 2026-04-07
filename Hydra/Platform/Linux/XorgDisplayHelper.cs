@@ -1,5 +1,4 @@
 using System.Runtime.InteropServices;
-using Hydra.Screen;
 
 namespace Hydra.Platform.Linux;
 

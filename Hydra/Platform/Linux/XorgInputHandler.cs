@@ -2,7 +2,6 @@ using System.Runtime.InteropServices;
 using Cathedral.Utils;
 using Hydra.Keyboard;
 using Hydra.Mouse;
-using Hydra.Screen;
 using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform.Linux;
@@ -54,7 +53,7 @@ public sealed class XorgInputHandler : IPlatformInput
 
         _rootWindow = NativeMethods.XDefaultRootWindow(_display);
         _inputSink = CreateInputSink();
-        _xiOpcode = DetectXI2();
+        _xiOpcode = DetectXi2();
         _lockKeycode = (int)NativeMethods.XKeysymToKeycode(_display, 0x006C); // XK_l
     }
 
@@ -107,7 +106,7 @@ public sealed class XorgInputHandler : IPlatformInput
         }
     }
 
-    public void StartEventTap(
+    public async Task StartEventTap(
         Action<double, double> onMouseMove,
         Action<KeyEvent> onKeyEvent,
         Action<MouseButtonEvent> onMouseButton,
@@ -118,13 +117,13 @@ public sealed class XorgInputHandler : IPlatformInput
         _onMouseButton = onMouseButton;
         _onMouseScroll = onMouseScroll;
 
-        using var ready = new ManualResetEventSlim(false);
+        var ready = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         _eventThread = new Thread(() =>
         {
-            RegisterXI2Events();
+            RegisterXi2Events();
             GrabLockHotkey();
-            ready.Set();
+            ready.TrySetResult(true);
 
             var xFd = NativeMethods.XConnectionNumber(_display);
             var pfd = new PollFd { Fd = xFd, Events = NativeMethods.POLLIN };
@@ -144,7 +143,7 @@ public sealed class XorgInputHandler : IPlatformInput
 
         _running = true;
         _eventThread.Start();
-        ready.Wait();
+        await ready.Task;
     }
 
     public KeyRepeatSettings GetKeyRepeatSettings()
@@ -169,7 +168,6 @@ public sealed class XorgInputHandler : IPlatformInput
         if (_cursorHidden) ShowCursor();
         if (_inputSink != nint.Zero) _ = NativeMethods.XDestroyWindow(_display, _inputSink);
         if (_display != nint.Zero) _ = NativeMethods.XCloseDisplay(_display);
-        GC.SuppressFinalize(this);
     }
 
     private void HandleEvent(ref XEvent ev)
@@ -219,8 +217,7 @@ public sealed class XorgInputHandler : IPlatformInput
                         4 => new MouseScrollEvent(0, 120),   // scroll up
                         5 => new MouseScrollEvent(0, -120),  // scroll down
                         6 => new MouseScrollEvent(-120, 0),  // scroll left
-                        7 => new MouseScrollEvent(120, 0),   // scroll right
-                        _ => default,
+                        _ => new MouseScrollEvent(120, 0),   // scroll right (7)
                     };
                     if (isDown) _onMouseScroll?.Invoke(scroll);  // only fire on press (scroll has no up)
                 }
@@ -315,7 +312,7 @@ public sealed class XorgInputHandler : IPlatformInput
         yield return NativeMethods.LockMask | NativeMethods.Mod2Mask;
     }
 
-    private void RegisterXI2Events()
+    private void RegisterXi2Events()
     {
         var maskHandle = GCHandle.Alloc(Xi2Mask, GCHandleType.Pinned);
         try
@@ -351,7 +348,7 @@ public sealed class XorgInputHandler : IPlatformInput
             ref attrs);
     }
 
-    private int DetectXI2()
+    private int DetectXi2()
     {
         if (!NativeMethods.XQueryExtension(_display, "XInputExtension", out var opcode, out _, out _))
             throw new InvalidOperationException("XInput2 extension not available — Xorg with XInput2 is required");

@@ -10,7 +10,6 @@ namespace Hydra.Relay;
 public class SlaveRelayConnection : RelayConnection
 {
     private readonly IPlatformOutput _output;
-    private readonly SlaveLogForwarder _logForwarder;
     private readonly ILogger<RelayConnection> _log;
     private readonly IScreenDetector _screens;
     private readonly IWorldState _peerState;
@@ -26,11 +25,10 @@ public class SlaveRelayConnection : RelayConnection
 
     // ReSharper disable once ConvertToPrimaryConstructor
 #pragma warning disable IDE0290
-    public SlaveRelayConnection(HydraConfig config, ILogger<RelayConnection> log, IPlatformOutput output, SlaveLogForwarder logForwarder, IScreenDetector screens, IWorldState peerState, SlaveCursorHider cursorHider, IScreenSaverSync screenSaverSync, IScreensaverSuppressor screensaverSuppressor)
+    public SlaveRelayConnection(HydraConfig config, ILogger<RelayConnection> log, IPlatformOutput output, IScreenDetector screens, IWorldState peerState, SlaveCursorHider cursorHider, IScreenSaverSync screenSaverSync, IScreensaverSuppressor screensaverSuppressor)
         : base(config, log, peerState)
     {
         _output = output;
-        _logForwarder = logForwarder;
         _log = log;
         _screens = screens;
         _peerState = peerState;
@@ -85,7 +83,7 @@ public class SlaveRelayConnection : RelayConnection
                 if (delta != null)
                 {
                     _cursorHider.OnMasterActivity(sourceHost);
-                    _output.MoveMouseRelative(delta.DX, delta.DY);
+                    _output.MoveMouseRelative(delta.Dx, delta.Dy);
                 }
                 break;
             case MessageKind.MouseButton:

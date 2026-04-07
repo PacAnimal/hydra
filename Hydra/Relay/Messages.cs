@@ -22,7 +22,7 @@ public enum MessageKind : byte
 }
 
 public record MouseMoveMessage(string Screen, int X, int Y);
-public record MouseMoveDeltaMessage(int DX, int DY);
+public record MouseMoveDeltaMessage(int Dx, int Dy);
 public record ScreenInfoEntry(string Name, int X, int Y, int Width, int Height, decimal Scale);
 public record ScreenInfoMessage(List<ScreenInfoEntry> Screens);
 public record SlaveLogMessage(int Level, string Category, string Message, string? Exception);

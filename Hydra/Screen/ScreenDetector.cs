@@ -19,7 +19,7 @@ public record LocalScreenSnapshot(List<ScreenRect> Screens, List<ScreenInfoEntry
 
 public abstract class ScreenDetector : SimpleHostedService, IScreenDetector
 {
-    private static readonly JsonSerializerOptions _jsonOptions = new()
+    private static readonly JsonSerializerOptions JsonOptions = new()
     {
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
@@ -72,7 +72,7 @@ public abstract class ScreenDetector : SimpleHostedService, IScreenDetector
             _log.LogInformation("Local screens: {Count}", snapshot.Screens.Count);
             for (var i = 0; i < snapshot.Screens.Count; i++)
                 if (snapshot.Screens[i].Identity != null)
-                    _log.LogInformation("  Screen {I}: {Json}", i, JsonSerializer.Serialize(snapshot.Screens[i].Identity, _jsonOptions));
+                    _log.LogInformation("  Screen {I}: {Json}", i, JsonSerializer.Serialize(snapshot.Screens[i].Identity, JsonOptions));
             if (ScreensChanged != null) await ScreensChanged(snapshot);
         }
     }

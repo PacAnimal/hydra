@@ -32,7 +32,6 @@ public class InputRouter(
     // volatile: written on poll timer thread, read on event tap thread.
     private volatile int _repeatDelayMs = 500;
     private volatile int _repeatRateMs = 33;
-    private long _lastRepeatSettingsTick;
 
     private readonly IWorldState _peerState = peerState ?? new WorldState();
     private readonly SemaphoreSlimValue<LocalMasterState> _state = new(new LocalMasterState(), disposeValue: false);
@@ -82,14 +81,13 @@ public class InputRouter(
         var (delayMs, rateMs) = platform.GetKeyRepeatSettings();
         _repeatDelayMs = delayMs;
         _repeatRateMs = rateMs;
-        _lastRepeatSettingsTick = Environment.TickCount64;
 
         relay.PeersChanged += OnPeersChanged;
         relay.MessageReceived += OnMessageReceived;
         relay.Disconnected += OnRelayDisconnected;
         screens.ScreensChanged += OnScreensChanged;
 
-        platform.StartEventTap((x, y) => OnMouseMove(x, y), OnKeyEvent, OnMouseButton, OnMouseScroll);
+        await platform.StartEventTap((x, y) => OnMouseMove(x, y), OnKeyEvent, OnMouseButton, OnMouseScroll);
 
         _screenSaverSync.StartWatching(OnScreensaverActivated, OnScreensaverDeactivated);
 
@@ -153,7 +151,6 @@ public class InputRouter(
                 var (delayMs, rateMs) = platform.GetKeyRepeatSettings();
                 _repeatDelayMs = delayMs;
                 _repeatRateMs = rateMs;
-                _lastRepeatSettingsTick = Environment.TickCount64;
             }
         }
         catch (OperationCanceledException) { }
@@ -182,8 +179,8 @@ public class InputRouter(
                 if (!current.Contains(currentHost))
                 {
                     st.Mouse.LeaveScreen();
-                    st.PendingDX = 0;
-                    st.PendingDY = 0;
+                    st.PendingDx = 0;
+                    st.PendingDy = 0;
                     disconnectedHost = currentHost;
                     warpX = st.WarpX;
                     warpY = st.WarpY;
@@ -223,8 +220,8 @@ public class InputRouter(
             {
                 disconnectedHost = st.Mouse.CurrentScreen.Host;
                 st.Mouse.LeaveScreen();
-                st.PendingDX = 0;
-                st.PendingDY = 0;
+                st.PendingDx = 0;
+                st.PendingDy = 0;
                 warpX = st.WarpX;
                 warpY = st.WarpY;
                 st.PendingCursorShow = false;
@@ -263,8 +260,8 @@ public class InputRouter(
                 FlushMouseDelta(st);
                 disconnectedHost = st.Mouse.CurrentScreen.Host;
                 st.Mouse.LeaveScreen();
-                st.PendingDX = 0;
-                st.PendingDY = 0;
+                st.PendingDx = 0;
+                st.PendingDy = 0;
                 warpX = st.WarpX;
                 warpY = st.WarpY;
                 st.PendingCursorShow = false;
@@ -285,8 +282,8 @@ public class InputRouter(
 
     private void OnScreensaverDeactivated()
     {
-        string? savedScreen = null;
-        int savedX = 0, savedY = 0;
+        string? savedScreen;
+        int savedX, savedY;
 
         using (var s = AsyncHelper.RunSync(() => _state.WaitForDisposable()))
         {
@@ -316,8 +313,8 @@ public class InputRouter(
                 platform.HideCursor();
                 platform.IsOnVirtualScreen = true;
                 st.Mouse.EnterScreen(dest, remoteInfo.Screens, savedX, savedY, scale, remoteInfo.ScaleMap);
-                st.PendingDX = 0;
-                st.PendingDY = 0;
+                st.PendingDx = 0;
+                st.PendingDy = 0;
                 st.LastWarpX = st.WarpX;
                 st.LastWarpY = st.WarpY;
                 var enterPayload = MessageSerializer.Encode(MessageKind.EnterScreen,
@@ -530,18 +527,18 @@ public class InputRouter(
         if (st.RelativeMouseScreens.GetValueOrDefault(screen.Name))
         {
             // relative mode: send accumulated delta, preserve sub-pixel remainders
-            var intDX = (int)st.PendingDX;
-            var intDY = (int)st.PendingDY;
-            if (intDX == 0 && intDY == 0) return;
-            st.PendingDX -= intDX;
-            st.PendingDY -= intDY;
-            payload = MessageSerializer.Encode(MessageKind.MouseMoveDelta, new MouseMoveDeltaMessage(intDX, intDY));
+            var intDx = (int)st.PendingDx;
+            var intDy = (int)st.PendingDy;
+            if (intDx == 0 && intDy == 0) return;
+            st.PendingDx -= intDx;
+            st.PendingDy -= intDy;
+            payload = MessageSerializer.Encode(MessageKind.MouseMoveDelta, new MouseMoveDeltaMessage(intDx, intDy));
         }
         else
         {
             // absolute mode: send current virtual position, discard accumulated deltas
-            st.PendingDX = 0;
-            st.PendingDY = 0;
+            st.PendingDx = 0;
+            st.PendingDy = 0;
             payload = MessageSerializer.Encode(MessageKind.MouseMove, new MouseMoveMessage(screen.Name, (int)st.Mouse.X, (int)st.Mouse.Y));
         }
 
@@ -557,7 +554,7 @@ public class InputRouter(
         if (!relay.IsConnected || st.Mouse.CurrentScreen == null) return;
         var screen = st.Mouse.CurrentScreen;
         var isRelative = st.RelativeMouseScreens.GetValueOrDefault(screen.Name);
-        if (isRelative && st.PendingDX == 0 && st.PendingDY == 0) return;
+        if (isRelative && st.PendingDx == 0 && st.PendingDy == 0) return;
         SendMousePosition(st, Environment.TickCount64);
     }
 
@@ -612,8 +609,8 @@ public class InputRouter(
         platform.HideCursor();
         platform.IsOnVirtualScreen = true;
         st.Mouse.EnterScreen(hit.Destination, remoteInfo.Screens, hit.EntryX, hit.EntryY, scale, remoteInfo.ScaleMap);
-        st.PendingDX = 0;
-        st.PendingDY = 0;
+        st.PendingDx = 0;
+        st.PendingDy = 0;
         st.LastWarpX = x;
         st.LastWarpY = y;
         log.LogInformation("Entered remote screen '{Name}' → ({X}, {Y})", hit.Destination.Name, hit.EntryX, hit.EntryY);
@@ -644,8 +641,8 @@ public class InputRouter(
         if (prevScreen != null)
         {
             // intra-host screen transition: reset accumulators and send EnterScreen for new screen
-            st.PendingDX = 0;
-            st.PendingDY = 0;
+            st.PendingDx = 0;
+            st.PendingDy = 0;
             if (relay.IsConnected && st.Mouse.CurrentScreen != null)
             {
                 var s = st.Mouse.CurrentScreen;
@@ -657,8 +654,8 @@ public class InputRouter(
         else
         {
             // same screen — accumulate scaled deltas for throttle
-            st.PendingDX += dx * (double)st.Mouse.Scale;
-            st.PendingDY += dy * (double)st.Mouse.Scale;
+            st.PendingDx += dx * (double)st.Mouse.Scale;
+            st.PendingDy += dy * (double)st.Mouse.Scale;
         }
 
         var now = Environment.TickCount64;
@@ -666,7 +663,7 @@ public class InputRouter(
         {
             st.LastVirtualLogTick = now;
             if (st.Mouse.CurrentScreen != null && st.RelativeMouseScreens.GetValueOrDefault(st.Mouse.CurrentScreen.Name))
-                log.LogDebug("Mouse: ({X}, {Y})  Offset: ({DX}, {DY})", (int)st.Mouse.X, (int)st.Mouse.Y, (int)st.PendingDX, (int)st.PendingDY);
+                log.LogDebug("Mouse: ({X}, {Y})  Offset: ({DX}, {DY})", (int)st.Mouse.X, (int)st.Mouse.Y, (int)st.PendingDx, (int)st.PendingDy);
             else
                 log.LogDebug("Mouse: ({X}, {Y})", (int)st.Mouse.X, (int)st.Mouse.Y);
         }
@@ -727,17 +724,17 @@ public class InputRouter(
     private static ScreenRect? FindLocalScreenAt(LocalMasterState st, int x, int y) =>
         st.LocalScreens.FirstOrDefault(s => s.Contains(x, y));
 
-    private static readonly JsonSerializerOptions _jsonOptions = new()
+    private static readonly JsonSerializerOptions JsonOptions = new()
     {
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
 
-    private void LogDetectedScreens(List<ScreenRect> screens)
+    private void LogDetectedScreens(List<ScreenRect> detected)
     {
-        log.LogInformation("Detected {Count} local screen(s):", screens.Count);
-        for (var i = 0; i < screens.Count; i++)
-            if (screens[i].Identity != null)
-                log.LogInformation("  Screen {I}: {Json}", i, JsonSerializer.Serialize(screens[i].Identity, _jsonOptions));
+        log.LogInformation("Detected {Count} local screen(s):", detected.Count);
+        for (var i = 0; i < detected.Count; i++)
+            if (detected[i].Identity != null)
+                log.LogInformation("  Screen {I}: {Json}", i, JsonSerializer.Serialize(detected[i].Identity, JsonOptions));
     }
 
     // combines local screens with placeholder remote screens (Width=0 until ScreenInfo arrives)
@@ -773,8 +770,8 @@ public class InputRouter(
 
         // 120Hz throttle: accumulated deltas and last send time
         public long LastMouseSendTick;
-        public double PendingDX;
-        public double PendingDY;
+        public double PendingDx;
+        public double PendingDy;
     }
 
     private record RemoteScreenInfo(List<ScreenRect> Screens, Dictionary<string, decimal> ScaleMap);

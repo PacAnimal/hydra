@@ -18,10 +18,9 @@ using Microsoft.Extensions.Logging;
 Console.OutputEncoding = Encoding.UTF8;
 
 List<HydraConfig> configs;
-string configPath;
 try
 {
-    (configs, configPath) = HydraConfig.LoadAll(Env.Config);
+    (configs, _) = HydraConfig.LoadAll(Env.Config);
 }
 catch (FileNotFoundException ex)
 {

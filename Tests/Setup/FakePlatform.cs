@@ -1,7 +1,6 @@
 using Hydra.Keyboard;
 using Hydra.Mouse;
 using Hydra.Platform;
-using Hydra.Screen;
 
 namespace Tests.Setup;
 
@@ -35,7 +34,7 @@ public sealed class FakePlatform : IPlatformInput
     public static List<DetectedScreen> GetAllScreens() => [new DetectedScreen(0, 0, 2560, 1440, null, null, null)];
     public bool IsAccessibilityTrusted() => true;
 
-    public void StartEventTap(
+    public Task StartEventTap(
         Action<double, double> onMouseMove,
         Action<KeyEvent> onKeyEvent,
         Action<MouseButtonEvent> onMouseButton,
@@ -47,6 +46,7 @@ public sealed class FakePlatform : IPlatformInput
         _onMouseScroll = onMouseScroll;
         WarpX = 2560 / 2;
         WarpY = 1440 / 2;
+        return Task.CompletedTask;
     }
 
     public KeyRepeatSettings GetKeyRepeatSettings() => new(500, 33);

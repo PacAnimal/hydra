@@ -67,12 +67,12 @@ public class MasterSlaveProtocolTests
         var msg = new SlaveLogMessage((int)LogLevel.Warning, "MyService", "something went wrong", null);
         await relay.FireMessageReceived("slave-pc", MessageKind.SlaveLog, JsonSerializer.Serialize(msg, SaneJson.Options));
 
-        var (Category, Level, Message) = logs.Entries.Single(e => e.Category.StartsWith("slave:"));
+        var (category, level, message) = logs.Entries.Single(e => e.Category.StartsWith("slave:"));
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(Category, Is.EqualTo("slave:slave-pc/MyService"));
-            Assert.That(Level, Is.EqualTo(LogLevel.Warning));
-            Assert.That(Message, Does.Contain("something went wrong"));
+            Assert.That(category, Is.EqualTo("slave:slave-pc/MyService"));
+            Assert.That(level, Is.EqualTo(LogLevel.Warning));
+            Assert.That(message, Does.Contain("something went wrong"));
         }
 
         await service.StopAsync(CancellationToken.None);
@@ -90,8 +90,8 @@ public class MasterSlaveProtocolTests
         var msg = new SlaveLogMessage((int)LogLevel.Error, "Crasher", "boom", "System.Exception: kaboom");
         await relay.FireMessageReceived("slave-pc", MessageKind.SlaveLog, JsonSerializer.Serialize(msg, SaneJson.Options));
 
-        var (Category, Level, Message) = logs.Entries.Single(e => e.Category.StartsWith("slave:"));
-        Assert.That(Message, Does.Contain("kaboom"));
+        var (_, _, message) = logs.Entries.Single(e => e.Category.StartsWith("slave:"));
+        Assert.That(message, Does.Contain("kaboom"));
 
         await service.StopAsync(CancellationToken.None);
     }
@@ -212,7 +212,6 @@ public class MasterSlaveProtocolTests
         new HydraConfig { Mode = Mode.Slave },
         NullLogger<RelayConnection>.Instance,
         new NullPlatformOutput(),
-        new SlaveLogForwarder(),
         new FakeScreenDetector(),
         new WorldState(),
         hider,

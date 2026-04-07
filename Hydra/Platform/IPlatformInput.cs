@@ -22,7 +22,7 @@ public interface IPlatformInput : IDisposable
     void WarpCursor(int x, int y);
     void HideCursor();
     void ShowCursor();
-    void StartEventTap(
+    Task StartEventTap(
         Action<double, double> onMouseMove,
         Action<KeyEvent> onKeyEvent,
         Action<MouseButtonEvent> onMouseButton,

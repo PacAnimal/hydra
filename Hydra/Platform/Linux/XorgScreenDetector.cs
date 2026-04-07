@@ -1,5 +1,4 @@
 using Hydra.Config;
-using Hydra.Platform;
 using Hydra.Screen;
 using Microsoft.Extensions.Logging;
 

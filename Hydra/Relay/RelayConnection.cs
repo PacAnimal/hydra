@@ -1,5 +1,4 @@
 using Cathedral.Config;
-using Cathedral.Utils;
 using Common;
 using Common.DTO;
 using Common.Interfaces;
@@ -9,7 +8,6 @@ using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using System.Net.Http;
 using System.Net.Sockets;
 using TypedSignalR.Client;
 
@@ -181,7 +179,8 @@ public class RelayConnection(HydraConfig config, ILogger<RelayConnection> log, I
             })
             .Build();
 
-        con.Closed += async closeEx =>
+        // ReSharper disable once AccessToDisposedClosure
+        con.Closed += async _ =>
         {
             try { await disco.CancelAsync(); }
             catch (ObjectDisposedException) { }

@@ -12,12 +12,12 @@ internal sealed class MacKeyResolver
     private KeyModifiers _previousModifiers;
     private readonly Dictionary<int, CharClassification> _keyDownId = [];
 
-    private static readonly nint _carbon =
+    private static readonly nint Carbon =
         NativeLibrary.Load("/System/Library/Frameworks/Carbon.framework/Carbon");
 
     // symbol pointer for kTISPropertyUnicodeKeyLayoutData (loaded once)
     private static readonly nint TisPropertyUnicodeKeyLayoutData =
-        Marshal.ReadIntPtr(NativeLibrary.GetExport(_carbon, "kTISPropertyUnicodeKeyLayoutData"));
+        Marshal.ReadIntPtr(NativeLibrary.GetExport(Carbon, "kTISPropertyUnicodeKeyLayoutData"));
 
     internal KeyEvent? Resolve(int eventType, nint eventRef)
     {

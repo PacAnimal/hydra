@@ -1,3 +1,4 @@
+// ReSharper disable InconsistentNaming
 namespace Hydra.Keyboard;
 
 // named identifiers for non-printable keys.

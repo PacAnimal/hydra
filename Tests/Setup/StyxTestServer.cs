@@ -4,7 +4,6 @@ using Cathedral.Config;
 using Cathedral.Utils;
 using Common;
 using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace Tests.Setup;
 

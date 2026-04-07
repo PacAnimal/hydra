@@ -96,7 +96,7 @@ public class VirtualMouseState
         }
 
         CurrentScreen = best;
-        X = Math.Clamp(globalX - best!.X, 0, best.Width - 1);
+        X = Math.Clamp(globalX - best.X, 0, best.Width - 1);
         Y = Math.Clamp(globalY - best.Y, 0, best.Height - 1);
         if (_scaleMap.TryGetValue(best.Name, out var newScale))
             Scale = newScale;

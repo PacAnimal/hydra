@@ -1,9 +1,7 @@
 using System.Runtime.InteropServices;
 using Hydra.Keyboard;
 using Hydra.Mouse;
-using Hydra.Platform;
 using Hydra.Relay;
-using Hydra.Screen;
 using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform.MacOs;
@@ -35,20 +33,20 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
 
     // mach_task_self_ is a global variable in libSystem — read it by dereferencing the export address,
     // NOT by calling it as a function (calling a data segment address as code causes a crash).
-    private static readonly uint _machTaskSelf = (uint)Marshal.ReadInt32(
+    private static readonly uint MachTaskSelf = (uint)Marshal.ReadInt32(
         NativeLibrary.GetExport(NativeLibrary.Load("/usr/lib/libSystem.B.dylib"), "mach_task_self_"));
 
     // kCFBooleanTrue for CGSSetConnectionProperty("SetsCursorInBackground")
-    private static readonly nint _cfBooleanTrue = Marshal.ReadIntPtr(
+    private static readonly nint CfBooleanTrue = Marshal.ReadIntPtr(
         NativeLibrary.GetExport(
             NativeLibrary.Load("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"),
             "kCFBooleanTrue"));
 
     // combined session state source — used for mouse events and CGEvent fallback paths
-    private static readonly nint _eventSource = NativeMethods.CGEventSourceCreate(NativeMethods.KCGEventSourceStateCombinedSessionState);
+    private static readonly nint EventSource = NativeMethods.CGEventSourceCreate(NativeMethods.KCGEventSourceStateCombinedSessionState);
 
     // char produced by each vk code (no modifiers) — used to find the correct vk for character injection
-    private static readonly Dictionary<char, ushort> _charToVk = BuildCharToVkMap();
+    private static readonly Dictionary<char, ushort> CharToVk = BuildCharToVkMap();
 
     public void MoveMouse(int x, int y)
     {
@@ -60,7 +58,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
         // use drag event type when a button is held, otherwise plain moved
         var move = GetMoveEventType();
 
-        var eventRef = NativeMethods.CGEventCreateMouseEvent(_eventSource, move.EventType, pos, move.Button);
+        var eventRef = NativeMethods.CGEventCreateMouseEvent(EventSource, move.EventType, pos, move.Button);
         if (eventRef == nint.Zero) return;
         NativeMethods.CGEventPost(NativeMethods.KCGHidEventTap, eventRef);
         NativeMethods.CFRelease(eventRef);
@@ -88,7 +86,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
 
         var move = GetMoveEventType();
 
-        var eventRef = NativeMethods.CGEventCreateMouseEvent(_eventSource, move.EventType, pos, move.Button);
+        var eventRef = NativeMethods.CGEventCreateMouseEvent(EventSource, move.EventType, pos, move.Button);
         if (eventRef == nint.Zero) return;
         // set integer AND double delta fields — some 3D apps/games read the double variant (barrier comment)
         NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGMouseEventDeltaX, dx);
@@ -121,10 +119,10 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
             // deskflow approach: inject via IOHIDPostEvent (NX_KEYDOWN/UP, flags=0) so the system uses the
             // current HID modifier state for shortcut resolution. fall back to CGEventPost with unicode
             // string for chars with no VK mapping (foreign/composed characters).
-            if (_charToVk.TryGetValue(char.ToLowerInvariant(ch), out var charVk))
+            if (CharToVk.TryGetValue(char.ToLowerInvariant(ch), out var charVk))
             {
                 if (!PostHidKey(charVk, isDown))
-                    PostCGKey(charVk, isDown, flags);
+                    PostCgKey(charVk, isDown, flags);
             }
             else
             {
@@ -135,7 +133,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
         {
             // non-modifier special key: same IOHIDPostEvent-first approach
             if (!PostHidKey((ushort)vk, isDown))
-                PostCGKey((ushort)vk, isDown, flags);
+                PostCgKey((ushort)vk, isDown, flags);
         }
     }
 
@@ -164,7 +162,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
         else _heldButtons.Remove(msg.Button);
 
         var pos = new CGPoint { X = _mouseX, Y = _mouseY };
-        var eventRef = NativeMethods.CGEventCreateMouseEvent(_eventSource, mouseType, pos, mouseButton);
+        var eventRef = NativeMethods.CGEventCreateMouseEvent(EventSource, mouseType, pos, mouseButton);
         if (eventRef == nint.Zero) return;
 
         if (msg.Button is not MouseButton.Left and not MouseButton.Right)
@@ -180,7 +178,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
 
         // wire format: 120 = 1 line. convert to integer line counts for the event constructor.
         // kCGScrollEventUnitLine = 1
-        var eventRef = NativeMethods.CGEventCreateScrollWheelEvent(_eventSource, 1, 2, msg.YDelta / 120, msg.XDelta / 120);
+        var eventRef = NativeMethods.CGEventCreateScrollWheelEvent(EventSource, 1, 2, msg.YDelta / 120, msg.XDelta / 120);
         if (eventRef == nint.Zero) return;
 
         // set 16.16 fixed-point line deltas for sub-line precision (reverses input handler's fpDelta * 120 >> 16)
@@ -192,9 +190,9 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
     }
 
     // post a CG keyboard event — used for non-modifier special keys and as fallback for modifiers.
-    private static void PostCGKey(ushort vk, bool isDown, ulong flags)
+    private static void PostCgKey(ushort vk, bool isDown, ulong flags)
     {
-        var eventRef = NativeMethods.CGEventCreateKeyboardEvent(_eventSource, vk, isDown);
+        var eventRef = NativeMethods.CGEventCreateKeyboardEvent(EventSource, vk, isDown);
         if (eventRef == nint.Zero) return;
         NativeMethods.CGEventSetFlags(eventRef, flags);
         NativeMethods.CGEventPost(NativeMethods.KCGHidEventTap, eventRef);
@@ -260,7 +258,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
             return 0;
         }
 
-        var kr = NativeMethods.IOServiceOpen(service, _machTaskSelf, NativeMethods.KIoHidParamConnectType, out var conn);
+        var kr = NativeMethods.IOServiceOpen(service, MachTaskSelf, NativeMethods.KIoHidParamConnectType, out var conn);
         _ = NativeMethods.IOObjectRelease(service);
         if (kr != 0)
         {
@@ -277,7 +275,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
     // mirrors deskflow's postKeyboardKey() fallback path.
     private void PostFlagsChanged(ushort vk, bool isDown)
     {
-        var eventRef = NativeMethods.CGEventCreateKeyboardEvent(_eventSource, vk, isDown);
+        var eventRef = NativeMethods.CGEventCreateKeyboardEvent(EventSource, vk, isDown);
         if (eventRef == nint.Zero) return;
         NativeMethods.CGEventSetType(eventRef, NativeMethods.KCGEventFlagsChanged);
         NativeMethods.CGEventSetFlags(eventRef, _modifierFlags);
@@ -304,7 +302,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
     // vk=0 with explicit unicode string — only reached when _charToVk has no entry for the char.
     private static unsafe void InjectCharacter(char ch, bool isDown, ulong flags)
     {
-        var eventRef = NativeMethods.CGEventCreateKeyboardEvent(_eventSource, 0, isDown);
+        var eventRef = NativeMethods.CGEventCreateKeyboardEvent(EventSource, 0, isDown);
         if (eventRef == nint.Zero) return;
         NativeMethods.CGEventSetFlags(eventRef, flags);
         var utf16 = (ushort)ch;
@@ -331,12 +329,11 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
             if (layoutPtr == nint.Zero) return map;
 
             var kbdType = NativeMethods.LMGetKbdType();
-            uint deadKeyState = 0;
             ushort* chars = stackalloc ushort[2];
 
             for (ushort vk = 0; vk < 128; vk++)
             {
-                deadKeyState = 0;
+                uint deadKeyState = 0;
                 var status = NativeMethods.UCKeyTranslate(
                     layoutPtr,
                     vk,
@@ -367,10 +364,10 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
 
     private static nint LoadTisPropertyKey()
     {
-        var carbon = System.Runtime.InteropServices.NativeLibrary.Load(
+        var carbon = NativeLibrary.Load(
             "/System/Library/Frameworks/Carbon.framework/Carbon");
-        return System.Runtime.InteropServices.Marshal.ReadIntPtr(
-            System.Runtime.InteropServices.NativeLibrary.GetExport(carbon, "kTISPropertyUnicodeKeyLayoutData"));
+        return Marshal.ReadIntPtr(
+            NativeLibrary.GetExport(carbon, "kTISPropertyUnicodeKeyLayoutData"));
     }
 
     // reverse of MacKeyResolver.MapModifiers(): KeyModifiers → CGEventFlags.
@@ -415,7 +412,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
         // allow cursor manipulation from background (private CGS API — matches master + synergy)
         var cid = NativeMethods.CGSMainConnectionID();
         var key = NativeMethods.CFStringCreateWithCString(nint.Zero, "SetsCursorInBackground", NativeMethods.KCFStringEncodingUtf8);
-        _ = NativeMethods.CGSSetConnectionProperty(cid, cid, key, _cfBooleanTrue);
+        _ = NativeMethods.CGSSetConnectionProperty(cid, cid, key, CfBooleanTrue);
         NativeMethods.CFRelease(key);
         _ = NativeMethods.CGDisplayHideCursor(_display);
         _cursorHidden = true;

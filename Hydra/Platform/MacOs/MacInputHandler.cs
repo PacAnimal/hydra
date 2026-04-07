@@ -2,7 +2,6 @@ using System.Runtime.InteropServices;
 using Cathedral.Utils;
 using Hydra.Keyboard;
 using Hydra.Mouse;
-using Hydra.Screen;
 using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform.MacOs;
@@ -11,7 +10,7 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
 {
     private readonly MacShieldProcess _shield = shield;
     private readonly uint _display = NativeMethods.CGMainDisplayID();
-    private readonly nint _cfBooleanTrue = GetCFBooleanTrue();
+    private readonly nint _cfBooleanTrue = GetCfBooleanTrue();
     private readonly MacKeyResolver _keyResolver = new();
 
     // stored as fields to prevent GC collection while the tap is active
@@ -29,12 +28,12 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
     public bool IsOnVirtualScreen { get => _isOnVirtualScreen; set => _isOnVirtualScreen.TrySet(value); }
 
     // cached ObjC selectors for NX_SYSDEFINED media key decoding and repeat settings
-    private static readonly nint _nsEventClass = NativeMethods.objc_getClass("NSEvent");
-    private static readonly nint _selKeyRepeatDelay = NativeMethods.sel_registerName("keyRepeatDelay");
-    private static readonly nint _selKeyRepeatInterval = NativeMethods.sel_registerName("keyRepeatInterval");
-    private static readonly nint _selEventWithCGEvent = NativeMethods.sel_registerName("eventWithCGEvent:");
-    private static readonly nint _selSubtype = NativeMethods.sel_registerName("subtype");
-    private static readonly nint _selData1 = NativeMethods.sel_registerName("data1");
+    private static readonly nint NsEventClass = NativeMethods.objc_getClass("NSEvent");
+    private static readonly nint SelKeyRepeatDelay = NativeMethods.sel_registerName("keyRepeatDelay");
+    private static readonly nint SelKeyRepeatInterval = NativeMethods.sel_registerName("keyRepeatInterval");
+    private static readonly nint SelEventWithCgEvent = NativeMethods.sel_registerName("eventWithCGEvent:");
+    private static readonly nint SelSubtype = NativeMethods.sel_registerName("subtype");
+    private static readonly nint SelData1 = NativeMethods.sel_registerName("data1");
 
 
     public bool IsAccessibilityTrusted() => NativeMethods.AXIsProcessTrusted();
@@ -73,7 +72,7 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
         _cursorHidden = false;
     }
 
-    public void StartEventTap(
+    public async Task StartEventTap(
         Action<double, double> onMouseMove,
         Action<KeyEvent> onKeyEvent,
         Action<MouseButtonEvent> onMouseButton,
@@ -87,7 +86,7 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
         // callback must be stored as field -- will crash if collected
         _tapCallback = TapCallback;
 
-        using var ready = new ManualResetEventSlim(false);
+        var ready = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         _tapThread = new Thread(() =>
         {
@@ -104,16 +103,16 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
             if (_tapPort == nint.Zero)
             {
                 log.LogError("CGEventTapCreate returned null -- accessibility permission denied?");
-                ready.Set();
+                ready.TrySetResult(false);
                 return;
             }
 
-            var commonModes = GetCFRunLoopCommonModes();
+            var commonModes = GetCfRunLoopCommonModes();
             _runLoopSource = NativeMethods.CFMachPortCreateRunLoopSource(nint.Zero, _tapPort, 0);
             NativeMethods.CFRunLoopAddSource(_runLoop, _runLoopSource, commonModes);
             NativeMethods.CGEventTapEnable(_tapPort, true);
 
-            ready.Set();
+            ready.TrySetResult(true);
             NativeMethods.CFRunLoopRun();
 
             // cleanup after run loop stops
@@ -123,14 +122,14 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
         { IsBackground = true, Name = "HydraEventTap" };
 
         _tapThread.Start();
-        ready.Wait();
+        await ready.Task;
     }
 
     public KeyRepeatSettings GetKeyRepeatSettings()
     {
-        if (_nsEventClass == nint.Zero) return new KeyRepeatSettings(500, 33);
-        var delaySeconds = NativeMethods.objc_msgSend_double(_nsEventClass, _selKeyRepeatDelay);
-        var rateSeconds = NativeMethods.objc_msgSend_double(_nsEventClass, _selKeyRepeatInterval);
+        if (NsEventClass == nint.Zero) return new KeyRepeatSettings(500, 33);
+        var delaySeconds = NativeMethods.objc_msgSend_double(NsEventClass, SelKeyRepeatDelay);
+        var rateSeconds = NativeMethods.objc_msgSend_double(NsEventClass, SelKeyRepeatInterval);
         return new KeyRepeatSettings((int)(delaySeconds * 1000), (int)(rateSeconds * 1000));
     }
 
@@ -145,7 +144,6 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
     {
         StopEventTap();
         if (_cursorHidden) ShowCursor();
-        GC.SuppressFinalize(this);
     }
 
     private nint TapCallback(nint proxy, int type, nint eventRef, nint userInfo)
@@ -226,15 +224,15 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
     private void HandleMediaKeyEvent(nint eventRef)
     {
         // create NSEvent from CGEvent to read subtype and data1
-        if (_nsEventClass == nint.Zero) return;
-        var nsEvent = NativeMethods.objc_msgSend(_nsEventClass, _selEventWithCGEvent, eventRef);
+        if (NsEventClass == nint.Zero) return;
+        var nsEvent = NativeMethods.objc_msgSend(NsEventClass, SelEventWithCgEvent, eventRef);
         if (nsEvent == nint.Zero) return;
 
         // subtype 8 = NSSystemDefinedEvent (NSEventSubtypeApplicationActivated is different)
-        var subtype = NativeMethods.objc_msgSend_long(nsEvent, _selSubtype);
+        var subtype = NativeMethods.objc_msgSend_long(nsEvent, SelSubtype);
         if (subtype != 8) return;
 
-        var data1 = NativeMethods.objc_msgSend_long(nsEvent, _selData1);
+        var data1 = NativeMethods.objc_msgSend_long(nsEvent, SelData1);
         var nxKeyType = (uint)((data1 & 0xFFFF0000L) >> 16);
         var isDown = (data1 & 0x100) == 0;
 
@@ -259,12 +257,12 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
         _ => null,
     };
 
-    private static nint GetCFRunLoopCommonModes() => ReadCoreFoundationSymbol("kCFRunLoopCommonModes");
-    private static nint GetCFBooleanTrue() => ReadCoreFoundationSymbol("kCFBooleanTrue");
+    private static nint GetCfRunLoopCommonModes() => ReadCoreFoundationSymbol("kCFRunLoopCommonModes");
+    private static nint GetCfBooleanTrue() => ReadCoreFoundationSymbol("kCFBooleanTrue");
 
-    private static readonly nint _coreFoundation =
+    private static readonly nint CoreFoundation =
         NativeLibrary.Load("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation");
 
     private static nint ReadCoreFoundationSymbol(string name) =>
-        Marshal.ReadIntPtr(NativeLibrary.GetExport(_coreFoundation, name));
+        Marshal.ReadIntPtr(NativeLibrary.GetExport(CoreFoundation, name));
 }

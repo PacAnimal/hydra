@@ -2,7 +2,6 @@ using Cathedral.Utils;
 using Common.DTO;
 using Common.Interfaces;
 using Microsoft.AspNetCore.SignalR;
-using Microsoft.Extensions.Logging;
 using Styx.Filters;
 using Styx.Services;
 

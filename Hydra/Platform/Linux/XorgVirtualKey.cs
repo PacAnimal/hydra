@@ -1,3 +1,4 @@
+// ReSharper disable InconsistentNaming
 namespace Hydra.Platform.Linux;
 
 // X11 keysym constants (XK_* values from <X11/keysymdef.h>).

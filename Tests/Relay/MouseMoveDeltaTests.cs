@@ -19,8 +19,8 @@ public class MouseMoveDeltaTests
         Assert.That(decoded, Is.Not.Null);
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(decoded!.DX, Is.EqualTo(42));
-            Assert.That(decoded.DY, Is.EqualTo(-17));
+            Assert.That(decoded!.Dx, Is.EqualTo(42));
+            Assert.That(decoded.Dy, Is.EqualTo(-17));
         }
     }
 
@@ -37,8 +37,8 @@ public class MouseMoveDeltaTests
         Assert.That(decoded, Is.Not.Null);
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(decoded!.DX, Is.EqualTo(dx));
-            Assert.That(decoded.DY, Is.EqualTo(dy));
+            Assert.That(decoded!.Dx, Is.EqualTo(dx));
+            Assert.That(decoded.Dy, Is.EqualTo(dy));
         }
     }
 

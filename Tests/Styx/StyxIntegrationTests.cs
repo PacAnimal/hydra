@@ -1,7 +1,5 @@
-using Common.DTO;
 using Hydra.Config;
 using Hydra.Relay;
-using Microsoft.AspNetCore.SignalR;
 using Tests.Setup;
 
 namespace Tests.Styx;

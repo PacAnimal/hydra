@@ -1,8 +1,6 @@
 using Hydra.Keyboard;
 using Hydra.Mouse;
-using Hydra.Platform;
 using Hydra.Relay;
-using Hydra.Screen;
 
 namespace Hydra.Platform.Linux;
 
@@ -48,7 +46,7 @@ public sealed class XorgOutputHandler : IPlatformOutput, ICursorVisibility
         if (msg.Character is { } ch)
         {
             // unicode char → x11 keysym → keycode
-            var keysym = ch <= '\xFF' ? (ulong)ch : 0x01000000u | (uint)ch;
+            var keysym = ch <= '\xFF' ? (ulong)ch : 0x01000000u | ch;
             InjectKeysym(keysym, isDown);
         }
         else if (msg.Key is { } key)
@@ -145,7 +143,6 @@ public sealed class XorgOutputHandler : IPlatformOutput, ICursorVisibility
     {
         if (_disposed) return;
         _disposed = true;
-        GC.SuppressFinalize(this);
         if (_display != nint.Zero)
         {
             if (_cursorHidden)

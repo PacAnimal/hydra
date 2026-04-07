@@ -2,7 +2,6 @@ using System.Runtime.InteropServices;
 using Cathedral.Utils;
 using Hydra.Keyboard;
 using Hydra.Mouse;
-using Hydra.Screen;
 using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform.Windows;
@@ -71,7 +70,7 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log) : IPla
         _cursorHidden = false;
     }
 
-    public void StartEventTap(
+    public async Task StartEventTap(
         Action<double, double> onMouseMove,
         Action<KeyEvent> onKeyEvent,
         Action<MouseButtonEvent> onMouseButton,
@@ -86,7 +85,7 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log) : IPla
         _mouseHookProc = MouseHookCallback;
         _keyboardHookProc = KeyboardHookCallback;
 
-        using var ready = new ManualResetEventSlim(false);
+        var ready = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         _hookThread = new Thread(() =>
         {
@@ -98,11 +97,11 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log) : IPla
             if (_mouseHook == nint.Zero || _keyboardHook == nint.Zero)
             {
                 log.LogError("SetWindowsHookEx failed -- could not install input hooks");
-                ready.Set();
+                ready.TrySetResult(false);
                 return;
             }
 
-            ready.Set();
+            ready.TrySetResult(true);
 
             // message pump — hooks fire during GetMessage
             while (NativeMethods.GetMessage(out var msg, nint.Zero, 0, 0) > 0)
@@ -117,7 +116,7 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log) : IPla
         { IsBackground = true, Name = "HydraHookPump" };
 
         _hookThread.Start();
-        ready.Wait();
+        await ready.Task;
     }
 
     public unsafe KeyRepeatSettings GetKeyRepeatSettings()
@@ -144,7 +143,6 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log) : IPla
     {
         StopEventTap();
         if (_cursorHidden) ShowCursor();
-        GC.SuppressFinalize(this);
     }
 
     private nint MouseHookCallback(int nCode, nint wParam, nint lParam)

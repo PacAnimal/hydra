@@ -3,7 +3,6 @@ using Cathedral.Extensions;
 using Cathedral.Utils;
 using Common.Interfaces;
 using Microsoft.AspNetCore.SignalR;
-using Microsoft.Extensions.Logging;
 
 namespace Styx.Services;
 

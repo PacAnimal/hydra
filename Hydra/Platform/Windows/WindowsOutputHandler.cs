@@ -1,8 +1,6 @@
 using Hydra.Keyboard;
 using Hydra.Mouse;
-using Hydra.Platform;
 using Hydra.Relay;
-using Hydra.Screen;
 
 namespace Hydra.Platform.Windows;
 
@@ -63,7 +61,7 @@ public sealed class WindowsOutputHandler : IPlatformOutput, ICursorVisibility
             int flatSpeed = 1;
             NativeMethods.SystemParametersInfo(NativeMethods.SPI_SETMOUSE, 0, (nint)flat, 0);
             // SPI_SETMOUSESPEED takes the value directly as pvParam (not a pointer)
-            NativeMethods.SystemParametersInfo(NativeMethods.SPI_SETMOUSESPEED, 0, (nint)flatSpeed, 0);
+            NativeMethods.SystemParametersInfo(NativeMethods.SPI_SETMOUSESPEED, 0, flatSpeed, 0);
         }
 
         var input = new INPUT
@@ -76,7 +74,7 @@ public sealed class WindowsOutputHandler : IPlatformOutput, ICursorVisibility
         if (saved)
         {
             NativeMethods.SystemParametersInfo(NativeMethods.SPI_SETMOUSE, 0, (nint)oldMouse, 0);
-            NativeMethods.SystemParametersInfo(NativeMethods.SPI_SETMOUSESPEED, 0, (nint)oldSpeed, 0);
+            NativeMethods.SystemParametersInfo(NativeMethods.SPI_SETMOUSESPEED, 0, oldSpeed, 0);
         }
     }
 
@@ -91,7 +89,7 @@ public sealed class WindowsOutputHandler : IPlatformOutput, ICursorVisibility
             var input = new INPUT
             {
                 type = NativeMethods.INPUT_KEYBOARD,
-                ki = new KEYBDINPUT { wVk = 0, wScan = (ushort)ch, dwFlags = flags },
+                ki = new KEYBDINPUT { wVk = 0, wScan = ch, dwFlags = flags },
             };
             _ = NativeMethods.SendInput(1, &input, sizeof(INPUT));
         }
@@ -142,7 +140,7 @@ public sealed class WindowsOutputHandler : IPlatformOutput, ICursorVisibility
             var input = new INPUT
             {
                 type = NativeMethods.INPUT_MOUSE,
-                mi = new MOUSEINPUT { dwFlags = NativeMethods.MOUSEEVENTF_WHEEL, mouseData = (uint)(short)msg.YDelta },
+                mi = new MOUSEINPUT { dwFlags = NativeMethods.MOUSEEVENTF_WHEEL, mouseData = (uint)msg.YDelta },
             };
             _ = NativeMethods.SendInput(1, &input, sizeof(INPUT));
         }
@@ -152,7 +150,7 @@ public sealed class WindowsOutputHandler : IPlatformOutput, ICursorVisibility
             var input = new INPUT
             {
                 type = NativeMethods.INPUT_MOUSE,
-                mi = new MOUSEINPUT { dwFlags = NativeMethods.MOUSEEVENTF_HWHEEL, mouseData = (uint)(short)msg.XDelta },
+                mi = new MOUSEINPUT { dwFlags = NativeMethods.MOUSEEVENTF_HWHEEL, mouseData = (uint)msg.XDelta },
             };
             _ = NativeMethods.SendInput(1, &input, sizeof(INPUT));
         }

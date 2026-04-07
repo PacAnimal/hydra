@@ -77,7 +77,7 @@ public class SpecialKeyTests
                 17 => SpecialKey.F18,
                 18 => SpecialKey.F19,
                 19 => SpecialKey.F20,
-                _ => SpecialKey.F1,
+                _ => throw new InvalidOperationException($"Unexpected: {i}"),
             };
             Assert.That((uint)actual, Is.EqualTo(expected), $"F{i + 1}");
         }

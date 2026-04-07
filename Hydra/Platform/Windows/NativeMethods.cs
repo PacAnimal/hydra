@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+// ReSharper disable InconsistentNaming
 
 namespace Hydra.Platform.Windows;
 
@@ -176,12 +177,12 @@ internal static partial class NativeMethods
 
     // EnumDisplayMonitors: classic DllImport for managed delegate marshaling
     [LibraryImport(User32, SetLastError = true)]
-    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool EnumDisplayMonitors(nint hdc, nint lprcClip, MonitorEnumProc lpfnEnum, nint dwData);
 
 #pragma warning disable SYSLIB1054 // ByValTStr not supported by LibraryImport source generator
-    [System.Runtime.InteropServices.DllImport(User32, EntryPoint = "GetMonitorInfoW", SetLastError = true)]
-    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    [DllImport(User32, EntryPoint = "GetMonitorInfoW", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool GetMonitorInfoW(nint hMonitor, ref MONITORINFOEX lpmi);
 #pragma warning restore SYSLIB1054
 
@@ -273,7 +274,7 @@ internal static partial class NativeMethods
     internal static partial uint SetThreadExecutionState(uint esFlags);
 }
 
-[System.Runtime.InteropServices.UnmanagedFunctionPointer(System.Runtime.InteropServices.CallingConvention.StdCall)]
+[UnmanagedFunctionPointer(CallingConvention.StdCall)]
 internal delegate bool MonitorEnumProc(nint hMonitor, nint hdcMonitor, ref WINRECT lprcMonitor, nint dwData);
 
 [UnmanagedFunctionPointer(CallingConvention.StdCall)]

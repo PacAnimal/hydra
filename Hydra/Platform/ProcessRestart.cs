@@ -24,11 +24,11 @@ internal static partial class ProcessRestart
             var args = Environment.GetCommandLineArgs();
             var argv = new string?[args.Length + 1]; // null-terminated
             Array.Copy(args, argv, args.Length);
-            execv(exePath, argv);
-            Environment.Exit(1); // execv only returns on failure
+            _ = Execv(exePath, argv);
+            Environment.Exit(1); // Execv only returns on failure
         }
     }
 
     [LibraryImport("libc", EntryPoint = "execv", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
-    private static partial int execv(string pathname, string?[] argv);
+    private static partial int Execv(string pathname, string?[] argv);
 }

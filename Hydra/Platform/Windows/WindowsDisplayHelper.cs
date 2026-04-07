@@ -18,7 +18,7 @@ internal static class WindowsDisplayHelper
                 X: r.Left, Y: r.Top,
                 Width: r.Right - r.Left, Height: r.Bottom - r.Top,
                 DisplayName: null,
-                OutputName: info.DeviceName?.TrimEnd('\0'),
+                OutputName: info.DeviceName.TrimEnd('\0'),
                 PlatformId: hMonitor.ToString()));
             return true;
         }, nint.Zero);

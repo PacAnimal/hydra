@@ -31,7 +31,7 @@ public sealed partial class MacScreenSaverSync(ILogger<MacScreenSaverSync> log) 
         _callback = (_, _, name, _, _) =>
         {
             // resolve CFStringRef name to a managed string for comparison
-            var str = CFStringToString(name);
+            var str = CfStringToString(name);
             if (str == DidStart)
             {
                 log.LogInformation("Screensaver started (notification received)");
@@ -48,9 +48,9 @@ public sealed partial class MacScreenSaverSync(ILogger<MacScreenSaverSync> log) 
         var nameStop = NativeMethods.CFStringCreateWithCString(nint.Zero, DidStop, NativeMethods.KCFStringEncodingUtf8);
 
         // use a stable observer pointer (1 / 2) to distinguish the two registrations on removal
-        NativeMethods.CFNotificationCenterAddObserver(_center, (nint)1, _callback, nameStart, nint.Zero,
+        NativeMethods.CFNotificationCenterAddObserver(_center, 1, _callback, nameStart, nint.Zero,
             NativeMethods.CFNotificationSuspensionBehaviorDeliverImmediately);
-        NativeMethods.CFNotificationCenterAddObserver(_center, (nint)2, _callback, nameStop, nint.Zero,
+        NativeMethods.CFNotificationCenterAddObserver(_center, 2, _callback, nameStop, nint.Zero,
             NativeMethods.CFNotificationSuspensionBehaviorDeliverImmediately);
 
         NativeMethods.CFRelease(nameStart);
@@ -64,8 +64,8 @@ public sealed partial class MacScreenSaverSync(ILogger<MacScreenSaverSync> log) 
 
         var nameStart = NativeMethods.CFStringCreateWithCString(nint.Zero, DidStart, NativeMethods.KCFStringEncodingUtf8);
         var nameStop = NativeMethods.CFStringCreateWithCString(nint.Zero, DidStop, NativeMethods.KCFStringEncodingUtf8);
-        NativeMethods.CFNotificationCenterRemoveObserver(_center, (nint)1, nameStart, nint.Zero);
-        NativeMethods.CFNotificationCenterRemoveObserver(_center, (nint)2, nameStop, nint.Zero);
+        NativeMethods.CFNotificationCenterRemoveObserver(_center, 1, nameStart, nint.Zero);
+        NativeMethods.CFNotificationCenterRemoveObserver(_center, 2, nameStop, nint.Zero);
         NativeMethods.CFRelease(nameStart);
         NativeMethods.CFRelease(nameStop);
 
@@ -122,12 +122,12 @@ public sealed partial class MacScreenSaverSync(ILogger<MacScreenSaverSync> log) 
         _assertionId = 0;
     }
 
-    private static unsafe string CFStringToString(nint cfString)
+    private static unsafe string CfStringToString(nint cfString)
     {
         if (cfString == nint.Zero) return "";
         // use CFStringGetCString into a stack buffer — fine for short notification names
         var buf = stackalloc byte[256];
-        if (CFStringGetCString(cfString, buf, 256, NativeMethods.KCFStringEncodingUtf8))
+        if (CfStringGetCString(cfString, buf, 256, NativeMethods.KCFStringEncodingUtf8))
             return Marshal.PtrToStringUTF8((nint)buf) ?? "";
         return "";
     }
@@ -135,5 +135,5 @@ public sealed partial class MacScreenSaverSync(ILogger<MacScreenSaverSync> log) 
     [LibraryImport(
         "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation", EntryPoint = "CFStringGetCString")]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static unsafe partial bool CFStringGetCString(nint theString, byte* buffer, nint bufferSize, uint encoding);
+    private static unsafe partial bool CfStringGetCString(nint theString, byte* buffer, nint bufferSize, uint encoding);
 }
