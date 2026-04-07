@@ -66,7 +66,7 @@ public class VirtualMouseStateTests
     public void ApplyDelta_Scale_ReducesMovement()
     {
         var state = new VirtualMouseState();
-        state.EnterScreen(Screen, [], 100, 100, scale: 0.5m);
+        state.EnterScreen(Screen, [], 100, 100, mouseScale: 0.5m);
         state.ApplyDelta(100, 0);
         Assert.That(state.X, Is.EqualTo(150).Within(1));
     }

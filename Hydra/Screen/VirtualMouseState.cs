@@ -6,19 +6,19 @@ public class VirtualMouseState
     public List<ScreenRect> RemoteScreens { get; private set; } = [];
     public double X { get; private set; }   // position within CurrentScreen (screen-local)
     public double Y { get; private set; }
-    public decimal Scale { get; private set; } = 1.0m;
+    public decimal MouseScale { get; private set; } = 1.0m;
     public bool IsOnVirtualScreen => CurrentScreen is not null;
 
     // per-screen scales from ScreenDefinitions; populated from ScreenInfo at EnterScreen
     private Dictionary<string, decimal> _scaleMap = new(StringComparer.OrdinalIgnoreCase);
 
-    public void EnterScreen(ScreenRect screen, List<ScreenRect> allScreens, int x, int y, decimal scale = 1.0m, Dictionary<string, decimal>? scaleMap = null)
+    public void EnterScreen(ScreenRect screen, List<ScreenRect> allScreens, int x, int y, decimal mouseScale = 1.0m, Dictionary<string, decimal>? scaleMap = null)
     {
         CurrentScreen = screen;
         RemoteScreens = allScreens.Count > 0 ? allScreens : [screen];
         X = x;
         Y = y;
-        Scale = scale;
+        MouseScale = mouseScale;
         _scaleMap = scaleMap ?? new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
     }
 
@@ -28,8 +28,8 @@ public class VirtualMouseState
         if (CurrentScreen is null) return null;
 
         var prev = CurrentScreen;
-        var candidateX = X + dx * (double)Scale;
-        var candidateY = Y + dy * (double)Scale;
+        var candidateX = X + dx * (double)MouseScale;
+        var candidateY = Y + dy * (double)MouseScale;
 
         // convert to host-global coords
         var globalX = CurrentScreen.X + candidateX;
@@ -53,8 +53,8 @@ public class VirtualMouseState
                 X = globalX - screen.X;
                 Y = globalY - screen.Y;
                 // update scale for the new screen
-                if (_scaleMap.TryGetValue(screen.Name, out var newScale))
-                    Scale = newScale;
+                if (_scaleMap.TryGetValue(screen.Name, out var newMouseScale))
+                    MouseScale = newMouseScale;
                 return prev;
             }
         }
@@ -70,7 +70,7 @@ public class VirtualMouseState
         RemoteScreens = [];
         X = 0;
         Y = 0;
-        Scale = 1.0m;
+        MouseScale = 1.0m;
         _scaleMap.Clear();
     }
 
@@ -98,7 +98,7 @@ public class VirtualMouseState
         CurrentScreen = best;
         X = Math.Clamp(globalX - best.X, 0, best.Width - 1);
         Y = Math.Clamp(globalY - best.Y, 0, best.Height - 1);
-        if (_scaleMap.TryGetValue(best.Name, out var newScale))
-            Scale = newScale;
+        if (_scaleMap.TryGetValue(best.Name, out var newMouseScale))
+            MouseScale = newMouseScale;
     }
 }

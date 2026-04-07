@@ -32,7 +32,7 @@ public class ScreenDefinition
     public string? DisplayName { get; init; }  // matches DetectedScreen.DisplayName (e.g. "DELL U2720Q")
     public string? OutputName { get; init; }   // matches DetectedScreen.OutputName (e.g. "HDMI-1")
     public string? PlatformId { get; init; }   // matches DetectedScreen.PlatformId
-    public decimal Scale { get; init; } = 1.0m;  // cursor speed multiplier for this screen
+    public decimal? MouseScale { get; init; }  // cursor speed multiplier for this screen; overrides root mouseScale
 }
 
 public class HydraConfig
@@ -42,6 +42,7 @@ public class HydraConfig
     public List<HostConfig> Hosts { get; init; } = [];
     // per-screen scale config — used by both master and slave
     public List<ScreenDefinition> ScreenDefinitions { get; init; } = [];
+    public decimal? MouseScale { get; init; }  // fallback cursor speed multiplier; overridden by per-screen mouseScale
 
     [JsonConverter(typeof(LogLevelConverter))]
     public LogLevel LogLevel { get; set; } = LogLevel.Information;

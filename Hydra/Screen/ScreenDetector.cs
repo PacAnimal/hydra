@@ -112,9 +112,9 @@ public abstract class ScreenDetector : SimpleHostedService, IScreenDetector
         foreach (var def in _config.ScreenDefinitions)
         {
             if (Matches(d, def))
-                return def.Scale;
+                return def.MouseScale ?? _config.MouseScale ?? 1.0m;
         }
-        return 1.0m;
+        return _config.MouseScale ?? 1.0m;
     }
 
     private static bool Matches(DetectedScreen d, ScreenDefinition def) =>

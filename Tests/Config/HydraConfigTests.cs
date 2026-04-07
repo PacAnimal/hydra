@@ -85,16 +85,24 @@ public class HydraConfigTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(config.ScreenDefinitions[0].DisplayName, Is.EqualTo("DELL U2720Q"));
-            Assert.That(config.ScreenDefinitions[0].Scale, Is.EqualTo(1.5m));
+            Assert.That(config.ScreenDefinitions[0].MouseScale, Is.EqualTo(1.5m));
             Assert.That(config.ScreenDefinitions[1].DisplayName, Is.EqualTo("Built-in Retina Display"));
-            Assert.That(config.ScreenDefinitions[1].Scale, Is.EqualTo(1.0m));
+            Assert.That(config.ScreenDefinitions[1].MouseScale, Is.EqualTo(1.0m));
         }
+    }
+
+    [Test]
+    public void Load_RootMouseScale_Deserialized()
+    {
+        var json = """{ "mode": "Slave", "mouseScale": 2.5 }""";
+        var configs = HydraConfig.ParseAndValidate(json);
+        Assert.That(configs[0].MouseScale, Is.EqualTo(2.5m));
     }
 
     [Test]
     public void ScreenDefinition_Validation_ThrowsWhenNoMatchCriteria()
     {
-        var json = """{ "mode": "Master", "screenDefinitions": [{ "scale": 1.5 }] }""";
+        var json = """{ "mode": "Master", "screenDefinitions": [{ "mouseScale": 1.5 }] }""";
         Assert.That(() => HydraConfig.ParseAndValidate(json), Throws.InvalidOperationException
             .With.Message.Contains("no matching criteria"));
     }

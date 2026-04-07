@@ -105,7 +105,7 @@ When cursor crosses the right edge in the top half (0–50%), it goes to `workst
 
 ### Dead corners
 
-`deadCorners` defines a pixel dead zone at each corner of the screen where outbound transitions are blocked, regardless of neighbour config. The value is in pixels — `50` means the cursor must be more than 50 pixels away from a corner to trigger a transition. The pixel value is multiplied by the screen's `scale` setting, so a high-DPI screen with `scale: 2` and `deadCorners: 50` gets an effective 100-pixel dead zone.
+`deadCorners` defines a pixel dead zone at each corner of the screen where outbound transitions are blocked, regardless of neighbour config. The value is in pixels — `50` means the cursor must be more than 50 pixels away from a corner to trigger a transition. The pixel value is multiplied by the screen's `mouseScale` setting, so a high-DPI screen with `mouseScale: 2` and `deadCorners: 50` gets an effective 100-pixel dead zone.
 
 Set at the root level to apply to all hosts:
 
@@ -153,10 +153,11 @@ Use these identifiers in `sourceScreen`/`destScreen` to target specific monitors
 
 ```json
 {
+  "mouseScale": 1.5,
   "screenDefinitions": [
-    { "displayName": "DELL U2720Q",             "scale": 1.5 },
-    { "displayName": "Built-in Retina Display", "scale": 1.0 },
-    { "outputName": "HDMI-1",                   "scale": 0.8 }
+    { "displayName": "DELL U2720Q",             "mouseScale": 1.5 },
+    { "displayName": "Built-in Retina Display", "mouseScale": 1.0 },
+    { "outputName": "HDMI-1",                   "mouseScale": 0.8 }
   ]
 }
 ```
@@ -166,9 +167,11 @@ Use these identifiers in `sourceScreen`/`destScreen` to target specific monitors
 | `displayName` | — | Match by display/monitor name (e.g. `"DELL U2720Q"`) |
 | `outputName` | — | Match by output connector name (e.g. `"HDMI-1"`) |
 | `platformId` | — | Match by platform-specific ID |
-| `scale` | `1.0` | Cursor speed multiplier on this screen |
+| `mouseScale` | — | Cursor speed multiplier on this screen; overrides root `mouseScale` |
 
-At least one match field must be set. Screens with no matching definition use default scale (1.0).
+The root-level `mouseScale` sets a fallback multiplier for all screens on that machine. Per-screen `mouseScale` in a `screenDefinitions` entry overrides it. If neither is set, the multiplier defaults to `1.0`.
+
+At least one match field must be set per `screenDefinitions` entry.
 
 ### Network-aware config
 
@@ -233,7 +236,7 @@ On the slave machine:
   "logLevel": "info",
   "networkConfig": "<same base64 string as master>",
   "screenDefinitions": [
-    { "displayName": "DELL U2720Q", "scale": 1.5 }
+    { "displayName": "DELL U2720Q", "mouseScale": 1.5 }
   ]
 }
 ```

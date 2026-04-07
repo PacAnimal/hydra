@@ -409,10 +409,10 @@ public class InputRouter(
     {
         var map = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
         foreach (var e in localEntries)
-            map[e.Name] = e.Scale;
+            map[e.Name] = e.MouseScale;
         foreach (var entries in peerScreens.Values)
             foreach (var e in entries)
-                map[e.Name] = e.Scale;
+                map[e.Name] = e.MouseScale;
         return map;
     }
 
@@ -440,7 +440,7 @@ public class InputRouter(
         if (peerScreens.TryGetValue(screen.Host, out var entries))
         {
             var entry = entries.FirstOrDefault(e => e.Name.EqualsIgnoreCase(screen.Name));
-            if (entry != null) return entry.Scale;
+            if (entry != null) return entry.MouseScale;
         }
         return 1.0m;
     }
@@ -654,8 +654,8 @@ public class InputRouter(
         else
         {
             // same screen — accumulate scaled deltas for throttle
-            st.PendingDx += dx * (double)st.Mouse.Scale;
-            st.PendingDy += dy * (double)st.Mouse.Scale;
+            st.PendingDx += dx * (double)st.Mouse.MouseScale;
+            st.PendingDy += dy * (double)st.Mouse.MouseScale;
         }
 
         var now = Environment.TickCount64;
