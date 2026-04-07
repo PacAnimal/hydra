@@ -509,4 +509,84 @@ public class ScreenLayoutTests
             Assert.That(remoteBlocked, Is.Null);
         }
     }
+
+    // -- multi-monitor edge filtering --
+
+    [Test]
+    public void MultiMonitor_NoSourceScreen_OnlyEdgeScreenTriggersTransition()
+    {
+        // host A: vertical screen on left (A:0), horizontal on right (A:1)
+        // neighbor "right → B" with no sourceScreen — only A:1 should trigger
+        var a0 = new ScreenRect("a:0", "a", 0, 0, 1080, 1920, IsLocal: true);
+        var a1 = new ScreenRect("a:1", "a", 1080, 0, 2560, 1440, IsLocal: true);
+        var b = new ScreenRect("b", "b", 0, 0, 2560, 1440, IsLocal: false);
+
+        var layout = new ScreenLayout(
+            [a0, a1, b],
+            [
+                new HostConfig { Name = "a", Neighbours = [new NeighbourConfig { Direction = Direction.Right, Name = "b", Mirror = false }] },
+            ],
+            null,
+            [],
+            NullLogger.Instance);
+
+        // right edge of a1 (the actual rightmost screen) → should transition
+        var hit = layout.DetectEdgeExit(a1, 2559, 720);
+        // right edge of a0 (inner screen) → should NOT transition
+        var miss = layout.DetectEdgeExit(a0, 1079, 720);
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(hit?.Destination.Name, Is.EqualTo("b"));
+            Assert.That(miss, Is.Null);
+        }
+    }
+
+    [Test]
+    public void MultiMonitor_ExplicitSourceScreen_InnerScreenCanTransition()
+    {
+        // same layout, but sourceScreen explicitly set to a:0 — inner screen should still trigger
+        var a0 = new ScreenRect("a:0", "a", 0, 0, 1080, 1920, IsLocal: true);
+        var a1 = new ScreenRect("a:1", "a", 1080, 0, 2560, 1440, IsLocal: true);
+        var b = new ScreenRect("b", "b", 0, 0, 2560, 1440, IsLocal: false);
+
+        var layout = new ScreenLayout(
+            [a0, a1, b],
+            [
+                new HostConfig { Name = "a", Neighbours = [new NeighbourConfig { Direction = Direction.Right, Name = "b", SourceScreen = "a:0", Mirror = false }] },
+            ],
+            null,
+            [],
+            NullLogger.Instance);
+
+        var hit = layout.DetectEdgeExit(a0, 1079, 720);
+        Assert.That(hit?.Destination.Name, Is.EqualTo("b"));
+    }
+
+    [Test]
+    public void MultiMonitor_SharedOuterEdge_BothScreensTransition()
+    {
+        // two screens stacked vertically, both with the same right edge
+        var a0 = new ScreenRect("a:0", "a", 0, 0, 1920, 1080, IsLocal: true);
+        var a1 = new ScreenRect("a:1", "a", 0, 1080, 1920, 1080, IsLocal: true);
+        var b = new ScreenRect("b", "b", 0, 0, 2560, 1440, IsLocal: false);
+
+        var layout = new ScreenLayout(
+            [a0, a1, b],
+            [
+                new HostConfig { Name = "a", Neighbours = [new NeighbourConfig { Direction = Direction.Right, Name = "b", Mirror = false }] },
+            ],
+            null,
+            [],
+            NullLogger.Instance);
+
+        var hit0 = layout.DetectEdgeExit(a0, 1919, 540);
+        var hit1 = layout.DetectEdgeExit(a1, 1919, 540);
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(hit0?.Destination.Name, Is.EqualTo("b"));
+            Assert.That(hit1?.Destination.Name, Is.EqualTo("b"));
+        }
+    }
 }

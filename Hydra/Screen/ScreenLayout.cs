@@ -33,6 +33,11 @@ public class ScreenLayout(List<ScreenRect> screens, List<HostConfig> configs, in
                     ? sourceScreens
                     : [.. sourceScreens.Where(s => MatchesId(s, neighbour.SourceScreen))];
 
+                // when no sourceScreen is specified and there are multiple screens,
+                // only apply to screens on the physical outer edge for this direction
+                if (neighbour.SourceScreen is null && filteredSources.Count > 1)
+                    filteredSources = FilterToEdgeScreens(filteredSources, neighbour.Direction);
+
                 // filter dest screens by DestScreen identifier if set
                 var filteredDests = neighbour.DestScreen is null
                     ? destScreens
@@ -90,6 +95,18 @@ public class ScreenLayout(List<ScreenRect> screens, List<HostConfig> configs, in
 
     private static bool MatchesId(ScreenRect screen, string id) =>
         screen.Identity?.Matches(id) ?? screen.Name.EqualsIgnoreCase(id);
+
+    private static List<ScreenRect> FilterToEdgeScreens(List<ScreenRect> screens, Direction dir)
+    {
+        switch (dir)
+        {
+            case Direction.Right: { var v = screens.Max(s => s.X + s.Width); return [.. screens.Where(s => s.X + s.Width == v)]; }
+            case Direction.Left: { var v = screens.Min(s => s.X); return [.. screens.Where(s => s.X == v)]; }
+            case Direction.Down: { var v = screens.Max(s => s.Y + s.Height); return [.. screens.Where(s => s.Y + s.Height == v)]; }
+            case Direction.Up: { var v = screens.Min(s => s.Y); return [.. screens.Where(s => s.Y == v)]; }
+            default: throw new ArgumentOutOfRangeException(nameof(dir), dir, null);
+        }
+    }
 
     // checks if the cursor is in the jump zone of any edge that has a neighbour.
     // coords are 0-based within the current screen.
