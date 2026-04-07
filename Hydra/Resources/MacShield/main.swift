@@ -14,9 +14,11 @@ import CoreLocation
 //   stdout "wired:1" / "wired:0" — wired Ethernet presence
 // emitted on startup and whenever state changes.
 
-// writes a line to stdout, flushing immediately so the parent process receives it without buffering.
+// writes a line to stdout; exits cleanly if the pipe is broken (parent restarted)
 func writeState(_ line: String) {
-    FileHandle.standardOutput.write(Data((line + "\n").utf8))
+    let data = Data((line + "\n").utf8)
+    let result = data.withUnsafeBytes { Darwin.write(STDOUT_FILENO, $0.baseAddress!, $0.count) }
+    if result == -1 { exit(0) }
 }
 
 // full-coverage view that participates in hit testing and swallows all mouse events
@@ -197,6 +199,7 @@ class ShieldDelegate: NSObject, NSApplicationDelegate, CLLocationManagerDelegate
     }
 }
 
+signal(SIGPIPE, SIG_IGN)
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
 let delegate = ShieldDelegate()
