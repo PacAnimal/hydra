@@ -3,6 +3,7 @@
   "mode": "Master",
   "logLevel": "info",
   "name": "macbook",
+  "lockFile": "hydra.lock",
   "hosts": [
     {
       "name": "macbook",

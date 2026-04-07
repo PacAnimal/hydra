@@ -3,6 +3,7 @@
   "mode": "Slave",
   "logLevel": "info",
   "name": "desktop",
+  "lockFile": "hydra.lock",
   "screenDefinitions": [
     { "displayName": "DELL U2720Q", "scale": 1.5 },
     { "displayName": "Built-in Retina Display", "scale": 1.0 }

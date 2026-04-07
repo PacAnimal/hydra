@@ -18,9 +18,10 @@ using Microsoft.Extensions.Logging;
 Console.OutputEncoding = Encoding.UTF8;
 
 List<HydraConfig> configs;
+string configPath;
 try
 {
-    (configs, _) = HydraConfig.LoadAll(Env.Config);
+    (configs, configPath) = HydraConfig.LoadAll(Env.Config);
 }
 catch (FileNotFoundException ex)
 {
@@ -31,6 +32,24 @@ catch (InvalidOperationException ex)
 {
     Console.Error.WriteLine(ex.Message);
     return;
+}
+
+// acquire process lock if configured — prevents two instances from running with the same config
+ProcessLock? processLock = null;
+if (configs[0].LockFile is { } lockFileSetting)
+{
+    var lockPath = Path.IsPathRooted(lockFileSetting)
+        ? lockFileSetting
+        : Path.GetFullPath(lockFileSetting, Path.GetDirectoryName(configPath)!);
+    try
+    {
+        processLock = ProcessLock.Acquire(lockPath);
+    }
+    catch (InvalidOperationException ex)
+    {
+        Console.Error.WriteLine(ex.Message);
+        return;
+    }
 }
 
 // on macOS, pre-start the shield before DI so network state is available for config resolution.

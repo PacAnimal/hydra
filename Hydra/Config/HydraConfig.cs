@@ -56,6 +56,9 @@ public class HydraConfig
     // optional — defaults to machine hostname without domain
     public string? Name { get; init; }
 
+    // optional — if set, hydra refuses to start if another instance holds the lock on this file
+    public string? LockFile { get; init; }
+
     // optional — if set, this config only activates when the specified network condition is met
     public ConfigCondition? Condition { get; init; }
     // required when Condition == Ssid — the WiFi network name to match
