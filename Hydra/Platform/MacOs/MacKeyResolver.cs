@@ -12,8 +12,12 @@ internal sealed class MacKeyResolver
     private KeyModifiers _previousModifiers;
     private readonly Dictionary<int, CharClassification> _keyDownId = [];
 
+    private static readonly nint _carbon =
+        NativeLibrary.Load("/System/Library/Frameworks/Carbon.framework/Carbon");
+
     // symbol pointer for kTISPropertyUnicodeKeyLayoutData (loaded once)
-    private static readonly nint TisPropertyUnicodeKeyLayoutData = LoadTisPropertyKey();
+    private static readonly nint TisPropertyUnicodeKeyLayoutData =
+        Marshal.ReadIntPtr(NativeLibrary.GetExport(_carbon, "kTISPropertyUnicodeKeyLayoutData"));
 
     internal KeyEvent? Resolve(int eventType, nint eventRef)
     {
@@ -159,9 +163,4 @@ internal sealed class MacKeyResolver
     internal static bool DetectAltGr(char? character, bool isCommand, bool optionHeld) =>
         optionHeld && !isCommand && character.HasValue;
 
-    private static readonly nint _carbon =
-        NativeLibrary.Load("/System/Library/Frameworks/Carbon.framework/Carbon");
-
-    private static nint LoadTisPropertyKey() =>
-        Marshal.ReadIntPtr(NativeLibrary.GetExport(_carbon, "kTISPropertyUnicodeKeyLayoutData"));
 }

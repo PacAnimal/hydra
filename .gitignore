@@ -137,6 +137,7 @@ _NCrunch*
 
 # macOS shield helper — compiled from Resources/MacShield/main.swift
 Hydra/Resources/MacShield/hydra-shield
+Hydra/Resources/MacShield/hydra-shield.app/
 
 # private project instructions
 CLAUDE.md
