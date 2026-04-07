@@ -37,6 +37,7 @@ internal static partial class NativeMethods
     internal const int KCGScrollWheelEventDeltaAxis2 = 12;        // integer line delta, horizontal (positive = right)
     internal const int KCGScrollWheelEventFixedPtDeltaAxis1 = 93; // 16.16 fixed-point line delta, vertical
     internal const int KCGScrollWheelEventFixedPtDeltaAxis2 = 94; // 16.16 fixed-point line delta, horizontal
+    internal const int KCGScrollWheelEventIsContinuous = 88;      // 0 = discrete mouse wheel, 1 = continuous (trackpad)
 
     // -- CoreGraphics private APIs (CGS) --
 

@@ -180,14 +180,28 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
 
         if (type == NativeMethods.KCGEventScrollWheel)
         {
-            // read 16.16 fixed-point line deltas (precision scrolling from trackpads and hi-res mice).
-            // convert to 120-unit wire format: fixedPt * 120 >> 16 (i.e. 1.0 lines = 120 wire units).
-            var fpDy = NativeMethods.CGEventGetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventFixedPtDeltaAxis1);
-            var fpDx = NativeMethods.CGEventGetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventFixedPtDeltaAxis2);
-            if (fpDx != 0 || fpDy != 0)
-                _onMouseScroll?.Invoke(new MouseScrollEvent(
-                    (short)Math.Clamp(fpDx * 120L >> 16, short.MinValue, short.MaxValue),
-                    (short)Math.Clamp(fpDy * 120L >> 16, short.MinValue, short.MaxValue)));
+            var isContinuous = NativeMethods.CGEventGetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventIsContinuous);
+            short wireX, wireY;
+            if (isContinuous != 0)
+            {
+                // trackpad / hi-res continuous: use 16.16 fixed-point deltas (preserves smooth granularity).
+                // convert to 120-unit wire format: fixedPt * 120 >> 16 (1.0 lines = 120 wire units).
+                var fpDy = NativeMethods.CGEventGetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventFixedPtDeltaAxis1);
+                var fpDx = NativeMethods.CGEventGetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventFixedPtDeltaAxis2);
+                wireX = (short)Math.Clamp(fpDx * 120L >> 16, short.MinValue, short.MaxValue);
+                wireY = (short)Math.Clamp(fpDy * 120L >> 16, short.MinValue, short.MaxValue);
+            }
+            else
+            {
+                // discrete mouse wheel: use integer line deltas (unaccelerated, ±1 per notch).
+                // this avoids forwarding macOS acceleration to the remote machine.
+                var dy = NativeMethods.CGEventGetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventDeltaAxis1);
+                var dx = NativeMethods.CGEventGetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventDeltaAxis2);
+                wireX = (short)Math.Clamp(dx * 120L, short.MinValue, short.MaxValue);
+                wireY = (short)Math.Clamp(dy * 120L, short.MinValue, short.MaxValue);
+            }
+            if (wireX != 0 || wireY != 0)
+                _onMouseScroll?.Invoke(new MouseScrollEvent(wireX, wireY));
             return IsOnVirtualScreen ? nint.Zero : eventRef;
         }
 
