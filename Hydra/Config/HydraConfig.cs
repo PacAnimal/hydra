@@ -1,7 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Cathedral.Extensions;
-using Hydra.Platform;
 using Hydra.Screen;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -61,10 +60,8 @@ public class HydraConfig
     // optional — if set, hydra refuses to start if another instance holds the lock on this file
     public string? LockFile { get; init; }
 
-    // optional — if set, this config only activates when the specified network condition is met
-    public ConfigCondition? Condition { get; init; }
-    // required when Condition == Ssid — the WiFi network name to match
-    public string? Ssid { get; init; }
+    // optional — if set, this config only activates when all specified conditions are met
+    public ConfigConditions? Conditions { get; init; }
 
     [JsonIgnore]
     public string ResolvedName => Name ?? Environment.MachineName.Split('.')[0];
@@ -101,28 +98,27 @@ public class HydraConfig
         return (configs, path);
     }
 
-    // true if any config has a network condition — if false, the single unconditional config is always active
-    public static bool HasConditions(List<HydraConfig> configs) => configs.Any(c => c.Condition != null);
+    // true if any config has conditions — if false, the single unconditional config is always active
+    public static bool HasConditions(List<HydraConfig> configs) => configs.Any(c => c.Conditions != null);
 
-    // resolves the active config from the list based on current network state.
+    // true if any config matches on SSID — determines whether WiFi detection is needed
+    public static bool HasSsidConditions(List<HydraConfig> configs) => configs.Any(c => c.Conditions?.Ssid != null);
+
+    // resolves the active config from the list based on currently active SSIDs.
     // returns null if no config matches (hydra should idle until network changes)
-    public static HydraConfig? Resolve(List<HydraConfig> configs, List<NetworkState> active)
+    public static HydraConfig? Resolve(List<HydraConfig> configs, List<string> activeSsids)
     {
         HydraConfig? fallback = null;
 
         foreach (var cfg in configs)
         {
-            if (cfg.Condition == null)
+            if (cfg.Conditions == null)
             {
                 fallback = cfg;
                 continue;
             }
 
-            if (cfg.Condition == ConfigCondition.Wired && active.Any(n => n.Type == ConfigCondition.Wired))
-                return cfg;
-
-            if (cfg.Condition == ConfigCondition.Ssid && active.Any(n => n.Type == ConfigCondition.Ssid &&
-                    (n.Ssid?.EqualsIgnoreCase(cfg.Ssid) ?? false)))
+            if (cfg.Conditions.Ssid != null && activeSsids.Any(s => s.EqualsIgnoreCase(cfg.Conditions.Ssid)))
                 return cfg;
         }
 
@@ -199,27 +195,23 @@ public class HydraConfig
 
     private static void Validate(List<HydraConfig> configs)
     {
-        var defaults = configs.Count(c => c.Condition == null);
+        var defaults = configs.Count(c => c.Conditions == null);
         if (defaults > 1)
-            throw new InvalidOperationException("hydra.conf has multiple default configs (configs without a 'condition' field). Only one is allowed.");
+            throw new InvalidOperationException("hydra.conf has multiple default configs (configs without a 'conditions' field). Only one is allowed.");
+
+        foreach (var cfg in configs.Where(c => c.Conditions != null))
+        {
+            if (cfg.Conditions!.Ssid == null)
+                throw new InvalidOperationException("A config with 'conditions' must have at least one condition field set (e.g. 'ssid').");
+        }
 
         var ssids = configs
-            .Where(c => c.Condition == ConfigCondition.Ssid)
-            .Select(c => c.Ssid?.ToLowerInvariant())
+            .Where(c => c.Conditions?.Ssid != null)
+            .Select(c => c.Conditions!.Ssid!.ToLowerInvariant())
             .ToList();
         var duplicateSsid = ssids.GroupBy(s => s).FirstOrDefault(g => g.Count() > 1);
         if (duplicateSsid != null)
             throw new InvalidOperationException($"hydra.conf has duplicate SSID config for '{duplicateSsid.Key}'.");
-
-        var wiredCount = configs.Count(c => c.Condition == ConfigCondition.Wired);
-        if (wiredCount > 1)
-            throw new InvalidOperationException("hydra.conf has multiple Wired configs. Only one is allowed.");
-
-        foreach (var cfg in configs.Where(c => c.Condition == ConfigCondition.Ssid))
-        {
-            if (string.IsNullOrWhiteSpace(cfg.Ssid))
-                throw new InvalidOperationException("A config with 'condition: Ssid' must have a non-empty 'ssid' field.");
-        }
 
         foreach (var cfg in configs)
         {

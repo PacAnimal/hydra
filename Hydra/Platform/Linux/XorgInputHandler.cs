@@ -68,23 +68,25 @@ public sealed class XorgInputHandler : IPlatformInput
         _ = NativeMethods.XFlush(_display);
     }
 
-    public void HideCursor()
+    public Task HideCursor()
     {
-        if (_cursorHidden) return;
+        if (_cursorHidden) return Task.CompletedTask;
         _ = NativeMethods.XMapWindow(_display, _inputSink);
         _ = NativeMethods.XRaiseWindow(_display, _inputSink);
         NativeMethods.XFixesHideCursor(_display, _rootWindow);
         _ = NativeMethods.XFlush(_display);
         _cursorHidden = true;
+        return Task.CompletedTask;
     }
 
-    public void ShowCursor()
+    public Task ShowCursor()
     {
-        if (!_cursorHidden) return;
+        if (!_cursorHidden) return Task.CompletedTask;
         _ = NativeMethods.XUnmapWindow(_display, _inputSink);
         NativeMethods.XFixesShowCursor(_display, _rootWindow);
         _ = NativeMethods.XFlush(_display);
         _cursorHidden = false;
+        return Task.CompletedTask;
     }
 
     public bool IsOnVirtualScreen
@@ -165,7 +167,7 @@ public sealed class XorgInputHandler : IPlatformInput
         UngrabKeyboard();
         UngrabPointer();
         UngrabLockHotkey();
-        if (_cursorHidden) ShowCursor();
+        if (_cursorHidden) _ = ShowCursor();
         if (_inputSink != nint.Zero) _ = NativeMethods.XDestroyWindow(_display, _inputSink);
         if (_display != nint.Zero) _ = NativeMethods.XCloseDisplay(_display);
     }

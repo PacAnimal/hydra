@@ -44,10 +44,10 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
         _ = NativeMethods.CGWarpMouseCursorPosition(new CGPoint { X = x, Y = y });
     }
 
-    public void HideCursor()
+    public async Task HideCursor()
     {
         if (_cursorHidden) return;
-        _shield.Show();
+        await _shield.Show();
 
         // allow cursor manipulation from background (private CGS API -- matches synergy)
         var cid = NativeMethods.CGSMainConnectionID();
@@ -63,10 +63,10 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
         _cursorHidden = true;
     }
 
-    public void ShowCursor()
+    public async Task ShowCursor()
     {
         if (!_cursorHidden) return;
-        _shield.Hide();
+        await _shield.Hide();
         if (!_shield.DebugShield)
             _ = NativeMethods.CGDisplayShowCursor(_display);
         _ = NativeMethods.CGAssociateMouseAndMouseCursorPosition(true);
@@ -145,7 +145,7 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
     public void Dispose()
     {
         StopEventTap();
-        if (_cursorHidden) ShowCursor();
+        if (_cursorHidden) _ = ShowCursor();
     }
 
     private nint TapCallback(nint proxy, int type, nint eventRef, nint userInfo)

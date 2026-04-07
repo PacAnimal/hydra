@@ -53,8 +53,8 @@ Neighbours are **mirrored by default** — declaring that `laptop` has `desktop`
 - `hosts` — list of host entries for the neighbour graph (master only; slaves don't need this)
 - `screenDefinitions` — optional per-screen configuration for scale (used on any machine)
 - `deadCorners` — pixel dead zone at screen corners where transitions are blocked (default `0`, `50` is a reasonable starting value). Scaled by the screen's `scale` setting. Can also be set per-host to override.
-- `condition` — optional network condition: `Wired` or `Ssid` (see [Network-aware config](#network-aware-config))
-- `ssid` — the WiFi network name to match; required when `condition` is `Ssid`
+- `conditions` — optional object; if set, this config only activates when all conditions are met (see [Network-aware config](#network-aware-config))
+  - `ssid` — activates when connected to this WiFi network name (case-insensitive)
 
 ### Screen layout
 
@@ -172,34 +172,35 @@ At least one match field must be set per `screenDefinitions` entry.
 
 ### Network-aware config
 
-If you move your machine between networks (e.g. home vs. office), `hydra.conf` can be an **array** of configs, each gated on the current network. Hydra picks the first matching config and restarts automatically when the network changes.
+If you move your machine between networks (e.g. home vs. office), `hydra.conf` can be an **array** of configs, each gated on the current network. Hydra picks the matching config and restarts automatically when the network changes. If no config matches — for example, you're at a coffee shop — Hydra idles silently. This is intentional: there are no machines to connect to anyway.
 
 ```json
 [
   {
     "mode": "Master",
-    "condition": "Ssid",
-    "ssid": "OfficeWifi",
+    "conditions": { "ssid": "HomeWifi" },
     "name": "laptop",
-    "networkConfig": "<base64 string>",
     "hosts": [
       { "name": "laptop", "neighbours": [{ "direction": "right", "name": "desktop" }] }
     ]
   },
   {
     "mode": "Slave",
-    "name": "laptop"
+    "conditions": { "ssid": "OfficeWifi" },
+    "name": "laptop",
+    "networkConfig": "<base64 string>"
   }
 ]
 ```
 
-- `condition: "Ssid"` — activates when connected to the named WiFi network (`ssid` field required)
-- `condition: "Wired"` — activates when connected via Ethernet
-- No `condition` — fallback, matches any network not covered by other entries
+- `conditions: { "ssid": "..." }` — activates when connected to the named WiFi network (case-insensitive)
+- No `conditions` — fallback, activates on any network not matched by another entry
 
-A config without a `condition` is the default fallback. If no config matches the current network (and there is no fallback), Hydra idles silently until the network changes.
+A fallback entry (no `conditions`) is optional. Without one, Hydra simply idles on unrecognised networks.
 
-Rules: at most one default, no duplicate SSIDs, no duplicate `Wired` entries — validated at startup.
+Rules: at most one fallback, no duplicate SSIDs — validated at startup.
+
+> **macOS note:** Location Services permission is only requested if at least one config uses `conditions`. Hydra never asks for location permission when running with a single unconditional config.
 
 ### Lock hotkey
 

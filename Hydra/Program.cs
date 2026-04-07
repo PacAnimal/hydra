@@ -53,13 +53,14 @@ if (configs[0].LockFile is { } lockFileSetting)
 }
 
 // on macOS, pre-start the shield before DI so network state is available for config resolution.
-// the shield (NSApplication) can show the Location Services dialog and uses NWPathMonitor + CoreWLAN.
+// the shield (NSApplication) activates WiFi/location on demand when "wifi" is sent via stdin.
 MacNetworkState? macNetworkState = null;
 MacShieldProcess? macShield = null;
 if (OperatingSystem.IsMacOS())
 {
+    var needsWifi = HydraConfig.HasSsidConditions(configs);
     macNetworkState = new MacNetworkState();
-    macShield = new MacShieldProcess(macNetworkState);
+    macShield = new MacShieldProcess(macNetworkState, needsWifi);
     await macShield.WaitForInitialState(TimeSpan.FromSeconds(3));
 }
 
@@ -76,8 +77,8 @@ if (!HydraConfig.HasConditions(configs))
     config = configs[0]; // single unconditional config — no network check needed
 else
 {
-    var activeNetworks = await detector.GetActiveNetworks();
-    config = HydraConfig.Resolve(configs, activeNetworks);
+    var activeSsids = await detector.GetActiveSsids();
+    config = HydraConfig.Resolve(configs, activeSsids);
 }
 
 // shared services always registered
@@ -181,10 +182,9 @@ if (macShield != null)
 {
     var shieldLog = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Shield");
     macShield.Log = shieldLog;
-    shieldLog.LogInformation("auth={Auth} ssid={Ssid} wired={Wired}",
-        macNetworkState!.WifiAuthStatus switch { 0 => "notDetermined", 1 => "restricted", 2 => "denied", 3 or 4 => "authorized", _ => "?" },
-        macNetworkState.Ssid ?? "(none)",
-        macNetworkState.Wired);
+    shieldLog.LogInformation("auth={Auth} ssid={Ssid}",
+        macNetworkState!.WifiAuthStatus switch { 0 => "notDetermined", 1 => "restricted", 2 => "denied", 3 or 4 => "authorized", _ => "none" },
+        macNetworkState.Ssid ?? "(none)");
 
     // wire shield state changes to immediate network re-check
     macShield.OnNetworkStateChanged = () => app.Services.GetRequiredService<NetworkWatcher>().TriggerCheck();

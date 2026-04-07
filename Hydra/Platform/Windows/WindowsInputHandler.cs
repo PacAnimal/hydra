@@ -37,37 +37,41 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log) : IPla
         NativeMethods.SetCursorPos(x, y);
     }
 
-    public void HideCursor()
+    public Task HideCursor()
     {
-        if (_cursorHidden) return;
-        // replace all system cursors with a 1x1 transparent cursor so no cursor type leaks through.
-        // ShowCursor(false) alone doesn't work — other windows re-show the cursor via WM_SETCURSOR.
-        // SetSystemCursor takes ownership of each handle, so we copy the blank for each cursor type.
-        unsafe
-        {
-            byte andMask = 0xFF; // AND=1 means no invert (transparent)
-            byte xorMask = 0x00; // XOR=0 means draw nothing
-            var blank = NativeMethods.CreateCursor(nint.Zero, 0, 0, 1, 1, &andMask, &xorMask);
-            if (blank == nint.Zero) return;
-
-            foreach (var id in NativeMethods.AllCursorIds)
-            {
-                var copy = NativeMethods.CopyCursor(blank);
-                if (copy != nint.Zero)
-                    NativeMethods.SetSystemCursor(copy, id);
-            }
-
-            NativeMethods.DestroyCursor(blank);
-        }
-        _cursorHidden = true;
+        if (_cursorHidden) return Task.CompletedTask;
+        HideCursorSync();
+        return Task.CompletedTask;
     }
 
-    public void ShowCursor()
+    public Task ShowCursor()
     {
-        if (!_cursorHidden) return;
+        if (!_cursorHidden) return Task.CompletedTask;
         // restore all system cursors to their defaults
         NativeMethods.SystemParametersInfo(NativeMethods.SPI_SETCURSORS, 0, nint.Zero, 0);
         _cursorHidden = false;
+        return Task.CompletedTask;
+    }
+
+    private unsafe void HideCursorSync()
+    {
+        // replace all system cursors with a 1x1 transparent cursor so no cursor type leaks through.
+        // ShowCursor(false) alone doesn't work — other windows re-show the cursor via WM_SETCURSOR.
+        // SetSystemCursor takes ownership of each handle, so we copy the blank for each cursor type.
+        byte andMask = 0xFF; // AND=1 means no invert (transparent)
+        byte xorMask = 0x00; // XOR=0 means draw nothing
+        var blank = NativeMethods.CreateCursor(nint.Zero, 0, 0, 1, 1, &andMask, &xorMask);
+        if (blank == nint.Zero) return;
+
+        foreach (var id in NativeMethods.AllCursorIds)
+        {
+            var copy = NativeMethods.CopyCursor(blank);
+            if (copy != nint.Zero)
+                NativeMethods.SetSystemCursor(copy, id);
+        }
+
+        NativeMethods.DestroyCursor(blank);
+        _cursorHidden = true;
     }
 
     public async Task StartEventTap(
@@ -142,7 +146,7 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log) : IPla
     public void Dispose()
     {
         StopEventTap();
-        if (_cursorHidden) ShowCursor();
+        if (_cursorHidden) _ = ShowCursor();
     }
 
     private nint MouseHookCallback(int nCode, nint wParam, nint lParam)

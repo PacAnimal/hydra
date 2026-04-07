@@ -1,5 +1,4 @@
 import AppKit
-import Network
 import CoreWLAN
 import CoreLocation
 
@@ -9,16 +8,23 @@ import CoreLocation
 // automatically suppresses itself while a fullscreen app (e.g. a game) is running.
 // runs until killed by the parent process.
 //
-// also handles macOS network state detection on behalf of the Hydra parent:
-//   stdout "ssid:NetworkName" — current WiFi SSID (empty = not connected / not authorized)
-//   stdout "wired:1" / "wired:0" — wired Ethernet presence
-// emitted on startup and whenever state changes.
+// also handles macOS WiFi SSID detection on behalf of the Hydra parent:
+//   stdin "wifi"          — activates WiFi monitoring (idempotent); requests location auth if needed
+//   stdout "ssid:Name"    — current WiFi SSID (empty = not connected / not authorized)
+//   stdout "wifiauth:<n>" — CLAuthorizationStatus raw value (0=notDetermined 1=restricted 2=denied 3/4=authorized)
+// emitted on activation and whenever SSID changes.
 
 // writes a line to stdout; exits cleanly if the pipe is broken (parent restarted)
 func writeState(_ line: String) {
     let data = Data((line + "\n").utf8)
     let result = data.withUnsafeBytes { Darwin.write(STDOUT_FILENO, $0.baseAddress!, $0.count) }
     if result == -1 { exit(0) }
+}
+
+// writes an error line to stderr — for conditions that break the protocol
+func writeError(_ message: String) {
+    let data = Data((message + "\n").utf8)
+    _ = data.withUnsafeBytes { Darwin.write(STDERR_FILENO, $0.baseAddress!, $0.count) }
 }
 
 // full-coverage view that participates in hit testing and swallows all mouse events
@@ -48,12 +54,14 @@ class ShieldDelegate: NSObject, NSApplicationDelegate, CLLocationManagerDelegate
     var desiredAbsorb = false
     var debugMode = false
 
-    private var pathMonitor: NWPathMonitor?
     private var locationManager: CLLocationManager?
-    private var reportedWired: Bool? = nil // nil = not yet reported
+    private var wifiActive = false // guard against duplicate "wifi" commands
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        guard let screen = NSScreen.main else { return }
+        guard let screen = NSScreen.main else {
+            writeError("no main screen available — shield window cannot be created")
+            return
+        }
         let level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.maximumWindow)))
         let w10 = screen.frame.width * 0.2
         let h10 = screen.frame.height * 0.2
@@ -82,7 +90,7 @@ class ShieldDelegate: NSObject, NSApplicationDelegate, CLLocationManagerDelegate
             self?.applyState()
         }
 
-        // read commands from parent process: "0" = pass-through, "1" = absorb, "2" = absorb + visible (debug)
+        // read commands from parent process: "0" = pass-through, "1" = absorb, "2" = absorb + visible (debug), "wifi" = activate WiFi monitoring
         DispatchQueue.global(qos: .background).async { [weak self] in
             while let line = readLine(strippingNewline: true) {
                 DispatchQueue.main.async {
@@ -91,47 +99,33 @@ class ShieldDelegate: NSObject, NSApplicationDelegate, CLLocationManagerDelegate
                     case "1":
                         self.desiredAbsorb = true
                         self.debugMode = false
+                        self.applyState()
+                        writeState("1")
                     case "2":
                         self.desiredAbsorb = true
                         self.debugMode = true
+                        self.applyState()
+                        writeState("2")
+                    case "wifi":
+                        self.startWifiMonitoring()
                     default: // "0"
                         self.desiredAbsorb = false
                         self.debugMode = false
+                        self.applyState()
+                        writeState("0")
                     }
-                    self.applyState()
                 }
             }
         }
-
-        startNetworkMonitoring()
     }
 
-    // MARK: - Network monitoring
-
-    private func startNetworkMonitoring() {
-        startWiredMonitoring()
-        startWifiMonitoring()
-    }
-
-    // NWPathMonitor watches wired Ethernet — no permissions required
-    private func startWiredMonitoring() {
-        let monitor = NWPathMonitor(requiredInterfaceType: .wiredEthernet)
-        monitor.pathUpdateHandler = { [weak self] path in
-            let wired = path.status == .satisfied
-            DispatchQueue.main.async {
-                guard let self else { return }
-                if self.reportedWired != wired {
-                    self.reportedWired = wired
-                    writeState("wired:\(wired ? 1 : 0)")
-                }
-            }
-        }
-        monitor.start(queue: DispatchQueue.global(qos: .background))
-        pathMonitor = monitor
-    }
+    // MARK: - WiFi monitoring (activated on demand via "wifi" stdin command)
 
     // CLLocationManager + CWWiFiClient for SSID — requires Location Services authorization
     private func startWifiMonitoring() {
+        guard !wifiActive else { return }
+        wifiActive = true
+
         let mgr = CLLocationManager()
         mgr.delegate = self
         locationManager = mgr
@@ -161,7 +155,8 @@ class ShieldDelegate: NSObject, NSApplicationDelegate, CLLocationManagerDelegate
     private func startCoreWlan() {
         let client = CWWiFiClient.shared()
         client.delegate = self
-        try? client.startMonitoringEvent(with: .ssidDidChange)
+        do { try client.startMonitoringEvent(with: .ssidDidChange) }
+        catch { writeError("CWWiFiClient startMonitoringEvent failed: \(error)") }
         reportSsid()
     }
 

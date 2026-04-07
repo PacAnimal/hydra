@@ -20,8 +20,8 @@ public record KeyRepeatSettings(int DelayMs, int RateMs);
 public interface IPlatformInput : IDisposable
 {
     void WarpCursor(int x, int y);
-    void HideCursor();
-    void ShowCursor();
+    Task HideCursor();
+    Task ShowCursor();
     Task StartEventTap(
         Action<double, double> onMouseMove,
         Action<KeyEvent> onKeyEvent,

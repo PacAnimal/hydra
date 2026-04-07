@@ -1,34 +1,17 @@
-using System.Net.NetworkInformation;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
-using Hydra.Config;
 
 namespace Hydra.Platform.Windows;
 
 internal sealed partial class WindowsNetworkDetector : INetworkDetector
 {
-    public Task<List<NetworkState>> GetActiveNetworks(CancellationToken cancel = default)
+    public Task<List<string>> GetActiveSsids(CancellationToken cancel = default) =>
+        Task.FromResult(GetWifiSsids());
+
+    private static List<string> GetWifiSsids()
     {
-        var results = new List<NetworkState>();
-
-        results.AddRange(GetWifiNetworks());
-
-        // wired: active Ethernet adapters
-        foreach (var iface in NetworkInterface.GetAllNetworkInterfaces())
-        {
-            if (iface.OperationalStatus != OperationalStatus.Up) continue;
-            if (iface.NetworkInterfaceType != NetworkInterfaceType.Ethernet) continue;
-            results.Add(new NetworkState(ConfigCondition.Wired, null));
-            break;
-        }
-
-        return Task.FromResult(results);
-    }
-
-    private static List<NetworkState> GetWifiNetworks()
-    {
-        var results = new List<NetworkState>();
+        var results = new List<string>();
 
         if (WlanOpenHandle(2, nint.Zero, out _, out var handle) != 0)
             return results;
@@ -48,7 +31,7 @@ internal sealed partial class WindowsNetworkDetector : INetworkDetector
                     var ifacePtr = itemStart + i * WlanInterfaceInfoSize;
                     var ssid = QuerySsid(handle, ifacePtr);
                     if (ssid != null)
-                        results.Add(new NetworkState(ConfigCondition.Ssid, ssid));
+                        results.Add(ssid);
                 }
             }
             finally

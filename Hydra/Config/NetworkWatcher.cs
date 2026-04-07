@@ -13,8 +13,8 @@ internal sealed class NetworkWatcher : SimpleHostedService
     private readonly HydraConfig? _activeConfig;
     private readonly ILogger<NetworkWatcher> _log;
 
-    // tracks last known network state for transition logging
-    private List<NetworkState>? _lastNetworks;
+    // tracks last known SSIDs for transition logging
+    private List<string>? _lastSsids;
 
     // debounce: ignore rapid re-triggers within this window
     private DateTime _lastCheck = DateTime.MinValue;
@@ -57,10 +57,10 @@ internal sealed class NetworkWatcher : SimpleHostedService
         if (now - _lastCheck < Debounce) return;
         _lastCheck = now;
 
-        List<NetworkState> active;
+        List<string> ssids;
         try
         {
-            active = await _detector.GetActiveNetworks(cancel);
+            ssids = await _detector.GetActiveSsids(cancel);
         }
         catch (Exception e) when (e is not OperationCanceledException)
         {
@@ -69,10 +69,10 @@ internal sealed class NetworkWatcher : SimpleHostedService
         }
 
         // log transition (null on first check = startup)
-        LogTransition(_lastNetworks, active);
-        _lastNetworks = active;
+        LogTransition(_lastSsids, ssids);
+        _lastSsids = ssids;
 
-        var resolved = HydraConfig.Resolve(_configs, active);
+        var resolved = HydraConfig.Resolve(_configs, ssids);
         if (resolved == _activeConfig) return;
 
         var from = _activeConfig != null ? $"{_activeConfig.Mode}" : "idle";
@@ -81,18 +81,18 @@ internal sealed class NetworkWatcher : SimpleHostedService
         ProcessRestart.Restart();
     }
 
-    private void LogTransition(List<NetworkState>? previous, List<NetworkState> current)
+    private void LogTransition(List<string>? previous, List<string> current)
     {
-        var prevStr = FormatNetworks(previous);
-        var currStr = FormatNetworks(current);
+        var prevStr = FormatSsids(previous);
+        var currStr = FormatSsids(current);
         if (prevStr == currStr) return;
         _log.LogInformation("Network: {Previous} → {Current}", prevStr, currStr);
     }
 
-    private static string FormatNetworks(List<NetworkState>? networks)
+    private static string FormatSsids(List<string>? ssids)
     {
-        if (networks == null) return "null";
-        if (networks.Count == 0) return "none";
-        return string.Join(", ", networks.Select(n => n.ToString()));
+        if (ssids == null) return "null";
+        if (ssids.Count == 0) return "none";
+        return string.Join(", ", ssids.Select(s => $"WiFi ({s})"));
     }
 }

@@ -52,7 +52,7 @@ public sealed class FakePlatform : IPlatformInput
     public KeyRepeatSettings GetKeyRepeatSettings() => new(500, 33);
     public void StopEventTap() { }
     public void WarpCursor(int x, int y) { WarpX = x; WarpY = y; }
-    public void HideCursor() { HideCursorCalled = true; }
-    public void ShowCursor() { ShowCursorCalled = true; }
+    public Task HideCursor() { HideCursorCalled = true; return Task.CompletedTask; }
+    public Task ShowCursor() { ShowCursorCalled = true; return Task.CompletedTask; }
     public void Dispose() { }
 }
