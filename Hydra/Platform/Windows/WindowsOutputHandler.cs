@@ -86,9 +86,11 @@ public sealed class WindowsOutputHandler : IPlatformOutput, ICursorVisibility
         {
             // when shortcut modifiers are held, inject via vk so WM_KEYDOWN fires and apps see the shortcut.
             // KEYEVENTF_UNICODE generates WM_CHAR which bypasses shortcut detection entirely.
+            // AltGr characters are excluded: the char is already resolved by the Mac side, inject it directly.
             const KeyModifiers shortcutMods = KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Super;
             var scan = NativeMethods.VkKeyScanW(ch); // char implicit-converts to ushort
-            if ((msg.Modifiers & shortcutMods) != 0 && scan != -1)
+            var isAltGr = (msg.Modifiers & KeyModifiers.AltGr) != 0;
+            if (!isAltGr && (msg.Modifiers & shortcutMods) != 0 && scan != -1)
             {
                 var vk = (ushort)(scan & 0xFF);
                 var flags = isUp ? NativeMethods.KEYEVENTF_KEYUP : 0u;
