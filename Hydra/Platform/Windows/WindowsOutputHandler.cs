@@ -90,16 +90,34 @@ public sealed class WindowsOutputHandler : IPlatformOutput, ICursorVisibility
             const KeyModifiers shortcutMods = KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Super;
             var scan = NativeMethods.VkKeyScanW(ch); // char implicit-converts to ushort
             var isAltGr = (msg.Modifiers & KeyModifiers.AltGr) != 0;
+            var isSuper = (msg.Modifiers & KeyModifiers.Super) != 0;
             if (!isAltGr && (msg.Modifiers & shortcutMods) != 0 && scan != -1)
             {
                 var vk = (ushort)(scan & 0xFF);
-                var flags = isUp ? NativeMethods.KEYEVENTF_KEYUP : 0u;
-                var input = new INPUT
+                if (isSuper && vk == 0x4C) // Win+L: UIPI blocks SendInput; use the API directly
                 {
-                    type = NativeMethods.INPUT_KEYBOARD,
-                    ki = new KEYBDINPUT { wVk = vk, dwFlags = flags },
-                };
-                _ = NativeMethods.SendInput(1, &input, sizeof(INPUT));
+                    if (!isUp) NativeMethods.LockWorkStation();
+                    return;
+                }
+
+                if (isSuper && !isUp)
+                {
+                    // batch Win down + key down in one SendInput so the shell sees them atomically
+                    var inputs = stackalloc INPUT[2];
+                    inputs[0] = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = (ushort)WinVirtualKey.LWin, dwFlags = NativeMethods.KEYEVENTF_EXTENDEDKEY } };
+                    inputs[1] = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = vk } };
+                    _ = NativeMethods.SendInput(2, inputs, sizeof(INPUT));
+                }
+                else
+                {
+                    var flags = isUp ? NativeMethods.KEYEVENTF_KEYUP : 0u;
+                    var input = new INPUT
+                    {
+                        type = NativeMethods.INPUT_KEYBOARD,
+                        ki = new KEYBDINPUT { wVk = vk, dwFlags = flags },
+                    };
+                    _ = NativeMethods.SendInput(1, &input, sizeof(INPUT));
+                }
             }
             else
             {

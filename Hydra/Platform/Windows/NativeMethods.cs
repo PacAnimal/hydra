@@ -230,6 +230,11 @@ internal static partial class NativeMethods
         uint wVirtKey, uint wScanCode, byte* lpKeyState,
         char* pwszBuff, int cchBuff, uint wFlags, nint dwhkl);
 
+    [LibraryImport(User32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool LockWorkStation();
+
     // -- kernel --
 
     [LibraryImport(Kernel32)]
