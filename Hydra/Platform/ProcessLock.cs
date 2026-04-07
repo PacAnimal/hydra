@@ -71,7 +71,7 @@ internal sealed partial class ProcessLock : IDisposable
         }
         finally
         {
-            Close(fd);
+            _ = Close(fd);
         }
     }
 

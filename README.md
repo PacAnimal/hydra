@@ -37,16 +37,12 @@ Edit `hydra.conf` (sits next to the binary):
       "neighbours": [
         { "direction": "right", "name": "desktop" }
       ]
-    },
-    {
-      "name": "desktop",
-      "neighbours": [
-        { "direction": "left", "name": "laptop" }
-      ]
     }
   ]
 }
 ```
+
+Neighbours are **mirrored by default** — declaring that `laptop` has `desktop` to the right automatically creates the reverse: `desktop` has `laptop` to its left. You only need to declare one side. Both sides can still be declared explicitly if needed (the mirror is skipped if the reverse already exists).
 
 ### Config fields
 
@@ -82,6 +78,7 @@ Supported directions: `left`, `right`, `up`, `down`.
 |-------|---------|-------------|
 | `direction` | required | Which edge of this host triggers the transition |
 | `name` | required | Target host name |
+| `mirror` | `true` | Auto-create the reverse mapping on the target host (skipped if the reverse already exists) |
 | `sourceStart` | `0` | Start of the source edge range (0–100%), inclusive |
 | `sourceEnd` | `100` | End of the source edge range (0–100%), inclusive |
 | `destStart` | `0` | Start of the destination edge range (0–100%) |
@@ -186,8 +183,7 @@ If you move your machine between networks (e.g. home vs. office), `hydra.conf` c
     "name": "laptop",
     "networkConfig": "<base64 string>",
     "hosts": [
-      { "name": "laptop", "neighbours": [{ "direction": "right", "name": "desktop" }] },
-      { "name": "desktop", "neighbours": [{ "direction": "left", "name": "laptop" }] }
+      { "name": "laptop", "neighbours": [{ "direction": "right", "name": "desktop" }] }
     ]
   },
   {
@@ -286,10 +282,6 @@ Add `networkConfig` to `hydra.conf` on both machines. Use the same config string
     {
       "name": "laptop",
       "neighbours": [{ "direction": "right", "name": "desktop" }]
-    },
-    {
-      "name": "desktop",
-      "neighbours": [{ "direction": "left", "name": "laptop" }]
     }
   ]
 }

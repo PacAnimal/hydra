@@ -25,6 +25,7 @@ public class NeighbourConfig
     public int SourceEnd { get; init; } = 100;        // % of source edge (0-100)
     public int DestStart { get; init; }               // % of dest edge (0-100)
     public int DestEnd { get; init; } = 100;          // % of dest edge (0-100)
+    public bool Mirror { get; init; } = true;         // auto-create the reverse mapping
 }
 
 public class ScreenDefinition
@@ -95,6 +96,7 @@ public class HydraConfig
 
         var json = File.ReadAllText(path);
         var configs = ParseConfigs(json, path);
+        configs.ForEach(c => ExpandMirrors(c.Hosts));
         Validate(configs);
         return (configs, path);
     }
@@ -131,6 +133,7 @@ public class HydraConfig
     internal static List<HydraConfig> ParseAndValidate(string json)
     {
         var configs = ParseConfigs(json, "<test>");
+        configs.ForEach(c => ExpandMirrors(c.Hosts));
         Validate(configs);
         return configs;
     }
@@ -149,6 +152,49 @@ public class HydraConfig
         var single = json.FromSaneJson<HydraConfig>()
             ?? throw new InvalidOperationException($"Failed to deserialize {path}");
         return [single];
+    }
+
+    // expands mirror neighbours: for each neighbour with Mirror != false, auto-creates the reverse
+    // mapping on the target host if one doesn't already exist. target hosts are created if missing.
+    internal static void ExpandMirrors(List<HostConfig> hosts)
+    {
+        // snapshot to avoid iterating while mutating
+        var snapshot = hosts.Select(h => (h.Name, Neighbours: h.Neighbours.ToList())).ToList();
+
+        foreach (var (sourceName, neighbours) in snapshot)
+        {
+            foreach (var n in neighbours)
+            {
+                if (!n.Mirror) continue;
+
+                var oppositeDir = n.Direction.Opposite();
+
+                // find or create the target host
+                var target = hosts.FirstOrDefault(h => h.Name.EqualsIgnoreCase(n.Name));
+                if (target is null)
+                {
+                    target = new HostConfig { Name = n.Name };
+                    hosts.Add(target);
+                }
+
+                // skip if target already has an explicit reverse mapping back to source
+                if (target.Neighbours.Any(r => r.Direction == oppositeDir && r.Name.EqualsIgnoreCase(sourceName)))
+                    continue;
+
+                target.Neighbours.Add(new NeighbourConfig
+                {
+                    Direction = oppositeDir,
+                    Name = sourceName,
+                    SourceStart = n.DestStart,
+                    SourceEnd = n.DestEnd,
+                    DestStart = n.SourceStart,
+                    DestEnd = n.SourceEnd,
+                    SourceScreen = n.DestScreen,
+                    DestScreen = n.SourceScreen,
+                    Mirror = false,
+                });
+            }
+        }
     }
 
     private static void Validate(List<HydraConfig> configs)

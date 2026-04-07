@@ -4,6 +4,18 @@ namespace Hydra.Screen;
 
 public enum Direction { Left, Right, Up, Down }
 
+public static class DirectionExtensions
+{
+    public static Direction Opposite(this Direction dir) => dir switch
+    {
+        Direction.Left => Direction.Right,
+        Direction.Right => Direction.Left,
+        Direction.Up => Direction.Down,
+        Direction.Down => Direction.Up,
+        _ => throw new ArgumentOutOfRangeException(nameof(dir), dir, null),
+    };
+}
+
 public class ScreenIdentity
 {
     public required string ScreenName { get; init; }

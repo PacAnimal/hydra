@@ -14,14 +14,7 @@
     {
       "name": "desktop",
       "neighbours": [
-        { "direction": "left", "name": "macbook" },
         { "direction": "right", "name": "monitor" }
-      ]
-    },
-    {
-      "name": "monitor",
-      "neighbours": [
-        { "direction": "left", "name": "desktop" }
       ]
     }
   ]
