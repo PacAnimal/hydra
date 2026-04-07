@@ -460,10 +460,12 @@ public class InputRouter(
     private void OnKeyEvent(KeyEvent keyEvent)
     {
         var label = keyEvent.Character.HasValue ? $" '{keyEvent.Character}'" : keyEvent.Key.HasValue ? $" {keyEvent.Key}" : "";
-        log.LogDebug("Key: {Type}{Label} mods={Modifiers}", keyEvent.Type, label, keyEvent.Modifiers);
 
         using var s = AsyncHelper.RunSync(() => _state.WaitForDisposable());
         var st = s.Value;
+
+        if (st.Mouse.IsOnVirtualScreen)
+            log.LogDebug("Key: {Type}{Label} mods={Modifiers}", keyEvent.Type, label, keyEvent.Modifiers);
 
         // consume both KeyDown and KeyUp for hotkeys so the slave never sees either half
         var hotkeyConsumed = (keyEvent.Modifiers & LockHotkey) == LockHotkey && keyEvent.Character is 'l' or 'm';
