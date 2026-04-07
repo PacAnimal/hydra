@@ -158,7 +158,7 @@ internal sealed class SelfUpdater(HydraConfig config, ILogger<SelfUpdater> log) 
     private static Version CurrentVersion() =>
         Version.Parse(Assembly.GetExecutingAssembly()
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
-            ?.InformationalVersion?.Split('+')[0]  // strip build metadata suffix
+            ?.InformationalVersion.Split('+')[0]  // strip build metadata suffix
             ?? "0.0.0");
 
     private static string? Rid()
