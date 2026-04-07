@@ -341,13 +341,13 @@ internal struct KEYBDINPUT
 }
 
 // INPUT is a union of MOUSEINPUT and KEYBDINPUT (plus HARDWAREINPUT, unused).
-// The union starts at offset 4 (after the type field). On 64-bit: sizeof = 40.
+// the union starts at offset 8 on x64 (4 bytes padding after type for 8-byte alignment of ULONG_PTR)
 [StructLayout(LayoutKind.Explicit, Size = 40)]
 internal struct INPUT
 {
     [FieldOffset(0)] internal uint type;
-    [FieldOffset(4)] internal MOUSEINPUT mi;
-    [FieldOffset(4)] internal KEYBDINPUT ki;
+    [FieldOffset(8)] internal MOUSEINPUT mi;
+    [FieldOffset(8)] internal KEYBDINPUT ki;
 }
 
 [StructLayout(LayoutKind.Sequential)]
