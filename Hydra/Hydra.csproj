@@ -61,7 +61,7 @@
     <Target Name="CompileMacShield" BeforeTargets="Build"
             Inputs="$(MSBuildProjectDirectory)/Resources/MacShield/main.swift;$(MSBuildProjectDirectory)/Resources/MacShield/ShieldInfo.plist"
             Outputs="$(MSBuildProjectDirectory)/Resources/MacShield/hydra-shield.app/Contents/MacOS/hydra-shield"
-            Condition="$(RuntimeIdentifier.StartsWith('osx'))">
+            Condition="$([MSBuild]::IsOSPlatform('OSX'))">
         <MakeDir Directories="$(MSBuildProjectDirectory)/Resources/MacShield/hydra-shield.app/Contents/MacOS" />
         <Copy SourceFiles="$(MSBuildProjectDirectory)/Resources/MacShield/ShieldInfo.plist"
               DestinationFiles="$(MSBuildProjectDirectory)/Resources/MacShield/hydra-shield.app/Contents/Info.plist" />
