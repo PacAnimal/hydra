@@ -52,16 +52,16 @@
     <ItemGroup>
         <!-- app bundle for Location Services identity — macOS requires a proper bundle to show auth dialogs -->
         <Content Include="Resources/MacShield/hydra-shield.app/Contents/MacOS/hydra-shield"
-                 CopyToOutputDirectory="PreserveNewest" Condition="$([MSBuild]::IsOSPlatform('OSX'))" />
+                 CopyToOutputDirectory="PreserveNewest" Condition="$(RuntimeIdentifier.StartsWith('osx'))" />
         <Content Include="Resources/MacShield/hydra-shield.app/Contents/Info.plist"
-                 CopyToOutputDirectory="PreserveNewest" Condition="$([MSBuild]::IsOSPlatform('OSX'))" />
+                 CopyToOutputDirectory="PreserveNewest" Condition="$(RuntimeIdentifier.StartsWith('osx'))" />
     </ItemGroup>
 
     <!-- compile the Swift shield helper into a proper .app bundle; only runs on macOS where swiftc is available -->
     <Target Name="CompileMacShield" BeforeTargets="Build"
             Inputs="$(MSBuildProjectDirectory)/Resources/MacShield/main.swift;$(MSBuildProjectDirectory)/Resources/MacShield/ShieldInfo.plist"
             Outputs="$(MSBuildProjectDirectory)/Resources/MacShield/hydra-shield.app/Contents/MacOS/hydra-shield"
-            Condition="$([MSBuild]::IsOSPlatform('OSX'))">
+            Condition="$(RuntimeIdentifier.StartsWith('osx'))">
         <MakeDir Directories="$(MSBuildProjectDirectory)/Resources/MacShield/hydra-shield.app/Contents/MacOS" />
         <Copy SourceFiles="$(MSBuildProjectDirectory)/Resources/MacShield/ShieldInfo.plist"
               DestinationFiles="$(MSBuildProjectDirectory)/Resources/MacShield/hydra-shield.app/Contents/Info.plist" />
