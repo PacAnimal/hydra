@@ -14,6 +14,12 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
     private double _mouseY;
     private readonly HashSet<MouseButton> _heldButtons = [];
     private readonly uint _display = NativeMethods.CGMainDisplayID();
+
+    // click state tracking for kCGMouseEventClickState (mirrors input-leap OSXScreen logic)
+    private int _clickState = 1;
+    private long _lastClickTimeMs;
+    private double _lastSingleClickX;
+    private double _lastSingleClickY;
     private bool _cursorHidden;
 
     // accumulated modifier state — updated on each modifier keydown/up
@@ -44,6 +50,9 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
 
     // combined session state source — used for mouse events and CGEvent fallback paths
     private static readonly nint EventSource = NativeMethods.CGEventSourceCreate(NativeMethods.KCGEventSourceStateCombinedSessionState);
+
+    private static readonly double DoubleClickMaxDist = Math.Sqrt(2) + 0.0001;
+    private static readonly double DoubleClickIntervalMs = GetDoubleClickIntervalMs();
 
     // char produced by each vk code (no modifiers) — used to find the correct vk for character injection
     private static readonly Dictionary<char, ushort> CharToVk = BuildCharToVkMap();
@@ -161,12 +170,16 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
         if (msg.IsPressed) _heldButtons.Add(msg.Button);
         else _heldButtons.Remove(msg.Button);
 
+        UpdateClickState(msg.IsPressed);
+
         var pos = new CGPoint { X = _mouseX, Y = _mouseY };
         var eventRef = NativeMethods.CGEventCreateMouseEvent(EventSource, mouseType, pos, mouseButton);
         if (eventRef == nint.Zero) return;
 
         if (msg.Button is not MouseButton.Left and not MouseButton.Right)
             NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGMouseEventButtonNumber, mouseButton);
+
+        NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGMouseEventClickState, _clickState);
 
         NativeMethods.CGEventPost(NativeMethods.KCGHidEventTap, eventRef);
         NativeMethods.CFRelease(eventRef);
@@ -384,6 +397,38 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
         if ((mods & KeyModifiers.Super) != 0) flags |= NativeMethods.KCGEventFlagMaskCommand;
         if ((mods & KeyModifiers.CapsLock) != 0) flags |= NativeMethods.KCGEventFlagMaskAlphaShift;
         return flags;
+    }
+
+    // [NSEvent doubleClickInterval] — system double-click threshold in seconds
+    private static double GetDoubleClickIntervalMs()
+    {
+        var cls = NativeMethods.objc_getClass("NSEvent");
+        var sel = NativeMethods.sel_registerName("doubleClickInterval");
+        var seconds = NativeMethods.objc_msgSend_double(cls, sel);
+        return seconds > 0 ? seconds * 1000.0 : 500.0;
+    }
+
+    // update _clickState for double/triple-click detection — mirrors input-leap's OSXScreen::fakeMouseButton().
+    // only increments on press; release events reuse the state set by the preceding press.
+    private void UpdateClickState(bool isPress)
+    {
+        if (!isPress) return;
+
+        var xDiff = _mouseX - _lastSingleClickX;
+        var yDiff = _mouseY - _lastSingleClickY;
+        var dist = Math.Sqrt(xDiff * xDiff + yDiff * yDiff);
+        var elapsedMs = Environment.TickCount64 - _lastClickTimeMs;
+        if (elapsedMs <= DoubleClickIntervalMs && dist <= DoubleClickMaxDist)
+            _clickState++;
+        else
+            _clickState = 1;
+
+        _lastClickTimeMs = Environment.TickCount64;
+        if (_clickState == 1)
+        {
+            _lastSingleClickX = _mouseX;
+            _lastSingleClickY = _mouseY;
+        }
     }
 
     // drag event type when a button is held, otherwise plain moved

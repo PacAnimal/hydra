@@ -88,7 +88,15 @@ public class XorgSpecialKeyMapTests
     [Test]
     public void NoDuplicateSpecialKeys()
     {
-        // Reverse construction throws if two keysyms map to the same SpecialKey
-        Assert.That(XorgSpecialKeyMap.Instance.Reverse, Is.Not.Empty);
+        // ISO_Left_Tab intentionally shares SpecialKey.Tab with Tab (Shift+Tab alias)
+        var unintentionalDupes = XorgSpecialKeyMap.Instance.Entries
+            .GroupBy(kvp => kvp.Value)
+            .Where(g => g.Count() > 1 && g.Key != SpecialKey.Tab)
+            .ToList();
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(unintentionalDupes, Is.Empty);
+            Assert.That(XorgSpecialKeyMap.Instance.Reverse, Is.Not.Empty);
+        }
     }
 }

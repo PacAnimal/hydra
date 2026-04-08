@@ -26,7 +26,7 @@ public sealed class XorgInputHandler : IPlatformInput
     private readonly Toggle _isOnVirtualScreen = new();
     private bool _keyboardGrabbed;
     private bool _pointerGrabbed;
-    private readonly object _grabLock = new();
+    private readonly Lock _grabLock = new();
     private CancellationTokenSource? _grabRetryCts;
     private CancellationTokenSource? _pointerRetryCts;
 

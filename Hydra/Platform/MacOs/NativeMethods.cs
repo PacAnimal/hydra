@@ -29,7 +29,8 @@ internal static partial class NativeMethods
     internal const int KCGEventOtherMouseDown = 25;
     internal const int KCGEventOtherMouseUp = 26;
 
-    // CGEventField values for mouse movement deltas and button number
+    // CGEventField values for mouse click state, movement deltas, and button number
+    internal const int KCGMouseEventClickState = 1;
     internal const int KCGMouseEventDeltaX = 5;
     internal const int KCGMouseEventDeltaY = 6;
     internal const int KCGMouseEventButtonNumber = 3;
