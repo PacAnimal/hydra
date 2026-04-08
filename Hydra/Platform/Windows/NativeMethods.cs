@@ -42,6 +42,7 @@ internal static partial class NativeMethods
     // -- message loop --
 
     internal const uint WM_QUIT = 0x0012;
+    internal const uint WM_USER = 0x0400;
 
     // -- GetSystemMetrics indices --
 
@@ -282,6 +283,19 @@ internal static partial class NativeMethods
     [LibraryImport(Kernel32)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     internal static partial uint SetThreadExecutionState(uint esFlags);
+
+    // -- desktop --
+
+    internal const uint GENERIC_READ = 0x80000000;
+
+    [LibraryImport(User32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial nint GetThreadDesktop(uint dwThreadId);
+
+    [LibraryImport(User32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool CloseDesktop(nint hDesktop);
 }
 
 [UnmanagedFunctionPointer(CallingConvention.StdCall)]

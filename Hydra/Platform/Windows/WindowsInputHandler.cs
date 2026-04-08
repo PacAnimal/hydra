@@ -25,6 +25,11 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log) : IPla
     private int _lastWarpY = -1;
     private readonly Toggle _isOnVirtualScreen = new();
     public bool IsOnVirtualScreen { get => _isOnVirtualScreen; set => _isOnVirtualScreen.TrySet(value); }
+    private nint _currentDesktop;
+    private Timer? _healthTimer;
+
+    // posted to the hook thread to trigger a desktop check
+    private const uint WmCheckHealth = NativeMethods.WM_USER + 1;
 
 
     // low-level hooks work without elevation for non-elevated processes
@@ -106,11 +111,17 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log) : IPla
                 return;
             }
 
+            _currentDesktop = NativeMethods.GetThreadDesktop(_hookThreadId);
             ready.TrySetResult(true);
 
             // message pump — hooks fire during GetMessage
             while (NativeMethods.GetMessage(out var msg, nint.Zero, 0, 0) > 0)
             {
+                if (msg.message == WmCheckHealth)
+                {
+                    CheckHookHealth();
+                    continue;
+                }
                 NativeMethods.TranslateMessage(in msg);
                 NativeMethods.DispatchMessage(in msg);
             }
@@ -122,6 +133,11 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log) : IPla
 
         _hookThread.Start();
         await ready.Task;
+
+        // periodic hook health check — detects desktop changes (UAC, lock screen) that silently invalidate hooks
+        _healthTimer = new Timer(_ =>
+            NativeMethods.PostThreadMessage(_hookThreadId, WmCheckHealth, nint.Zero, nint.Zero),
+            null, 200, 200);
     }
 
     public unsafe KeyRepeatSettings GetKeyRepeatSettings()
@@ -139,6 +155,8 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log) : IPla
 
     public void StopEventTap()
     {
+        _healthTimer?.Dispose();
+        _healthTimer = null;
         if (_hookThreadId != 0)
             NativeMethods.PostThreadMessage(_hookThreadId, NativeMethods.WM_QUIT, nint.Zero, nint.Zero);
         _hookThread?.Join(TimeSpan.FromSeconds(2));
@@ -148,6 +166,22 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log) : IPla
     {
         StopEventTap();
         if (_cursorHidden) _ = ShowCursor();
+    }
+
+    // called on the hook thread — checks if the desktop has changed and reinstalls hooks if needed
+    private void CheckHookHealth()
+    {
+        var desk = NativeMethods.GetThreadDesktop(_hookThreadId);
+        if (desk == _currentDesktop) return;
+        _currentDesktop = desk;
+
+        log.LogInformation("Desktop change detected, reinstalling hooks");
+        if (_mouseHook != nint.Zero) { NativeMethods.UnhookWindowsHookEx(_mouseHook); _mouseHook = nint.Zero; }
+        if (_keyboardHook != nint.Zero) { NativeMethods.UnhookWindowsHookEx(_keyboardHook); _keyboardHook = nint.Zero; }
+        _mouseHook = NativeMethods.SetWindowsHookExW(NativeMethods.WH_MOUSE_LL, _mouseHookProc!, nint.Zero, 0);
+        _keyboardHook = NativeMethods.SetWindowsHookExW(NativeMethods.WH_KEYBOARD_LL, _keyboardHookProc!, nint.Zero, 0);
+        if (_mouseHook == nint.Zero || _keyboardHook == nint.Zero)
+            log.LogWarning("Hook reinstall failed after desktop change");
     }
 
     private nint MouseHookCallback(int nCode, nint wParam, nint lParam)

@@ -205,6 +205,14 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial int XUngrabKey(nint display, int keycode, uint modifiers, nint grabWindow);
 
+    // PointerRoot: redirect focus to pointer root (dismisses transient grabs from menus/popups)
+    internal static readonly nint PointerRoot = new(1);
+    internal const int RevertToPointerRoot = 1;
+
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int XSetInputFocus(nint display, nint focus, int revertTo, nuint time);
+
     // -- pointer grab --
 
     [LibraryImport(X11)]

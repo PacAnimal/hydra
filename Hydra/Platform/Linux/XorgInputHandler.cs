@@ -26,6 +26,9 @@ public sealed class XorgInputHandler : IPlatformInput
     private readonly Toggle _isOnVirtualScreen = new();
     private bool _keyboardGrabbed;
     private bool _pointerGrabbed;
+    private readonly object _grabLock = new();
+    private CancellationTokenSource? _grabRetryCts;
+    private CancellationTokenSource? _pointerRetryCts;
 
     // XI2 event mask for raw button press/release (15, 16) and raw motion (17).
     // XISetMask(mask, n) = mask[n>>3] |= 1 << (n&7)
@@ -246,46 +249,163 @@ public sealed class XorgInputHandler : IPlatformInput
 
     private void GrabKeyboard()
     {
-        if (_keyboardGrabbed) return;
+        lock (_grabLock) { if (_keyboardGrabbed) return; }
         _ = NativeMethods.XMapWindow(_display, _inputSink);
         _ = NativeMethods.XRaiseWindow(_display, _inputSink);
+        _ = NativeMethods.XFlush(_display);
         var result = NativeMethods.XGrabKeyboard(_display, _inputSink, true,
             NativeMethods.GrabModeAsync, NativeMethods.GrabModeAsync, NativeMethods.CurrentTime);
-        if (result == NativeMethods.GrabSuccess)
-            _keyboardGrabbed = true;
-        else
-            _log.LogWarning("XGrabKeyboard failed (result={Result})", result);
         _ = NativeMethods.XFlush(_display);
+        if (result == NativeMethods.GrabSuccess)
+        {
+            lock (_grabLock) _keyboardGrabbed = true;
+            return;
+        }
+        _log.LogWarning("XGrabKeyboard failed (result={Result}), retrying in background", result);
+        CancellationTokenSource cts;
+        lock (_grabLock)
+        {
+            _grabRetryCts?.Cancel();
+            _grabRetryCts?.Dispose();
+            cts = _grabRetryCts = new CancellationTokenSource();
+        }
+        _ = Task.Run(() => RetryGrabKeyboardAsync(cts.Token));
     }
 
     private void UngrabKeyboard()
     {
-        if (!_keyboardGrabbed) return;
+        CancellationTokenSource? cts;
+        bool wasGrabbed;
+        lock (_grabLock)
+        {
+            cts = _grabRetryCts;
+            _grabRetryCts = null;
+            wasGrabbed = _keyboardGrabbed;
+            _keyboardGrabbed = false;
+        }
+        cts?.Cancel();
+        cts?.Dispose();
+        if (!wasGrabbed) return;
         _ = NativeMethods.XUngrabKeyboard(_display, NativeMethods.CurrentTime);
         _ = NativeMethods.XFlush(_display);
-        _keyboardGrabbed = false;
+    }
+
+    private async Task RetryGrabKeyboardAsync(CancellationToken ct)
+    {
+        const int maxAttempts = 20;
+        for (var i = 0; i < maxAttempts; i++)
+        {
+            try { await Task.Delay(50, ct); }
+            catch (OperationCanceledException) { return; }
+
+            // dismiss transient grabs (xsecurelock technique: redirect focus to pointer root)
+            _ = NativeMethods.XSetInputFocus(_display, NativeMethods.PointerRoot,
+                NativeMethods.RevertToPointerRoot, NativeMethods.CurrentTime);
+            _ = NativeMethods.XFlush(_display);
+
+            var result = NativeMethods.XGrabKeyboard(_display, _inputSink, true,
+                NativeMethods.GrabModeAsync, NativeMethods.GrabModeAsync, NativeMethods.CurrentTime);
+            _ = NativeMethods.XFlush(_display);
+
+            if (result != NativeMethods.GrabSuccess)
+            {
+                _log.LogDebug("XGrabKeyboard retry {Attempt}/{Max} failed (result={Result})", i + 1, maxAttempts, result);
+                continue;
+            }
+
+            lock (_grabLock)
+            {
+                if (ct.IsCancellationRequested)
+                {
+                    // UngrabKeyboard ran while we were grabbing — release immediately
+                    _ = NativeMethods.XUngrabKeyboard(_display, NativeMethods.CurrentTime);
+                    _ = NativeMethods.XFlush(_display);
+                    return;
+                }
+                _keyboardGrabbed = true;
+            }
+            _log.LogInformation("XGrabKeyboard succeeded on retry {Attempt}", i + 1);
+            return;
+        }
+        _log.LogWarning("XGrabKeyboard failed after {Max} retries", maxAttempts);
     }
 
     private void GrabPointer()
     {
-        if (_pointerGrabbed) return;
+        lock (_grabLock) { if (_pointerGrabbed) return; }
         var result = NativeMethods.XGrabPointer(_display, _inputSink, false,
             NativeMethods.ButtonPressMask | NativeMethods.ButtonReleaseMask | NativeMethods.PointerMotionMask,
             NativeMethods.GrabModeAsync, NativeMethods.GrabModeAsync,
             nint.Zero, nint.Zero, NativeMethods.CurrentTime);
-        if (result == NativeMethods.GrabSuccess)
-            _pointerGrabbed = true;
-        else
-            _log.LogWarning("XGrabPointer failed (result={Result})", result);
         _ = NativeMethods.XFlush(_display);
+        if (result == NativeMethods.GrabSuccess)
+        {
+            lock (_grabLock) _pointerGrabbed = true;
+            return;
+        }
+        _log.LogWarning("XGrabPointer failed (result={Result}), retrying in background", result);
+        CancellationTokenSource cts;
+        lock (_grabLock)
+        {
+            _pointerRetryCts?.Cancel();
+            _pointerRetryCts?.Dispose();
+            cts = _pointerRetryCts = new CancellationTokenSource();
+        }
+        _ = Task.Run(() => RetryGrabPointerAsync(cts.Token));
     }
 
     private void UngrabPointer()
     {
-        if (!_pointerGrabbed) return;
+        CancellationTokenSource? cts;
+        bool wasGrabbed;
+        lock (_grabLock)
+        {
+            cts = _pointerRetryCts;
+            _pointerRetryCts = null;
+            wasGrabbed = _pointerGrabbed;
+            _pointerGrabbed = false;
+        }
+        cts?.Cancel();
+        cts?.Dispose();
+        if (!wasGrabbed) return;
         _ = NativeMethods.XUngrabPointer(_display, NativeMethods.CurrentTime);
         _ = NativeMethods.XFlush(_display);
-        _pointerGrabbed = false;
+    }
+
+    private async Task RetryGrabPointerAsync(CancellationToken ct)
+    {
+        const int maxAttempts = 20;
+        for (var i = 0; i < maxAttempts; i++)
+        {
+            try { await Task.Delay(50, ct); }
+            catch (OperationCanceledException) { return; }
+
+            var result = NativeMethods.XGrabPointer(_display, _inputSink, false,
+                NativeMethods.ButtonPressMask | NativeMethods.ButtonReleaseMask | NativeMethods.PointerMotionMask,
+                NativeMethods.GrabModeAsync, NativeMethods.GrabModeAsync,
+                nint.Zero, nint.Zero, NativeMethods.CurrentTime);
+            _ = NativeMethods.XFlush(_display);
+
+            if (result != NativeMethods.GrabSuccess)
+            {
+                _log.LogDebug("XGrabPointer retry {Attempt}/{Max} failed (result={Result})", i + 1, maxAttempts, result);
+                continue;
+            }
+
+            lock (_grabLock)
+            {
+                if (ct.IsCancellationRequested)
+                {
+                    _ = NativeMethods.XUngrabPointer(_display, NativeMethods.CurrentTime);
+                    _ = NativeMethods.XFlush(_display);
+                    return;
+                }
+                _pointerGrabbed = true;
+            }
+            _log.LogInformation("XGrabPointer succeeded on retry {Attempt}", i + 1);
+            return;
+        }
+        _log.LogWarning("XGrabPointer failed after {Max} retries", maxAttempts);
     }
 
     // passive grab for Ctrl+Alt+Super+L — 4 variants for NumLock/CapsLock combinations
