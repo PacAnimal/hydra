@@ -14,6 +14,7 @@ internal sealed class XorgSpecialKeyMap : SpecialKeyMap
         // tty
         { XorgVirtualKey.BackSpace, SpecialKey.BackSpace },
         { XorgVirtualKey.Tab, SpecialKey.Tab },
+        { XorgVirtualKey.ISO_Left_Tab, SpecialKey.Tab },  // Shift+Tab
         { XorgVirtualKey.Return, SpecialKey.Return },
         { XorgVirtualKey.Escape, SpecialKey.Escape },
         { XorgVirtualKey.Delete, SpecialKey.Delete },

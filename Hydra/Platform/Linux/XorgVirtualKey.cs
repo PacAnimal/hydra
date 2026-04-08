@@ -84,6 +84,7 @@ internal static class XorgVirtualKey
     internal const ulong XF86Eject = 0x1008FF2C;
 
     // modifiers
+    internal const ulong ISO_Left_Tab = 0xFE20;      // Shift+Tab on most layouts
     internal const ulong ISO_Level3_Shift = 0xFE03;  // AltGr on most layouts
     internal const ulong Shift_L = 0xFFE1;
     internal const ulong Shift_R = 0xFFE2;
