@@ -24,6 +24,7 @@ public interface IPlatformInput : IDisposable
     Task ShowCursor();
     Task StartEventTap(
         Action<double, double> onMouseMove,
+        Action<double, double>? onMouseDelta,
         Action<KeyEvent> onKeyEvent,
         Action<MouseButtonEvent> onMouseButton,
         Action<MouseScrollEvent> onMouseScroll);

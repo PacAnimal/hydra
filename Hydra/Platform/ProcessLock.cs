@@ -30,13 +30,28 @@ internal sealed partial class ProcessLock : IDisposable
             // between here and the delete, File.Delete will throw IOException (FileShare.None
             // blocks the internal handle open), which we swallow
             _stream.Dispose();
-            try { File.Delete(_path); } catch { }
+            try
+            {
+                File.Delete(_path);
+            }
+            catch
+            {
+                // ignored
+            }
         }
         else
         {
             // on unix, unlink while we still hold the lock — race-free, inode stays
             // alive for our fd and a new process will create a fresh file at the path
-            try { File.Delete(_path); } catch { }
+            try
+            {
+                File.Delete(_path);
+            }
+            catch
+            {
+                // ignored
+            }
+
             _stream.Dispose();
         }
     }

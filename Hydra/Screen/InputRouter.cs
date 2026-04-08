@@ -48,14 +48,13 @@ public class InputRouter(
 
         log.LogInformation("Host: {Name}", config.ResolvedName);
 
-        if (config.LocalHost == null && config.Hosts.Count > 0)
+        if (!config.RemoteOnly && config.LocalHost == null && config.Hosts.Count > 0)
         {
             log.LogError("Host '{Name}' is not listed in the config hosts — add it to the hosts list.", config.ResolvedName);
             return;
         }
 
         var snapshot = await screens.Get(cancellationToken);
-        LogDetectedScreens(snapshot.Screens);
 
         using (var s = await _state.WaitForDisposable(cancellationToken))
         {
@@ -64,13 +63,16 @@ public class InputRouter(
             st.LocalScreenEntries = snapshot.Entries;
             st.ActiveLocalScreen = st.LocalScreens.FirstOrDefault();
 
-            if (st.ActiveLocalScreen == null)
+            if (!config.RemoteOnly && st.ActiveLocalScreen == null)
             {
                 log.LogError("No local screens detected.");
                 return;
             }
 
-            UpdateWarpPoint(st, st.ActiveLocalScreen);
+            if (st.ActiveLocalScreen != null)
+                UpdateWarpPoint(st, st.ActiveLocalScreen);
+            if (config.RemoteOnly)
+                st.LockedToScreen = true;  // default: locked to remote; hotkey unlocks to local
             st.Screens = BuildAllScreens(st.LocalScreens, config);
             st.Layout = new ScreenLayout(st.Screens, config.Hosts, config.DeadCorners, BuildScaleMap(st.LocalScreenEntries, []), log);
 
@@ -87,7 +89,7 @@ public class InputRouter(
         relay.Disconnected += OnRelayDisconnected;
         screens.ScreensChanged += OnScreensChanged;
 
-        await platform.StartEventTap((x, y) => OnMouseMove(x, y), OnKeyEvent, OnMouseButton, OnMouseScroll);
+        await platform.StartEventTap((x, y) => OnMouseMove(x, y), OnMouseDelta, OnKeyEvent, OnMouseButton, OnMouseScroll);
 
         _screenSaverSync.StartWatching(OnScreensaverActivated, OnScreensaverDeactivated);
 
@@ -205,6 +207,12 @@ public class InputRouter(
             var payload = MessageSerializer.Encode(MessageKind.MasterConfig, new { });
             _ = relay.Send([host], payload).AsTask();
             log.LogDebug("Sent MasterConfig to {Host}", host);
+        }
+
+        if (config.RemoteOnly)
+        {
+            using var s = await _state.WaitForDisposable();
+            TryEnterRemoteOnly(s.Value);
         }
     }
 
@@ -345,7 +353,10 @@ public class InputRouter(
                     await _peerState.SetPeerScreens(sourceHost, info.Screens);
                     var snapshot = await _peerState.GetPeerScreensSnapshot();
                     using (var s = await _state.WaitForDisposable())
+                    {
                         RebuildLayout(s.Value, snapshot);
+                        if (config.RemoteOnly) TryEnterRemoteOnly(s.Value);
+                    }
                     log.LogInformation("Screen info from {Host}: {Count} screen(s)", sourceHost, info.Screens.Count);
                 }
                 break;
@@ -378,14 +389,15 @@ public class InputRouter(
     // rebuilds screens/layout from localScreens/peerScreens; must be called under lock
     private void RebuildLayout(LocalMasterState st, Dictionary<string, List<ScreenInfoEntry>> peerScreens)
     {
-        if (st.ActiveLocalScreen == null) return;
+        if (!config.RemoteOnly && st.ActiveLocalScreen == null) return;
 
         var newScreens = BuildAllScreens(st.LocalScreens, config);
         ApplyPeerScreenSizes(peerScreens, newScreens);
         var newLayout = new ScreenLayout(newScreens, config.Hosts, config.DeadCorners, BuildScaleMap(st.LocalScreenEntries, peerScreens), log);
         st.Screens = newScreens;
         st.Layout = newLayout;
-        st.ActiveLocalScreen = st.LocalScreens.FirstOrDefault(s => s.Name.EqualsIgnoreCase(st.ActiveLocalScreen.Name)) ?? st.LocalScreens.FirstOrDefault() ?? st.ActiveLocalScreen;
+        st.ActiveLocalScreen = st.ActiveLocalScreen == null ? null
+            : st.LocalScreens.FirstOrDefault(s => s.Name.EqualsIgnoreCase(st.ActiveLocalScreen.Name)) ?? st.LocalScreens.FirstOrDefault() ?? st.ActiveLocalScreen;
 
         // prune stale relative-mode entries for screens that no longer exist
         var validNames = new HashSet<string>(st.Screens.Select(s => s.Name), StringComparer.OrdinalIgnoreCase);
@@ -471,7 +483,32 @@ public class InputRouter(
             if (keyEvent.Character == 'l')
             {
                 st.LockedToScreen = !st.LockedToScreen;
-                log.LogInformation("Screen lock: {State}", st.LockedToScreen ? "locked" : "unlocked");
+                if (config.RemoteOnly)
+                {
+                    if (st.LockedToScreen)
+                    {
+                        // re-lock: re-enter remote
+                        log.LogInformation("Remote lock: locked to remote");
+                        TryEnterRemoteOnly(st);
+                    }
+                    else
+                    {
+                        // unlock: leave remote, return to local
+                        log.LogInformation("Remote lock: unlocked (local)");
+                        if (st.Mouse.IsOnVirtualScreen && st.Mouse.CurrentScreen != null)
+                        {
+                            var leavingHost = st.Mouse.CurrentScreen.Host;
+                            FlushMouseDelta(st);
+                            st.Mouse.LeaveScreen();
+                            platform.IsOnVirtualScreen = false;
+                            _ = platform.ShowCursor();
+                            var payload = MessageSerializer.Encode(MessageKind.LeaveScreen, new { });
+                            _ = relay.Send([leavingHost], payload).AsTask();
+                        }
+                    }
+                }
+                else
+                    log.LogInformation("Screen lock: {State}", st.LockedToScreen ? "locked" : "unlocked");
             }
             else if (st.Mouse.IsOnVirtualScreen && st.Mouse.CurrentScreen != null)
             {
@@ -668,33 +705,66 @@ public class InputRouter(
                 log.LogDebug("Mouse: ({X}, {Y})", (int)st.Mouse.X, (int)st.Mouse.Y);
         }
 
-        // check if we've crossed back to a local screen
-        var virtualScreen = st.Mouse.CurrentScreen!;
-        var hit = st.Layout!.DetectEdgeExit(virtualScreen, (int)st.Mouse.X, (int)st.Mouse.Y);
-        if (hit is not null && hit.Destination.IsLocal && !st.LockedToScreen)
+        // check edge exit: remote→local return (suppressed in remote-only) and remote→remote transitions
         {
-            var targetScreen = hit.Destination;
-
-            // flush any pending delta before leaving
-            FlushMouseDelta(st);
-
-            // warp to entry in global OS coords; show is deferred to next real-screen event
-            var globalX = targetScreen.X + hit.EntryX;
-            var globalY = targetScreen.Y + hit.EntryY;
-            var leavingScreen = st.Mouse.CurrentScreen;
-            st.Mouse.LeaveScreen();
-            ReturnToLocalScreen(globalX, globalY);
-            st.PendingCursorShow = true;
-            st.ActiveLocalScreen = targetScreen;
-            UpdateWarpPoint(st, targetScreen);
-            log.LogInformation("Returned to local screen ← ({X}, {Y})", globalX, globalY);
-
-            if (relay.IsConnected && leavingScreen != null)
+            var virtualScreen = st.Mouse.CurrentScreen!;
+            var hit = st.Layout!.DetectEdgeExit(virtualScreen, (int)st.Mouse.X, (int)st.Mouse.Y);
+            if (hit is not null)
             {
-                var payload = MessageSerializer.Encode(MessageKind.LeaveScreen, new { });
-                _ = relay.Send([leavingScreen.Host], payload).AsTask();
+                if (!hit.Destination.IsLocal)
+                {
+                    // remote→remote: always allowed in remote-only; locked prevents it in normal mode
+                    if (config.RemoteOnly || !st.LockedToScreen)
+                    {
+                        var leavingScreen = st.Mouse.CurrentScreen;
+                        FlushMouseDelta(st);
+                        var peerScreens = AsyncHelper.RunSync(() => _peerState.GetPeerScreensSnapshot().AsTask());
+                        var remoteInfo = GetRemoteScreensAndScales(st.Screens, peerScreens, hit.Destination);
+                        var scale = remoteInfo.ScaleMap.GetValueOrDefault(hit.Destination.Name, 1.0m);
+                        st.Mouse.EnterScreen(hit.Destination, remoteInfo.Screens, hit.EntryX, hit.EntryY, scale, remoteInfo.ScaleMap);
+                        st.PendingDx = 0;
+                        st.PendingDy = 0;
+                        log.LogInformation("Switched to remote screen '{Name}' → ({X}, {Y})", hit.Destination.Name, hit.EntryX, hit.EntryY);
+
+                        if (relay.IsConnected)
+                        {
+                            if (leavingScreen != null && leavingScreen.Host != hit.Destination.Host)
+                            {
+                                var leavePayload = MessageSerializer.Encode(MessageKind.LeaveScreen, new { });
+                                _ = relay.Send([leavingScreen.Host], leavePayload).AsTask();
+                            }
+                            var enterPayload = MessageSerializer.Encode(MessageKind.EnterScreen,
+                                new EnterScreenMessage(hit.Destination.Name, hit.EntryX, hit.EntryY, hit.Destination.Width, hit.Destination.Height));
+                            _ = relay.Send([hit.Destination.Host], enterPayload).AsTask();
+                        }
+                        return;
+                    }
+                }
+                else if (!st.LockedToScreen && !config.RemoteOnly)
+                {
+                    // return to local: blocked by lock or remote-only mode
+                    var targetScreen = hit.Destination;
+
+                    FlushMouseDelta(st);
+
+                    var globalX = targetScreen.X + hit.EntryX;
+                    var globalY = targetScreen.Y + hit.EntryY;
+                    var leavingScreen = st.Mouse.CurrentScreen;
+                    st.Mouse.LeaveScreen();
+                    ReturnToLocalScreen(globalX, globalY);
+                    st.PendingCursorShow = true;
+                    st.ActiveLocalScreen = targetScreen;
+                    UpdateWarpPoint(st, targetScreen);
+                    log.LogInformation("Returned to local screen ← ({X}, {Y})", globalX, globalY);
+
+                    if (relay.IsConnected && leavingScreen != null)
+                    {
+                        var payload = MessageSerializer.Encode(MessageKind.LeaveScreen, new { });
+                        _ = relay.Send([leavingScreen.Host], payload).AsTask();
+                    }
+                    return;
+                }
             }
-            return;
         }
 
         // throttle mouse sends to MaxMouseHz
@@ -711,6 +781,92 @@ public class InputRouter(
     {
         platform.IsOnVirtualScreen = false;
         platform.WarpCursor(x, y);
+    }
+
+    // enters remote-only mode targeting the first remote screen with known dimensions.
+    // must be called under _state lock. no-op if already on virtual screen or no screen ready yet.
+    private void TryEnterRemoteOnly(LocalMasterState st)
+    {
+        if (st.Mouse.IsOnVirtualScreen) return;
+        if (!st.LockedToScreen) return;  // user explicitly unlocked to local — don't auto-re-enter
+        var target = st.Screens.FirstOrDefault(s => !s.IsLocal && s.Width > 0);
+        if (target == null) return;
+        if (!relay.IsConnected) return;
+
+        var peerScreens = AsyncHelper.RunSync(() => _peerState.GetPeerScreensSnapshot().AsTask());
+        var remoteInfo = GetRemoteScreensAndScales(st.Screens, peerScreens, target);
+        var scale = remoteInfo.ScaleMap.GetValueOrDefault(target.Name, 1.0m);
+        var entryX = target.Width / 2;
+        var entryY = target.Height / 2;
+
+        _ = platform.HideCursor();
+        platform.IsOnVirtualScreen = true;
+        st.Mouse.EnterScreen(target, remoteInfo.Screens, entryX, entryY, scale, remoteInfo.ScaleMap);
+        st.PendingDx = 0;
+        st.PendingDy = 0;
+        st.LockedToScreen = true;
+        log.LogInformation("Remote-only: entered '{Name}' → ({X}, {Y})", target.Name, entryX, entryY);
+
+        var payload = MessageSerializer.Encode(MessageKind.EnterScreen, new EnterScreenMessage(target.Name, entryX, entryY, target.Width, target.Height));
+        _ = relay.Send([target.Host], payload).AsTask();
+    }
+
+    // handles raw mouse deltas from evdev (remote-only/console mode).
+    // feeds directly into VirtualMouseState — no warp-point math needed.
+    private void OnMouseDelta(double dx, double dy)
+    {
+        using var s = AsyncHelper.RunSync(() => _state.WaitForDisposable());
+        var st = s.Value;
+        if (!st.Mouse.IsOnVirtualScreen) return;
+
+        var leavingScreen = st.Mouse.CurrentScreen!;
+        var prevScreen = st.Mouse.ApplyDelta(dx, dy);
+        if (prevScreen != null)
+        {
+            // intra-host screen transition
+            st.PendingDx = 0;
+            st.PendingDy = 0;
+            if (relay.IsConnected && st.Mouse.CurrentScreen != null)
+            {
+                var sc = st.Mouse.CurrentScreen;
+                var enterPayload = MessageSerializer.Encode(MessageKind.EnterScreen,
+                    new EnterScreenMessage(sc.Name, (int)st.Mouse.X, (int)st.Mouse.Y, sc.Width, sc.Height));
+                _ = relay.Send([sc.Host], enterPayload).AsTask();
+            }
+        }
+        else
+        {
+            // check for cross-host edge exit (cursor clamped at edge by ApplyDelta)
+            var hit = st.Layout?.DetectEdgeExit(st.Mouse.CurrentScreen!, (int)st.Mouse.X, (int)st.Mouse.Y);
+            if (hit is not null && !hit.Destination.IsLocal && relay.IsConnected)
+            {
+                FlushMouseDelta(st);
+                var peerScreens = AsyncHelper.RunSync(() => _peerState.GetPeerScreensSnapshot().AsTask());
+                var remoteInfo = GetRemoteScreensAndScales(st.Screens, peerScreens, hit.Destination);
+                var scale = remoteInfo.ScaleMap.GetValueOrDefault(hit.Destination.Name, 1.0m);
+                st.Mouse.EnterScreen(hit.Destination, remoteInfo.Screens, hit.EntryX, hit.EntryY, scale, remoteInfo.ScaleMap);
+                st.PendingDx = 0;
+                st.PendingDy = 0;
+                log.LogInformation("Switched to remote screen '{Name}' → ({X}, {Y})", hit.Destination.Name, hit.EntryX, hit.EntryY);
+
+                if (leavingScreen.Host != hit.Destination.Host)
+                {
+                    var leavePayload = MessageSerializer.Encode(MessageKind.LeaveScreen, new { });
+                    _ = relay.Send([leavingScreen.Host], leavePayload).AsTask();
+                }
+                var crossPayload = MessageSerializer.Encode(MessageKind.EnterScreen,
+                    new EnterScreenMessage(hit.Destination.Name, hit.EntryX, hit.EntryY, hit.Destination.Width, hit.Destination.Height));
+                _ = relay.Send([hit.Destination.Host], crossPayload).AsTask();
+                return;
+            }
+
+            st.PendingDx += dx * (double)st.Mouse.MouseScale;
+            st.PendingDy += dy * (double)st.Mouse.MouseScale;
+        }
+
+        var now = Environment.TickCount64;
+        if (now - st.LastMouseSendTick >= MinMouseIntervalMs)
+            SendMousePosition(st, now);
     }
 
     private static void UpdateWarpPoint(LocalMasterState st, ScreenRect screen)

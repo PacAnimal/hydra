@@ -7,6 +7,8 @@ using Microsoft.Extensions.Logging;
 
 namespace Hydra.Config;
 
+public record ConditionState(List<string> ActiveSsids, int ScreenCount);
+
 public class HostConfig
 {
     public required string Name { get; init; }
@@ -49,6 +51,7 @@ public class HydraConfig
 
     public string? NetworkConfig { get; init; }
 
+    public bool RemoteOnly { get; init; } = false;
     public bool AutoUpdate { get; init; } = true;
     public bool SyncScreensaver { get; init; } = true;
     public bool DebugShield { get; init; } = false;
@@ -98,28 +101,36 @@ public class HydraConfig
         return (configs, path);
     }
 
-    // true if any config has conditions — if false, the single unconditional config is always active
-    public static bool HasConditions(List<HydraConfig> configs) => configs.Any(c => c.Conditions != null);
+    // true if any config has effective conditions — if false, the single unconditional config is always active
+    public static bool HasConditions(List<HydraConfig> configs) => configs.Any(c => c.Conditions?.IsEmpty == false);
 
     // true if any config matches on SSID — determines whether WiFi detection is needed
     public static bool HasSsidConditions(List<HydraConfig> configs) => configs.Any(c => c.Conditions?.Ssid != null);
 
-    // resolves the active config from the list based on currently active SSIDs.
-    // returns null if no config matches (hydra should idle until network changes)
-    public static HydraConfig? Resolve(List<HydraConfig> configs, List<string> activeSsids)
+    // true if any config matches on screen count — determines whether screen count detection is needed
+    public static bool HasScreenCountConditions(List<HydraConfig> configs) => configs.Any(c => c.Conditions?.ScreenCount != null);
+
+    // resolves the active config from the list based on current condition state.
+    // returns null if no config matches (hydra should idle until conditions change)
+    public static HydraConfig? Resolve(List<HydraConfig> configs, ConditionState state)
     {
         HydraConfig? fallback = null;
 
         foreach (var cfg in configs)
         {
-            if (cfg.Conditions == null)
+            if (cfg.Conditions == null || cfg.Conditions.IsEmpty)
             {
                 fallback = cfg;
                 continue;
             }
 
-            if (cfg.Conditions.Ssid != null && activeSsids.Any(s => s.EqualsIgnoreCase(cfg.Conditions.Ssid)))
-                return cfg;
+            // all specified conditions must match (AND logic)
+            if (cfg.Conditions.Ssid != null && !state.ActiveSsids.Any(s => s.EqualsIgnoreCase(cfg.Conditions.Ssid)))
+                continue;
+            if (cfg.Conditions.ScreenCount != null && state.ScreenCount != cfg.Conditions.ScreenCount)
+                continue;
+
+            return cfg;
         }
 
         return fallback;
@@ -195,23 +206,34 @@ public class HydraConfig
 
     private static void Validate(List<HydraConfig> configs)
     {
-        var defaults = configs.Count(c => c.Conditions == null);
+        // empty conditions ({}) is treated as unconditional — count those as defaults too
+        var defaults = configs.Count(c => c.Conditions == null || c.Conditions.IsEmpty);
         if (defaults > 1)
             throw new InvalidOperationException("hydra.conf has multiple default configs (configs without a 'conditions' field). Only one is allowed.");
 
-        foreach (var cfg in configs.Where(c => c.Conditions != null))
+        foreach (var cfg in configs.Where(c => c.RemoteOnly))
         {
-            if (cfg.Conditions!.Ssid == null)
-                throw new InvalidOperationException("A config with 'conditions' must have at least one condition field set (e.g. 'ssid').");
+            if (cfg.Mode != Mode.Master)
+                throw new InvalidOperationException("remoteOnly requires mode: Master.");
+            var hasRemoteHost = cfg.Hosts.Any(h => !h.Name.EqualsIgnoreCase(cfg.ResolvedName));
+            if (!hasRemoteHost)
+                throw new InvalidOperationException("remoteOnly requires at least one remote host in the hosts list.");
         }
 
-        var ssids = configs
-            .Where(c => c.Conditions?.Ssid != null)
-            .Select(c => c.Conditions!.Ssid!.ToLowerInvariant())
+        foreach (var cfg in configs.Where(c => c.Conditions?.IsEmpty == false))
+        {
+            if (cfg.Conditions!.ScreenCount is < 1)
+                throw new InvalidOperationException("screenCount condition must be >= 1.");
+        }
+
+        // no two conditional configs may have identical (ssid, screenCount) tuples
+        var conditionKeys = configs
+            .Where(c => c.Conditions?.IsEmpty == false)
+            .Select(c => (Ssid: c.Conditions!.Ssid?.ToLowerInvariant(), c.Conditions.ScreenCount))
             .ToList();
-        var duplicateSsid = ssids.GroupBy(s => s).FirstOrDefault(g => g.Count() > 1);
-        if (duplicateSsid != null)
-            throw new InvalidOperationException($"hydra.conf has duplicate SSID config for '{duplicateSsid.Key}'.");
+        var duplicate = conditionKeys.GroupBy(k => k).FirstOrDefault(g => g.Count() > 1);
+        if (duplicate != null)
+            throw new InvalidOperationException($"hydra.conf has duplicate conditions for ssid='{duplicate.Key.Ssid}' screenCount='{duplicate.Key.ScreenCount}'.");
 
         foreach (var cfg in configs)
         {

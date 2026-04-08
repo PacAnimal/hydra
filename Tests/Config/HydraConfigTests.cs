@@ -14,6 +14,11 @@ public class HydraConfigTests
         new() { Mode = mode, Conditions = conditions };
 
     private static ConfigConditions SsidCondition(string ssid) => new() { Ssid = ssid };
+    private static ConfigConditions ScreenCountCondition(int count) => new() { ScreenCount = count };
+    private static ConfigConditions SsidAndScreenCount(string ssid, int count) => new() { Ssid = ssid, ScreenCount = count };
+
+    private static ConditionState State(List<string>? ssids = null, int screenCount = 1) =>
+        new(ssids ?? [], screenCount);
 
     [Test]
     public void Load_ReturnsValidConfig()
@@ -137,7 +142,7 @@ public class HydraConfigTests
         var cfg = MakeConfig();
         var configs = new List<HydraConfig> { cfg };
         // no SSIDs at all — should still pick the unconditional config
-        Assert.That(HydraConfig.Resolve(configs, []), Is.SameAs(cfg));
+        Assert.That(HydraConfig.Resolve(configs, State()), Is.SameAs(cfg));
     }
 
     [Test]
@@ -146,7 +151,7 @@ public class HydraConfigTests
         var home = MakeConfig(conditions: SsidCondition("HomeNet"));
         var fallback = MakeConfig(Mode.Slave);
         var configs = new List<HydraConfig> { home, fallback };
-        Assert.That(HydraConfig.Resolve(configs, ["HomeNet"]), Is.SameAs(home));
+        Assert.That(HydraConfig.Resolve(configs, State(["HomeNet"])), Is.SameAs(home));
     }
 
     [Test]
@@ -154,7 +159,7 @@ public class HydraConfigTests
     {
         var home = MakeConfig(conditions: SsidCondition("HomeNet"));
         var configs = new List<HydraConfig> { home };
-        Assert.That(HydraConfig.Resolve(configs, ["homenet"]), Is.SameAs(home));
+        Assert.That(HydraConfig.Resolve(configs, State(["homenet"])), Is.SameAs(home));
     }
 
     [Test]
@@ -162,7 +167,7 @@ public class HydraConfigTests
     {
         var home = MakeConfig(conditions: SsidCondition("HomeNet"));
         var configs = new List<HydraConfig> { home };
-        Assert.That(HydraConfig.Resolve(configs, ["OfficeNet"]), Is.Null);
+        Assert.That(HydraConfig.Resolve(configs, State(["OfficeNet"])), Is.Null);
     }
 
     [Test]
@@ -171,7 +176,7 @@ public class HydraConfigTests
         var ssid = MakeConfig(conditions: SsidCondition("HomeNet"));
         var fallback = MakeConfig(Mode.Slave);
         var configs = new List<HydraConfig> { ssid, fallback };
-        Assert.That(HydraConfig.Resolve(configs, ["OfficeNet"]), Is.SameAs(fallback));
+        Assert.That(HydraConfig.Resolve(configs, State(["OfficeNet"])), Is.SameAs(fallback));
     }
 
     [Test]
@@ -179,7 +184,50 @@ public class HydraConfigTests
     {
         var ssid = MakeConfig(conditions: SsidCondition("HomeNet"));
         var configs = new List<HydraConfig> { ssid };
-        Assert.That(HydraConfig.Resolve(configs, []), Is.Null);
+        Assert.That(HydraConfig.Resolve(configs, State()), Is.Null);
+    }
+
+    [Test]
+    public void Resolve_ScreenCount_MatchesWhenEqual()
+    {
+        var cfg = MakeConfig(conditions: ScreenCountCondition(2));
+        var configs = new List<HydraConfig> { cfg };
+        Assert.That(HydraConfig.Resolve(configs, State(screenCount: 2)), Is.SameAs(cfg));
+    }
+
+    [Test]
+    public void Resolve_ScreenCount_DoesNotMatchWhenDifferent()
+    {
+        var cfg = MakeConfig(conditions: ScreenCountCondition(2));
+        var configs = new List<HydraConfig> { cfg };
+        Assert.That(HydraConfig.Resolve(configs, State(screenCount: 1)), Is.Null);
+    }
+
+    [Test]
+    public void Resolve_SsidAndScreenCount_BothMustMatch()
+    {
+        var office2 = MakeConfig(conditions: SsidAndScreenCount("Office", 2));
+        var fallback = MakeConfig(Mode.Slave);
+        var configs = new List<HydraConfig> { office2, fallback };
+        Assert.That(HydraConfig.Resolve(configs, State(["Office"], screenCount: 2)), Is.SameAs(office2));
+    }
+
+    [Test]
+    public void Resolve_SsidAndScreenCount_SsidMatchButCountMismatch_FallsThrough()
+    {
+        var office2 = MakeConfig(conditions: SsidAndScreenCount("Office", 2));
+        var fallback = MakeConfig(Mode.Slave);
+        var configs = new List<HydraConfig> { office2, fallback };
+        Assert.That(HydraConfig.Resolve(configs, State(["Office"], screenCount: 1)), Is.SameAs(fallback));
+    }
+
+    [Test]
+    public void Resolve_SsidAndScreenCount_CountMatchButSsidMismatch_FallsThrough()
+    {
+        var office2 = MakeConfig(conditions: SsidAndScreenCount("Office", 2));
+        var fallback = MakeConfig(Mode.Slave);
+        var configs = new List<HydraConfig> { office2, fallback };
+        Assert.That(HydraConfig.Resolve(configs, State(["Home"], screenCount: 2)), Is.SameAs(fallback));
     }
 
     // Validate
@@ -202,15 +250,61 @@ public class HydraConfigTests
             ]
             """;
         Assert.That(() => HydraConfig.ParseAndValidate(json),
-            Throws.InvalidOperationException.With.Message.Contains("duplicate SSID"));
+            Throws.InvalidOperationException.With.Message.Contains("duplicate conditions"));
     }
 
     [Test]
-    public void Validate_Throws_WhenConditionsHasNoFields()
+    public void Validate_EmptyConditions_TreatedAsUnconditional()
     {
-        var json = """[{"mode":"Master","conditions":{}}]""";
+        // {} is the same as no conditions — valid, treated as fallback
+        var json = """[{"mode":"Master","conditions":{}},{"mode":"Slave","conditions":{"ssid":"Home"}}]""";
+        Assert.That(() => HydraConfig.ParseAndValidate(json), Throws.Nothing);
+    }
+
+    [Test]
+    public void Validate_Throws_OnDuplicateConditionTuple()
+    {
+        var json = """
+            [
+              {"mode":"Master","conditions":{"ssid":"Home","screenCount":2}},
+              {"mode":"Slave","conditions":{"ssid":"Home","screenCount":2}}
+            ]
+            """;
         Assert.That(() => HydraConfig.ParseAndValidate(json),
-            Throws.InvalidOperationException.With.Message.Contains("at least one condition field"));
+            Throws.InvalidOperationException.With.Message.Contains("duplicate conditions"));
+    }
+
+    [Test]
+    public void Validate_SameSSID_DifferentScreenCount_IsAllowed()
+    {
+        var json = """
+            [
+              {"mode":"Master","conditions":{"ssid":"Office","screenCount":1}},
+              {"mode":"Master","conditions":{"ssid":"Office","screenCount":2}},
+              {"mode":"Slave"}
+            ]
+            """;
+        Assert.That(() => HydraConfig.ParseAndValidate(json), Throws.Nothing);
+    }
+
+    [Test]
+    public void Validate_Throws_WhenScreenCountIsZero()
+    {
+        var json = """[{"mode":"Master","conditions":{"screenCount":0}}]""";
+        Assert.That(() => HydraConfig.ParseAndValidate(json),
+            Throws.InvalidOperationException.With.Message.Contains("screenCount"));
+    }
+
+    [Test]
+    public void Validate_Accepts_ScreenCountOnlyCondition()
+    {
+        var json = """
+            [
+              {"mode":"Master","conditions":{"screenCount":2}},
+              {"mode":"Slave"}
+            ]
+            """;
+        Assert.That(() => HydraConfig.ParseAndValidate(json), Throws.Nothing);
     }
 
     [Test]
@@ -265,5 +359,30 @@ public class HydraConfigTests
             Assert.That(remotes, Contains.Item("right"));
             Assert.That(remotes, Contains.Item("other"));
         }
+    }
+
+    // RemoteOnly validation
+
+    [Test]
+    public void RemoteOnly_RequiresMasterMode()
+    {
+        var json = """{ "mode": "Slave", "remoteOnly": true, "hosts": [{ "name": "mac" }] }""";
+        Assert.That(() => HydraConfig.ParseAndValidate(json),
+            Throws.InvalidOperationException.With.Message.Contains("mode: Master"));
+    }
+
+    [Test]
+    public void RemoteOnly_RequiresAtLeastOneRemoteHost()
+    {
+        var json = """{ "mode": "Master", "remoteOnly": true, "hosts": [] }""";
+        Assert.That(() => HydraConfig.ParseAndValidate(json),
+            Throws.InvalidOperationException.With.Message.Contains("remote host"));
+    }
+
+    [Test]
+    public void RemoteOnly_ValidConfig_Parses()
+    {
+        var json = """{ "mode": "Master", "remoteOnly": true, "hosts": [{ "name": "mac" }] }""";
+        Assert.That(() => HydraConfig.ParseAndValidate(json), Throws.Nothing);
     }
 }

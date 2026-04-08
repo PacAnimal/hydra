@@ -76,6 +76,7 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
 
     public async Task StartEventTap(
         Action<double, double> onMouseMove,
+        Action<double, double>? onMouseDelta,
         Action<KeyEvent> onKeyEvent,
         Action<MouseButtonEvent> onMouseButton,
         Action<MouseScrollEvent> onMouseScroll)

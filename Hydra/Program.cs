@@ -70,15 +70,16 @@ var services = builder.Services;
 services.AddEnvironmentConfiguration();
 services.AddSereneConsoleLogging(c => c.MinLogLevel = configs[0].LogLevel);
 
-// detect current network and resolve which config to use
+// detect current network/screens and resolve which config to use
 var detector = await CreateDetector(macNetworkState, services);
 HydraConfig? config;
 if (!HydraConfig.HasConditions(configs))
-    config = configs[0]; // single unconditional config — no network check needed
+    config = configs[0]; // single unconditional config — no detection needed
 else
 {
-    var activeSsids = await detector.GetActiveSsids();
-    config = HydraConfig.Resolve(configs, activeSsids);
+    var activeSsids = HydraConfig.HasSsidConditions(configs) ? await detector.GetActiveSsids() : [];
+    var screenCount = HydraConfig.HasScreenCountConditions(configs) ? GetScreenCount() : 1;
+    config = HydraConfig.Resolve(configs, new ConditionState(activeSsids, screenCount));
 }
 
 // shared services always registered
@@ -99,6 +100,7 @@ if (OperatingSystem.IsMacOS() && macShield != null && macNetworkState != null)
 // network watcher always runs — logs state on startup, triggers restarts on change
 services.AddSingleton(sp => new NetworkWatcher(
     sp.GetRequiredService<INetworkDetector>(),
+    GetScreenCount,
     configs,
     config,
     sp.GetRequiredService<ILogger<NetworkWatcher>>()));
@@ -108,11 +110,16 @@ if (config != null)
 {
     services.AddSingleton(config);
 
+    // console mode: no X display available — use evdev input and null screen detector
+    var linuxConsoleMode = OperatingSystem.IsLinux() && Environment.GetEnvironmentVariable("DISPLAY") == null;
+
     // screen detector must be registered before any service that awaits IScreenDetector.Get() at startup
     if (OperatingSystem.IsMacOS())
         services.AddHostedService<IScreenDetector, MacScreenDetector>();
     else if (OperatingSystem.IsWindows())
         services.AddHostedService<IScreenDetector, WindowsScreenDetector>();
+    else if (linuxConsoleMode)
+        services.AddHostedService<IScreenDetector, NullScreenDetector>();
     else if (OperatingSystem.IsLinux())
         services.AddHostedService<IScreenDetector, XorgScreenDetector>();
     else
@@ -124,6 +131,15 @@ if (config != null)
             services.AddSingleton<IPlatformInput, MacInputHandler>();
         else if (OperatingSystem.IsWindows())
             services.AddSingleton<IPlatformInput, WindowsInputHandler>();
+        else if (linuxConsoleMode)
+        {
+            if (!config.RemoteOnly)
+            {
+                Console.Error.WriteLine("No display server available (DISPLAY not set). Set remoteOnly: true in hydra.conf for console operation.");
+                return;
+            }
+            services.AddSingleton<IPlatformInput, EvdevInputHandler>();
+        }
         else if (OperatingSystem.IsLinux())
             services.AddSingleton<IPlatformInput, XorgInputHandler>();
         else
@@ -158,6 +174,8 @@ if (config != null)
         services.AddSingleton<IScreenSaverSync, MacScreenSaverSync>();
     else if (OperatingSystem.IsWindows())
         services.AddSingleton<IScreenSaverSync, WindowsScreenSaverSync>();
+    else if (linuxConsoleMode)
+        services.AddSingleton<IScreenSaverSync, NullScreenSaverSync>();
     else if (OperatingSystem.IsLinux())
         services.AddSingleton<IScreenSaverSync, XorgScreenSaverSync>();
     else
@@ -190,6 +208,17 @@ if (macShield != null)
     macShield.OnNetworkStateChanged = () => app.Services.GetRequiredService<NetworkWatcher>().TriggerCheck();
 }
 
+// wire screen changes to condition re-check when screenCount conditions are configured
+if (HydraConfig.HasScreenCountConditions(configs))
+{
+    var screenDetector = app.Services.GetService<IScreenDetector>();
+    if (screenDetector != null)
+    {
+        var watcher = app.Services.GetRequiredService<NetworkWatcher>();
+        screenDetector.ScreensChanged += _ => { watcher.TriggerCheck(); return Task.CompletedTask; };
+    }
+}
+
 app.Run();
 processLock?.Dispose();
 
@@ -201,4 +230,26 @@ static async Task<INetworkDetector> CreateDetector(MacNetworkState? macNetworkSt
     if (OperatingSystem.IsWindows()) return new WindowsNetworkDetector();
     if (OperatingSystem.IsLinux()) return new LinuxNetworkDetector(cmdRunner, await logServices.CreateLogger<LinuxNetworkDetector>());
     throw new PlatformNotSupportedException($"Unsupported OS: {Environment.OSVersion}");
+}
+
+// returns the current number of connected screens
+static int GetScreenCount()
+{
+    if (OperatingSystem.IsMacOS()) return MacDisplayHelper.GetAllScreens().Count;
+    if (OperatingSystem.IsWindows()) return WindowsDisplayHelper.GetAllScreens().Count;
+    if (OperatingSystem.IsLinux())
+    {
+        var display = Hydra.Platform.Linux.NativeMethods.XOpenDisplay(null);
+        if (display == nint.Zero) return 1;
+        try
+        {
+            var root = Hydra.Platform.Linux.NativeMethods.XDefaultRootWindow(display);
+            return XorgDisplayHelper.GetAllScreens(display, root).Count;
+        }
+        finally
+        {
+            _ = Hydra.Platform.Linux.NativeMethods.XCloseDisplay(display);
+        }
+    }
+    return 1;
 }

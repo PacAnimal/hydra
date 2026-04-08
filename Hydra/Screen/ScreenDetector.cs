@@ -5,6 +5,7 @@ using Cathedral.Utils;
 using Hydra.Config;
 using Hydra.Platform;
 using Hydra.Relay;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace Hydra.Screen;
@@ -121,4 +122,16 @@ public abstract class ScreenDetector : SimpleHostedService, IScreenDetector
         (def.DisplayName == null || d.DisplayName?.EqualsIgnoreCase(def.DisplayName) is true)
         && (def.OutputName == null || d.OutputName?.EqualsIgnoreCase(def.OutputName) is true)
         && (def.PlatformId == null || d.PlatformId?.EqualsIgnoreCase(def.PlatformId) is true);
+}
+
+// no-op screen detector for console/headless mode — no local screens to detect
+public sealed class NullScreenDetector : IScreenDetector, IHostedService
+{
+    private static readonly LocalScreenSnapshot Empty = new([], []);
+#pragma warning disable CS0067  // never fired — headless mode has no screen changes
+    public event Func<LocalScreenSnapshot, Task>? ScreensChanged;
+#pragma warning restore CS0067
+    public Task<LocalScreenSnapshot> Get(CancellationToken ct = default) => Task.FromResult(Empty);
+    public Task StartAsync(CancellationToken ct) => Task.CompletedTask;
+    public Task StopAsync(CancellationToken ct) => Task.CompletedTask;
 }

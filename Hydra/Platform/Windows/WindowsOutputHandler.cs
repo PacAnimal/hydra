@@ -104,7 +104,7 @@ public sealed class WindowsOutputHandler : IPlatformOutput, ICursorVisibility
                 {
                     // batch Win down + key down in one SendInput so the shell sees them atomically
                     var inputs = stackalloc INPUT[2];
-                    inputs[0] = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = (ushort)WinVirtualKey.LWin, dwFlags = NativeMethods.KEYEVENTF_EXTENDEDKEY } };
+                    inputs[0] = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = WinVirtualKey.LWin, dwFlags = NativeMethods.KEYEVENTF_EXTENDEDKEY } };
                     inputs[1] = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = vk } };
                     _ = NativeMethods.SendInput(2, inputs, sizeof(INPUT));
                 }

@@ -54,7 +54,7 @@ jobs:
 
     strategy:
       matrix:
-        rid: [osx-arm64, win-x64, linux-x64]
+        rid: [osx-arm64, win-x64, linux-x64, linux-arm64]
 
     steps:
       - uses: actions/checkout@v6
@@ -103,7 +103,8 @@ jobs:
             hydra-osx-arm64/hydra-osx-arm64.tar.gz \
             hydra-win-x64/hydra-win-x64.tar.gz \
             hydra-win-x64/hydra-win-x64.zip \
-            hydra-linux-x64/hydra-linux-x64.tar.gz
+            hydra-linux-x64/hydra-linux-x64.tar.gz \
+            hydra-linux-arm64/hydra-linux-arm64.tar.gz
 
       - name: Prune old releases (keep last 5)
         env:

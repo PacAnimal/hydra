@@ -14,13 +14,15 @@ Hydra runs on the machine with the physical keyboard and mouse (the **master**).
 - Full keyboard forwarding, including dead keys and special characters — resolved on the master using its own keyboard layout
 - Mouse button and scroll forwarding
 - End-to-end encrypted relay via **Styx** for machines on different networks
-- macOS, Windows, and Linux support
+- macOS, Windows, and Linux (x64 and arm64) support
+- **Remote-only mode** — use a headless Linux machine (e.g. Raspberry Pi) as a dedicated input forwarder; all input goes straight to a remote machine with no local screen involved
 
 ## Requirements
 
 - .NET 10
 - **macOS**: Accessibility permission (System Settings → Privacy & Security → Accessibility)
-- **Linux**: X11 with XInput2 (Wayland not yet supported)
+- **Linux (with display)**: X11 with XInput2 (Wayland not yet supported)
+- **Linux (headless/console)**: `remoteOnly: true` in config; user must be in the `input` group (`sudo usermod -aG input $USER`) for `/dev/input/event*` access; `libxkbcommon` installed (`apt install libxkbcommon0`)
 
 ## Configuration
 
@@ -53,8 +55,10 @@ Neighbours are **mirrored by default** — declaring that `laptop` has `desktop`
 - `hosts` — list of host entries for the neighbour graph (master only; slaves don't need this)
 - `screenDefinitions` — optional per-screen configuration for scale (used on any machine)
 - `deadCorners` — pixel dead zone at screen corners where transitions are blocked (default `0`, `50` is a reasonable starting value). Scaled by the screen's `scale` setting. Can also be set per-host to override.
-- `conditions` — optional object; if set, this config only activates when all conditions are met (see [Network-aware config](#network-aware-config))
+- `remoteOnly` — `true` to forward all input to remote machines immediately at startup, with no local screen involved (see [Remote-only mode](#remote-only-mode))
+- `conditions` — optional object; if set, this config only activates when **all** specified conditions are met (see [Network-aware config](#network-aware-config))
   - `ssid` — activates when connected to this WiFi network name (case-insensitive)
+  - `screenCount` — activates when exactly this many screens are connected (integer ≥ 1)
 
 ### Screen layout
 
@@ -194,17 +198,104 @@ If you move your machine between networks (e.g. home vs. office), `hydra.conf` c
 ```
 
 - `conditions: { "ssid": "..." }` — activates when connected to the named WiFi network (case-insensitive)
-- No `conditions` — fallback, activates on any network not matched by another entry
+- `conditions: { "screenCount": 2 }` — activates when exactly 2 screens are connected
+- Conditions are **AND-ed** — `{ "ssid": "Office", "screenCount": 2 }` requires both to match simultaneously
+- No `conditions` (or `{}`) — fallback, activates when no other entry matches
 
-A fallback entry (no `conditions`) is optional. Without one, Hydra simply idles on unrecognised networks.
+A fallback entry is optional. Without one, Hydra idles when no config matches — e.g. at a coffee shop.
 
-Rules: at most one fallback, no duplicate SSIDs — validated at startup.
+Rules: at most one fallback, no two configs with identical condition tuples — validated at startup.
+
+Hydra re-evaluates conditions automatically when the network changes or screens are connected/disconnected, and restarts with the appropriate config if needed.
+
+**Example — different layouts for docked vs. laptop-only:**
+
+```json
+[
+  {
+    "mode": "Master",
+    "conditions": { "ssid": "Office", "screenCount": 2 },
+    "hosts": [
+      { "name": "laptop", "neighbours": [{ "direction": "right", "name": "desktop" }] }
+    ]
+  },
+  {
+    "mode": "Master",
+    "conditions": { "ssid": "Office", "screenCount": 1 },
+    "hosts": [
+      { "name": "laptop", "neighbours": [{ "direction": "right", "name": "desktop" }] }
+    ]
+  },
+  { "mode": "Slave" }
+]
+```
 
 > **macOS note:** Location Services permission is only requested if at least one config uses `conditions`. Hydra never asks for location permission when running with a single unconditional config.
 
 ### Lock hotkey
 
 **Ctrl+Alt+Super+L** — locks the cursor to the current screen until pressed again.
+
+In remote-only mode the lock hotkey works differently: since there is no local screen to return to, it acts as a **remote toggle** — press once to unlock to local (pass input through to the physical machine running Hydra), press again to re-lock back to remote.
+
+---
+
+## Remote-only mode
+
+Remote-only mode turns Hydra into a dedicated input forwarder: 100% of keyboard and mouse input goes to the configured remote machine(s) immediately at startup, with no edge-crossing required. This is useful for setups like a Raspberry Pi as a wireless keyboard/mouse bridge — input is forwarded to a Mac or PC over the network using the Pi's own keyboard layout.
+
+### When to use it
+
+- A headless Linux machine (no monitor, no display server) needs to forward input
+- You want a second computer that is always controlled remotely — no toggle, no edge, just instant forwarding
+- You want to use a PC keyboard layout on a Mac without installing any software on the Mac (except for Hydra 🙂)
+
+### Configuration
+
+Set `remoteOnly: true` and list the remote host(s). No local entry for the Pi itself is needed.
+
+```json
+{
+  "mode": "Master",
+  "name": "pi",
+  "remoteOnly": true,
+  "networkConfig": "<base64 string>",
+  "hosts": [
+    { "name": "mac" }
+  ]
+}
+```
+
+With multiple remote hosts, add neighbours between them so the cursor can transition across hosts:
+
+```json
+{
+  "mode": "Master",
+  "name": "pi",
+  "remoteOnly": true,
+  "networkConfig": "<base64 string>",
+  "hosts": [
+    {
+      "name": "mac",
+      "neighbours": [{ "direction": "right", "name": "win" }]
+    },
+    { "name": "win" }
+  ]
+}
+```
+
+### Headless Linux (no display server)
+
+On a console-only Linux machine (no `$DISPLAY`), Hydra automatically uses the evdev input subsystem instead of X11. No Xorg or Wayland is needed.
+
+Requirements:
+- User must be in the `input` group: `sudo usermod -aG input $USER` (log out and back in for the group change to take effect)
+- `libxkbcommon` installed: `sudo apt install libxkbcommon0`
+- Set the keyboard layout via `XKB_DEFAULT_LAYOUT` if not `us`, e.g. `XKB_DEFAULT_LAYOUT=gb ./hydra`
+
+> If `$DISPLAY` is set (X11 is running), Hydra uses X11 regardless of `remoteOnly`.
+
+> If no `$DISPLAY` and `remoteOnly` is not set, Hydra exits with an error — it can't capture input without either a display server or remote-only mode.
 
 ## Running
 
@@ -215,9 +306,10 @@ dotnet run --project Hydra
 Or build a self-contained single-file executable:
 
 ```bash
-dotnet publish Hydra --runtime osx-arm64 --self-contained   # macOS Apple Silicon
-dotnet publish Hydra --runtime win-x64  --self-contained    # Windows x64
+dotnet publish Hydra --runtime osx-arm64  --self-contained   # macOS Apple Silicon
+dotnet publish Hydra --runtime win-x64   --self-contained   # Windows x64
 dotnet publish Hydra --runtime linux-x64 --self-contained   # Linux x64
+dotnet publish Hydra --runtime linux-arm64 --self-contained # Linux arm64 (e.g. Raspberry Pi)
 ```
 
 Output lands in `Hydra/bin/Release/net10.0/<rid>/publish/`. The binary bundles the runtime and all assets — nothing else needs to ship alongside it.

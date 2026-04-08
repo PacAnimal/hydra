@@ -7,6 +7,7 @@ namespace Tests.Setup;
 public sealed class FakePlatform : IPlatformInput
 {
     private Action<double, double>? _onMouseMove;
+    private Action<double, double>? _onMouseDelta;
     private Action<KeyEvent>? _onKeyEvent;
     private Action<MouseButtonEvent>? _onMouseButton;
     private Action<MouseScrollEvent>? _onMouseScroll;
@@ -18,6 +19,7 @@ public sealed class FakePlatform : IPlatformInput
     public int WarpY { get; private set; }
 
     public void FireMouseMove(double x, double y) => _onMouseMove?.Invoke(x, y);
+    public void FireMouseDelta(double dx, double dy) => _onMouseDelta?.Invoke(dx, dy);
     public void FireKeyEvent(KeyEvent e) => _onKeyEvent?.Invoke(e);
     public void FireMouseButton(MouseButtonEvent e) => _onMouseButton?.Invoke(e);
     public void FireMouseScroll(MouseScrollEvent e) => _onMouseScroll?.Invoke(e);
@@ -36,11 +38,13 @@ public sealed class FakePlatform : IPlatformInput
 
     public Task StartEventTap(
         Action<double, double> onMouseMove,
+        Action<double, double>? onMouseDelta,
         Action<KeyEvent> onKeyEvent,
         Action<MouseButtonEvent> onMouseButton,
         Action<MouseScrollEvent> onMouseScroll)
     {
         _onMouseMove = onMouseMove;
+        _onMouseDelta = onMouseDelta;
         _onKeyEvent = onKeyEvent;
         _onMouseButton = onMouseButton;
         _onMouseScroll = onMouseScroll;

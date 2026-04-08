@@ -78,7 +78,7 @@ internal sealed class XorgKeyResolver
     // maps a dead keysym to its combining char and spacing form.
     // spacing is '\0' for dead keys with no natural standalone character.
     // when dead key + space is pressed, spacing form is emitted if available, otherwise space passes through.
-    private static DeadKeyInfo DeadKeyLookup(ulong keysym) => keysym switch
+    internal static DeadKeyInfo DeadKeyLookup(ulong keysym) => keysym switch
     {
         0xFE50 => new('\u0300', '\u0060'),  // XK_dead_grave              → combining grave, ` spacing
         0xFE51 => new('\u0301', '\u00B4'),  // XK_dead_acute              → combining acute, ´ spacing
@@ -114,7 +114,7 @@ internal sealed class XorgKeyResolver
 
     // checks special key map first, then falls back to mechanical MISCELLANY mapping.
     // MISCELLANY keysyms (0xFF00-0xFFFF) map directly: keysym | 0x01000000 = SpecialKey value.
-    private static SpecialKey? KeySymToSpecialKey(ulong keysym)
+    internal static SpecialKey? KeySymToSpecialKey(ulong keysym)
     {
         if (XorgSpecialKeyMap.Instance.TryGet(keysym, out var special)) return special;
 
@@ -129,7 +129,7 @@ internal sealed class XorgKeyResolver
     // latin-1 printable range (0x0020-0x00FF) maps directly as unicode codepoints.
     // modern Unicode-extension keysyms (0x01000000 | codepoint) strip the flag bit.
     // legacy named keysyms where X11 value equals Unicode codepoint (e.g. EuroSign = 0x20AC).
-    private static char? KeySymToChar(ulong keysym)
+    internal static char? KeySymToChar(ulong keysym)
     {
         if (keysym is >= 0x0020 and <= 0x00FF)
             return (char)keysym;
@@ -165,7 +165,7 @@ internal sealed class XorgKeyResolver
         return evType == NativeMethods.KeyPress ? state | bit : state & ~bit;
     }
 
-    private record DeadKeyInfo(char Combining, char Spacing);
+    internal record DeadKeyInfo(char Combining, char Spacing);
 
     // X11 modifier mask bit for a modifier keysym, or 0 for non-modifier keys
     private static uint ModifierBit(ulong keysym) => keysym switch

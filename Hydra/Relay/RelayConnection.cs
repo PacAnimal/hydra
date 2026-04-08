@@ -33,6 +33,10 @@ public class RelayConnection(HydraConfig config, ILogger<RelayConnection> log, I
             var encrypted = await _encryption.Encrypt(payload);
             await _server.Send(targetHosts, encrypted);
         }
+        catch (HttpRequestException ex)
+        {
+            log.LogWarning("Failed to send relay message to [{TargetHosts}]: {Message}", string.Join(", ", targetHosts), ex.InnerException?.Message ?? ex.Message);
+        }
         catch (Exception ex)
         {
             log.LogWarning(ex, "Failed to send relay message to [{TargetHosts}]", string.Join(", ", targetHosts));
@@ -144,6 +148,10 @@ public class RelayConnection(HydraConfig config, ILogger<RelayConnection> log, I
             catch (OperationCanceledException)
             {
                 log.LogWarning("Relay connection lost — retrying in 15s");
+            }
+            catch (HttpRequestException ex)
+            {
+                log.LogWarning("Relay connection failed — retrying in 15s: {Message}", ex.InnerException?.Message ?? ex.Message);
             }
             catch (Exception ex)
             {

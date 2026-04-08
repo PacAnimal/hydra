@@ -76,6 +76,7 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log) : IPla
 
     public async Task StartEventTap(
         Action<double, double> onMouseMove,
+        Action<double, double>? onMouseDelta,
         Action<KeyEvent> onKeyEvent,
         Action<MouseButtonEvent> onMouseButton,
         Action<MouseScrollEvent> onMouseScroll)

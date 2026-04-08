@@ -5,25 +5,28 @@ using Microsoft.Extensions.Logging;
 
 namespace Hydra.Config;
 
-// monitors network changes and restarts hydra when the active config should change
+// monitors network/screen changes and restarts hydra when the active config should change
 internal sealed class NetworkWatcher : SimpleHostedService
 {
     private readonly INetworkDetector _detector;
+    private readonly Func<int> _screenCountProvider;
     private readonly List<HydraConfig> _configs;
     private readonly HydraConfig? _activeConfig;
     private readonly ILogger<NetworkWatcher> _log;
 
-    // tracks last known SSIDs for transition logging
+    // tracks last known state for transition logging
     private List<string>? _lastSsids;
+    private int? _lastScreenCount;
 
     // debounce: ignore rapid re-triggers within this window
     private DateTime _lastCheck = DateTime.MinValue;
     private static readonly TimeSpan Debounce = TimeSpan.FromSeconds(2);
 
-    public NetworkWatcher(INetworkDetector detector, List<HydraConfig> configs, HydraConfig? activeConfig, ILogger<NetworkWatcher> log)
+    public NetworkWatcher(INetworkDetector detector, Func<int> screenCountProvider, List<HydraConfig> configs, HydraConfig? activeConfig, ILogger<NetworkWatcher> log)
         : base(log, TimeSpan.FromSeconds(60))
     {
         _detector = detector;
+        _screenCountProvider = screenCountProvider;
         _configs = configs;
         _activeConfig = activeConfig;
         _log = log;
@@ -68,25 +71,35 @@ internal sealed class NetworkWatcher : SimpleHostedService
             return;
         }
 
-        // log transition (null on first check = startup)
-        LogTransition(_lastSsids, ssids);
-        _lastSsids = ssids;
+        var screenCount = _screenCountProvider();
 
-        var resolved = HydraConfig.Resolve(_configs, ssids);
+        // log transitions (null on first check = startup)
+        LogSsidTransition(_lastSsids, ssids);
+        LogScreenCountTransition(_lastScreenCount, screenCount);
+        _lastSsids = ssids;
+        _lastScreenCount = screenCount;
+
+        var resolved = HydraConfig.Resolve(_configs, new ConditionState(ssids, screenCount));
         if (resolved == _activeConfig) return;
 
         var from = _activeConfig != null ? $"{_activeConfig.Mode}" : "idle";
         var to = resolved != null ? $"{resolved.Mode}" : "idle";
-        _log.LogInformation("Network change: switching from {From} to {To}, restarting", from, to);
+        _log.LogInformation("Conditions changed: switching from {From} to {To}, restarting", from, to);
         ProcessRestart.Restart();
     }
 
-    private void LogTransition(List<string>? previous, List<string> current)
+    private void LogSsidTransition(List<string>? previous, List<string> current)
     {
         var prevStr = FormatSsids(previous);
         var currStr = FormatSsids(current);
         if (prevStr == currStr) return;
         _log.LogInformation("Network: {Previous} → {Current}", prevStr, currStr);
+    }
+
+    private void LogScreenCountTransition(int? previous, int current)
+    {
+        if (previous == null || previous == current) return;
+        _log.LogInformation("Screens: {Previous} → {Current}", previous, current);
     }
 
     private static string FormatSsids(List<string>? ssids)

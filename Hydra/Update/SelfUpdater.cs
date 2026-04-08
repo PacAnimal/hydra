@@ -36,6 +36,10 @@ internal sealed class SelfUpdater(HydraConfig config, ILogger<SelfUpdater> log) 
         {
             await CheckAndUpdate(cancel);
         }
+        catch (HttpRequestException e)
+        {
+            log.LogDebug("Auto-update check failed: {Message}", e.InnerException?.Message ?? e.Message);
+        }
         catch (Exception e) when (e is not OperationCanceledException)
         {
             log.LogWarning(e, "Auto-update failed, continuing with current version");
@@ -166,6 +170,7 @@ internal sealed class SelfUpdater(HydraConfig config, ILogger<SelfUpdater> log) 
         if (OperatingSystem.IsMacOS() && RuntimeInformation.ProcessArchitecture == Architecture.Arm64) return "osx-arm64";
         if (OperatingSystem.IsWindows() && RuntimeInformation.ProcessArchitecture == Architecture.X64) return "win-x64";
         if (OperatingSystem.IsLinux() && RuntimeInformation.ProcessArchitecture == Architecture.X64) return "linux-x64";
+        if (OperatingSystem.IsLinux() && RuntimeInformation.ProcessArchitecture == Architecture.Arm64) return "linux-arm64";
         return null;
     }
 }
