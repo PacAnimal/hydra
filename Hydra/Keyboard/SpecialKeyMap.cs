@@ -8,7 +8,12 @@ internal abstract class SpecialKeyMap
 
     private Dictionary<SpecialKey, ulong>? _reverse;
 
+    internal IEnumerable<KeyValuePair<ulong, SpecialKey>> Entries => Map;
+
     internal bool TryGet(ulong code, out SpecialKey key) => Map.TryGetValue(code, out key);
 
-    internal Dictionary<SpecialKey, ulong> Reverse => _reverse ??= Map.ToDictionary(kvp => kvp.Value, kvp => kvp.Key);
+    // first keysym per SpecialKey wins; aliases (e.g. ISO_Left_Tab) are forward-only
+    internal Dictionary<SpecialKey, ulong> Reverse => _reverse ??= Map
+        .GroupBy(kvp => kvp.Value)
+        .ToDictionary(g => g.Key, g => g.First().Key);
 }
