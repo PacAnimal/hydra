@@ -70,9 +70,9 @@ jobs:
       - name: Package artifact
         run: |
           cd Hydra/bin/Release/net10.0/${{ matrix.rid }}/publish
-          tar czf ${{ github.workspace }}/hydra-${{ matrix.rid }}.tar.gz .
+          tar czf ${{ github.workspace }}/hydra-${{ matrix.rid }}.tar.gz --exclude='*.pdb' .
           if [[ "${{ matrix.rid }}" == win-* ]]; then
-            zip -r ${{ github.workspace }}/hydra-${{ matrix.rid }}.zip .
+            zip -r ${{ github.workspace }}/hydra-${{ matrix.rid }}.zip . -x '*.pdb'
           fi
 
       - name: Upload artifact
