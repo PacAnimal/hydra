@@ -40,88 +40,92 @@ export default function App() {
         </div>
       </header>
 
-      <main className="app-main">
-        <div className="section multi-toggle">
-          <label className="checkbox-label">
-            <input
-              type="checkbox"
-              checked={multiConfig}
-              onChange={e => setMultiConfig(e.target.checked)}
-            />
-            Multi-Config Mode (array of configs with conditions)
-          </label>
-        </div>
+      <div className="app-body">
+        <aside className="config-panel">
+          <ConfigFileSection configs={configs} multiConfig={multiConfig} />
+        </aside>
 
-        {multiConfig && (
-          <div className="config-tabs">
-            {configs.map((_, i) => (
-              <button
-                key={i}
-                className={`tab-btn${i === activeIndex ? ' active' : ''}`}
-                onClick={() => setActiveIndex(i)}
-              >
-                Config {i + 1}
-                {configs.length > 1 && (
-                  <span
-                    className="tab-remove"
-                    onClick={e => { e.stopPropagation(); removeConfigEntry(i) }}
-                    role="button"
-                    aria-label={`remove config ${i + 1}`}
-                  >
-                    ✕
-                  </span>
-                )}
-              </button>
-            ))}
-            <button className="tab-btn tab-add" onClick={addConfigEntry}>+</button>
+        <main className="app-main">
+          <div className="section multi-toggle">
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={multiConfig}
+                onChange={e => setMultiConfig(e.target.checked)}
+              />
+              Multi-Config Mode (array of configs with conditions)
+            </label>
           </div>
-        )}
 
-        <ModeSelect value={current.mode} onChange={mode => updateCurrent({ mode })} />
+          {multiConfig && (
+            <div className="config-tabs">
+              {configs.map((_, i) => (
+                <button
+                  key={i}
+                  className={`tab-btn${i === activeIndex ? ' active' : ''}`}
+                  onClick={() => setActiveIndex(i)}
+                >
+                  Config {i + 1}
+                  {configs.length > 1 && (
+                    <span
+                      className="tab-remove"
+                      onClick={e => { e.stopPropagation(); removeConfigEntry(i) }}
+                      role="button"
+                      aria-label={`remove config ${i + 1}`}
+                    >
+                      ✕
+                    </span>
+                  )}
+                </button>
+              ))}
+              <button className="tab-btn tab-add" onClick={addConfigEntry}>+</button>
+            </div>
+          )}
 
-        <GlobalSettings config={current} onChange={updateCurrent} />
+          <ModeSelect value={current.mode} onChange={mode => updateCurrent({ mode })} />
 
-        {isMaster && (
-          <HostsEditor
-            hosts={current.hosts ?? []}
-            onAdd={addHost}
-            onRemove={removeHost}
-            onUpdate={updateHost}
-            onAddNeighbour={addNeighbour}
-            onRemoveNeighbour={removeNeighbour}
-            onUpdateNeighbour={updateNeighbour}
+          <GlobalSettings config={current} onChange={updateCurrent} />
+
+          {isMaster && (
+            <HostsEditor
+              hosts={current.hosts ?? []}
+              onAdd={addHost}
+              onRemove={removeHost}
+              onUpdate={updateHost}
+              onAddNeighbour={addNeighbour}
+              onRemoveNeighbour={removeNeighbour}
+              onUpdateNeighbour={updateNeighbour}
+            />
+          )}
+
+          <ScreenDefinitions
+            screens={current.screenDefinitions ?? []}
+            onAdd={addScreen}
+            onRemove={removeScreen}
+            onUpdate={updateScreen}
           />
-        )}
 
-        <ScreenDefinitions
-          screens={current.screenDefinitions ?? []}
-          onAdd={addScreen}
-          onRemove={removeScreen}
-          onUpdate={updateScreen}
-        />
+          {multiConfig && (
+            <div className="section">
+              <h2>Conditions</h2>
+              <p className="hint">When should this config be active?</p>
+              <ConditionsEditor
+                conditions={current.conditions ?? {}}
+                onChange={updateConditions}
+              />
+            </div>
+          )}
 
-        {multiConfig && (
-          <div className="section">
-            <h2>Conditions</h2>
-            <p className="hint">When should this config be active?</p>
-            <ConditionsEditor
-              conditions={current.conditions ?? {}}
-              onChange={updateConditions}
-            />
-          </div>
-        )}
-
-        {errors.length > 0 && (
-          <div className="section validation-errors">
-            <h2>Validation Errors</h2>
-            {errors.map((e, i) => (
-              <div key={i} className="error">{e.message}</div>
-            ))}
-          </div>
-        )}
-
-        <ConfigFileSection configs={configs} multiConfig={multiConfig} />
-      </main>
+          {errors.length > 0 && (
+            <div className="section validation-errors">
+              <h2>Validation Errors</h2>
+              {errors.map((e, i) => (
+                <div key={i} className="error">{e.message}</div>
+              ))}
+            </div>
+          )}
+        </main>
+      </div>
     </div>
   )
 }

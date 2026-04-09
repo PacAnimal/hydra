@@ -7,23 +7,14 @@ import type { HydraConfig } from '../types'
 const cfg: HydraConfig = { mode: 'Master', name: 'test' }
 
 describe('ConfigFileSection', () => {
-  it('renders View and Download buttons', () => {
+  it('renders Copy and Download buttons', () => {
     render(<ConfigFileSection configs={[cfg]} multiConfig={false} />)
-    expect(screen.getByRole('button', { name: /view/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /copy to clipboard/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /download/i })).toBeInTheDocument()
   })
 
-  it('opens dialog on View click', async () => {
-    const user = userEvent.setup()
-    render(<ConfigFileSection configs={[cfg]} multiConfig={false} />)
-    await user.click(screen.getByRole('button', { name: /view/i }))
-    expect(HTMLDialogElement.prototype.showModal).toHaveBeenCalled()
-  })
-
-  it('displays JSON in the dialog', async () => {
-    const user = userEvent.setup()
+  it('displays JSON', () => {
     const { container } = render(<ConfigFileSection configs={[cfg]} multiConfig={false} />)
-    await user.click(screen.getByRole('button', { name: /view/i }))
     const pre = container.querySelector('pre')
     expect(pre?.textContent).toContain('"mode"')
   })
@@ -38,10 +29,7 @@ describe('ConfigFileSection', () => {
     })
 
     render(<ConfigFileSection configs={[cfg]} multiConfig={false} />)
-    await user.click(screen.getByRole('button', { name: /view/i }))
-    // dialog is hidden in jsdom (showModal is stubbed), query with { hidden: true }
-    const copyBtn = screen.getByRole('button', { name: /copy to clipboard/i, hidden: true })
-    await user.click(copyBtn)
+    await user.click(screen.getByRole('button', { name: /copy to clipboard/i }))
     expect(writeText).toHaveBeenCalledWith(expect.stringContaining('"mode"'))
   })
 })
