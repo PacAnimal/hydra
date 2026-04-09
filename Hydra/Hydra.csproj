@@ -33,6 +33,7 @@
     <ItemGroup>
         <PackageReference Include="Cathedral" Version="0.0.422" />
         <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.5" />
+        <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.5" />
         <PackageReference Include="TypedSignalR.Client" Version="3.6.0">
             <PrivateAssets>all</PrivateAssets>
             <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
@@ -51,24 +52,16 @@
 
     <ItemGroup>
         <!-- app bundle for Location Services identity — macOS requires a proper bundle to show auth dialogs -->
-        <Content Include="Resources/MacShield/hydra-shield.app/Contents/MacOS/hydra-shield"
-                 CopyToOutputDirectory="PreserveNewest"
-                 Condition="$([MSBuild]::IsOSPlatform('OSX')) And '$(RuntimeIdentifier)' != 'win-x64' And '$(RuntimeIdentifier)' != 'linux-x64' And '$(RuntimeIdentifier)' != 'linux-arm64'" />
-        <Content Include="Resources/MacShield/hydra-shield.app/Contents/Info.plist"
-                 CopyToOutputDirectory="PreserveNewest"
-                 Condition="$([MSBuild]::IsOSPlatform('OSX')) And '$(RuntimeIdentifier)' != 'win-x64' And '$(RuntimeIdentifier)' != 'linux-x64' And '$(RuntimeIdentifier)' != 'linux-arm64'" />
+        <Content Include="Resources/MacShield/hydra-shield.app/Contents/MacOS/hydra-shield" CopyToOutputDirectory="PreserveNewest" Condition="$([MSBuild]::IsOSPlatform('OSX')) And '$(RuntimeIdentifier)' != 'win-x64' And '$(RuntimeIdentifier)' != 'linux-x64' And '$(RuntimeIdentifier)' != 'linux-arm64'" />
+        <Content Include="Resources/MacShield/hydra-shield.app/Contents/Info.plist" CopyToOutputDirectory="PreserveNewest" Condition="$([MSBuild]::IsOSPlatform('OSX')) And '$(RuntimeIdentifier)' != 'win-x64' And '$(RuntimeIdentifier)' != 'linux-x64' And '$(RuntimeIdentifier)' != 'linux-arm64'" />
     </ItemGroup>
 
     <!-- compile the Swift shield helper into a proper .app bundle; only runs on macOS where swiftc is available -->
     <!-- uses a stamp file as Outputs — the binary path (inside hydra-shield.app/) doesn't exist on fresh checkout,
          causing MSBuild's incremental check to silently skip the target; a stamp in the existing MacShield/ dir works reliably -->
-    <Target Name="CompileMacShield" BeforeTargets="Build;_CopyOutOfDateSourceItemsToOutputDirectory"
-            Inputs="$(MSBuildProjectDirectory)/Resources/MacShield/main.swift;$(MSBuildProjectDirectory)/Resources/MacShield/ShieldInfo.plist"
-            Outputs="$(MSBuildProjectDirectory)/Resources/MacShield/.shield-stamp"
-            Condition="$([MSBuild]::IsOSPlatform('OSX')) And '$(RuntimeIdentifier)' != 'win-x64' And '$(RuntimeIdentifier)' != 'linux-x64' And '$(RuntimeIdentifier)' != 'linux-arm64'">
+    <Target Name="CompileMacShield" BeforeTargets="Build;_CopyOutOfDateSourceItemsToOutputDirectory" Inputs="$(MSBuildProjectDirectory)/Resources/MacShield/main.swift;$(MSBuildProjectDirectory)/Resources/MacShield/ShieldInfo.plist" Outputs="$(MSBuildProjectDirectory)/Resources/MacShield/.shield-stamp" Condition="$([MSBuild]::IsOSPlatform('OSX')) And '$(RuntimeIdentifier)' != 'win-x64' And '$(RuntimeIdentifier)' != 'linux-x64' And '$(RuntimeIdentifier)' != 'linux-arm64'">
         <MakeDir Directories="$(MSBuildProjectDirectory)/Resources/MacShield/hydra-shield.app/Contents/MacOS" />
-        <Copy SourceFiles="$(MSBuildProjectDirectory)/Resources/MacShield/ShieldInfo.plist"
-              DestinationFiles="$(MSBuildProjectDirectory)/Resources/MacShield/hydra-shield.app/Contents/Info.plist" />
+        <Copy SourceFiles="$(MSBuildProjectDirectory)/Resources/MacShield/ShieldInfo.plist" DestinationFiles="$(MSBuildProjectDirectory)/Resources/MacShield/hydra-shield.app/Contents/Info.plist" />
         <Exec Command="xcrun swiftc -O -framework Network -framework CoreWLAN -framework CoreLocation -o &quot;$(MSBuildProjectDirectory)/Resources/MacShield/hydra-shield.app/Contents/MacOS/hydra-shield&quot; &quot;$(MSBuildProjectDirectory)/Resources/MacShield/main.swift&quot;" />
         <Exec Command="codesign --force --sign - &quot;$(MSBuildProjectDirectory)/Resources/MacShield/hydra-shield.app&quot;" />
         <Touch Files="$(MSBuildProjectDirectory)/Resources/MacShield/.shield-stamp" AlwaysCreate="true" />

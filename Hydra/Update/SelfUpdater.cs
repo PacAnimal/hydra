@@ -7,11 +7,13 @@ using System.Text.Json;
 using Cathedral.Utils;
 using Hydra.Config;
 using Hydra.Platform;
+using Hydra.Platform.Windows;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace Hydra.Update;
 
-internal sealed class SelfUpdater(HydraConfig config, ILogger<SelfUpdater> log) : SimpleHostedService(log, TimeSpan.FromMinutes(30))
+internal sealed class SelfUpdater(HydraConfig config, IHostApplicationLifetime lifetime, ILogger<SelfUpdater> log) : SimpleHostedService(log, TimeSpan.FromMinutes(30))
 {
     private const string Repo = "pacanimal/hydra";
     private readonly Toggle _warned = new();
@@ -145,6 +147,15 @@ internal sealed class SelfUpdater(HydraConfig config, ILogger<SelfUpdater> log) 
         }
 
         log.LogInformation("Update applied, restarting");
+
+        if (OperatingSystem.IsWindows() && RunMode.IsSessionChild)
+        {
+            // running as service child — signal the watchdog to restart the service, then stop ourselves
+            Win32Session.SignalGlobalEvent("HydraUpdateReady");
+            lifetime.StopApplication();
+            return;
+        }
+
         ProcessRestart.Restart();
     }
 

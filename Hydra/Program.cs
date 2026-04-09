@@ -17,6 +17,14 @@ using Microsoft.Extensions.Logging;
 // ensure console can display non-ASCII characters (e.g. '€', 'ø') in debug logs
 Console.OutputEncoding = Encoding.UTF8;
 
+if (OperatingSystem.IsWindows())
+{
+    if (args.Contains("--install-service")) { ServiceCommands.Install(); return; }
+    if (args.Contains("--uninstall-service")) { ServiceCommands.Uninstall(); return; }
+    if (args.Contains("--service")) { ServiceHost.Run(args); return; }
+    if (args.Contains("--session")) RunMode.IsSessionChild = true;
+}
+
 List<HydraConfig> configs;
 string configPath;
 try
@@ -193,6 +201,9 @@ if (config != null)
     else
         services.AddSingleton<IRelaySender, NullRelaySender>();
 }
+
+if (OperatingSystem.IsWindows() && RunMode.IsSessionChild)
+    services.AddHostedService<SessionChildLifetime>();
 
 var app = builder.Build();
 
