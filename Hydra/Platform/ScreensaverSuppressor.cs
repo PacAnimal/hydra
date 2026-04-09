@@ -10,7 +10,7 @@ public interface IScreensaverSuppressor
     void Restore();
 }
 
-internal sealed class ScreensaverSuppressor(HydraConfig config, ILogger<ScreensaverSuppressor> log, IScreenSaverSync platform)
+internal sealed class ScreensaverSuppressor(IHydraProfile config, ILogger<ScreensaverSuppressor> log, IScreenSaverSync platform)
     : SimpleHostedService(log, TimeSpan.FromSeconds(5)), IScreensaverSuppressor
 {
     private volatile bool _suppressing;
