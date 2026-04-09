@@ -42,10 +42,8 @@ describe('App', () => {
     expect(screen.queryByText('Host 1')).not.toBeInTheDocument()
   })
 
-  it('shows multi-config tabs when multi-config enabled', async () => {
-    const user = userEvent.setup()
+  it('always shows profile tabs', () => {
     render(<App />)
-    await user.click(screen.getByLabelText(/multi-config mode/i))
-    expect(screen.getByText('Config 1')).toBeInTheDocument()
+    expect(screen.getByText('Profile 1')).toBeInTheDocument()
   })
 })

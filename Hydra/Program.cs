@@ -25,11 +25,13 @@ if (OperatingSystem.IsWindows())
     if (args.Contains("--session")) RunMode.IsSessionChild = true;
 }
 
-List<HydraConfig> configs;
+HydraConfigFile configFile;
+List<HydraConfig> profiles;
 string configPath;
 try
 {
-    (configs, configPath) = HydraConfig.LoadAll(Env.Config);
+    (configFile, configPath) = HydraConfigFile.LoadAll(Env.Config);
+    profiles = configFile.Profiles;
 }
 catch (FileNotFoundException ex)
 {
@@ -44,7 +46,7 @@ catch (InvalidOperationException ex)
 
 // acquire process lock if configured — prevents two instances from running with the same config
 ProcessLock? processLock = null;
-if (configs[0].LockFile is { } lockFileSetting)
+if (configFile.LockFile is { } lockFileSetting)
 {
     var lockPath = Path.IsPathRooted(lockFileSetting)
         ? lockFileSetting
@@ -66,7 +68,7 @@ MacNetworkState? macNetworkState = null;
 MacShieldProcess? macShield = null;
 if (OperatingSystem.IsMacOS())
 {
-    var needsWifi = HydraConfig.HasSsidConditions(configs);
+    var needsWifi = HydraConfig.HasSsidConditions(profiles);
     macNetworkState = new MacNetworkState();
     macShield = new MacShieldProcess(macNetworkState, needsWifi);
     await macShield.WaitForInitialState(TimeSpan.FromSeconds(3));
@@ -76,22 +78,29 @@ var builder = Host.CreateApplicationBuilder(args).DisableEventLog();
 var services = builder.Services;
 
 services.AddEnvironmentConfiguration();
-services.AddSereneConsoleLogging(c => c.MinLogLevel = configs[0].LogLevel);
 
-// detect current network/screens and resolve which config to use
+// detect current network/screens and resolve which profile to use
 var detector = await CreateDetector(macNetworkState, services);
 HydraConfig? config;
-if (!HydraConfig.HasConditions(configs))
-    config = configs[0]; // single unconditional config — no detection needed
+if (!HydraConfig.HasConditions(profiles))
+    config = profiles[0]; // single unconditional profile — no detection needed
 else
 {
-    var activeSsids = HydraConfig.HasSsidConditions(configs) ? await detector.GetActiveSsids() : [];
-    var screenCount = HydraConfig.HasScreenCountConditions(configs) ? GetScreenCount() : 1;
-    config = HydraConfig.Resolve(configs, new ConditionState(activeSsids, screenCount));
+    var activeSsids = HydraConfig.HasSsidConditions(profiles) ? await detector.GetActiveSsids() : [];
+    var screenCount = HydraConfig.HasScreenCountConditions(profiles) ? GetScreenCount() : 1;
+    config = HydraConfig.Resolve(profiles, new ConditionState(activeSsids, screenCount));
 }
 
+var profile = new HydraProfile(configFile, config);
+services.AddSingleton<IHydraProfile>(profile);
+
+services.AddSereneConsoleLogging(c => c.MinLogLevel = profile.LogLevel);
+
+var startupLog = await services.CreateLogger<HydraProfile>();
+startupLog.LogInformation("Active profile: {ProfileName}", profile.ProfileName ?? "<none>");
+
 // shared services always registered
-services.AddSingleton(configs);
+services.AddSingleton(profiles);
 services.AddSingleton<ICmdRunner, CmdRunner>();
 services.AddSingleton<INetworkDetector>(_ => detector);
 services.AddSingleton<IWorldState, WorldState>();
@@ -99,7 +108,7 @@ services.AddSingleton<IWorldState, WorldState>();
 // shield always runs on macOS — handles cursor shielding + network state detection
 if (OperatingSystem.IsMacOS() && macShield != null && macNetworkState != null)
 {
-    if (config != null) macShield.DebugShield = config.DebugShield;
+    macShield.DebugShield = profile.DebugShield;
     services.AddSingleton(macNetworkState);
     services.AddSingleton(macShield);
     services.AddHostedService(_ => macShield);
@@ -109,15 +118,13 @@ if (OperatingSystem.IsMacOS() && macShield != null && macNetworkState != null)
 services.AddSingleton(sp => new NetworkWatcher(
     sp.GetRequiredService<INetworkDetector>(),
     GetScreenCount,
-    configs,
+    profiles,
     config,
     sp.GetRequiredService<ILogger<NetworkWatcher>>()));
 services.AddHostedService(sp => sp.GetRequiredService<NetworkWatcher>());
 
 if (config != null)
 {
-    services.AddSingleton(config);
-
     // console mode: no X display available — use evdev input and null screen detector
     var linuxConsoleMode = OperatingSystem.IsLinux() && Environment.GetEnvironmentVariable("DISPLAY") == null;
 
@@ -133,7 +140,7 @@ if (config != null)
     else
         throw new PlatformNotSupportedException($"Unsupported OS: {Environment.OSVersion}");
 
-    if (config.Mode == Mode.Master)
+    if (profile.Mode == Mode.Master)
     {
         if (OperatingSystem.IsMacOS())
             services.AddSingleton<IPlatformInput, MacInputHandler>();
@@ -141,7 +148,7 @@ if (config != null)
             services.AddSingleton<IPlatformInput, WindowsInputHandler>();
         else if (linuxConsoleMode)
         {
-            if (!config.RemoteOnly)
+            if (!profile.RemoteOnly)
             {
                 Console.Error.WriteLine("No display server available (DISPLAY not set). Set remoteOnly: true in hydra.conf for console operation.");
                 return;
@@ -155,7 +162,7 @@ if (config != null)
 
         services.AddHostedService<InputRouter>();
     }
-    else if (config.Mode == Mode.Slave)
+    else if (profile.Mode == Mode.Slave)
     {
         if (OperatingSystem.IsMacOS())
             services.AddSingleton<IPlatformOutput, MacOutputHandler>();
@@ -172,7 +179,7 @@ if (config != null)
         // forwarder buffers log entries; SlaveLogSender drains them to masters
         var forwarder = new SlaveLogForwarder();
         services.AddSingleton(forwarder);
-        services.AddSereneCustomLogging(e => forwarder.ForwardAsync(e).AsTask(), c => c.MinLogLevel = config.LogLevel);
+        services.AddSereneCustomLogging(e => forwarder.ForwardAsync(e).AsTask(), c => c.MinLogLevel = profile.LogLevel);
         services.AddHostedService<SlaveLogSender>();
 
         services.AddHostedService<IScreensaverSuppressor, ScreensaverSuppressor>();
@@ -191,9 +198,9 @@ if (config != null)
 
     services.AddHostedService<SelfUpdater>();
 
-    if (config.NetworkConfig != null)
+    if (profile.NetworkConfig != null)
     {
-        if (config.Mode == Mode.Slave)
+        if (profile.Mode == Mode.Slave)
             services.AddHostedService<IRelaySender, SlaveRelayConnection>();
         else
             services.AddHostedService<IRelaySender, MasterRelayConnection>();
@@ -220,7 +227,7 @@ if (macShield != null)
 }
 
 // wire screen changes to condition re-check when screenCount conditions are configured
-if (HydraConfig.HasScreenCountConditions(configs))
+if (HydraConfig.HasScreenCountConditions(profiles))
 {
     var screenDetector = app.Services.GetService<IScreenDetector>();
     if (screenDetector != null)

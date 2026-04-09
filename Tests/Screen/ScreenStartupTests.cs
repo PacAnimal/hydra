@@ -14,20 +14,19 @@ public class ScreenStartupTests
     [Test]
     public async Task StartAsync_NameNotInScreens_LogsErrorAndDoesNotCrash()
     {
-        var config = new HydraConfig
+        var profile = TransitionTestHelper.Profile("unknown-host", new HydraConfig
         {
             Mode = Mode.Master,
-            Name = "unknown-host",
             Hosts =
             [
                 new HostConfig { Name = "laptop", Neighbours = [new NeighbourConfig { Direction = Direction.Right, Name = "desktop" }] },
                 new HostConfig { Name = "desktop", Neighbours = [new NeighbourConfig { Direction = Direction.Left, Name = "laptop" }] },
             ],
-        };
+        });
 
         var logs = new ErrorCapture();
         var service = new InputRouter(
-            new FakePlatform(), config, new NullRelaySender(),
+            new FakePlatform(), profile, new NullRelaySender(),
             new FakeScreenDetector(), NullLoggerFactory.Instance, logs.CreateLogger(), new NullScreenSaverSync());
 
         // must not throw

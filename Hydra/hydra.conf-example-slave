@@ -1,11 +1,15 @@
 {
-  "networkConfig": "<base64-encoded network config from Styx>",
-  "mode": "Slave",
-  "logLevel": "info",
   "name": "desktop",
+  "logLevel": "info",
   "lockFile": "hydra.lock",
-  "screenDefinitions": [
-    { "displayName": "DELL U2720Q", "mouseScale": 1.5 },
-    { "displayName": "Built-in Retina Display", "mouseScale": 1.0 }
+  "profiles": [
+    {
+      "networkConfig": "<base64-encoded network config from Styx>",
+      "mode": "Slave",
+      "screenDefinitions": [
+        { "displayName": "DELL U2720Q", "mouseScale": 1.5 },
+        { "displayName": "Built-in Retina Display", "mouseScale": 1.0 }
+      ]
+    }
   ]
 }

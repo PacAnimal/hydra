@@ -13,7 +13,7 @@ using TypedSignalR.Client;
 
 namespace Hydra.Relay;
 
-public class RelayConnection(HydraConfig config, ILogger<RelayConnection> log, IWorldState peerState)
+public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log, IWorldState peerState)
     : BackgroundService, IStyxClient, IRelaySender
 {
     private IStyxServer? _server;
@@ -119,12 +119,12 @@ public class RelayConnection(HydraConfig config, ILogger<RelayConnection> log, I
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        if (config.NetworkConfig == null) return;
+        if (profile.NetworkConfig == null) return;
 
         NetworkConfig netConfig;
         try
         {
-            netConfig = NetworkConfig.Parse(config.NetworkConfig);
+            netConfig = NetworkConfig.Parse(profile.NetworkConfig);
         }
         catch (Exception ex)
         {
@@ -132,7 +132,7 @@ public class RelayConnection(HydraConfig config, ILogger<RelayConnection> log, I
             return;
         }
 
-        var hostName = config.ResolvedName;
+        var hostName = profile.Name;
         log.LogInformation("Starting relay connection to {Server} as {HostName}", netConfig.StyxServer, hostName);
 
         while (!stoppingToken.IsCancellationRequested)

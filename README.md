@@ -30,14 +30,19 @@ Edit `hydra.conf` (sits next to the binary):
 
 ```json
 {
-  "mode": "Master",
   "name": "laptop",
   "logLevel": "info",
-  "hosts": [
+  "profiles": [
     {
-      "name": "laptop",
-      "neighbours": [
-        { "direction": "right", "name": "desktop" }
+      "profileName": "Home",
+      "mode": "Master",
+      "hosts": [
+        {
+          "name": "laptop",
+          "neighbours": [
+            { "direction": "right", "name": "desktop" }
+          ]
+        }
       ]
     }
   ]
@@ -48,15 +53,25 @@ Neighbours are **mirrored by default** — declaring that `laptop` has `desktop`
 
 ### Config fields
 
-- `mode` — `Master` or `Slave`
+**Root-level** (global, apply to all profiles):
+
 - `name` — this machine's name on the network. Optional — defaults to the machine's hostname without domain. Must match one of the host names for the master to identify its own screen.
 - `logLevel` — `trce`, `dbug`, `info`, `warn`, `fail`, or `crit`
+- `autoUpdate` — `false` to disable automatic updates
+- `lockFile` — path to a lock file to prevent multiple instances (default: none)
+- `profiles` — array of profile objects (see below); at least one required
+
+**Per-profile** (inside a `profiles` entry):
+
+- `profileName` — name for this profile, logged at startup so you know which one is active (no duplicates allowed)
+- `mode` — `Master` or `Slave`
 - `networkConfig` — base64 relay config string from Styx (required when using the relay)
 - `hosts` — list of host entries for the neighbour graph (master only; slaves don't need this)
-- `screenDefinitions` — optional per-screen configuration for scale (used on any machine)
-- `deadCorners` — pixel dead zone at screen corners where transitions are blocked (default `0`, `50` is a reasonable starting value). Scaled by the screen's `scale` setting. Can also be set per-host to override.
+- `screenDefinitions` — per-screen scale config (slave only; reported to master via ScreenInfo)
+- `mouseScale` — fallback cursor speed multiplier for all screens on this slave (slave only)
+- `deadCorners` — pixel dead zone at screen corners where transitions are blocked (default `0`, `50` is a reasonable starting value). Scaled by the screen's mouseScale. Can also be set per-host to override.
 - `remoteOnly` — `true` to forward all input to remote machines immediately at startup, with no local screen involved (see [Remote-only mode](#remote-only-mode))
-- `conditions` — optional object; if set, this config only activates when **all** specified conditions are met (see [Network-aware config](#network-aware-config))
+- `conditions` — optional object; if set, this profile only activates when **all** specified conditions are met (see [Network-aware config](#network-aware-config))
   - `ssid` — activates when connected to this WiFi network name (case-insensitive)
   - `screenCount` — activates when exactly this many screens are connected (integer ≥ 1)
 
@@ -108,17 +123,17 @@ When cursor crosses the right edge in the top half (0–50%), it goes to `workst
 
 `deadCorners` defines a pixel dead zone at each corner of the screen where outbound transitions are blocked, regardless of neighbour config. The value is in pixels — `50` means the cursor must be more than 50 pixels away from a corner to trigger a transition. The pixel value is multiplied by the screen's `mouseScale` setting, so a high-DPI screen with `mouseScale: 2` and `deadCorners: 50` gets an effective 100-pixel dead zone.
 
-Set at the root level to apply to all hosts:
+Set at the profile level to apply to all hosts:
 
 ```json
 {
-  "mode": "Master",
-  "deadCorners": 50,
-  "hosts": [...]
+  "profiles": [
+    { "mode": "Master", "deadCorners": 50, "hosts": [...] }
+  ]
 }
 ```
 
-Override per-host (takes precedence over the root value):
+Override per-host (takes precedence over the profile value):
 
 ```json
 {
@@ -150,15 +165,22 @@ Use these identifiers in `sourceScreen`/`destScreen` to target specific monitors
 
 ### Screen definitions
 
-`screenDefinitions` is available on both master and slave. Each entry specifies one or more match criteria — all specified criteria must match (case-insensitive). Use the identifiers shown at startup to build match entries.
+`screenDefinitions` is **slave only**. The slave reports its screen layout and scale settings to the master at connection time; the master applies the scale when routing cursor movement to that slave's screens.
+
+Each entry specifies one or more match criteria — all specified criteria must match (case-insensitive). Use the identifiers shown at startup to build match entries.
 
 ```json
 {
-  "mouseScale": 1.5,
-  "screenDefinitions": [
-    { "displayName": "DELL U2720Q",             "mouseScale": 1.5 },
-    { "displayName": "Built-in Retina Display", "mouseScale": 1.0 },
-    { "outputName": "HDMI-1",                   "mouseScale": 0.8 }
+  "profiles": [
+    {
+      "mode": "Slave",
+      "mouseScale": 1.5,
+      "screenDefinitions": [
+        { "displayName": "DELL U2720Q",             "mouseScale": 1.5 },
+        { "displayName": "Built-in Retina Display", "mouseScale": 1.0 },
+        { "outputName": "HDMI-1",                   "mouseScale": 0.8 }
+      ]
+    }
   ]
 }
 ```
@@ -168,66 +190,85 @@ Use these identifiers in `sourceScreen`/`destScreen` to target specific monitors
 | `displayName` | — | Match by display/monitor name (e.g. `"DELL U2720Q"`) |
 | `outputName` | — | Match by output connector name (e.g. `"HDMI-1"`) |
 | `platformId` | — | Match by platform-specific ID |
-| `mouseScale` | — | Cursor speed multiplier on this screen; overrides root `mouseScale` |
+| `mouseScale` | — | Cursor speed multiplier on this screen; overrides the profile-level `mouseScale` |
 
-The root-level `mouseScale` sets a fallback multiplier for all screens on that machine. Per-screen `mouseScale` in a `screenDefinitions` entry overrides it. If neither is set, the multiplier defaults to `1.0`.
+The profile-level `mouseScale` sets a fallback multiplier for all screens on this slave. Per-screen `mouseScale` in a `screenDefinitions` entry overrides it. If neither is set, the multiplier defaults to `1.0`.
 
 At least one match field must be set per `screenDefinitions` entry.
 
 ### Network-aware config
 
-If you move your machine between networks (e.g. home vs. office), `hydra.conf` can be an **array** of configs, each gated on the current network. Hydra picks the matching config and restarts automatically when the network changes. If no config matches — for example, you're at a coffee shop — Hydra idles silently. This is intentional: there are no machines to connect to anyway.
+If you move your machine between networks (e.g. home vs. office), add multiple profiles to `hydra.conf`, each gated on the current network. Hydra picks the matching profile and restarts automatically when the network changes. If no profile matches — for example, you're at a coffee shop — Hydra idles silently. This is intentional: there are no machines to connect to anyway.
 
-```json
-[
-  {
-    "mode": "Master",
-    "conditions": { "ssid": "HomeWifi" },
-    "name": "laptop",
-    "hosts": [
-      { "name": "laptop", "neighbours": [{ "direction": "right", "name": "desktop" }] }
-    ]
-  },
-  {
-    "mode": "Slave",
-    "conditions": { "ssid": "OfficeWifi" },
-    "name": "laptop",
-    "networkConfig": "<base64 string>"
-  }
-]
-```
+Each profile has a `profileName` — logged at startup so you always know which profile is active.
 
 - `conditions: { "ssid": "..." }` — activates when connected to the named WiFi network (case-insensitive)
 - `conditions: { "screenCount": 2 }` — activates when exactly 2 screens are connected
 - Conditions are **AND-ed** — `{ "ssid": "Office", "screenCount": 2 }` requires both to match simultaneously
-- No `conditions` (or `{}`) — fallback, activates when no other entry matches
+- No `conditions` (or `{}`) — fallback, activates when no other profile matches
 
-A fallback entry is optional. Without one, Hydra idles when no config matches — e.g. at a coffee shop.
+A fallback profile is optional. Without one, Hydra idles when no profile matches — e.g. at a coffee shop.
 
-Rules: at most one fallback, no two configs with identical condition tuples — validated at startup.
+Rules: at most one fallback, no two profiles with identical condition tuples, no duplicate profile names — validated at startup.
 
-Hydra re-evaluates conditions automatically when the network changes or screens are connected/disconnected, and restarts with the appropriate config if needed.
+Hydra re-evaluates conditions automatically when the network changes or screens are connected/disconnected, and restarts with the appropriate profile if needed.
+
+**Example — laptop as slave at home, master at work:**
+
+A common setup: at home your stationary desktop controls your laptop (the laptop is a slave). At work, your laptop is docked and controls a dedicated workstation (the laptop is the master).
+
+```json
+{
+  "name": "laptop",
+  "profiles": [
+    {
+      "profileName": "Home",
+      "conditions": { "ssid": "HomeWifi" },
+      "mode": "Slave",
+      "networkConfig": "<base64 string>"
+    },
+    {
+      "profileName": "Work",
+      "conditions": { "ssid": "OfficeWifi" },
+      "mode": "Master",
+      "networkConfig": "<base64 string>",
+      "hosts": [
+        {
+          "name": "laptop",
+          "neighbours": [{ "direction": "right", "name": "workstation" }]
+        },
+        { "name": "workstation" }
+      ]
+    }
+  ]
+}
+```
 
 **Example — different layouts for docked vs. laptop-only:**
 
 ```json
-[
-  {
-    "mode": "Master",
-    "conditions": { "ssid": "Office", "screenCount": 2 },
-    "hosts": [
-      { "name": "laptop", "neighbours": [{ "direction": "right", "name": "desktop" }] }
-    ]
-  },
-  {
-    "mode": "Master",
-    "conditions": { "ssid": "Office", "screenCount": 1 },
-    "hosts": [
-      { "name": "laptop", "neighbours": [{ "direction": "right", "name": "desktop" }] }
-    ]
-  },
-  { "mode": "Slave" }
-]
+{
+  "name": "laptop",
+  "profiles": [
+    {
+      "profileName": "Office docked",
+      "mode": "Master",
+      "conditions": { "ssid": "Office", "screenCount": 2 },
+      "hosts": [
+        { "name": "laptop", "neighbours": [{ "direction": "right", "name": "desktop" }] }
+      ]
+    },
+    {
+      "profileName": "Office undocked",
+      "mode": "Master",
+      "conditions": { "ssid": "Office", "screenCount": 1 },
+      "hosts": [
+        { "name": "laptop", "neighbours": [{ "direction": "right", "name": "desktop" }] }
+      ]
+    },
+    { "profileName": "Away", "mode": "Slave" }
+  ]
+}
 ```
 
 > **macOS note:** Location Services permission is only requested if at least one config uses `conditions`. Hydra never asks for location permission when running with a single unconditional config.
@@ -256,12 +297,16 @@ Set `remoteOnly: true` and list the remote host(s). No local entry for the Pi it
 
 ```json
 {
-  "mode": "Master",
   "name": "pi",
-  "remoteOnly": true,
-  "networkConfig": "<base64 string>",
-  "hosts": [
-    { "name": "mac" }
+  "profiles": [
+    {
+      "mode": "Master",
+      "remoteOnly": true,
+      "networkConfig": "<base64 string>",
+      "hosts": [
+        { "name": "mac" }
+      ]
+    }
   ]
 }
 ```
@@ -270,16 +315,20 @@ With multiple remote hosts, add neighbours between them so the cursor can transi
 
 ```json
 {
-  "mode": "Master",
   "name": "pi",
-  "remoteOnly": true,
-  "networkConfig": "<base64 string>",
-  "hosts": [
+  "profiles": [
     {
-      "name": "mac",
-      "neighbours": [{ "direction": "right", "name": "win" }]
-    },
-    { "name": "win" }
+      "mode": "Master",
+      "remoteOnly": true,
+      "networkConfig": "<base64 string>",
+      "hosts": [
+        {
+          "name": "mac",
+          "neighbours": [{ "direction": "right", "name": "win" }]
+        },
+        { "name": "win" }
+      ]
+    }
   ]
 }
 ```
@@ -320,12 +369,17 @@ On the slave machine:
 
 ```json
 {
-  "mode": "Slave",
   "name": "desktop",
   "logLevel": "info",
-  "networkConfig": "<same base64 string as master>",
-  "screenDefinitions": [
-    { "displayName": "DELL U2720Q", "mouseScale": 1.5 }
+  "profiles": [
+    {
+      "profileName": "Home",
+      "mode": "Slave",
+      "networkConfig": "<same base64 string as master>",
+      "screenDefinitions": [
+        { "displayName": "DELL U2720Q", "mouseScale": 1.5 }
+      ]
+    }
   ]
 }
 ```
@@ -367,14 +421,19 @@ Add `networkConfig` to `hydra.conf` on both machines. Use the same config string
 
 ```json
 {
-  "mode": "Master",
   "name": "laptop",
-  "networkConfig": "<base64 string from the Styx web UI>",
   "logLevel": "info",
-  "hosts": [
+  "profiles": [
     {
-      "name": "laptop",
-      "neighbours": [{ "direction": "right", "name": "desktop" }]
+      "profileName": "Home",
+      "mode": "Master",
+      "networkConfig": "<base64 string from the Styx web UI>",
+      "hosts": [
+        {
+          "name": "laptop",
+          "neighbours": [{ "direction": "right", "name": "desktop" }]
+        }
+      ]
     }
   ]
 }
@@ -384,10 +443,15 @@ Add `networkConfig` to `hydra.conf` on both machines. Use the same config string
 
 ```json
 {
-  "mode": "Slave",
   "name": "desktop",
-  "networkConfig": "<same base64 string>",
-  "logLevel": "info"
+  "logLevel": "info",
+  "profiles": [
+    {
+      "profileName": "Home",
+      "mode": "Slave",
+      "networkConfig": "<same base64 string>"
+    }
+  ]
 }
 ```
 

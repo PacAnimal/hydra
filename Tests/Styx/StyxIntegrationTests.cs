@@ -89,8 +89,8 @@ public class StyxIntegrationTests
         var key = StyxTestServer.GenerateEncryptionKey();
         var cfg = await StyxTestServer.BuildNetworkConfig(_factory!, networkId, key);
 
-        await using var sender = new HydraTestClient(_factory!, new HydraConfig { Mode = Mode.Master, NetworkConfig = cfg, Name = "sender" });
-        await using var receiver = new HydraTestClient(_factory!, new HydraConfig { Mode = Mode.Master, NetworkConfig = cfg, Name = "receiver" });
+        await using var sender = new HydraTestClient(_factory!, TransitionTestHelper.Profile("sender", new HydraConfig { Mode = Mode.Master, NetworkConfig = cfg }));
+        await using var receiver = new HydraTestClient(_factory!, TransitionTestHelper.Profile("receiver", new HydraConfig { Mode = Mode.Master, NetworkConfig = cfg }));
 
         await sender.StartAsync(CancellationToken.None);
         await receiver.StartAsync(CancellationToken.None);
@@ -117,8 +117,8 @@ public class StyxIntegrationTests
         var networkId = Guid.NewGuid();
         var cfg = await StyxTestServer.BuildNetworkConfig(_factory!, networkId);
 
-        await using var alpha = new HydraTestClient(_factory!, new HydraConfig { Mode = Mode.Master, NetworkConfig = cfg, Name = "alpha" });
-        await using var beta = new HydraTestClient(_factory!, new HydraConfig { Mode = Mode.Master, NetworkConfig = cfg, Name = "beta" });
+        await using var alpha = new HydraTestClient(_factory!, TransitionTestHelper.Profile("alpha", new HydraConfig { Mode = Mode.Master, NetworkConfig = cfg }));
+        await using var beta = new HydraTestClient(_factory!, TransitionTestHelper.Profile("beta", new HydraConfig { Mode = Mode.Master, NetworkConfig = cfg }));
 
         await alpha.StartAsync(CancellationToken.None);
         await beta.StartAsync(CancellationToken.None);
@@ -144,9 +144,9 @@ public class StyxIntegrationTests
         var cfgA = await StyxTestServer.BuildNetworkConfig(_factory!, networkA);
         var cfgB = await StyxTestServer.BuildNetworkConfig(_factory!, networkB);
 
-        await using var senderA = new HydraTestClient(_factory!, new HydraConfig { Mode = Mode.Master, NetworkConfig = cfgA, Name = "sender" });
-        await using var receiverA = new HydraTestClient(_factory!, new HydraConfig { Mode = Mode.Master, NetworkConfig = cfgA, Name = "receiver" });
-        await using var clientB = new HydraTestClient(_factory!, new HydraConfig { Mode = Mode.Master, NetworkConfig = cfgB, Name = "sender" });
+        await using var senderA = new HydraTestClient(_factory!, TransitionTestHelper.Profile("sender", new HydraConfig { Mode = Mode.Master, NetworkConfig = cfgA }));
+        await using var receiverA = new HydraTestClient(_factory!, TransitionTestHelper.Profile("receiver", new HydraConfig { Mode = Mode.Master, NetworkConfig = cfgA }));
+        await using var clientB = new HydraTestClient(_factory!, TransitionTestHelper.Profile("sender", new HydraConfig { Mode = Mode.Master, NetworkConfig = cfgB }));
 
         await senderA.StartAsync(CancellationToken.None);
         await receiverA.StartAsync(CancellationToken.None);
@@ -167,11 +167,11 @@ public class StyxIntegrationTests
         var networkId = Guid.NewGuid();
         var cfg = await StyxTestServer.BuildNetworkConfig(_factory!, networkId);
 
-        await using var first = new HydraTestClient(_factory!, new HydraConfig { Mode = Mode.Master, NetworkConfig = cfg, Name = "duplicate" });
+        await using var first = new HydraTestClient(_factory!, TransitionTestHelper.Profile("duplicate", new HydraConfig { Mode = Mode.Master, NetworkConfig = cfg }));
         await first.StartAsync(CancellationToken.None);
         await first.WaitForReady();
 
-        await using var second = new HydraTestClient(_factory!, new HydraConfig { Mode = Mode.Master, NetworkConfig = cfg, Name = "duplicate" });
+        await using var second = new HydraTestClient(_factory!, TransitionTestHelper.Profile("duplicate", new HydraConfig { Mode = Mode.Master, NetworkConfig = cfg }));
         await second.StartAsync(CancellationToken.None);
         await second.WaitForReady();
 
@@ -185,14 +185,14 @@ public class StyxIntegrationTests
         var networkId = Guid.NewGuid();
         var cfg = await StyxTestServer.BuildNetworkConfig(_factory!, networkId);
 
-        await using var clientA = new HydraTestClient(_factory!, new HydraConfig { Mode = Mode.Master, NetworkConfig = cfg, Name = "host-a" });
+        await using var clientA = new HydraTestClient(_factory!, TransitionTestHelper.Profile("host-a", new HydraConfig { Mode = Mode.Master, NetworkConfig = cfg }));
         await clientA.StartAsync(CancellationToken.None);
         await clientA.WaitForReady();
 
         var initialPeers = await clientA.WaitForPeers();
         Assert.That(initialPeers, Is.Empty);
 
-        var clientB = new HydraTestClient(_factory!, new HydraConfig { Mode = Mode.Master, NetworkConfig = cfg, Name = "host-b" });
+        var clientB = new HydraTestClient(_factory!, TransitionTestHelper.Profile("host-b", new HydraConfig { Mode = Mode.Master, NetworkConfig = cfg }));
         await clientB.StartAsync(CancellationToken.None);
         await clientB.WaitForReady();
 
@@ -219,12 +219,12 @@ public class StyxIntegrationTests
         var key = StyxTestServer.GenerateEncryptionKey();
         var cfg = await StyxTestServer.BuildNetworkConfig(_factory!, networkId, key);
 
-        await using var receiver = new HydraTestClient(_factory!, new HydraConfig { Mode = Mode.Master, NetworkConfig = cfg, Name = "receiver" });
+        await using var receiver = new HydraTestClient(_factory!, TransitionTestHelper.Profile("receiver", new HydraConfig { Mode = Mode.Master, NetworkConfig = cfg }));
         await receiver.StartAsync(CancellationToken.None);
         await receiver.WaitForReady();
 
         // sender1 connects and sends a message — receiver caches its RemoteKey
-        var sender1 = new HydraTestClient(_factory!, new HydraConfig { Mode = Mode.Master, NetworkConfig = cfg, Name = "sender" });
+        var sender1 = new HydraTestClient(_factory!, TransitionTestHelper.Profile("sender", new HydraConfig { Mode = Mode.Master, NetworkConfig = cfg }));
         await sender1.StartAsync(CancellationToken.None);
         await sender1.WaitForReady();
 
@@ -237,7 +237,7 @@ public class StyxIntegrationTests
         await receiver.WaitForPeers(); // receiver sees sender leave
 
         // sender2 reconnects — new RelayEncryption means new salt, receiver's cached RemoteKey is stale
-        var sender2 = new HydraTestClient(_factory!, new HydraConfig { Mode = Mode.Master, NetworkConfig = cfg, Name = "sender" });
+        var sender2 = new HydraTestClient(_factory!, TransitionTestHelper.Profile("sender", new HydraConfig { Mode = Mode.Master, NetworkConfig = cfg }));
         await sender2.StartAsync(CancellationToken.None);
         await sender2.WaitForReady();
 
@@ -260,7 +260,7 @@ public class StyxIntegrationTests
         var networkId = Guid.NewGuid();
         var cfg = await StyxTestServer.BuildNetworkConfig(_factory!, networkId);
 
-        await using var client = new HydraTestClient(_factory!, new HydraConfig { Mode = Mode.Master, NetworkConfig = cfg, Name = "solo" });
+        await using var client = new HydraTestClient(_factory!, TransitionTestHelper.Profile("solo", new HydraConfig { Mode = Mode.Master, NetworkConfig = cfg }));
         await client.StartAsync(CancellationToken.None);
         await client.WaitForReady();
 

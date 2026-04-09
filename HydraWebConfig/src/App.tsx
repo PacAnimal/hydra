@@ -3,6 +3,7 @@ import { useHydraConfig } from './hooks/useHydraConfig'
 import { validate } from './utils/validation'
 import { DropZone } from './components/DropZone'
 import { ModeSelect } from './components/ModeSelect'
+import { RootSettings } from './components/RootSettings'
 import { GlobalSettings } from './components/GlobalSettings'
 import { HostsEditor } from './components/HostsEditor'
 import { ScreenDefinitions } from './components/ScreenDefinitions'
@@ -12,18 +13,19 @@ import { ConfigFileSection } from './components/ConfigFileSection'
 export default function App() {
   const {
     state, current,
+    updateRoot,
     updateCurrent,
     addHost, removeHost, updateHost,
     addNeighbour, removeNeighbour, updateNeighbour,
     addScreen, removeScreen, updateScreen,
     updateConditions,
-    setMultiConfig, addConfigEntry, removeConfigEntry, setActiveIndex,
+    addProfile, removeProfile, setActiveIndex,
     importJson, reset,
   } = useHydraConfig()
 
-  const { configs, multiConfig, activeIndex } = state
+  const { profiles, activeIndex } = state
   const isMaster = current.mode === 'Master'
-  const errors = validate(configs, multiConfig)
+  const errors = validate(profiles)
 
   return (
     <div className="app">
@@ -42,45 +44,47 @@ export default function App() {
 
       <div className="app-body">
         <aside className="config-panel">
-          <ConfigFileSection configs={configs} multiConfig={multiConfig} />
+          <ConfigFileSection state={state} />
         </aside>
 
         <main className="app-main">
-          <div className="section multi-toggle">
-            <label className="checkbox-label">
-              <input
-                type="checkbox"
-                checked={multiConfig}
-                onChange={e => setMultiConfig(e.target.checked)}
-              />
-              Multi-Config Mode (array of configs with conditions)
-            </label>
+          <RootSettings state={state} onChange={updateRoot} />
+
+          <div className="config-tabs">
+            {profiles.map((p, i) => (
+              <button
+                key={i}
+                className={`tab-btn${i === activeIndex ? ' active' : ''}`}
+                onClick={() => setActiveIndex(i)}
+              >
+                {p.profileName.trim() || `Profile ${i + 1}`}
+                {profiles.length > 1 && (
+                  <span
+                    className="tab-remove"
+                    onClick={e => { e.stopPropagation(); removeProfile(i) }}
+                    role="button"
+                    aria-label={`remove profile ${i + 1}`}
+                  >
+                    ✕
+                  </span>
+                )}
+              </button>
+            ))}
+            <button className="tab-btn tab-add" onClick={addProfile}>+</button>
           </div>
 
-          {multiConfig && (
-            <div className="config-tabs">
-              {configs.map((_, i) => (
-                <button
-                  key={i}
-                  className={`tab-btn${i === activeIndex ? ' active' : ''}`}
-                  onClick={() => setActiveIndex(i)}
-                >
-                  Config {i + 1}
-                  {configs.length > 1 && (
-                    <span
-                      className="tab-remove"
-                      onClick={e => { e.stopPropagation(); removeConfigEntry(i) }}
-                      role="button"
-                      aria-label={`remove config ${i + 1}`}
-                    >
-                      ✕
-                    </span>
-                  )}
-                </button>
-              ))}
-              <button className="tab-btn tab-add" onClick={addConfigEntry}>+</button>
+          <div className="section">
+            <div className="field">
+              <label htmlFor="profileName">Profile Name</label>
+              <input
+                id="profileName"
+                type="text"
+                value={current.profileName}
+                placeholder="e.g. Home, Work, Office"
+                onChange={e => updateCurrent({ profileName: e.target.value })}
+              />
             </div>
-          )}
+          </div>
 
           <ModeSelect value={current.mode} onChange={mode => updateCurrent({ mode })} />
 
@@ -98,23 +102,23 @@ export default function App() {
             />
           )}
 
-          <ScreenDefinitions
-            screens={current.screenDefinitions ?? []}
-            onAdd={addScreen}
-            onRemove={removeScreen}
-            onUpdate={updateScreen}
-          />
-
-          {multiConfig && (
-            <div className="section">
-              <h2>Conditions</h2>
-              <p className="hint">When should this config be active?</p>
-              <ConditionsEditor
-                conditions={current.conditions ?? {}}
-                onChange={updateConditions}
-              />
-            </div>
+          {!isMaster && (
+            <ScreenDefinitions
+              screens={current.screenDefinitions ?? []}
+              onAdd={addScreen}
+              onRemove={removeScreen}
+              onUpdate={updateScreen}
+            />
           )}
+
+          <div className="section">
+            <h2>Conditions</h2>
+            <p className="hint">When should this profile be active?</p>
+            <ConditionsEditor
+              conditions={current.conditions ?? {}}
+              onChange={updateConditions}
+            />
+          </div>
 
           {errors.length > 0 && (
             <div className="section validation-errors">

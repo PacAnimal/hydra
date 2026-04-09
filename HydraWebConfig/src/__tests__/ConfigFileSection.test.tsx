@@ -2,19 +2,19 @@ import { describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ConfigFileSection } from '../components/ConfigFileSection'
-import type { HydraConfig } from '../types'
+import type { FormState } from '../types'
 
-const cfg: HydraConfig = { mode: 'Master', name: 'test' }
+const state: FormState = { name: 'test', profiles: [{ profileName: 'Home', mode: 'Master' }], activeIndex: 0 }
 
 describe('ConfigFileSection', () => {
   it('renders Copy and Download buttons', () => {
-    render(<ConfigFileSection configs={[cfg]} multiConfig={false} />)
+    render(<ConfigFileSection state={state} />)
     expect(screen.getByRole('button', { name: /copy to clipboard/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /download/i })).toBeInTheDocument()
   })
 
   it('displays JSON', () => {
-    const { container } = render(<ConfigFileSection configs={[cfg]} multiConfig={false} />)
+    const { container } = render(<ConfigFileSection state={state} />)
     const pre = container.querySelector('pre')
     expect(pre?.textContent).toContain('"mode"')
   })
@@ -28,7 +28,7 @@ describe('ConfigFileSection', () => {
       configurable: true,
     })
 
-    render(<ConfigFileSection configs={[cfg]} multiConfig={false} />)
+    render(<ConfigFileSection state={state} />)
     await user.click(screen.getByRole('button', { name: /copy to clipboard/i }))
     expect(writeText).toHaveBeenCalledWith(expect.stringContaining('"mode"'))
   })

@@ -32,26 +32,26 @@ export interface ConfigConditions {
   screenCount?: number
 }
 
-export interface HydraConfig {
+export interface HydraProfile {
+  profileName: string
   mode: Mode
-  name?: string
   hosts?: HostConfig[]
   screenDefinitions?: ScreenDefinition[]
   mouseScale?: number
-  logLevel?: LogLevel
   networkConfig?: string
   remoteOnly?: boolean
-  autoUpdate?: boolean
   syncScreensaver?: boolean
   debugShield?: boolean
   deadCorners?: number
-  lockFile?: string
   conditions?: ConfigConditions
 }
 
-// form state — always an array internally; single-config mode just uses configs[0]
+// form state — profiles always an array; activeIndex tracks the selected profile tab
 export interface FormState {
-  multiConfig: boolean
-  configs: HydraConfig[]
+  name?: string
+  autoUpdate?: boolean
+  logLevel?: LogLevel
+  lockFile?: string
+  profiles: HydraProfile[]
   activeIndex: number
 }

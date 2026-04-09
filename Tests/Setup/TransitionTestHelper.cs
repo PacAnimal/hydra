@@ -10,11 +10,14 @@ namespace Tests.Setup;
 
 public static class TransitionTestHelper
 {
+    // convenience: wraps a named HydraConfig into an IHydraProfile for use in tests
+    public static IHydraProfile Profile(string name, HydraConfig? config = null) =>
+        new HydraProfile(new HydraConfigFile { Name = name }, config);
+
     // "home" is the local screen; "remote" is a real remote host
-    public static readonly HydraConfig TestConfig = new()
+    public static readonly IHydraProfile TestConfig = Profile("home", new HydraConfig
     {
         Mode = Mode.Master,
-        Name = "home",
         Hosts =
         [
             new HostConfig
@@ -28,7 +31,7 @@ public static class TransitionTestHelper
                 Neighbours = [new NeighbourConfig { Direction = Direction.Left, Name = "home" }],
             },
         ],
-    };
+    });
 
     public static TestServiceBundle CreateService()
     {
@@ -47,15 +50,14 @@ public static class TransitionTestHelper
     }
 
     // remote-only: single remote host "mac", no local screens
-    public static readonly HydraConfig RemoteOnlyConfig = new()
+    public static readonly IHydraProfile RemoteOnlyConfig = Profile("pi", new HydraConfig
     {
         Mode = Mode.Master,
-        Name = "pi",
         RemoteOnly = true,
         Hosts = [new HostConfig { Name = "mac", Neighbours = [] }],
-    };
+    });
 
-    public static TestServiceBundle CreateRemoteOnlyService(HydraConfig? config = null)
+    public static TestServiceBundle CreateRemoteOnlyService(IHydraProfile? config = null)
     {
         var platform = new FakePlatform();
         var relay = new FakeRelay();

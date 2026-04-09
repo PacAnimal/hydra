@@ -4,8 +4,8 @@ using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform.MacOs;
 
-public class MacScreenDetector(HydraConfig config, ILogger<MacScreenDetector> log)
-    : ScreenDetector(config, log)
+public class MacScreenDetector(IHydraProfile profile, ILogger<MacScreenDetector> log)
+    : ScreenDetector(profile, log)
 {
     protected override List<DetectedScreen> Detect() => MacDisplayHelper.GetAllScreens();
 }

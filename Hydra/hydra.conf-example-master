@@ -1,20 +1,40 @@
 {
-  "networkConfig": "<base64-encoded network config from Styx>",
-  "mode": "Master",
-  "logLevel": "info",
   "name": "macbook",
+  "logLevel": "info",
   "lockFile": "hydra.lock",
-  "hosts": [
+  "profiles": [
     {
-      "name": "macbook",
-      "neighbours": [
-        { "direction": "right", "name": "desktop" }
+      "profileName": "Home",
+      "conditions": { "ssid": "HomeWifi" },
+      "networkConfig": "<base64-encoded network config from Styx>",
+      "mode": "Master",
+      "hosts": [
+        {
+          "name": "macbook",
+          "neighbours": [
+            { "direction": "right", "name": "desktop" }
+          ]
+        },
+        {
+          "name": "desktop"
+        }
       ]
     },
     {
-      "name": "desktop",
-      "neighbours": [
-        { "direction": "right", "name": "monitor" }
+      "profileName": "Work",
+      "conditions": { "ssid": "OfficeWifi" },
+      "networkConfig": "<base64-encoded network config from Styx>",
+      "mode": "Master",
+      "hosts": [
+        {
+          "name": "macbook",
+          "neighbours": [
+            { "direction": "right", "name": "workstation" }
+          ]
+        },
+        {
+          "name": "workstation"
+        }
       ]
     }
   ]

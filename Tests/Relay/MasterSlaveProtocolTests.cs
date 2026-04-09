@@ -195,21 +195,21 @@ public class MasterSlaveProtocolTests
 
     // -- helpers --
 
-    private static HydraConfig MakeConfig(params string[] slaveNames) => new()
-    {
-        Mode = Mode.Master,
-        Name = "main",
-        Hosts = [new HostConfig { Name = "main" }, .. slaveNames.Select(n => new HostConfig { Name = n })],
-    };
+    private static IHydraProfile MakeConfig(params string[] slaveNames) =>
+        TransitionTestHelper.Profile("main", new HydraConfig
+        {
+            Mode = Mode.Master,
+            Hosts = [new HostConfig { Name = "main" }, .. slaveNames.Select(n => new HostConfig { Name = n })],
+        });
 
-    private static InputRouter MakeService(HydraConfig config, IRelaySender relay) =>
-        new(new FakePlatform(), config, relay, new FakeScreenDetector(), NullLoggerFactory.Instance, NullLogger<InputRouter>.Instance, new NullScreenSaverSync());
+    private static InputRouter MakeService(IHydraProfile profile, IRelaySender relay) =>
+        new(new FakePlatform(), profile, relay, new FakeScreenDetector(), NullLoggerFactory.Instance, NullLogger<InputRouter>.Instance, new NullScreenSaverSync());
 
     private static List<string> MasterConfigTargets(FakeRelay relay) =>
         [.. relay.Sent.Where(s => s.Kind == MessageKind.MasterConfig).SelectMany(s => s.Targets)];
 
     private sealed class TestableSlaveRelay(SlaveCursorHider hider) : SlaveRelayConnection(
-        new HydraConfig { Mode = Mode.Slave },
+        TransitionTestHelper.Profile("slave", new HydraConfig { Mode = Mode.Slave }),
         NullLogger<RelayConnection>.Instance,
         new NullPlatformOutput(),
         new FakeScreenDetector(),
@@ -241,7 +241,7 @@ public class MasterSlaveProtocolTests
     private sealed class TestableMasterRelay : MasterRelayConnection
     {
         public TestableMasterRelay() : base(
-            new HydraConfig { Mode = Mode.Master },
+            TransitionTestHelper.Profile("master", new HydraConfig { Mode = Mode.Master }),
             NullLogger<RelayConnection>.Instance,
             new WorldState())
         { }

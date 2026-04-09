@@ -1,88 +1,96 @@
 import { describe, it, expect } from 'vitest'
 import { validate } from '../utils/validation'
-import type { HydraConfig } from '../types'
+import type { HydraProfile } from '../types'
+
+const p = (overrides: Partial<HydraProfile>): HydraProfile => ({
+  profileName: 'test',
+  mode: 'Master',
+  ...overrides,
+})
 
 describe('validate', () => {
   it('passes a valid single master config', () => {
-    const cfg: HydraConfig = { mode: 'Master' }
-    expect(validate([cfg], false)).toHaveLength(0)
+    expect(validate([p({ mode: 'Master' })])).toHaveLength(0)
   })
 
   it('passes a valid single slave config', () => {
-    const cfg: HydraConfig = { mode: 'Slave' }
-    expect(validate([cfg], false)).toHaveLength(0)
+    expect(validate([p({ mode: 'Slave' })])).toHaveLength(0)
   })
 
-  it('errors when multiple unconditional configs in multi mode', () => {
-    const configs: HydraConfig[] = [{ mode: 'Master' }, { mode: 'Slave' }]
-    const errors = validate(configs, true)
+  it('errors when profileName is empty', () => {
+    const errors = validate([p({ profileName: '' })])
+    expect(errors.some(e => e.message.includes('profile name is required'))).toBe(true)
+  })
+
+  it('errors on duplicate profile names', () => {
+    const profiles: HydraProfile[] = [
+      p({ profileName: 'Home', conditions: { ssid: 'HomeWifi' } }),
+      p({ profileName: 'home', conditions: { ssid: 'OfficeWifi' } }),
+    ]
+    const errors = validate(profiles)
+    expect(errors.some(e => e.message.includes('duplicate profile name'))).toBe(true)
+  })
+
+  it('errors when multiple unconditional profiles', () => {
+    const profiles: HydraProfile[] = [p({ profileName: 'A' }), p({ profileName: 'B', mode: 'Slave' })]
+    const errors = validate(profiles)
     expect(errors.some(e => e.message.includes('unconditional'))).toBe(true)
   })
 
-  it('passes when only one unconditional config in multi mode', () => {
-    const configs: HydraConfig[] = [
-      { mode: 'Master', conditions: { ssid: 'home' } },
-      { mode: 'Slave' },
+  it('passes when only one unconditional profile', () => {
+    const profiles: HydraProfile[] = [
+      p({ profileName: 'A', conditions: { ssid: 'home' } }),
+      p({ profileName: 'B', mode: 'Slave' }),
     ]
-    expect(validate(configs, true)).toHaveLength(0)
+    expect(validate(profiles)).toHaveLength(0)
   })
 
   it('errors on duplicate condition tuples', () => {
-    const configs: HydraConfig[] = [
-      { mode: 'Master', conditions: { ssid: 'home' } },
-      { mode: 'Slave', conditions: { ssid: 'home' } },
+    const profiles: HydraProfile[] = [
+      p({ profileName: 'A', conditions: { ssid: 'home' } }),
+      p({ profileName: 'B', mode: 'Slave', conditions: { ssid: 'home' } }),
     ]
-    const errors = validate(configs, true)
-    expect(errors.some(e => e.message.includes('duplicate'))).toBe(true)
+    const errors = validate(profiles)
+    expect(errors.some(e => e.message.includes('duplicate condition'))).toBe(true)
   })
 
   it('passes conditions with same ssid but different screenCount', () => {
-    const configs: HydraConfig[] = [
-      { mode: 'Master', conditions: { ssid: 'home', screenCount: 2 } },
-      { mode: 'Slave', conditions: { ssid: 'home', screenCount: 1 } },
+    const profiles: HydraProfile[] = [
+      p({ profileName: 'A', conditions: { ssid: 'home', screenCount: 2 } }),
+      p({ profileName: 'B', mode: 'Slave', conditions: { ssid: 'home', screenCount: 1 } }),
     ]
-    expect(validate(configs, true)).toHaveLength(0)
+    expect(validate(profiles)).toHaveLength(0)
   })
 
   it('errors when screenCount < 1', () => {
-    const cfg: HydraConfig = { mode: 'Master', conditions: { screenCount: 0 } }
-    const errors = validate([cfg], false)
+    const errors = validate([p({ conditions: { screenCount: 0 } })])
     expect(errors.some(e => e.message.includes('screenCount'))).toBe(true)
   })
 
   it('passes when screenCount >= 1', () => {
-    const cfg: HydraConfig = { mode: 'Master', conditions: { screenCount: 1 } }
-    expect(validate([cfg], false)).toHaveLength(0)
+    expect(validate([p({ conditions: { screenCount: 1 } })])).toHaveLength(0)
   })
 
   it('errors when screenDefinition has no match criteria', () => {
-    const cfg: HydraConfig = { mode: 'Master', screenDefinitions: [{ mouseScale: 1.5 }] }
-    const errors = validate([cfg], false)
+    const errors = validate([p({ mode: 'Slave', screenDefinitions: [{ mouseScale: 1.5 }] })])
     expect(errors.some(e => e.message.includes('displayName'))).toBe(true)
   })
 
   it('passes screenDefinition with displayName only', () => {
-    const cfg: HydraConfig = { mode: 'Master', screenDefinitions: [{ displayName: 'DELL' }] }
-    expect(validate([cfg], false)).toHaveLength(0)
+    expect(validate([p({ mode: 'Slave', screenDefinitions: [{ displayName: 'DELL' }] })])).toHaveLength(0)
   })
 
   it('errors when remoteOnly used with Slave mode', () => {
-    const cfg: HydraConfig = { mode: 'Slave', remoteOnly: true }
-    const errors = validate([cfg], false)
+    const errors = validate([p({ mode: 'Slave', remoteOnly: true })])
     expect(errors.some(e => e.message.includes('Master'))).toBe(true)
   })
 
-  it('errors when remoteOnly with no remote hosts', () => {
-    const cfg: HydraConfig = { mode: 'Master', name: 'mac', remoteOnly: true, hosts: [{ name: 'mac' }] }
-    const errors = validate([cfg], false)
+  it('errors when remoteOnly with no hosts', () => {
+    const errors = validate([p({ remoteOnly: true, hosts: [] })])
     expect(errors.some(e => e.message.includes('remote host'))).toBe(true)
   })
 
   it('passes when remoteOnly with a remote host', () => {
-    const cfg: HydraConfig = {
-      mode: 'Master', name: 'mac', remoteOnly: true,
-      hosts: [{ name: 'mac' }, { name: 'pc' }],
-    }
-    expect(validate([cfg], false)).toHaveLength(0)
+    expect(validate([p({ remoteOnly: true, hosts: [{ name: 'pc' }] })])).toHaveLength(0)
   })
 })

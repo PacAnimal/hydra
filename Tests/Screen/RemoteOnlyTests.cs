@@ -203,17 +203,16 @@ public class RemoteOnlyTests
     [Test]
     public async Task MouseDelta_TransitionsToNeighborHost()
     {
-        var config = new HydraConfig
+        var config = TransitionTestHelper.Profile("pi", new HydraConfig
         {
             Mode = Mode.Master,
-            Name = "pi",
             RemoteOnly = true,
             Hosts =
             [
                 new HostConfig { Name = "mac", Neighbours = [new NeighbourConfig { Direction = Direction.Right, Name = "win" }] },
                 new HostConfig { Name = "win", Neighbours = [new NeighbourConfig { Direction = Direction.Left, Name = "mac" }] },
             ],
-        };
+        });
 
         await _service.StopAsync(CancellationToken.None);
         (_platform, _relay, _service) = TransitionTestHelper.CreateRemoteOnlyService(config);
@@ -235,17 +234,16 @@ public class RemoteOnlyTests
     [Test]
     public async Task MouseDelta_SendsLeaveScreen_WhenCrossingToNewHost()
     {
-        var config = new HydraConfig
+        var config = TransitionTestHelper.Profile("pi", new HydraConfig
         {
             Mode = Mode.Master,
-            Name = "pi",
             RemoteOnly = true,
             Hosts =
             [
                 new HostConfig { Name = "mac", Neighbours = [new NeighbourConfig { Direction = Direction.Right, Name = "win" }] },
                 new HostConfig { Name = "win", Neighbours = [new NeighbourConfig { Direction = Direction.Left, Name = "mac" }] },
             ],
-        };
+        });
 
         await _service.StopAsync(CancellationToken.None);
         (_platform, _relay, _service) = TransitionTestHelper.CreateRemoteOnlyService(config);

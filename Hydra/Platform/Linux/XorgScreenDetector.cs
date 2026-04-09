@@ -9,7 +9,7 @@ public class XorgScreenDetector : ScreenDetector
     private readonly nint _display;
     private readonly nint _rootWindow;
 
-    public XorgScreenDetector(HydraConfig config, ILogger<XorgScreenDetector> log) : base(config, log)
+    public XorgScreenDetector(IHydraProfile profile, ILogger<XorgScreenDetector> log) : base(profile, log)
     {
         _ = NativeMethods.XInitThreads();
         _display = NativeMethods.XOpenDisplay(null);

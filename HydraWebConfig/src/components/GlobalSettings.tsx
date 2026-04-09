@@ -1,10 +1,8 @@
-import type { HydraConfig, LogLevel } from '../types'
-
-const LOG_LEVELS: LogLevel[] = ['trace', 'debug', 'info', 'warn', 'error', 'critical']
+import type { HydraProfile } from '../types'
 
 interface Props {
-  config: HydraConfig
-  onChange: (patch: Partial<HydraConfig>) => void
+  config: HydraProfile
+  onChange: (patch: Partial<HydraProfile>) => void
 }
 
 export function GlobalSettings({ config, onChange }: Props) {
@@ -12,31 +10,7 @@ export function GlobalSettings({ config, onChange }: Props) {
 
   return (
     <div className="section">
-      <h2>Identity</h2>
-      <div className="field-row">
-        <div className="field">
-          <label htmlFor="name">Name</label>
-          <input
-            id="name"
-            type="text"
-            value={config.name ?? ''}
-            placeholder="hostname"
-            onChange={e => onChange({ name: e.target.value || undefined })}
-          />
-        </div>
-        <div className="field">
-          <label htmlFor="lockFile">Lock File</label>
-          <input
-            id="lockFile"
-            type="text"
-            value={config.lockFile ?? ''}
-            placeholder="hydra.lock"
-            onChange={e => onChange({ lockFile: e.target.value || undefined })}
-          />
-        </div>
-      </div>
-
-      <h2 style={{ marginTop: '1.5rem' }}>Network</h2>
+      <h2>Network</h2>
       <div className="field">
         <label htmlFor="networkConfig">Network Config</label>
         <textarea
@@ -50,28 +24,20 @@ export function GlobalSettings({ config, onChange }: Props) {
 
       <h2 style={{ marginTop: '1.5rem' }}>Settings</h2>
       <div className="field-row">
-        <div className="field">
-          <label htmlFor="logLevel">Log Level</label>
-          <select
-            id="logLevel"
-            value={config.logLevel ?? 'info'}
-            onChange={e => onChange({ logLevel: e.target.value as LogLevel })}
-          >
-            {LOG_LEVELS.map(l => <option key={l} value={l}>{l}</option>)}
-          </select>
-        </div>
-        <div className="field">
-          <label htmlFor="mouseScale">Mouse Scale</label>
-          <input
-            id="mouseScale"
-            type="number"
-            step="0.1"
-            min="0.1"
-            value={config.mouseScale ?? ''}
-            placeholder="1.0"
-            onChange={e => onChange({ mouseScale: e.target.value ? Number(e.target.value) : undefined })}
-          />
-        </div>
+        {!isMaster && (
+          <div className="field">
+            <label htmlFor="mouseScale">Mouse Scale</label>
+            <input
+              id="mouseScale"
+              type="number"
+              step="0.1"
+              min="0.1"
+              value={config.mouseScale ?? ''}
+              placeholder="1.0"
+              onChange={e => onChange({ mouseScale: e.target.value ? Number(e.target.value) : undefined })}
+            />
+          </div>
+        )}
         <div className="field">
           <label htmlFor="deadCorners">Dead Corners (px)</label>
           <input
@@ -86,14 +52,6 @@ export function GlobalSettings({ config, onChange }: Props) {
       </div>
 
       <div className="checkbox-group">
-        <label className="checkbox-label">
-          <input
-            type="checkbox"
-            checked={config.autoUpdate !== false}
-            onChange={e => onChange({ autoUpdate: e.target.checked ? undefined : false })}
-          />
-          Auto Update
-        </label>
         <label className="checkbox-label">
           <input
             type="checkbox"

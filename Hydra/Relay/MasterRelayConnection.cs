@@ -3,8 +3,8 @@ using Microsoft.Extensions.Logging;
 
 namespace Hydra.Relay;
 
-public class MasterRelayConnection(HydraConfig config, ILogger<RelayConnection> log, IWorldState peerState)
-    : RelayConnection(config, log, peerState)
+public class MasterRelayConnection(IHydraProfile profile, ILogger<RelayConnection> log, IWorldState peerState)
+    : RelayConnection(profile, log, peerState)
 {
     protected override Task OnReceive(string sourceHost, MessageKind kind, string json)
     {

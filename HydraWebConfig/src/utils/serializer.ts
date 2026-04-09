@@ -1,4 +1,4 @@
-import type { HydraConfig, NeighbourConfig, HostConfig, ScreenDefinition, ConfigConditions } from '../types'
+import type { FormState, HydraProfile, NeighbourConfig, HostConfig, ScreenDefinition, ConfigConditions } from '../types'
 
 function serializeNeighbour(n: NeighbourConfig): Record<string, unknown> {
   const out: Record<string, unknown> = {
@@ -40,42 +40,44 @@ function serializeConditions(c: ConfigConditions): Record<string, unknown> {
   return out
 }
 
-function serializeConfig(cfg: HydraConfig): Record<string, unknown> {
-  const out: Record<string, unknown> = { mode: cfg.mode }
-  if (cfg.name?.trim()) out.name = cfg.name.trim()
-  if (cfg.lockFile?.trim()) out.lockFile = cfg.lockFile.trim()
-  if (cfg.networkConfig?.trim()) out.networkConfig = cfg.networkConfig.trim()
-  if (cfg.logLevel && cfg.logLevel !== 'info') out.logLevel = cfg.logLevel
+function serializeProfile(p: HydraProfile): Record<string, unknown> {
+  const out: Record<string, unknown> = { profileName: p.profileName, mode: p.mode }
+  if (p.networkConfig?.trim()) out.networkConfig = p.networkConfig.trim()
 
-  if (cfg.mouseScale !== undefined) out.mouseScale = cfg.mouseScale
-  if (cfg.deadCorners !== undefined) out.deadCorners = cfg.deadCorners
+  if (p.deadCorners !== undefined) out.deadCorners = p.deadCorners
 
   // booleans — omit when equal to default
-  if (cfg.remoteOnly === true) out.remoteOnly = true
-  if (cfg.autoUpdate === false) out.autoUpdate = false
-  if (cfg.syncScreensaver === false) out.syncScreensaver = false
-  if (cfg.debugShield === true) out.debugShield = true
+  if (p.remoteOnly === true) out.remoteOnly = true
+  if (p.syncScreensaver === false) out.syncScreensaver = false
+  if (p.debugShield === true) out.debugShield = true
 
-  const hosts = (cfg.hosts ?? []).filter(h => h.name.trim())
-  if (cfg.mode === 'Master' && hosts.length > 0) out.hosts = hosts.map(serializeHost)
+  const hosts = (p.hosts ?? []).filter(h => h.name.trim())
+  if (p.mode === 'Master' && hosts.length > 0) out.hosts = hosts.map(serializeHost)
 
-  const screens = (cfg.screenDefinitions ?? []).filter(
-    s => s.displayName || s.outputName || s.platformId
-  )
-  if (screens.length > 0) out.screenDefinitions = screens.map(serializeScreenDefinition)
+  // mouseScale and screenDefinitions are slave-only
+  if (p.mode !== 'Master') {
+    if (p.mouseScale !== undefined) out.mouseScale = p.mouseScale
+    const screens = (p.screenDefinitions ?? []).filter(
+      s => s.displayName || s.outputName || s.platformId
+    )
+    if (screens.length > 0) out.screenDefinitions = screens.map(serializeScreenDefinition)
+  }
 
-  if (cfg.conditions) {
-    const c = serializeConditions(cfg.conditions)
+  if (p.conditions) {
+    const c = serializeConditions(p.conditions)
     if (Object.keys(c).length > 0) out.conditions = c
   }
 
   return out
 }
 
-// serialize a single config or an array of configs to a JSON string
-export function serialize(configs: HydraConfig[], multiConfig: boolean): string {
-  if (multiConfig) {
-    return JSON.stringify(configs.map(serializeConfig), null, 2)
-  }
-  return JSON.stringify(serializeConfig(configs[0] ?? { mode: 'Master' }), null, 2)
+export function serialize(state: FormState): string {
+  const out: Record<string, unknown> = {}
+  // root-level globals — omit when equal to default
+  if (state.name?.trim()) out.name = state.name.trim()
+  if (state.autoUpdate === false) out.autoUpdate = false
+  if (state.logLevel && state.logLevel !== 'info') out.logLevel = state.logLevel
+  if (state.lockFile?.trim()) out.lockFile = state.lockFile.trim()
+  out.profiles = state.profiles.map(serializeProfile)
+  return JSON.stringify(out, null, 2)
 }

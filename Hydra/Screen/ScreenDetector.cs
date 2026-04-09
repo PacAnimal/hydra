@@ -25,7 +25,7 @@ public abstract class ScreenDetector : SimpleHostedService, IScreenDetector
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
 
-    private readonly HydraConfig _config;
+    private readonly IHydraProfile _profile;
     private readonly ILogger _log;
     private readonly SemaphoreSlim _lock = new(1, 1);
     private List<DetectedScreen> _detected = [];
@@ -36,9 +36,9 @@ public abstract class ScreenDetector : SimpleHostedService, IScreenDetector
 
     // ReSharper disable once ConvertToPrimaryConstructor
 #pragma warning disable IDE0290
-    protected ScreenDetector(HydraConfig config, ILogger log) : base(log, loopTime: TimeSpan.FromSeconds(2))
+    protected ScreenDetector(IHydraProfile profile, ILogger log) : base(log, loopTime: TimeSpan.FromSeconds(2))
     {
-        _config = config;
+        _profile = profile;
         _log = log;
     }
 #pragma warning restore IDE0290
@@ -92,7 +92,7 @@ public abstract class ScreenDetector : SimpleHostedService, IScreenDetector
         for (var i = 0; i < detected.Count; i++)
         {
             var d = detected[i];
-            var name = ScreenNaming.BuildScreenName(_config.ResolvedName, i, detected.Count);
+            var name = ScreenNaming.BuildScreenName(_profile.Name, i, detected.Count);
             var scale = ResolveScale(d);
             var identity = new ScreenIdentity
             {
@@ -101,7 +101,7 @@ public abstract class ScreenDetector : SimpleHostedService, IScreenDetector
                 DisplayName = d.DisplayName,
                 PlatformId = d.PlatformId,
             };
-            screens.Add(new ScreenRect(name, _config.ResolvedName, d.X, d.Y, d.Width, d.Height, IsLocal: true, Identity: identity));
+            screens.Add(new ScreenRect(name, _profile.Name, d.X, d.Y, d.Width, d.Height, IsLocal: true, Identity: identity));
             entries.Add(new ScreenInfoEntry(name, d.X - minX, d.Y - minY, d.Width, d.Height, scale));
         }
 
@@ -110,12 +110,12 @@ public abstract class ScreenDetector : SimpleHostedService, IScreenDetector
 
     private decimal ResolveScale(DetectedScreen d)
     {
-        foreach (var def in _config.ScreenDefinitions)
+        foreach (var def in _profile.ScreenDefinitions)
         {
             if (Matches(d, def))
-                return def.MouseScale ?? _config.MouseScale ?? 1.0m;
+                return def.MouseScale ?? _profile.MouseScale ?? 1.0m;
         }
-        return _config.MouseScale ?? 1.0m;
+        return _profile.MouseScale ?? 1.0m;
     }
 
     private static bool Matches(DetectedScreen d, ScreenDefinition def) =>

@@ -13,7 +13,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Hydra.Update;
 
-internal sealed class SelfUpdater(HydraConfig config, IHostApplicationLifetime lifetime, ILogger<SelfUpdater> log) : SimpleHostedService(log, TimeSpan.FromMinutes(30))
+internal sealed class SelfUpdater(IHydraProfile profile, IHostApplicationLifetime lifetime, ILogger<SelfUpdater> log) : SimpleHostedService(log, TimeSpan.FromMinutes(30))
 {
     private const string Repo = "pacanimal/hydra";
     private readonly Toggle _warned = new();
@@ -22,7 +22,7 @@ internal sealed class SelfUpdater(HydraConfig config, IHostApplicationLifetime l
     {
         Cleanup();
 
-        if (!config.AutoUpdate)
+        if (!profile.AutoUpdate)
         {
             if (_warned.TrySet()) log.LogDebug("Auto-update disabled");
             return;

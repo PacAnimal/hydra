@@ -1,15 +1,14 @@
 import { useState } from 'react'
-import type { HydraConfig } from '../types'
+import type { FormState } from '../types'
 import { serialize } from '../utils/serializer'
 
 interface Props {
-  configs: HydraConfig[]
-  multiConfig: boolean
+  state: FormState
 }
 
-export function ConfigFileSection({ configs, multiConfig }: Props) {
+export function ConfigFileSection({ state }: Props) {
   const [copied, setCopied] = useState(false)
-  const json = serialize(configs, multiConfig)
+  const json = serialize(state)
 
   const download = () => {
     const blob = new Blob([json], { type: 'application/json' })

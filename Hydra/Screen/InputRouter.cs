@@ -14,7 +14,7 @@ namespace Hydra.Screen;
 
 public class InputRouter(
     IPlatformInput platform,
-    HydraConfig config,
+    IHydraProfile profile,
     IRelaySender relay,
     IScreenDetector screens,
     ILoggerFactory loggerFactory,
@@ -46,11 +46,11 @@ public class InputRouter(
             return;
         }
 
-        log.LogInformation("Host: {Name}", config.ResolvedName);
+        log.LogInformation("Host: {Name}", profile.Name);
 
-        if (!config.RemoteOnly && config.LocalHost == null && config.Hosts.Count > 0)
+        if (!profile.RemoteOnly && profile.LocalHost == null && profile.Hosts.Count > 0)
         {
-            log.LogError("Host '{Name}' is not listed in the config hosts — add it to the hosts list.", config.ResolvedName);
+            log.LogError("Host '{Name}' is not listed in the config hosts — add it to the hosts list.", profile.Name);
             return;
         }
 
@@ -63,7 +63,7 @@ public class InputRouter(
             st.LocalScreenEntries = snapshot.Entries;
             st.ActiveLocalScreen = st.LocalScreens.FirstOrDefault();
 
-            if (!config.RemoteOnly && st.ActiveLocalScreen == null)
+            if (!profile.RemoteOnly && st.ActiveLocalScreen == null)
             {
                 log.LogError("No local screens detected.");
                 return;
@@ -71,10 +71,10 @@ public class InputRouter(
 
             if (st.ActiveLocalScreen != null)
                 UpdateWarpPoint(st, st.ActiveLocalScreen);
-            if (config.RemoteOnly)
+            if (profile.RemoteOnly)
                 st.LockedToScreen = true;  // default: locked to remote; hotkey unlocks to local
-            st.Screens = BuildAllScreens(st.LocalScreens, config);
-            st.Layout = new ScreenLayout(st.Screens, config.Hosts, config.DeadCorners, BuildScaleMap(st.LocalScreenEntries, []), log);
+            st.Screens = BuildAllScreens(st.LocalScreens);
+            st.Layout = new ScreenLayout(st.Screens, profile.Hosts, profile.DeadCorners, BuildScaleMap(st.LocalScreenEntries, []), log);
 
             foreach (var remote in st.Screens.Where(r => !r.IsLocal))
                 log.LogInformation("Remote screen '{Name}': waiting for peer", remote.Name);
@@ -125,7 +125,7 @@ public class InputRouter(
     {
         log.LogInformation("Screen configuration changed — rebuilding layout");
         LogDetectedScreens(snapshot.Screens);
-        var newScreens = BuildAllScreens(snapshot.Screens, config);
+        var newScreens = BuildAllScreens(snapshot.Screens);
         var peerScreens = await _peerState.GetPeerScreensSnapshot();
 
         using var s = await _state.WaitForDisposable();
@@ -134,7 +134,7 @@ public class InputRouter(
         st.LocalScreens = snapshot.Screens;
         st.LocalScreenEntries = snapshot.Entries;
         st.Screens = newScreens;
-        st.Layout = new ScreenLayout(newScreens, config.Hosts, config.DeadCorners, BuildScaleMap(st.LocalScreenEntries, peerScreens), log);
+        st.Layout = new ScreenLayout(newScreens, profile.Hosts, profile.DeadCorners, BuildScaleMap(st.LocalScreenEntries, peerScreens), log);
 
         if (!st.Mouse.IsOnVirtualScreen)
         {
@@ -161,7 +161,7 @@ public class InputRouter(
     private async Task OnPeersChanged(string[] hostNames)
     {
         var current = new HashSet<string>(hostNames, StringComparer.OrdinalIgnoreCase);
-        var configuredSlaves = config.RemoteHosts
+        var configuredSlaves = profile.RemoteHosts
             .Select(s => s.Name)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
@@ -209,7 +209,7 @@ public class InputRouter(
             log.LogDebug("Sent MasterConfig to {Host}", host);
         }
 
-        if (config.RemoteOnly)
+        if (profile.RemoteOnly)
         {
             using var s = await _state.WaitForDisposable();
             TryEnterRemoteOnly(s.Value);
@@ -355,7 +355,7 @@ public class InputRouter(
                     using (var s = await _state.WaitForDisposable())
                     {
                         RebuildLayout(s.Value, snapshot);
-                        if (config.RemoteOnly) TryEnterRemoteOnly(s.Value);
+                        if (profile.RemoteOnly) TryEnterRemoteOnly(s.Value);
                     }
                     log.LogInformation("Screen info from {Host}: {Count} screen(s)", sourceHost, info.Screens.Count);
                 }
@@ -389,11 +389,11 @@ public class InputRouter(
     // rebuilds screens/layout from localScreens/peerScreens; must be called under lock
     private void RebuildLayout(LocalMasterState st, Dictionary<string, List<ScreenInfoEntry>> peerScreens)
     {
-        if (!config.RemoteOnly && st.ActiveLocalScreen == null) return;
+        if (!profile.RemoteOnly && st.ActiveLocalScreen == null) return;
 
-        var newScreens = BuildAllScreens(st.LocalScreens, config);
+        var newScreens = BuildAllScreens(st.LocalScreens);
         ApplyPeerScreenSizes(peerScreens, newScreens);
-        var newLayout = new ScreenLayout(newScreens, config.Hosts, config.DeadCorners, BuildScaleMap(st.LocalScreenEntries, peerScreens), log);
+        var newLayout = new ScreenLayout(newScreens, profile.Hosts, profile.DeadCorners, BuildScaleMap(st.LocalScreenEntries, peerScreens), log);
         st.Screens = newScreens;
         st.Layout = newLayout;
         st.ActiveLocalScreen = st.ActiveLocalScreen == null ? null
@@ -483,7 +483,7 @@ public class InputRouter(
             if (keyEvent.Character == 'l')
             {
                 st.LockedToScreen = !st.LockedToScreen;
-                if (config.RemoteOnly)
+                if (profile.RemoteOnly)
                 {
                     if (st.LockedToScreen)
                     {
@@ -714,7 +714,7 @@ public class InputRouter(
                 if (!hit.Destination.IsLocal)
                 {
                     // remote→remote: always allowed in remote-only; locked prevents it in normal mode
-                    if (config.RemoteOnly || !st.LockedToScreen)
+                    if (profile.RemoteOnly || !st.LockedToScreen)
                     {
                         var leavingScreen = st.Mouse.CurrentScreen;
                         FlushMouseDelta(st);
@@ -740,7 +740,7 @@ public class InputRouter(
                         return;
                     }
                 }
-                else if (!st.LockedToScreen && !config.RemoteOnly)
+                else if (!st.LockedToScreen && !profile.RemoteOnly)
                 {
                     // return to local: blocked by lock or remote-only mode
                     var targetScreen = hit.Destination;
@@ -894,10 +894,10 @@ public class InputRouter(
     }
 
     // combines local screens with placeholder remote screens (Width=0 until ScreenInfo arrives)
-    private static List<ScreenRect> BuildAllScreens(List<ScreenRect> localScreens, HydraConfig config)
+    private List<ScreenRect> BuildAllScreens(List<ScreenRect> localScreens)
     {
         var result = new List<ScreenRect>(localScreens);
-        foreach (var host in config.RemoteHosts)
+        foreach (var host in profile.RemoteHosts)
             result.Add(new ScreenRect(host.Name, host.Name, 0, 0, 0, 0, IsLocal: false));
         return result;
     }
