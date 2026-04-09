@@ -237,9 +237,10 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log) : IPla
         {
             var info = Marshal.PtrToStructure<KBDLLHOOKSTRUCT>(lParam);
             // always resolve to track modifier state even on the real screen
-            var keyEvent = _keyResolver.Resolve((int)wParam, info);
-            if (keyEvent is not null)
-                _onKeyEvent?.Invoke(keyEvent);
+            var keyEvents = _keyResolver.Resolve((int)wParam, info);
+            if (keyEvents is not null)
+                foreach (var keyEvent in keyEvents)
+                    _onKeyEvent?.Invoke(keyEvent);
             if (IsOnVirtualScreen) return 1; // swallow — don't call CallNextHookEx
         }
         return NativeMethods.CallNextHookEx(nint.Zero, nCode, wParam, lParam);

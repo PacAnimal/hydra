@@ -6,7 +6,7 @@ import App from '../App'
 describe('App', () => {
   it('renders without crashing', () => {
     render(<App />)
-    expect(screen.getByText('Hydra Config')).toBeInTheDocument()
+    expect(screen.getByText('Hydra')).toBeInTheDocument()
   })
 
   it('shows Master and Slave toggle buttons', () => {

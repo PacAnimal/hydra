@@ -20,7 +20,12 @@ internal sealed class WinKeyResolver
     private char _pendingDeadKey;
     private char _pendingDeadSpacing;  // spacing form used when composition fails (e.g. dead_circumflex + space → ^)
 
-    internal KeyEvent? Resolve(int wParam, KBDLLHOOKSTRUCT info)
+    // AltGr detection: deferred LCtrl (may be synthetic from AltGr — decided when RMenu arrives)
+    private (int Vk, KeyModifiers Mods, uint Time)? _deferredLCtrl;
+    // set when LLKHF_INJECTED caught a synthetic LCtrl (alternative detection path for drivers that do set it)
+    private bool _injectedLCtrlPending;
+
+    internal KeyEvent[]? Resolve(int wParam, KBDLLHOOKSTRUCT info)
     {
         var vk = (int)info.vkCode;
         var isKeyUp = wParam is NativeMethods.WM_KEYUP or NativeMethods.WM_SYSKEYUP;
@@ -28,36 +33,81 @@ internal sealed class WinKeyResolver
         // update tracked key state before resolving
         UpdateKeyState(vk, info.flags, isKeyUp);
 
-        // suppress injected modifier events (e.g. synthetic LCtrl from AltGr — state is tracked
-        // but the event itself should not be forwarded to the receiver)
+        // suppress injected modifier events — state is tracked in UpdateKeyState but event is not forwarded.
+        // also detects the synthetic LCtrl that AltGr generates when LLKHF_INJECTED IS set.
         if ((info.flags & NativeMethods.LLKHF_INJECTED) != 0 && IsModifier(vk)) return null;
 
         var mods = GetModifiers();
 
         if (isKeyUp)
-            return KeyResolver.ReplayKeyUp(_keyDownId, vk, mods);
+        {
+            _injectedLCtrlPending = false;
+            var prefix = FlushDeferredLCtrl();
+            var up = KeyResolver.ReplayKeyUp(_keyDownId, vk, mods);
+            return Events(prefix, up);
+        }
+
+        // AltGr detection: RMenu preceded by a same-timestamp or LLKHF_INJECTED synthetic LCtrl
+        if (vk == WinVirtualKey.RMenu)
+        {
+            var isAltGr = (_deferredLCtrl is { Time: var t } && t == info.time) || _injectedLCtrlPending;
+            _injectedLCtrlPending = false;
+            if (isAltGr)
+            {
+                _deferredLCtrl = null;
+                // clear synthetic LCtrl from key state so it doesn't bleed into future GetModifiers() calls
+                _keyState[WinVirtualKey.LControl] = 0;
+                _keyState[WinVirtualKey.Control] = (byte)((_keyState[WinVirtualKey.RControl] & 0x80) != 0 ? 0x80 : 0);
+                var altGrMods = GetModifiers();
+                _keyDownId[vk] = new CharClassification(null, SpecialKey.AltGr);
+                return [KeyEvent.Special(KeyEventType.KeyDown, SpecialKey.AltGr, altGrMods)];
+            }
+        }
+        else
+        {
+            _injectedLCtrlPending = false;
+        }
+
+        // flush deferred LCtrl — it was not followed by same-timestamp RMenu, so it's a real Ctrl press
+        var flushed = FlushDeferredLCtrl();
 
         if (WinSpecialKeyMap.Instance.TryGet((ulong)vk, out var specialKey))
         {
-            // suppress auto-repeat — only emit on initial press, not while held
-            if (_keyDownId.ContainsKey(vk)) return null;
+            // suppress auto-repeat — only emit on initial press, not while held.
+            // for deferred LCtrl, _keyDownId won't have it yet, so check _deferredLCtrl too.
+            if (_keyDownId.ContainsKey(vk)) return Events(flushed, null);
             _pendingDeadKey = '\0';
             _pendingDeadSpacing = '\0';
+
+            if (specialKey == SpecialKey.Control_L)
+            {
+                // defer LCtrl — may be AltGr's synthetic key; decided on next RMenu event
+                _deferredLCtrl ??= (vk, mods, info.time);
+                return Events(flushed, null);
+            }
+
             _keyDownId[vk] = new CharClassification(null, specialKey);
-            return KeyEvent.Special(KeyEventType.KeyDown, specialKey, mods);
+            return Events(flushed, KeyEvent.Special(KeyEventType.KeyDown, specialKey, mods));
         }
 
         // suppress character key auto-repeat
-        if (_keyDownId.ContainsKey(vk)) return null;
+        if (_keyDownId.ContainsKey(vk)) return Events(flushed, null);
 
-        return ResolveCharacter(vk, info.scanCode, info.flags, mods);
+        var charEvent = ResolveCharacter(vk, info.scanCode, info.flags, mods);
+        return Events(flushed, charEvent);
     }
 
     private void UpdateKeyState(int vk, uint flags, bool isKeyUp)
     {
-        // ignore injected keys for modifier state (avoids phantom ctrl from AltGr synthesis)
+        // ignore injected keys for modifier state (avoids phantom ctrl from AltGr synthesis).
+        // track injected LCtrl so we can detect AltGr even when LLKHF_INJECTED is set.
         bool injected = (flags & NativeMethods.LLKHF_INJECTED) != 0;
-        if (injected && IsModifier(vk)) return;
+        if (injected && IsModifier(vk))
+        {
+            if (vk == WinVirtualKey.LControl && !isKeyUp)
+                _injectedLCtrlPending = true;
+            return;
+        }
 
         if (isKeyUp)
         {
@@ -87,8 +137,11 @@ internal sealed class WinKeyResolver
         if ((_keyState[WinVirtualKey.LWin] | _keyState[WinVirtualKey.RWin]) != 0) mods |= KeyModifiers.Super;
         if ((_keyState[WinVirtualKey.Capital] & 0x01) != 0) mods |= KeyModifiers.CapsLock;
         if ((_keyState[WinVirtualKey.Numlock] & 0x01) != 0) mods |= KeyModifiers.NumLock;
-        // AltGr = RMenu alone; the synthesized LCtrl is injected and stripped in UpdateKeyState
+        // AltGr = RMenu alone; the synthesized LCtrl is detected and stripped separately
         if ((_keyState[WinVirtualKey.RMenu] & 0x80) != 0) mods |= KeyModifiers.AltGr;
+        // strip Control and Alt when AltGr is active — receiver only needs AltGr (matches Linux behaviour)
+        if ((mods & KeyModifiers.AltGr) != 0)
+            mods &= ~(KeyModifiers.Control | KeyModifiers.Alt);
         return mods;
     }
 
@@ -193,6 +246,24 @@ internal sealed class WinKeyResolver
 
         _keyDownId[vk] = new CharClassification(null, classified.Key);
         return KeyEvent.Special(KeyEventType.KeyDown, classified.Key!.Value, mods);
+    }
+
+    // flush the deferred LCtrl as a real Ctrl key-down event
+    private KeyEvent? FlushDeferredLCtrl()
+    {
+        if (_deferredLCtrl is not { } def) return null;
+        _deferredLCtrl = null;
+        _keyDownId[def.Vk] = new CharClassification(null, SpecialKey.Control_L);
+        return KeyEvent.Special(KeyEventType.KeyDown, SpecialKey.Control_L, def.Mods);
+    }
+
+    // combine up to two nullable events into an array (returns null when both are null)
+    private static KeyEvent[]? Events(KeyEvent? a, KeyEvent? b)
+    {
+        if (a is null && b is null) return null;
+        if (a is null) return [b!];
+        if (b is null) return [a!];
+        return [a, b];
     }
 
     // gets the keyboard layout associated with the foreground window's thread.

@@ -40,7 +40,7 @@ export default function App() {
       <header className="app-header">
         <div className="header-inner">
           <div className="header-title">
-            <h1>Hydra Config</h1>
+            <h1>Hydra</h1>
             <span className="subtitle">Visual configuration editor</span>
           </div>
           <div className="header-actions">
