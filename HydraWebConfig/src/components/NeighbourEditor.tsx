@@ -27,7 +27,7 @@ export function NeighbourEditor({ neighbour, onChange, onRemove }: Props) {
           </select>
         </div>
         <div className="field flex-grow">
-          <label>Host Name</label>
+          <label className="required">Host Name</label>
           <input
             type="text"
             value={neighbour.name}

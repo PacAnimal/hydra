@@ -21,7 +21,7 @@ export function HostCard({ host, index, onChange, onRemove, onAddNeighbour, onRe
 
       <div className="field-row">
         <div className="field flex-grow">
-          <label>Host Name</label>
+          <label className="required">Host Name</label>
           <input
             type="text"
             value={host.name}

@@ -59,6 +59,18 @@ body {
   font-family: 'Cascadia Code', 'Fira Code', monospace;
 }
 
+.btn-incomplete {
+  background: transparent;
+  border: none;
+  padding: 0;
+  font-family: 'Cascadia Code', 'Fira Code', monospace;
+  font-size: 0.75rem;
+  color: #e05050;
+  cursor: pointer;
+  transition: color 0.15s;
+}
+.btn-incomplete:hover { color: #ff7070; }
+
 .config-panel-footer {
   display: flex;
   gap: 8px;
@@ -126,6 +138,8 @@ label {
   letter-spacing: 0.06em;
 }
 
+label.required::after { content: ' *'; color: #e05050; }
+
 input[type=text],
 input[type=number],
 input[type=password],
@@ -175,6 +189,7 @@ textarea {
 
 /* buttons */
 button { cursor: pointer; }
+button:disabled { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
 
 .btn-primary {
   background: #2563eb;
@@ -288,28 +303,43 @@ button { cursor: pointer; }
 /* multi-config */
 .multi-toggle { padding: 14px 20px; }
 
-.config-tabs {
-  display: flex;
-  gap: 4px;
-  flex-wrap: wrap;
+.profiles-section { margin-bottom: 12px; }
+
+.profiles-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
   margin-bottom: 8px;
 }
 
+.config-tabs {
+  display: flex;
+  gap: 0;
+  flex-wrap: wrap;
+  margin-bottom: -1px;
+  position: relative;
+  z-index: 1;
+}
+
 .tab-btn {
-  background: #1a1a1a;
+  background: #111;
   border: 1px solid #2a2a2a;
-  color: #888;
-  border-radius: 6px;
-  padding: 6px 14px;
+  border-bottom: none;
+  color: #666;
+  border-radius: 6px 6px 0 0;
+  padding: 7px 14px;
   font-size: 0.82rem;
   display: flex;
   align-items: center;
   gap: 8px;
   transition: background 0.15s, color 0.15s;
+  margin-right: 2px;
 }
-.tab-btn.active { background: #252533; border-color: #2563eb55; color: #fff; }
-.tab-btn:hover:not(.active) { background: #222; color: #ccc; }
-.tab-add { color: #2563eb; border-style: dashed; }
+.tab-btn.active { background: #1a1a1a; border-color: #2a2a2a; color: #fff; }
+.tab-btn:hover:not(.active) { background: #161616; color: #aaa; }
+.tab-add { color: #2563eb; border-style: dashed; border-bottom: none; margin-right: 0; }
 
 .tab-remove {
   font-size: 0.7rem;
@@ -318,6 +348,24 @@ button { cursor: pointer; }
   line-height: 1;
 }
 .tab-remove:hover { color: #e05050; }
+
+.tab-panel {
+  background: #1a1a1a;
+  border: 1px solid #2a2a2a;
+  border-radius: 6px;
+  padding: 0;
+}
+
+.tab-panel > .section {
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid #222;
+  border-radius: 0;
+  margin-bottom: 0;
+  padding: 20px 24px;
+}
+
+.tab-panel > .section:last-child { border-bottom: none; }
 
 /* hosts */
 .host-card, .screen-card {

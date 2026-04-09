@@ -60,14 +60,6 @@ export function GlobalSettings({ config, onChange }: Props) {
           />
           Sync Screensaver
         </label>
-        <label className="checkbox-label">
-          <input
-            type="checkbox"
-            checked={config.debugShield === true}
-            onChange={e => onChange({ debugShield: e.target.checked ? true : undefined })}
-          />
-          Debug Shield
-        </label>
         {isMaster && (
           <label className="checkbox-label">
             <input

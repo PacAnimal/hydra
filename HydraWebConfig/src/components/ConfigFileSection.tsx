@@ -4,9 +4,11 @@ import { serialize } from '../utils/serializer'
 
 interface Props {
   state: FormState
+  isValid: boolean
+  onScrollToErrors: () => void
 }
 
-export function ConfigFileSection({ state }: Props) {
+export function ConfigFileSection({ state, isValid, onScrollToErrors }: Props) {
   const [copied, setCopied] = useState(false)
   const json = serialize(state)
 
@@ -30,13 +32,16 @@ export function ConfigFileSection({ state }: Props) {
     <div className="config-panel-inner">
       <div className="config-panel-header">
         <span className="config-panel-title">hydra.conf</span>
+        {!isValid && (
+          <button className="btn-incomplete" onClick={onScrollToErrors}>(INCOMPLETE!)</button>
+        )}
       </div>
       <pre className="config-pre">{json}</pre>
       <div className="config-panel-footer">
-        <button className="btn-copy" onClick={copy}>
+        <button className="btn-copy" onClick={copy} disabled={!isValid}>
           {copied ? 'Copied!' : 'Copy to Clipboard'}
         </button>
-        <button className="btn-secondary" onClick={download}>Download</button>
+        <button className="btn-secondary" onClick={download} disabled={!isValid}>Download</button>
       </div>
     </div>
   )

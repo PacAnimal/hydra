@@ -71,6 +71,7 @@ export function ScreenDefinitions({ screens, onAdd, onRemove, onUpdate }: Props)
   return (
     <div className="section">
       <h2>Screen Definitions</h2>
+      <p className="hint">At least one of Display Name, Output Name, or Platform ID is required per screen.</p>
       {screens.map((s, si) => (
         <ScreenDefinitionCard
           key={si}
