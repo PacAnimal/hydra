@@ -7,16 +7,17 @@ using System.Text.Json;
 using Cathedral.Utils;
 using Hydra.Config;
 using Hydra.Platform;
-using Hydra.Platform.Windows;
-using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace Hydra.Update;
 
-internal sealed class SelfUpdater(IHydraProfile profile, IHostApplicationLifetime lifetime, ILogger<SelfUpdater> log) : SimpleHostedService(log, TimeSpan.FromMinutes(30))
+internal sealed class SelfUpdater(IHydraProfile profile, ILogger<SelfUpdater> log) : SimpleHostedService(log, TimeSpan.FromMinutes(30))
 {
     private const string Repo = "pacanimal/hydra";
     private readonly Toggle _warned = new();
+
+    // set by ServiceHost to stop the child process before a binary swap
+    internal Func<Task>? StopChild { get; set; }
 
     protected override async Task Execute(CancellationToken cancel)
     {
@@ -133,6 +134,10 @@ internal sealed class SelfUpdater(IHydraProfile profile, IHostApplicationLifetim
         if (!File.Exists(tmpPath))
             throw new InvalidOperationException($"'{exeName}' not found in archive");
 
+        // stop child before swapping — prevents file-lock conflicts in service mode
+        if (StopChild != null)
+            await StopChild();
+
         // atomic swap
         if (OperatingSystem.IsWindows())
         {
@@ -148,11 +153,10 @@ internal sealed class SelfUpdater(IHydraProfile profile, IHostApplicationLifetim
 
         log.LogInformation("Update applied, restarting");
 
-        if (OperatingSystem.IsWindows() && RunMode.IsSessionChild)
+        if (StopChild != null)
         {
-            // running as service child — signal the watchdog to restart the service, then stop ourselves
-            Win32Session.SignalGlobalEvent("HydraUpdateReady");
-            lifetime.StopApplication();
+            // running as service — exit non-zero so SCM failure action restarts with the new binary
+            Environment.Exit(1);
             return;
         }
 

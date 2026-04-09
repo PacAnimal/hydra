@@ -196,7 +196,8 @@ if (config != null)
     else
         services.AddSingleton<IScreenSaverSync, NullScreenSaverSync>();
 
-    services.AddHostedService<SelfUpdater>();
+    if (!RunMode.IsSessionChild)
+        services.AddHostedService<SelfUpdater>();
 
     if (profile.NetworkConfig != null)
     {

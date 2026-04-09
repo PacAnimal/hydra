@@ -12,14 +12,12 @@ internal sealed class SessionWatchdog(ILogger<SessionWatchdog> log)
     private uint _lastSession = Win32Session.NoSession;
     private ChildProcess? _child;
     private SafeFileHandle? _stopEvent;
-    private SafeFileHandle? _updateEvent;
     private TimeSpan _backoff = TimeSpan.FromSeconds(1);
 
     protected override async Task Execute(CancellationToken cancel)
     {
-        // lazy init so events exist before the child process is launched
+        // lazy init so event exists before the child process is launched
         _stopEvent ??= Win32Session.CreateGlobalEvent("HydraSessionStop", manualReset: true);
-        _updateEvent ??= Win32Session.CreateGlobalEvent("HydraUpdateReady", manualReset: false);
 
         var session = Win32Session.GetActiveConsoleSessionId();
 
@@ -48,17 +46,12 @@ internal sealed class SessionWatchdog(ILogger<SessionWatchdog> log)
         {
             _backoff = TimeSpan.FromSeconds(1);
         }
-
-        // non-blocking check for staged update signal
-        if (_updateEvent != null && Win32Session.WaitForEvent(_updateEvent, 0))
-            HandleUpdate();
     }
 
     protected override async Task OnShutdown(CancellationToken cancel)
     {
         await StopChildAsync();
         _stopEvent?.Dispose();
-        _updateEvent?.Dispose();
     }
 
     private void StartChild(uint session)
@@ -75,7 +68,7 @@ internal sealed class SessionWatchdog(ILogger<SessionWatchdog> log)
         }
     }
 
-    private async Task StopChildAsync()
+    internal async Task StopChildAsync()
     {
         if (_child == null) return;
 
@@ -95,12 +88,5 @@ internal sealed class SessionWatchdog(ILogger<SessionWatchdog> log)
         _child = null;
 
         if (_stopEvent != null) Win32Session.ResetGlobalEvent(_stopEvent);
-    }
-
-    private void HandleUpdate()
-    {
-        log.LogInformation("Update applied by child, restarting service");
-        // exit non-zero so SCM's failure action (restart/5000) fires and picks up the new binary
-        Environment.Exit(1);
     }
 }
