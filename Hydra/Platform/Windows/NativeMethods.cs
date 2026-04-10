@@ -151,6 +151,10 @@ internal static partial class NativeMethods
         nint hInst, int xHotSpot, int yHotSpot, int nWidth, int nHeight,
         byte* pvANDPlane, byte* pvXORPlane);
 
+    [LibraryImport(User32, EntryPoint = "LoadCursorW")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial nint LoadCursor(nint hInstance, nint lpCursorName);
+
     [LibraryImport(User32, EntryPoint = "CopyIcon")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     internal static partial nint CopyCursor(nint hcur);
