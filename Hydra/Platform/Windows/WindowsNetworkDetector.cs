@@ -23,8 +23,8 @@ internal sealed partial class WindowsNetworkDetector : INetworkDetector
 
             try
             {
-                var count = Marshal.ReadInt32(ifaceListPtr, 8); // dwNumberOfItems at offset 8
-                var itemStart = ifaceListPtr + 12; // items start after dwNumberOfItems + dwIndex
+                var count = Marshal.ReadInt32(ifaceListPtr); // dwNumberOfItems at offset 0
+                var itemStart = ifaceListPtr + 8; // items start after dwNumberOfItems(4) + dwIndex(4)
 
                 for (var i = 0; i < count; i++)
                 {
@@ -84,23 +84,23 @@ internal sealed partial class WindowsNetworkDetector : INetworkDetector
     private const int WlanInterfaceInfoSize = 532;
 
     [LibraryImport("wlanapi.dll")]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     private static partial uint WlanOpenHandle(uint dwClientVersion, nint pReserved, out uint pdwNegotiatedVersion, out nint phClientHandle);
 
     [LibraryImport("wlanapi.dll")]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     private static partial uint WlanCloseHandle(nint hClientHandle, nint pReserved);
 
     [LibraryImport("wlanapi.dll")]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     private static partial uint WlanEnumInterfaces(nint hClientHandle, nint pReserved, out nint ppInterfaceList);
 
     [LibraryImport("wlanapi.dll")]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     private static partial uint WlanQueryInterface(nint hClientHandle, ref Guid pInterfaceGuid, uint wlanIntfOpcode,
         nint pReserved, out uint pdwDataSize, out nint ppData, out uint pWlanOpcodeValueType);
 
     [LibraryImport("wlanapi.dll")]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     private static partial void WlanFreeMemory(nint pMemory);
 }
