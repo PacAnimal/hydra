@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: build-hydra
+  cancel-in-progress: false
+
 jobs:
   version:
     runs-on: ubuntu-latest

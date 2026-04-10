@@ -182,6 +182,13 @@ public class HydraConfig
 
         foreach (var cfg in profiles)
         {
+            // no duplicate host names within a profile
+            var dupHost = cfg.Hosts
+                .GroupBy(h => h.Name.Trim(), StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault(g => g.Count() > 1);
+            if (dupHost != null)
+                throw new InvalidOperationException($"hydra.conf has duplicate host name '{dupHost.Key}' in profile '{cfg.ProfileName ?? "(default)"}'.");
+
             if (cfg.Mode == Mode.Master && cfg.MouseScale != null)
                 throw new InvalidOperationException("mouseScale is slave-only. Remove it from master profiles.");
             if (cfg.Mode == Mode.Master && cfg.ScreenDefinitions.Count > 0)

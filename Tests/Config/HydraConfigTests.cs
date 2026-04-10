@@ -469,4 +469,26 @@ public class HydraConfigTests
         var json = AsFile("""[{ "mode": "Master" }]""");
         Assert.That(() => HydraConfig.ParseAndValidate(json), Throws.Nothing);
     }
+
+    [Test]
+    public void Validate_Throws_OnDuplicateHostName()
+    {
+        var json = AsFile("""
+            [{ "mode": "Master", "hosts": [{ "name": "mac" }, { "name": "mac" }] }]
+            """);
+        Assert.That(() => HydraConfig.ParseAndValidate(json),
+            Throws.InvalidOperationException.With.Message.Contains("duplicate host name"));
+    }
+
+    [Test]
+    public void Validate_Accepts_UniqueBidirectionalHosts()
+    {
+        var json = AsFile("""
+            [{ "mode": "Master", "hosts": [
+              { "name": "mac", "neighbours": [{ "direction": "up", "name": "windows" }] },
+              { "name": "windows", "neighbours": [{ "direction": "down", "name": "mac" }] }
+            ]}]
+            """);
+        Assert.That(() => HydraConfig.ParseAndValidate(json), Throws.Nothing);
+    }
 }
