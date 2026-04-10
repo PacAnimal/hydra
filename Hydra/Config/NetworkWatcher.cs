@@ -12,6 +12,7 @@ internal sealed class NetworkWatcher : SimpleHostedService
     private readonly Func<int> _screenCountProvider;
     private readonly List<HydraConfig> _configs;
     private readonly HydraConfig? _activeConfig;
+    private readonly string? _profileOverride;
     private readonly ILogger<NetworkWatcher> _log;
 
     // tracks last known state for transition logging
@@ -22,13 +23,14 @@ internal sealed class NetworkWatcher : SimpleHostedService
     private DateTime _lastCheck = DateTime.MinValue;
     private static readonly TimeSpan Debounce = TimeSpan.FromSeconds(2);
 
-    public NetworkWatcher(INetworkDetector detector, Func<int> screenCountProvider, List<HydraConfig> configs, HydraConfig? activeConfig, ILogger<NetworkWatcher> log)
+    public NetworkWatcher(INetworkDetector detector, Func<int> screenCountProvider, List<HydraConfig> configs, HydraConfig? activeConfig, string? profileOverride, ILogger<NetworkWatcher> log)
         : base(log, TimeSpan.FromSeconds(60))
     {
         _detector = detector;
         _screenCountProvider = screenCountProvider;
         _configs = configs;
         _activeConfig = activeConfig;
+        _profileOverride = profileOverride;
         _log = log;
 
         NetworkChange.NetworkAddressChanged += OnNetworkAddressChanged;
@@ -52,6 +54,9 @@ internal sealed class NetworkWatcher : SimpleHostedService
 
     private async Task CheckNetwork(CancellationToken cancel)
     {
+        // profile override is fixed — conditions can't change the selection
+        if (_profileOverride != null) return;
+
         // no conditional configs — nothing to check
         if (!HydraConfig.HasConditions(_configs)) return;
 

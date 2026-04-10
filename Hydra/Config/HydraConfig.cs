@@ -67,9 +67,13 @@ public class HydraConfig
     public static bool HasScreenCountConditions(List<HydraConfig> profiles) => profiles.Any(c => c.Conditions?.ScreenCount != null);
 
     // resolves the active profile from the list based on current condition state.
+    // if profileOverride is set, that profile is returned unconditionally (ignores conditions).
     // returns null if no profile matches (hydra should idle until conditions change)
-    public static HydraConfig? Resolve(List<HydraConfig> profiles, ConditionState state)
+    public static HydraConfig? Resolve(List<HydraConfig> profiles, ConditionState state, string? profileOverride = null)
     {
+        if (profileOverride != null)
+            return profiles.FirstOrDefault(c => c.ProfileName != null && c.ProfileName.EqualsIgnoreCase(profileOverride));
+
         HydraConfig? fallback = null;
 
         foreach (var cfg in profiles)
@@ -142,8 +146,15 @@ public class HydraConfig
         }
     }
 
-    internal static void Validate(List<HydraConfig> profiles, string resolvedName)
+    internal static void Validate(List<HydraConfig> profiles, string resolvedName, string? profileOverride = null)
     {
+        if (profileOverride != null)
+        {
+            var exists = profiles.Any(c => c.ProfileName != null && c.ProfileName.EqualsIgnoreCase(profileOverride));
+            if (!exists)
+                throw new InvalidOperationException($"hydra.conf 'profile' override '{profileOverride}' does not match any profile's profileName.");
+        }
+
         // no duplicate profile names
         var names = profiles.Where(c => !string.IsNullOrWhiteSpace(c.ProfileName))
             .GroupBy(c => c.ProfileName!.Trim(), StringComparer.OrdinalIgnoreCase)

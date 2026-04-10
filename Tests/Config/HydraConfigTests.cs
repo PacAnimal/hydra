@@ -372,6 +372,52 @@ public class HydraConfigTests
         Assert.That(() => HydraConfig.ParseAndValidate(json), Throws.Nothing);
     }
 
+    // Resolve with profile override
+
+    private static HydraConfig MakeNamedConfig(string profileName, Mode mode = Mode.Master, ConfigConditions? conditions = null) =>
+        new() { Mode = mode, Conditions = conditions, ProfileName = profileName };
+
+    [Test]
+    public void Resolve_ProfileOverride_SelectsNamedProfile_IgnoringConditions()
+    {
+        var home = MakeNamedConfig("Home", conditions: SsidCondition("HomeNet"));
+        var fallback = MakeConfig(Mode.Slave);
+        var configs = new List<HydraConfig> { home, fallback };
+        // conditions don't match, but override forces "Home"
+        Assert.That(HydraConfig.Resolve(configs, State(), "Home"), Is.SameAs(home));
+    }
+
+    [Test]
+    public void Resolve_ProfileOverride_IsCaseInsensitive()
+    {
+        var home = MakeNamedConfig("Home", conditions: SsidCondition("HomeNet"));
+        var configs = new List<HydraConfig> { home };
+        Assert.That(HydraConfig.Resolve(configs, State(), "home"), Is.SameAs(home));
+    }
+
+    [Test]
+    public void Resolve_ProfileOverride_ReturnsNull_WhenNameNotFound()
+    {
+        var home = MakeNamedConfig("Home", conditions: SsidCondition("HomeNet"));
+        var configs = new List<HydraConfig> { home };
+        Assert.That(HydraConfig.Resolve(configs, State(), "Nonexistent"), Is.Null);
+    }
+
+    [Test]
+    public void Validate_Throws_WhenProfileOverrideDoesNotMatchAnyProfileName()
+    {
+        var json = """{"profile":"Nope","profiles":[{"mode":"Master","profileName":"Home","conditions":{"ssid":"HomeNet"}}]}""";
+        Assert.That(() => HydraConfigFile.Parse(json, "<test>"),
+            Throws.InvalidOperationException.With.Message.Contains("'Nope'"));
+    }
+
+    [Test]
+    public void Validate_Accepts_ValidProfileOverride()
+    {
+        var json = """{"profile":"Home","profiles":[{"mode":"Master","profileName":"Home","conditions":{"ssid":"HomeNet"}}]}""";
+        Assert.That(() => HydraConfigFile.Parse(json, "<test>"), Throws.Nothing);
+    }
+
     // LocalHost / RemoteHosts
 
     [Test]

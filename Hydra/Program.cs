@@ -82,7 +82,9 @@ services.AddEnvironmentConfiguration();
 // detect current network/screens and resolve which profile to use
 var detector = await CreateDetector(macNetworkState, services);
 HydraConfig? config;
-if (!HydraConfig.HasConditions(profiles))
+if (configFile.Profile != null)
+    config = HydraConfig.Resolve(profiles, new ConditionState([], 1), configFile.Profile);
+else if (!HydraConfig.HasConditions(profiles))
     config = profiles[0]; // single unconditional profile — no detection needed
 else
 {
@@ -128,6 +130,7 @@ services.AddSingleton(sp => new NetworkWatcher(
     GetScreenCount,
     profiles,
     config,
+    configFile.Profile,
     sp.GetRequiredService<ILogger<NetworkWatcher>>()));
 services.AddHostedService(sp => sp.GetRequiredService<NetworkWatcher>());
 

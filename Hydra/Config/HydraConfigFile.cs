@@ -22,6 +22,9 @@ public class HydraConfigFile
     // optional — defaults to machine hostname without domain
     public string? Name { get; init; }
 
+    // optional — if set, this profile is always selected regardless of conditions (useful for debugging)
+    public string? Profile { get; init; }
+
     public List<HydraConfig> Profiles { get; init; } = [];
 
     // convenience method for single-profile scenarios (tests, simple setups)
@@ -49,7 +52,7 @@ public class HydraConfigFile
         var file = json.FromSaneJson<HydraConfigFile>()
             ?? throw new InvalidOperationException($"Failed to deserialize {path}");
         file.Profiles.ForEach(p => HydraConfig.ExpandMirrors(p.Hosts));
-        HydraConfig.Validate(file.Profiles, file.Name ?? Environment.MachineName.Split('.')[0]);
+        HydraConfig.Validate(file.Profiles, file.Name ?? Environment.MachineName.Split('.')[0], file.Profile);
         return file;
     }
 
