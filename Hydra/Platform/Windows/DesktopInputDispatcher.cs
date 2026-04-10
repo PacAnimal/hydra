@@ -19,7 +19,8 @@ namespace Hydra.Platform.Windows;
 [SupportedOSPlatform("windows")]
 internal sealed class DesktopInputDispatcher : IDisposable
 {
-    private const uint DesktopAccess = NativeMethods.DESKTOP_READOBJECTS | NativeMethods.DESKTOP_WRITEOBJECTS;
+    private const uint DesktopAccess = NativeMethods.DESKTOP_CREATEWINDOW | NativeMethods.DESKTOP_HOOKCONTROL
+                                     | NativeMethods.DESKTOP_READOBJECTS | NativeMethods.GENERIC_WRITE;
 
     // vk codes that require KEYEVENTF_EXTENDEDKEY (right-side modifiers, nav cluster, arrows)
     private static readonly HashSet<ulong> ExtendedKeys =
@@ -133,22 +134,26 @@ internal sealed class DesktopInputDispatcher : IDisposable
                 }
             case MoveMouseCommand m:
                 {
-                    ExecuteMoveMouse(m.Dx, m.Dy);
+                    if (ExecuteMoveMouse(m.Dx, m.Dy) == 0)
+                        _log.LogWarning("SendInput(mouse move) failed (error {Error})", Marshal.GetLastWin32Error());
                     break;
                 }
             case MoveMouseRelativeCommand m:
                 {
-                    ExecuteMoveMouseRelative(m.Dx, m.Dy);
+                    if (ExecuteMoveMouseRelative(m.Dx, m.Dy) == 0)
+                        _log.LogWarning("SendInput(mouse relative) failed (error {Error})", Marshal.GetLastWin32Error());
                     break;
                 }
             case InjectKeyCommand k:
                 {
-                    ExecuteInjectKey(k.Msg);
+                    if (ExecuteInjectKey(k.Msg) == 0)
+                        _log.LogWarning("SendInput(key) failed (error {Error})", Marshal.GetLastWin32Error());
                     break;
                 }
             case InjectMouseButtonCommand b:
                 {
-                    ExecuteInjectMouseButton(b.Msg);
+                    if (ExecuteInjectMouseButton(b.Msg) == 0)
+                        _log.LogWarning("SendInput(mouse button) failed (error {Error})", Marshal.GetLastWin32Error());
                     break;
                 }
             case InjectMouseScrollCommand s:
@@ -159,7 +164,7 @@ internal sealed class DesktopInputDispatcher : IDisposable
         }
     }
 
-    private static unsafe void ExecuteMoveMouse(int dx, int dy)
+    private static unsafe uint ExecuteMoveMouse(int dx, int dy)
     {
         var input = new INPUT
         {
@@ -171,10 +176,10 @@ internal sealed class DesktopInputDispatcher : IDisposable
                 dwFlags = NativeMethods.MOUSEEVENTF_MOVE | NativeMethods.MOUSEEVENTF_ABSOLUTE | NativeMethods.MOUSEEVENTF_VIRTUALDESK,
             },
         };
-        _ = NativeMethods.SendInput(1, &input, sizeof(INPUT));
+        return NativeMethods.SendInput(1, &input, sizeof(INPUT));
     }
 
-    private static unsafe void ExecuteMoveMouseRelative(int dx, int dy)
+    private static unsafe uint ExecuteMoveMouseRelative(int dx, int dy)
     {
         // disable mouse acceleration for 1:1 movement, then restore (matches input-leap approach)
         int* oldMouse = stackalloc int[3];
@@ -197,16 +202,18 @@ internal sealed class DesktopInputDispatcher : IDisposable
             type = NativeMethods.INPUT_MOUSE,
             mi = new MOUSEINPUT { dx = dx, dy = dy, dwFlags = NativeMethods.MOUSEEVENTF_MOVE },
         };
-        _ = NativeMethods.SendInput(1, &input, sizeof(INPUT));
+        var result = NativeMethods.SendInput(1, &input, sizeof(INPUT));
 
         if (saved)
         {
             NativeMethods.SystemParametersInfo(NativeMethods.SPI_SETMOUSE, 0, (nint)oldMouse, 0);
             NativeMethods.SystemParametersInfo(NativeMethods.SPI_SETMOUSESPEED, 0, oldSpeed, 0);
         }
+
+        return result;
     }
 
-    private static unsafe void ExecuteInjectKey(KeyEventMessage msg)
+    private static unsafe uint ExecuteInjectKey(KeyEventMessage msg)
     {
         var isUp = msg.Type == KeyEventType.KeyUp;
 
@@ -225,7 +232,7 @@ internal sealed class DesktopInputDispatcher : IDisposable
                 if (isSuper && vk == 0x4C) // Win+L: UIPI blocks SendInput; use the API directly
                 {
                     if (!isUp) NativeMethods.LockWorkStation();
-                    return;
+                    return 1;
                 }
 
                 if (isSuper && !isUp)
@@ -234,7 +241,7 @@ internal sealed class DesktopInputDispatcher : IDisposable
                     var inputs = stackalloc INPUT[2];
                     inputs[0] = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = WinVirtualKey.LWin, dwFlags = NativeMethods.KEYEVENTF_EXTENDEDKEY } };
                     inputs[1] = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = vk } };
-                    _ = NativeMethods.SendInput(2, inputs, sizeof(INPUT));
+                    return NativeMethods.SendInput(2, inputs, sizeof(INPUT));
                 }
                 else
                 {
@@ -244,7 +251,7 @@ internal sealed class DesktopInputDispatcher : IDisposable
                         type = NativeMethods.INPUT_KEYBOARD,
                         ki = new KEYBDINPUT { wVk = vk, dwFlags = flags },
                     };
-                    _ = NativeMethods.SendInput(1, &input, sizeof(INPUT));
+                    return NativeMethods.SendInput(1, &input, sizeof(INPUT));
                 }
             }
             else
@@ -256,7 +263,7 @@ internal sealed class DesktopInputDispatcher : IDisposable
                     type = NativeMethods.INPUT_KEYBOARD,
                     ki = new KEYBDINPUT { wVk = 0, wScan = ch, dwFlags = flags },
                 };
-                _ = NativeMethods.SendInput(1, &input, sizeof(INPUT));
+                return NativeMethods.SendInput(1, &input, sizeof(INPUT));
             }
         }
         else if (msg.Key is { } key && WinSpecialKeyMap.Instance.Reverse.TryGetValue(key, out var vk))
@@ -270,11 +277,13 @@ internal sealed class DesktopInputDispatcher : IDisposable
                 type = NativeMethods.INPUT_KEYBOARD,
                 ki = new KEYBDINPUT { wVk = (ushort)vk, dwFlags = flags },
             };
-            _ = NativeMethods.SendInput(1, &input, sizeof(INPUT));
+            return NativeMethods.SendInput(1, &input, sizeof(INPUT));
         }
+
+        return 1; // nothing to inject
     }
 
-    private static unsafe void ExecuteInjectMouseButton(MouseButtonMessage msg)
+    private static unsafe uint ExecuteInjectMouseButton(MouseButtonMessage msg)
     {
         var (downFlag, upFlag, mouseData) = msg.Button switch
         {
@@ -285,7 +294,7 @@ internal sealed class DesktopInputDispatcher : IDisposable
             MouseButton.Extra2 => (NativeMethods.MOUSEEVENTF_XDOWN, NativeMethods.MOUSEEVENTF_XUP, (uint)NativeMethods.XBUTTON2),
             _ => (0u, 0u, 0u),
         };
-        if (downFlag == 0) return;
+        if (downFlag == 0) return 1;
 
         var input = new INPUT
         {
@@ -296,10 +305,10 @@ internal sealed class DesktopInputDispatcher : IDisposable
                 mouseData = mouseData,
             },
         };
-        _ = NativeMethods.SendInput(1, &input, sizeof(INPUT));
+        return NativeMethods.SendInput(1, &input, sizeof(INPUT));
     }
 
-    private static unsafe void ExecuteInjectMouseScroll(MouseScrollMessage msg)
+    private unsafe void ExecuteInjectMouseScroll(MouseScrollMessage msg)
     {
         if (msg.YDelta != 0)
         {
@@ -308,7 +317,8 @@ internal sealed class DesktopInputDispatcher : IDisposable
                 type = NativeMethods.INPUT_MOUSE,
                 mi = new MOUSEINPUT { dwFlags = NativeMethods.MOUSEEVENTF_WHEEL, mouseData = (uint)msg.YDelta },
             };
-            _ = NativeMethods.SendInput(1, &input, sizeof(INPUT));
+            if (NativeMethods.SendInput(1, &input, sizeof(INPUT)) == 0)
+                _log.LogWarning("SendInput(scroll y) failed (error {Error})", Marshal.GetLastWin32Error());
         }
 
         if (msg.XDelta != 0)
@@ -318,7 +328,8 @@ internal sealed class DesktopInputDispatcher : IDisposable
                 type = NativeMethods.INPUT_MOUSE,
                 mi = new MOUSEINPUT { dwFlags = NativeMethods.MOUSEEVENTF_HWHEEL, mouseData = (uint)msg.XDelta },
             };
-            _ = NativeMethods.SendInput(1, &input, sizeof(INPUT));
+            if (NativeMethods.SendInput(1, &input, sizeof(INPUT)) == 0)
+                _log.LogWarning("SendInput(scroll x) failed (error {Error})", Marshal.GetLastWin32Error());
         }
     }
 
