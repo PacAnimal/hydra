@@ -287,7 +287,8 @@ internal static partial class NativeMethods
     // -- desktop --
 
     internal const uint GENERIC_READ = 0x80000000;
-    internal const uint GENERIC_WRITE = 0x40000000;
+    internal const uint DESKTOP_READOBJECTS = 0x0001;
+    internal const uint DESKTOP_WRITEOBJECTS = 0x0080;
     internal const uint DF_ALLOWOTHERACCOUNTHOOK = 0x0001;
     internal const int UOI_NAME = 2;
 

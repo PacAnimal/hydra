@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using Microsoft.Extensions.Logging;
 
@@ -14,6 +15,10 @@ namespace Hydra.Platform.Windows;
 [SupportedOSPlatform("windows")]
 internal sealed class DesktopInputDispatcher : IDisposable
 {
+    // DESKTOP_READOBJECTS | DESKTOP_WRITEOBJECTS — minimum rights the interactive user has on all desktops
+    // including Winlogon. GENERIC_WRITE would also request journal rights the user doesn't have, causing failure.
+    private const uint DesktopAccess = NativeMethods.DESKTOP_READOBJECTS | NativeMethods.DESKTOP_WRITEOBJECTS;
+
     private readonly ILogger _log;
     private readonly BlockingCollection<Action> _queue = [];
     private readonly System.Threading.Timer _pollTimer;
@@ -24,8 +29,12 @@ internal sealed class DesktopInputDispatcher : IDisposable
     internal DesktopInputDispatcher(ILogger log)
     {
         _log = log;
-        _activeDesktop = NativeMethods.OpenInputDesktop(NativeMethods.DF_ALLOWOTHERACCOUNTHOOK, true, NativeMethods.GENERIC_WRITE);
+        _activeDesktop = NativeMethods.OpenInputDesktop(NativeMethods.DF_ALLOWOTHERACCOUNTHOOK, true, DesktopAccess);
         _activeDesktopName = GetDesktopName(_activeDesktop);
+        if (_activeDesktop == nint.Zero)
+            _log.LogWarning("OpenInputDesktop failed at startup (error {Error}) — input may not work on secure desktops", Marshal.GetLastWin32Error());
+        else
+            _log.LogInformation("Desktop input dispatcher started, current desktop: {Name}", _activeDesktopName);
         StartWorker(_activeDesktop);
         _pollTimer = new System.Threading.Timer(_ => PollDesktop(), null, TimeSpan.FromMilliseconds(200), TimeSpan.FromMilliseconds(200));
     }
@@ -54,7 +63,10 @@ internal sealed class DesktopInputDispatcher : IDisposable
         var t = new Thread(() =>
         {
             if (hDesk != nint.Zero)
-                NativeMethods.SetThreadDesktop(hDesk);
+            {
+                if (!NativeMethods.SetThreadDesktop(hDesk))
+                    _log.LogWarning("SetThreadDesktop failed at worker startup (error {Error})", Marshal.GetLastWin32Error());
+            }
             foreach (var action in _queue.GetConsumingEnumerable())
                 action();
         })
@@ -69,8 +81,12 @@ internal sealed class DesktopInputDispatcher : IDisposable
     {
         if (_disposed) return;
 
-        var hDesk = NativeMethods.OpenInputDesktop(NativeMethods.DF_ALLOWOTHERACCOUNTHOOK, true, NativeMethods.GENERIC_WRITE);
-        if (hDesk == nint.Zero) return; // brief transition, skip
+        var hDesk = NativeMethods.OpenInputDesktop(NativeMethods.DF_ALLOWOTHERACCOUNTHOOK, true, DesktopAccess);
+        if (hDesk == nint.Zero)
+        {
+            _log.LogDebug("OpenInputDesktop returned null during poll (error {Error})", Marshal.GetLastWin32Error());
+            return;
+        }
 
         var name = GetDesktopName(hDesk);
         if (name == _activeDesktopName)
@@ -90,7 +106,7 @@ internal sealed class DesktopInputDispatcher : IDisposable
         _queue.TryAdd(() =>
         {
             if (!NativeMethods.SetThreadDesktop(hDesk))
-                _log.LogWarning("SetThreadDesktop failed for desktop {Name}", name);
+                _log.LogWarning("SetThreadDesktop failed for desktop {Name} (error {Error})", name, Marshal.GetLastWin32Error());
             if (oldDesk != nint.Zero)
                 NativeMethods.CloseDesktop(oldDesk);
         });
