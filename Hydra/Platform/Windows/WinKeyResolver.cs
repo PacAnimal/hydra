@@ -262,7 +262,7 @@ internal sealed class WinKeyResolver
     {
         if (a is null && b is null) return null;
         if (a is null) return [b!];
-        if (b is null) return [a!];
+        if (b is null) return [a];
         return [a, b];
     }
 

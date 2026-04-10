@@ -293,7 +293,7 @@ public class MasterSlaveProtocolTests
     }
 
     // variant that exposes its WorldState for log-level assertions
-    private sealed class TestableSlaveRelayWithState : SlaveRelayConnection, IDisposable
+    private sealed class TestableSlaveRelayWithState : SlaveRelayConnection
     {
         private readonly SlaveCursorHider _hider;
 
