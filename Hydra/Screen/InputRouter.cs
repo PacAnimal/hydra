@@ -204,7 +204,7 @@ public class InputRouter(
         // send MasterConfig only to newly appeared peers that are configured as slaves
         foreach (var host in delta.NewPeers)
         {
-            var payload = MessageSerializer.Encode(MessageKind.MasterConfig, new { });
+            var payload = MessageSerializer.Encode(MessageKind.MasterConfig, new MasterConfigMessage(profile.LogLevel));
             _ = relay.Send([host], payload).AsTask();
             log.LogDebug("Sent MasterConfig to {Host}", host);
         }

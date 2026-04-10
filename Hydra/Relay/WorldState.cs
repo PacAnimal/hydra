@@ -14,8 +14,9 @@ public interface IWorldState
     ILogger GetOrCreateSlaveLogger(string category, ILoggerFactory factory);
 
     // -- slave-side --
-    ValueTask AddMaster(string host);
+    ValueTask AddMaster(string host, MasterConfigMessage config);
     ValueTask<string[]> GetMasters();
+    ValueTask<Dictionary<string, MasterConfigMessage>> GetMasterConfigs();
     ValueTask PruneMasters(HashSet<string> activePeers);
 
     // -- shared (encryption) --
@@ -64,7 +65,8 @@ public class WorldState : IWorldState
                     sh.Value.RemoteKeys.Remove(host);
 
             using var sl = await _slave.WaitForDisposable();
-            sl.Value.Masters.RemoveWhere(departed.Contains);
+            foreach (var key in departed.Where(sl.Value.Masters.ContainsKey).ToList())
+                sl.Value.Masters.Remove(key);
         }
 
         return new PeerDelta(newPeers, departed.Count > 0, snapshot);
@@ -85,22 +87,29 @@ public class WorldState : IWorldState
     public ILogger GetOrCreateSlaveLogger(string category, ILoggerFactory factory) =>
         _loggers.GetOrAdd(category, c => factory.CreateLogger(c));
 
-    public async ValueTask AddMaster(string host)
+    public async ValueTask AddMaster(string host, MasterConfigMessage config)
     {
         using var s = await _slave.WaitForDisposable();
-        s.Value.Masters.Add(host);
+        s.Value.Masters[host] = config;
     }
 
     public async ValueTask<string[]> GetMasters()
     {
         using var s = await _slave.WaitForDisposable();
-        return [.. s.Value.Masters];
+        return [.. s.Value.Masters.Keys];
+    }
+
+    public async ValueTask<Dictionary<string, MasterConfigMessage>> GetMasterConfigs()
+    {
+        using var s = await _slave.WaitForDisposable();
+        return new Dictionary<string, MasterConfigMessage>(s.Value.Masters, StringComparer.OrdinalIgnoreCase);
     }
 
     public async ValueTask PruneMasters(HashSet<string> activePeers)
     {
         using var s = await _slave.WaitForDisposable();
-        s.Value.Masters.RemoveWhere(h => !activePeers.Contains(h));
+        foreach (var key in s.Value.Masters.Keys.Where(h => !activePeers.Contains(h)).ToList())
+            s.Value.Masters.Remove(key);
     }
 
     public async ValueTask ClearPeers()
@@ -132,7 +141,7 @@ public class WorldState : IWorldState
 
     private class SlaveState
     {
-        public HashSet<string> Masters = new(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<string, MasterConfigMessage> Masters = new(StringComparer.OrdinalIgnoreCase);
     }
 
     private class SharedState

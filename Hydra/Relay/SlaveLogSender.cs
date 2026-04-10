@@ -17,13 +17,21 @@ public sealed class SlaveLogSender(IRelaySender relay, SlaveLogForwarder logForw
         {
             await logForwarder.Reader.WaitToReadAsync(cancel);
 
-            var masters = await peerState.GetMasters();
-            if (!relay.IsConnected || masters.Length == 0) break;
+            var masterConfigs = await peerState.GetMasterConfigs();
+            if (!relay.IsConnected || masterConfigs.Count == 0) break;
 
             if (!logForwarder.Reader.TryRead(out var entry)) continue;
+
+            var targets = masterConfigs
+                .Where(kv => entry.Level >= (kv.Value.LogLevel ?? LogLevel.Information))
+                .Select(kv => kv.Key)
+                .ToArray();
+
+            if (targets.Length == 0) continue;
+
             var msg = new SlaveLogMessage((int)entry.Level, entry.Category, entry.OriginalMessage, entry.Exception?.ToString());
             var payload = MessageSerializer.Encode(MessageKind.SlaveLog, msg);
-            await relay.Send(masters, payload);
+            await relay.Send(targets, payload);
         }
     }
 }

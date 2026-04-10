@@ -16,6 +16,9 @@ public class HydraConfigFile
     // optional — if set, hydra refuses to start if another instance holds the lock on this file
     public string? LockFile { get; init; }
 
+    // optional — if set, log output is also written to this file
+    public string? LogFile { get; init; }
+
     // optional — defaults to machine hostname without domain
     public string? Name { get; init; }
 

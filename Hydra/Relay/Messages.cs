@@ -3,6 +3,7 @@ using System.Text.Json;
 using Cathedral.Config;
 using Hydra.Keyboard;
 using Hydra.Mouse;
+using Microsoft.Extensions.Logging;
 
 namespace Hydra.Relay;
 
@@ -25,6 +26,7 @@ public record MouseMoveMessage(string Screen, int X, int Y);
 public record MouseMoveDeltaMessage(int Dx, int Dy);
 public record ScreenInfoEntry(string Name, int X, int Y, int Width, int Height, decimal MouseScale);
 public record ScreenInfoMessage(List<ScreenInfoEntry> Screens);
+public record MasterConfigMessage(LogLevel? LogLevel);
 public record SlaveLogMessage(int Level, string Category, string Message, string? Exception);
 public record KeyEventMessage(KeyEventType Type, KeyModifiers Modifiers, char? Character, SpecialKey? Key, int? RepeatDelayMs = null, int? RepeatRateMs = null);
 public record MouseButtonMessage(MouseButton Button, bool IsPressed);

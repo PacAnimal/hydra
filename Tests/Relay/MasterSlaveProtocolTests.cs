@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Cathedral.Config;
+using Cathedral.Logging;
 using Hydra.Config;
 using Hydra.Platform;
 using Hydra.Relay;
@@ -193,6 +194,74 @@ public class MasterSlaveProtocolTests
         hider.Dispose();
     }
 
+    // -- per-master log level handshake --
+
+    [Test]
+    public async Task MasterConfig_WithLogLevel_StoredInWorldState()
+    {
+        var state = new WorldState();
+        using var slave = new TestableSlaveRelayWithState(state);
+
+        var msg = new MasterConfigMessage(LogLevel.Debug);
+        await slave.SimulateMasterConfig("master-pc", JsonSerializer.Serialize(msg, SaneJson.Options));
+
+        var configs = await state.GetMasterConfigs();
+        Assert.That(configs["master-pc"].LogLevel, Is.EqualTo(LogLevel.Debug));
+    }
+
+    [Test]
+    public async Task MasterConfig_WithoutLogLevel_StoredWithNullLogLevel()
+    {
+        var state = new WorldState();
+        using var slave = new TestableSlaveRelayWithState(state);
+
+        await slave.SimulateMasterConfig("master-pc", "{}");
+
+        var configs = await state.GetMasterConfigs();
+        Assert.That(configs["master-pc"].LogLevel, Is.Null);
+    }
+
+    // -- SlaveLogSender per-master filtering --
+
+    [Test]
+    public async Task SlaveLogSender_FiltersEntriesByMasterLogLevel()
+    {
+        var state = new WorldState();
+        await state.AddMaster("verbose-master", new MasterConfigMessage(LogLevel.Debug));
+        await state.AddMaster("quiet-master", new MasterConfigMessage(LogLevel.Warning));
+
+        var forwarder = new SlaveLogForwarder();
+        await forwarder.ForwardAsync(new LogEntry(LogLevel.Debug, "Test", default, "debug msg", "debug msg", null));
+
+        var relay = new FakeRelay();
+        var sender = new SlaveLogSender(relay, forwarder, state, NullLogger<SlaveLogSender>.Instance);
+        await sender.StartAsync(CancellationToken.None);
+        await Task.Delay(200);
+        await sender.StopAsync(CancellationToken.None);
+
+        var sent = relay.Sent.Where(s => s.Kind == MessageKind.SlaveLog).ToList();
+        Assert.That(sent, Has.Count.EqualTo(1));
+        Assert.That(sent[0].Targets, Is.EquivalentTo(["verbose-master"]));
+    }
+
+    [Test]
+    public async Task SlaveLogSender_EntryBelowAllMasterLevels_NotSent()
+    {
+        var state = new WorldState();
+        await state.AddMaster("master", new MasterConfigMessage(LogLevel.Warning));
+
+        var forwarder = new SlaveLogForwarder();
+        await forwarder.ForwardAsync(new LogEntry(LogLevel.Debug, "Test", default, "debug msg", "debug msg", null));
+
+        var relay = new FakeRelay();
+        var sender = new SlaveLogSender(relay, forwarder, state, NullLogger<SlaveLogSender>.Instance);
+        await sender.StartAsync(CancellationToken.None);
+        await Task.Delay(200);
+        await sender.StopAsync(CancellationToken.None);
+
+        Assert.That(relay.Sent.Where(s => s.Kind == MessageKind.SlaveLog), Is.Empty);
+    }
+
     // -- helpers --
 
     private static IHydraProfile MakeConfig(params string[] slaveNames) =>
@@ -218,8 +287,35 @@ public class MasterSlaveProtocolTests
         new NullScreenSaverSync(),
         new NullScreensaverSuppressor())
     {
+        // simulates a legacy master that sends no log level
         public Task SimulateMasterConfig(string host) => OnReceive(host, MessageKind.MasterConfig, "{}");
         public Task SimulateDisconnected() => OnDisconnected();
+    }
+
+    // variant that exposes its WorldState for log-level assertions
+    private sealed class TestableSlaveRelayWithState : SlaveRelayConnection, IDisposable
+    {
+        private readonly SlaveCursorHider _hider;
+
+        public TestableSlaveRelayWithState(WorldState state) : this(
+            state, new SlaveCursorHider(new FakeCursorVisibility(), NullLogger<SlaveCursorHider>.Instance))
+        { }
+
+        private TestableSlaveRelayWithState(WorldState state, SlaveCursorHider hider) : base(
+            TransitionTestHelper.Profile("slave", new HydraConfig { Mode = Mode.Slave }),
+            NullLogger<RelayConnection>.Instance,
+            new NullPlatformOutput(),
+            new FakeScreenDetector(),
+            state,
+            hider,
+            new NullScreenSaverSync(),
+            new NullScreensaverSuppressor())
+        {
+            _hider = hider;
+        }
+
+        public Task SimulateMasterConfig(string host, string json) => OnReceive(host, MessageKind.MasterConfig, json);
+        public override void Dispose() { _hider.Dispose(); base.Dispose(); }
     }
 
     private sealed class NullPlatformOutput : IPlatformOutput

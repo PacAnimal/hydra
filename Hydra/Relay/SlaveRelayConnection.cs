@@ -60,7 +60,7 @@ public class SlaveRelayConnection : RelayConnection
         switch (kind)
         {
             case MessageKind.MasterConfig:
-                await HandleMasterConfig(sourceHost);
+                await HandleMasterConfig(sourceHost, json);
                 break;
             case MessageKind.MouseMove:
                 var move = json.FromSaneJson<MouseMoveMessage>();
@@ -225,10 +225,11 @@ public class SlaveRelayConnection : RelayConnection
         _repeatTimers.Clear();
     }
 
-    private async Task HandleMasterConfig(string masterHost)
+    private async Task HandleMasterConfig(string masterHost, string json)
     {
+        var config = json.FromSaneJson<MasterConfigMessage>() ?? new MasterConfigMessage(null);
         var before = await _peerState.GetMasters();
-        await _peerState.AddMaster(masterHost);
+        await _peerState.AddMaster(masterHost, config);
         var after = await _peerState.GetMasters();
         // only signal connected if this is a genuinely new master
         if (after.Length > before.Length)

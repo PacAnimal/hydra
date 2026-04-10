@@ -96,6 +96,14 @@ services.AddSingleton<IHydraProfile>(profile);
 
 services.AddSereneConsoleLogging(c => c.MinLogLevel = profile.LogLevel);
 
+if (configFile.LogFile is { } logFileSetting)
+{
+    var logPath = Path.IsPathRooted(logFileSetting)
+        ? logFileSetting
+        : Path.GetFullPath(logFileSetting, Path.GetDirectoryName(configPath)!);
+    services.AddSereneFileLogging(logPath, c => c.MinLogLevel = profile.LogLevel);
+}
+
 var startupLog = await services.CreateLogger<HydraProfile>();
 startupLog.LogInformation("Active profile: {ProfileName}", profile.ProfileName ?? "<none>");
 
@@ -179,7 +187,7 @@ if (config != null)
         // forwarder buffers log entries; SlaveLogSender drains them to masters
         var forwarder = new SlaveLogForwarder();
         services.AddSingleton(forwarder);
-        services.AddSereneCustomLogging(e => forwarder.ForwardAsync(e).AsTask(), c => c.MinLogLevel = profile.LogLevel);
+        services.AddSereneCustomLogging(e => forwarder.ForwardAsync(e).AsTask(), c => c.MinLogLevel = LogLevel.Debug);
         services.AddHostedService<SlaveLogSender>();
 
         services.AddHostedService<IScreensaverSuppressor, ScreensaverSuppressor>();

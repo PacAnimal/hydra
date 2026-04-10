@@ -15,9 +15,10 @@ internal static class ServiceHost
     {
         HydraConfigFile configFile;
         List<HydraConfig> profiles;
+        string configPath;
         try
         {
-            (configFile, _) = HydraConfigFile.LoadAll(Env.Config);
+            (configFile, configPath) = HydraConfigFile.LoadAll(Env.Config);
             profiles = configFile.Profiles;
         }
         catch (Exception ex) when (ex is FileNotFoundException or InvalidOperationException)
@@ -34,6 +35,14 @@ internal static class ServiceHost
 
         services.AddWindowsService(options => options.ServiceName = "Hydra");
         services.AddSereneConsoleLogging(c => c.MinLogLevel = profile.LogLevel);
+
+        if (configFile.LogFile is { } logFileSetting)
+        {
+            var logPath = Path.IsPathRooted(logFileSetting)
+                ? logFileSetting
+                : Path.GetFullPath(logFileSetting, Path.GetDirectoryName(configPath)!);
+            services.AddSereneFileLogging(logPath, c => c.MinLogLevel = profile.LogLevel);
+        }
         services.AddSingleton<IHydraProfile>(profile);
         services.AddSingleton<SessionWatchdog>();
         services.AddHostedService(sp => sp.GetRequiredService<SessionWatchdog>());
