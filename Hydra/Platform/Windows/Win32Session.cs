@@ -43,6 +43,8 @@ internal static partial class Win32Session
             {
                 cb = (uint)Marshal.SizeOf<STARTUPINFOW>(),
                 lpDesktop = "winsta0\\Default",
+                dwFlags = 0x00000001,  // STARTF_USESHOWWINDOW
+                wShowWindow = 0,       // SW_HIDE
             };
 
             var cmdLine = new System.Text.StringBuilder($"\"{exePath}\" {extraArgs}");

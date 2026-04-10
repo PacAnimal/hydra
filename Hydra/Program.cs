@@ -96,7 +96,7 @@ services.AddSingleton<IHydraProfile>(profile);
 
 services.AddSereneConsoleLogging(c => c.MinLogLevel = profile.LogLevel);
 
-if (configFile.LogFile is { } logFileSetting)
+if (!RunMode.IsSessionChild && configFile.LogFile is { } logFileSetting)
 {
     var logPath = Path.IsPathRooted(logFileSetting)
         ? logFileSetting
