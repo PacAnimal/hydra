@@ -113,9 +113,8 @@ public class InputRouter(
         using var s = await _state.WaitForDisposable();
 #pragma warning restore CA2016
         var st = s.Value;
-        if (st.Mouse.IsOnVirtualScreen || st.PendingCursorShow)
+        if (st.Mouse.IsOnVirtualScreen)
         {
-            st.PendingCursorShow = false;
             platform.IsOnVirtualScreen = false;
             await platform.ShowCursor();
         }
@@ -186,7 +185,6 @@ public class InputRouter(
                     disconnectedHost = currentHost;
                     warpX = st.WarpX;
                     warpY = st.WarpY;
-                    st.PendingCursorShow = false;
                 }
             }
 
@@ -232,7 +230,6 @@ public class InputRouter(
                 st.PendingDy = 0;
                 warpX = st.WarpX;
                 warpY = st.WarpY;
-                st.PendingCursorShow = false;
             }
         }
 
@@ -272,7 +269,6 @@ public class InputRouter(
                 st.PendingDy = 0;
                 warpX = st.WarpX;
                 warpY = st.WarpY;
-                st.PendingCursorShow = false;
             }
         }
 
@@ -281,7 +277,7 @@ public class InputRouter(
             var leavePayload = MessageSerializer.Encode(MessageKind.LeaveScreen, new { });
             _ = relay.Send([disconnectedHost], leavePayload).AsTask();
             ReturnToLocalScreen(warpX, warpY);
-            _ = platform.ShowCursor();
+            AsyncHelper.RunSync(platform.ShowCursor);
         }
 
         BroadcastScreensaverSync(true);
@@ -318,7 +314,7 @@ public class InputRouter(
                 var peerScreens = AsyncHelper.RunSync(() => _peerState.GetPeerScreensSnapshot().AsTask());
                 var remoteInfo = GetRemoteScreensAndScales(st.Screens, peerScreens, dest);
                 var scale = GetRemoteScale(peerScreens, dest);
-                _ = platform.HideCursor();
+                AsyncHelper.RunSync(platform.HideCursor);
                 platform.IsOnVirtualScreen = true;
                 st.Mouse.EnterScreen(dest, remoteInfo.Screens, savedX, savedY, scale, remoteInfo.ScaleMap);
                 st.PendingDx = 0;
@@ -501,7 +497,7 @@ public class InputRouter(
                             FlushMouseDelta(st);
                             st.Mouse.LeaveScreen();
                             platform.IsOnVirtualScreen = false;
-                            _ = platform.ShowCursor();
+                            AsyncHelper.RunSync(platform.ShowCursor);
                             var payload = MessageSerializer.Encode(MessageKind.LeaveScreen, new { });
                             _ = relay.Send([leavingHost], payload).AsTask();
                         }
@@ -616,12 +612,6 @@ public class InputRouter(
 
     private void HandleRealScreenMove(LocalMasterState st, double x, double y)
     {
-        if (st.PendingCursorShow)
-        {
-            st.PendingCursorShow = false;
-            _ = platform.ShowCursor();
-        }
-
         // track which local screen the cursor is on
         var screen = FindLocalScreenAt(st, (int)x, (int)y) ?? st.ActiveLocalScreen!;
         if (screen != st.ActiveLocalScreen)
@@ -643,7 +633,7 @@ public class InputRouter(
         var scale = GetRemoteScale(peerScreens, hit.Destination);
         var remoteInfo = GetRemoteScreensAndScales(st.Screens, peerScreens, hit.Destination);
 
-        _ = platform.HideCursor();
+        AsyncHelper.RunSync(platform.HideCursor);
         platform.IsOnVirtualScreen = true;
         st.Mouse.EnterScreen(hit.Destination, remoteInfo.Screens, hit.EntryX, hit.EntryY, scale, remoteInfo.ScaleMap);
         st.PendingDx = 0;
@@ -752,7 +742,7 @@ public class InputRouter(
                     var leavingScreen = st.Mouse.CurrentScreen;
                     st.Mouse.LeaveScreen();
                     ReturnToLocalScreen(globalX, globalY);
-                    st.PendingCursorShow = true;
+                    AsyncHelper.RunSync(platform.ShowCursor);
                     st.ActiveLocalScreen = targetScreen;
                     UpdateWarpPoint(st, targetScreen);
                     log.LogInformation("Returned to local screen ← ({X}, {Y})", globalX, globalY);
@@ -799,7 +789,7 @@ public class InputRouter(
         var entryX = target.Width / 2;
         var entryY = target.Height / 2;
 
-        _ = platform.HideCursor();
+        AsyncHelper.RunSync(platform.HideCursor);
         platform.IsOnVirtualScreen = true;
         st.Mouse.EnterScreen(target, remoteInfo.Screens, entryX, entryY, scale, remoteInfo.ScaleMap);
         st.PendingDx = 0;
@@ -913,7 +903,6 @@ public class InputRouter(
         public int WarpX, WarpY, HalfW, HalfH;
         public double LastWarpX, LastWarpY;
         public long LastVirtualLogTick;
-        public bool PendingCursorShow;
         public bool LockedToScreen;
 
         // per-screen relative mouse mode (true = relative, false/absent = absolute)

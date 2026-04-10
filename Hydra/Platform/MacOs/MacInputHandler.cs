@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using Cathedral.Extensions;
 using Cathedral.Utils;
 using Hydra.Keyboard;
 using Hydra.Mouse;
@@ -24,6 +25,7 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
     private Action<MouseButtonEvent>? _onMouseButton;
     private Action<MouseScrollEvent>? _onMouseScroll;
     private bool _cursorHidden;
+    private readonly SemaphoreSlim _cursorLock = new(1, 1);
     private readonly Toggle _isOnVirtualScreen = new();
     public bool IsOnVirtualScreen { get => _isOnVirtualScreen; set => _isOnVirtualScreen.TrySet(value); }
 
@@ -46,7 +48,9 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
 
     public async Task HideCursor()
     {
+        using var guard = await _cursorLock.WaitForDisposable();
         if (_cursorHidden) return;
+        _cursorHidden = true; // set before await so racing ShowCursor sees correct state
         await _shield.Show();
 
         // allow cursor manipulation from background (private CGS API -- matches synergy)
@@ -60,18 +64,18 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
         _ = NativeMethods.CGAssociateMouseAndMouseCursorPosition(true);
         // near-zero suppression interval prevents CGWarpMouseCursorPosition from resetting acceleration
         NativeMethods.CGSetLocalEventsSuppressionInterval(0.0001);
-        _cursorHidden = true;
     }
 
     public async Task ShowCursor()
     {
+        using var guard = await _cursorLock.WaitForDisposable();
         if (!_cursorHidden) return;
+        _cursorHidden = false; // set before await so racing HideCursor sees correct state
         await _shield.Hide();
         if (!_shield.DebugShield)
             _ = NativeMethods.CGDisplayShowCursor(_display);
         _ = NativeMethods.CGAssociateMouseAndMouseCursorPosition(true);
         NativeMethods.CGSetLocalEventsSuppressionInterval(0.0);
-        _cursorHidden = false;
     }
 
     public async Task StartEventTap(
@@ -146,7 +150,7 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
     public void Dispose()
     {
         StopEventTap();
-        if (_cursorHidden) _ = ShowCursor();
+        if (_cursorHidden) AsyncHelper.RunSync(ShowCursor);
     }
 
     private nint TapCallback(nint proxy, int type, nint eventRef, nint userInfo)

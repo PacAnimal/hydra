@@ -7,7 +7,7 @@ using Microsoft.Win32.SafeHandles;
 namespace Hydra.Platform.Windows;
 
 [SupportedOSPlatform("windows")]
-internal sealed partial class SasService(ILogger<SasService> log) : SimpleHostedService(log, TimeSpan.Zero)
+internal sealed partial class SasService(ILogger<SasService> log) : SimpleHostedService(log, TimeSpan.Zero, TimeSpan.FromSeconds(5))
 {
     private SafeFileHandle? _sasEvent;
 

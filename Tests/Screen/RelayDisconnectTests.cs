@@ -74,6 +74,26 @@ public class RelayDisconnectTests
     }
 
     [Test]
+    public void ReturnToLocal_ShowsCursorImmediately_WithoutExtraMouseMove()
+    {
+        // enter virtual screen via right edge
+        _platform.FireMouseMove(2559, 720);
+        Assert.That(_platform.IsOnVirtualScreen, Is.True, "pre-condition: should be on virtual screen");
+
+        _platform.ShowCursorCalled = false;
+
+        // nudge left far enough to reach x=0 on the remote (NudgeDistance=2 means entry is at x=2, need dx>=-2)
+        _platform.FireMouseMove(2555, 720);
+
+        using (Assert.EnterMultipleScope())
+        {
+            // ShowCursor must have fired immediately — no second mouse move required
+            Assert.That(_platform.ShowCursorCalled, Is.True, "ShowCursor should fire immediately on return-to-local, not deferred");
+            Assert.That(_platform.IsOnVirtualScreen, Is.False, "should be back on local screen");
+        }
+    }
+
+    [Test]
     public void Reconnected_AllowsEdgeTransitionAgain()
     {
         // disconnect then reconnect

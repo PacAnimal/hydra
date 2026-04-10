@@ -7,17 +7,29 @@ namespace Hydra.Platform.MacOs;
 
 // launches the hydra-shield Swift binary (shipped alongside the executable).
 // provides two services:
-//   1. cursor shielding window — controlled via stdin ("0" hide, "1" show, "2" debug)
+//   1. cursor shielding window — controlled via stdin (CmdHide/CmdShow/CmdDebug)
 //      shield echoes the command back on stdout after applying state; C# holds the send lock until the echo arrives
-//   2. network state detection — send "wifi" via stdin to activate; shield reports "ssid:Name" on stdout
+//   2. network state detection — send CmdWifi via stdin to activate; shield reports PfxSsid/PfxWifiAuth on stdout
 // always runs on macOS (both master and slave) so network detection is always available.
 internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsWifi) : IHostedService, IDisposable
 {
+    // stdin commands (C# → shield)
+    private const string CmdHide = "0"; // pass-through: ignoresMouseEvents = true
+    private const string CmdShow = "1"; // absorb: ignoresMouseEvents = false (invisible)
+    private const string CmdDebug = "2"; // absorb: ignoresMouseEvents = false (visible red)
+    private const string CmdWifi = "wifi"; // activate WiFi/location monitoring (no echo)
+
+    // stdout prefixes (shield → C#)
+    private const string PfxSsid = "ssid:";
+    private const string PfxWifiAuth = "wifiauth:";
+
     private readonly string _binaryPath = Path.Combine(AppContext.BaseDirectory, "Resources", "MacShield", "hydra-shield.app", "Contents", "MacOS", "hydra-shield");
     private readonly SemaphoreSlim _sendSemaphore = new(1, 1);
     private volatile TaskCompletionSource<string>? _pendingReply; // completed by ReadOutput when echo arrives
     private Process? _process;
     private TaskCompletionSource? _initialStateTcs;
+    private volatile bool _stopping;
+    private volatile string _lastState = CmdHide; // last show/hide command; re-applied after unexpected restart
 
     // assigned after DI builds so post-startup state changes are logged through the normal pipeline
     internal ILogger? Log { get; set; }
@@ -51,8 +63,8 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
         return Task.CompletedTask;
     }
 
-    internal Task Show() => SendWithReply(DebugShield ? "2" : "1");
-    internal Task Hide() => SendWithReply("0");
+    internal Task Show() { _lastState = DebugShield ? CmdDebug : CmdShow; return SendWithReply(_lastState); }
+    internal Task Hide() { _lastState = CmdHide; return SendWithReply(CmdHide); }
 
     public void Dispose()
     {
@@ -79,7 +91,7 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
         _ = Hide(); // pass-through on startup
 
         if (needsWifi)
-            _ = SendFireAndForget("wifi"); // activate WiFi monitoring + location on demand (no echo expected)
+            _ = SendFireAndForget(CmdWifi); // activate WiFi monitoring + location on demand (no echo expected)
         else
             _initialStateTcs?.TrySetResult(); // no SSID expected — unblock WaitForInitialState immediately
 
@@ -89,6 +101,7 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
 
     private void Stop()
     {
+        _stopping = true;
         if (_process is null || _process.HasExited) return;
         try
         {
@@ -115,7 +128,8 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
             _pendingReply = null;
             return;
         }
-        await tcs.Task;
+        // 5-second safety timeout: if the shield dies without echoing, don't deadlock forever
+        await Task.WhenAny(tcs.Task, Task.Delay(5000));
         _pendingReply = null;
     }
 
@@ -153,23 +167,28 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
         while (true)
         {
             var line = await reader.ReadLineAsync();
-            if (line == null) break; // EOF — process exited
+            if (line == null)
+            {
+                // EOF — process exited; unblock any pending SendWithReply
+                _pendingReply?.TrySetResult("");
+                break;
+            }
 
-            if (line is "0" or "1" or "2")
+            if (line is CmdHide or CmdShow or CmdDebug)
             {
                 // echo from shield confirming show/hide state was applied
                 _pendingReply?.TrySetResult(line);
             }
-            else if (line.StartsWith("ssid:", StringComparison.Ordinal))
+            else if (line.StartsWith(PfxSsid, StringComparison.Ordinal))
             {
-                var ssid = line["ssid:".Length..];
+                var ssid = line[PfxSsid.Length..];
                 var newSsid = string.IsNullOrEmpty(ssid) ? null : ssid;
                 var changed = newSsid != networkState.Ssid;
                 networkState.Ssid = newSsid;
                 _initialStateTcs?.TrySetResult();
                 if (changed && (_initialStateTcs?.Task.IsCompleted ?? true)) OnNetworkStateChanged?.Invoke();
             }
-            else if (line.StartsWith("wifiauth:", StringComparison.Ordinal) && int.TryParse(line["wifiauth:".Length..], out var authStatus))
+            else if (line.StartsWith(PfxWifiAuth, StringComparison.Ordinal) && int.TryParse(line[PfxWifiAuth.Length..], out var authStatus))
             {
                 networkState.WifiAuthStatus = authStatus;
                 Log?.LogDebug("Location services auth: {Status}", authStatus switch
@@ -181,6 +200,16 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
                     _ => authStatus.ToString()
                 });
             }
+        }
+
+        if (!_stopping)
+        {
+            // unexpected exit — restart and restore state
+            Log?.LogWarning("Shield process exited unexpectedly — restarting");
+            await Task.Delay(500);
+            StartProcess();
+            if (_lastState != CmdHide)
+                _ = SendWithReply(_lastState);
         }
     }
 

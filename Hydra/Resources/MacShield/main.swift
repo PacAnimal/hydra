@@ -4,15 +4,25 @@ import CoreLocation
 
 // tiny shield app — places a topmost window over the cursor park position (main screen center)
 // to absorb hover events while the KVM cursor is hidden there.
-// no dock icon, no menu bar. controlled via stdin: "0" = hide, "1" = show (invisible), "2" = show (visible red, debug).
+// no dock icon, no menu bar. controlled via stdin: CmdHide/CmdShow/CmdDebug.
 // automatically suppresses itself while a fullscreen app (e.g. a game) is running.
 // runs until killed by the parent process.
 //
 // also handles macOS WiFi SSID detection on behalf of the Hydra parent:
-//   stdin "wifi"          — activates WiFi monitoring (idempotent); requests location auth if needed
-//   stdout "ssid:Name"    — current WiFi SSID (empty = not connected / not authorized)
-//   stdout "wifiauth:<n>" — CLAuthorizationStatus raw value (0=notDetermined 1=restricted 2=denied 3/4=authorized)
+//   stdin CmdWifi         — activates WiFi monitoring (idempotent); requests location auth if needed
+//   stdout PfxSsid+Name   — current WiFi SSID (empty = not connected / not authorized)
+//   stdout PfxWifiAuth+n  — CLAuthorizationStatus raw value (0=notDetermined 1=restricted 2=denied 3/4=authorized)
 // emitted on activation and whenever SSID changes.
+
+// stdin commands (C# → shield)
+let CmdHide  = "0"
+let CmdShow  = "1"
+let CmdDebug = "2"
+let CmdWifi  = "wifi"
+
+// stdout prefixes (shield → C#)
+let PfxSsid     = "ssid:"
+let PfxWifiAuth = "wifiauth:"
 
 // writes a line to stdout; exits cleanly if the pipe is broken (parent restarted)
 func writeState(_ line: String) {
@@ -82,7 +92,7 @@ class ShieldDelegate: NSObject, NSApplicationDelegate, CLLocationManagerDelegate
         w.acceptsMouseMovedEvents = true
         w.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
         w.contentView = AbsorberView(frame: NSRect(origin: .zero, size: frame.size))
-        w.orderFrontRegardless() // always composited so first "1" is instant
+        w.orderFrontRegardless() // always composited so first CmdShow is instant
         window = w
 
         // poll for fullscreen apps every 500ms; suppress window while one is active
@@ -90,32 +100,34 @@ class ShieldDelegate: NSObject, NSApplicationDelegate, CLLocationManagerDelegate
             self?.applyState()
         }
 
-        // read commands from parent process: "0" = pass-through, "1" = absorb, "2" = absorb + visible (debug), "wifi" = activate WiFi monitoring
+        // read commands from parent process
         DispatchQueue.global(qos: .background).async { [weak self] in
             while let line = readLine(strippingNewline: true) {
                 DispatchQueue.main.async {
                     guard let self else { return }
                     switch line {
-                    case "1":
+                    case CmdShow:
                         self.desiredAbsorb = true
                         self.debugMode = false
                         self.applyState()
-                        writeState("1")
-                    case "2":
+                        writeState(CmdShow)
+                    case CmdDebug:
                         self.desiredAbsorb = true
                         self.debugMode = true
                         self.applyState()
-                        writeState("2")
-                    case "wifi":
+                        writeState(CmdDebug)
+                    case CmdWifi:
                         self.startWifiMonitoring()
-                    default: // "0"
+                    default: // CmdHide
                         self.desiredAbsorb = false
                         self.debugMode = false
                         self.applyState()
-                        writeState("0")
+                        writeState(CmdHide)
                     }
                 }
             }
+            // stdin closed — parent process died; exit so we don't linger as an orphan
+            DispatchQueue.main.async { NSApplication.shared.terminate(nil) }
         }
     }
 
@@ -131,24 +143,24 @@ class ShieldDelegate: NSObject, NSApplicationDelegate, CLLocationManagerDelegate
         locationManager = mgr
 
         let status = mgr.authorizationStatus
-        writeState("wifiauth:\(status.rawValue)") // 0=notDetermined 1=restricted 2=denied 3=authorized 4=authorizedAlways
+        writeState("\(PfxWifiAuth)\(status.rawValue)") // 0=notDetermined 1=restricted 2=denied 3=authorized 4=authorizedAlways
         switch status {
         case .notDetermined:
             mgr.requestAlwaysAuthorization()
         case .authorized, .authorizedAlways:
             startCoreWlan()
         default:
-            writeState("ssid:")
+            writeState(PfxSsid)
         }
     }
 
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-        writeState("wifiauth:\(manager.authorizationStatus.rawValue)")
+        writeState("\(PfxWifiAuth)\(manager.authorizationStatus.rawValue)")
         switch manager.authorizationStatus {
         case .authorized, .authorizedAlways:
             startCoreWlan()
         default:
-            writeState("ssid:")
+            writeState(PfxSsid)
         }
     }
 
@@ -166,7 +178,7 @@ class ShieldDelegate: NSObject, NSApplicationDelegate, CLLocationManagerDelegate
 
     private func reportSsid() {
         let ssid = CWWiFiClient.shared().interface()?.ssid() ?? ""
-        writeState("ssid:\(ssid)")
+        writeState("\(PfxSsid)\(ssid)")
     }
 
     // MARK: - Shield window

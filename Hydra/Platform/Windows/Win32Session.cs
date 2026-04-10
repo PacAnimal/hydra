@@ -261,7 +261,7 @@ internal static partial class Win32Session
     [LibraryImport(Kernel32)]
     private static partial uint WaitForSingleObject(SafeHandle hHandle, uint dwMilliseconds);
 
-    [LibraryImport(Advapi32, SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+    [LibraryImport(Advapi32, EntryPoint = "ConvertStringSecurityDescriptorToSecurityDescriptorW", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool ConvertStringSecurityDescriptorToSecurityDescriptor(
         string stringSd, uint revision, out IntPtr sd, out uint sdSize);
