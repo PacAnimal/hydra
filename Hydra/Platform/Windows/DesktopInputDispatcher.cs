@@ -10,20 +10,19 @@ namespace Hydra.Platform.Windows;
 /// SendInput is desktop-scoped: calls from a thread attached to winsta0\Default are silently dropped
 /// when the active input desktop is winsta0\Winlogon (lock screen) or the secure desktop (UAC prompts).
 /// This class polls OpenInputDesktop every 200ms and re-attaches the worker thread via SetThreadDesktop
-/// whenever the input desktop changes.
+/// whenever the input desktop changes. Requires the process to run as SYSTEM (winlogon token) so that
+/// OpenInputDesktop succeeds on restricted desktops.
 /// </remarks>
 [SupportedOSPlatform("windows")]
 internal sealed class DesktopInputDispatcher : IDisposable
 {
-    // DESKTOP_READOBJECTS | DESKTOP_WRITEOBJECTS — minimum rights the interactive user has on all desktops
-    // including Winlogon. GENERIC_WRITE would also request journal rights the user doesn't have, causing failure.
     private const uint DesktopAccess = NativeMethods.DESKTOP_READOBJECTS | NativeMethods.DESKTOP_WRITEOBJECTS;
 
     private readonly ILogger _log;
     private readonly BlockingCollection<Action> _queue = [];
-    private readonly System.Threading.Timer _pollTimer;
+    private readonly Timer _pollTimer;
     private nint _activeDesktop;
-    private string _activeDesktopName = "";
+    private string _activeDesktopName;
     private bool _disposed;
 
     internal DesktopInputDispatcher(ILogger log)
@@ -32,11 +31,11 @@ internal sealed class DesktopInputDispatcher : IDisposable
         _activeDesktop = NativeMethods.OpenInputDesktop(NativeMethods.DF_ALLOWOTHERACCOUNTHOOK, true, DesktopAccess);
         _activeDesktopName = GetDesktopName(_activeDesktop);
         if (_activeDesktop == nint.Zero)
-            _log.LogWarning("OpenInputDesktop failed at startup (error {Error}) — input may not work on secure desktops", Marshal.GetLastWin32Error());
+            _log.LogWarning("OpenInputDesktop failed at startup (error {Error})", Marshal.GetLastWin32Error());
         else
             _log.LogInformation("Desktop input dispatcher started, current desktop: {Name}", _activeDesktopName);
         StartWorker(_activeDesktop);
-        _pollTimer = new System.Threading.Timer(_ => PollDesktop(), null, TimeSpan.FromMilliseconds(200), TimeSpan.FromMilliseconds(200));
+        _pollTimer = new Timer(_ => PollDesktop(), null, TimeSpan.FromMilliseconds(200), TimeSpan.FromMilliseconds(200));
     }
 
     internal void Dispatch(Action action)
@@ -84,7 +83,7 @@ internal sealed class DesktopInputDispatcher : IDisposable
         var hDesk = NativeMethods.OpenInputDesktop(NativeMethods.DF_ALLOWOTHERACCOUNTHOOK, true, DesktopAccess);
         if (hDesk == nint.Zero)
         {
-            _log.LogDebug("OpenInputDesktop returned null during poll (error {Error})", Marshal.GetLastWin32Error());
+            _log.LogWarning("OpenInputDesktop failed during poll (error {Error})", Marshal.GetLastWin32Error());
             return;
         }
 
@@ -101,8 +100,8 @@ internal sealed class DesktopInputDispatcher : IDisposable
         _activeDesktop = hDesk;
         _activeDesktopName = name;
 
-        // re-attach the worker thread to the new desktop (it has no windows or hooks, so SetThreadDesktop succeeds)
-        // close the old handle after switching so it remains valid until the thread detaches
+        // re-attach the worker thread to the new desktop (no windows/hooks on it, so SetThreadDesktop succeeds)
+        // close the old handle after switching so it stays valid until the thread detaches
         _queue.TryAdd(() =>
         {
             if (!NativeMethods.SetThreadDesktop(hDesk))
@@ -117,7 +116,7 @@ internal sealed class DesktopInputDispatcher : IDisposable
         if (hDesk == nint.Zero) return "";
         const int bufSize = 128;
         char* buf = stackalloc char[bufSize];
-        return NativeMethods.GetUserObjectInformationW(hDesk, NativeMethods.UOI_NAME, (nint)buf, (uint)(bufSize * sizeof(char)), out _)
+        return NativeMethods.GetUserObjectInformationW(hDesk, NativeMethods.UOI_NAME, (nint)buf, bufSize * sizeof(char), out _)
             ? new string(buf)
             : "";
     }

@@ -36,7 +36,9 @@ internal static partial class Win32Session
         uint uiAccess = 1;
         _ = SetTokenInformation(token, 26 /*TokenUIAccess*/, ref uiAccess, sizeof(uint));
 
-        _ = CreateEnvironmentBlock(out var envBlock, token, false);
+        // build environment from user's profile so %APPDATA% etc. point to user paths, not SYSTEM's
+        using var envToken = AcquireUserToken(sessionId);
+        _ = CreateEnvironmentBlock(out var envBlock, envToken ?? token, false);
         try
         {
             var si = new STARTUPINFOW
@@ -122,14 +124,18 @@ internal static partial class Win32Session
 
     private static SafeAccessTokenHandle AcquireSessionToken(uint sessionId)
     {
-        // try the logged-in user's token first (works when user is at the desktop or lock screen)
+        // use SYSTEM token (winlogon.exe) — required for OpenInputDesktop/SetThreadDesktop on secure desktops
+        return FindWinlogonToken(sessionId)
+            ?? AcquireUserToken(sessionId)
+            ?? throw new InvalidOperationException($"no token available for session {sessionId}");
+    }
+
+    private static SafeAccessTokenHandle? AcquireUserToken(uint sessionId)
+    {
         if (WTSQueryUserToken(sessionId, out var token) && !token.IsInvalid)
             return token;
-
-        // fall back to winlogon.exe token (for pre-login or when WTSQueryUserToken is not available)
         token.Dispose();
-        return FindWinlogonToken(sessionId)
-            ?? throw new InvalidOperationException($"no token available for session {sessionId}");
+        return null;
     }
 
     private static SafeAccessTokenHandle? FindWinlogonToken(uint sessionId)
