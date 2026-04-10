@@ -280,22 +280,27 @@ internal sealed class DesktopInputDispatcher : IDisposable
             {
                 if (!isUp)
                 {
+                    // buffer the Win down — only inject it paired with a shortcut key (see character path above).
+                    // sending a standalone LWin down means the shell sees Win held with nothing between
+                    // down and up, and opens the start menu on release even after a shortcut was used.
                     _winKeyDown = true;
                     _winUsedAsModifier = false;
+                    return 1;
                 }
                 else
                 {
                     _winKeyDown = false;
-                    if (_winUsedAsModifier)
+                    if (!_winUsedAsModifier)
                     {
-                        // inject a no-op key alongside Win up so the shell doesn't treat this as a start menu tap
+                        // bare win tap — win down was never injected, so inject down+up now to open start menu
                         _winUsedAsModifier = false;
-                        var inputs = stackalloc INPUT[3];
-                        inputs[0] = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = 0xFF } };
-                        inputs[1] = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = 0xFF, dwFlags = NativeMethods.KEYEVENTF_KEYUP } };
-                        inputs[2] = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = (ushort)vk, dwFlags = NativeMethods.KEYEVENTF_EXTENDEDKEY | NativeMethods.KEYEVENTF_KEYUP } };
-                        return NativeMethods.SendInput(3, inputs, sizeof(INPUT));
+                        var inputs = stackalloc INPUT[2];
+                        inputs[0] = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = (ushort)vk, dwFlags = NativeMethods.KEYEVENTF_EXTENDEDKEY } };
+                        inputs[1] = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = (ushort)vk, dwFlags = NativeMethods.KEYEVENTF_EXTENDEDKEY | NativeMethods.KEYEVENTF_KEYUP } };
+                        return NativeMethods.SendInput(2, inputs, sizeof(INPUT));
                     }
+                    _winUsedAsModifier = false;
+                    // fall through to inject Win up normally (Win down was already sent with the shortcut batch)
                 }
             }
 
