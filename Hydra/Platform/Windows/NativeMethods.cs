@@ -287,10 +287,27 @@ internal static partial class NativeMethods
     // -- desktop --
 
     internal const uint GENERIC_READ = 0x80000000;
+    internal const uint GENERIC_WRITE = 0x40000000;
+    internal const uint DF_ALLOWOTHERACCOUNTHOOK = 0x0001;
+    internal const int UOI_NAME = 2;
 
     [LibraryImport(User32)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     internal static partial nint GetThreadDesktop(uint dwThreadId);
+
+    [LibraryImport(User32, SetLastError = true)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial nint OpenInputDesktop(uint dwFlags, [MarshalAs(UnmanagedType.Bool)] bool fInherit, uint dwDesiredAccess);
+
+    [LibraryImport(User32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool SetThreadDesktop(nint hDesktop);
+
+    [LibraryImport(User32, EntryPoint = "GetUserObjectInformationW")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool GetUserObjectInformationW(nint hObj, int nIndex, nint pvInfo, uint nLength, out uint lpnLengthNeeded);
 
     [LibraryImport(User32)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]

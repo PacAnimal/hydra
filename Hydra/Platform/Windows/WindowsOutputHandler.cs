@@ -1,10 +1,13 @@
+using System.Runtime.Versioning;
 using Hydra.Keyboard;
 using Hydra.Mouse;
 using Hydra.Relay;
+using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform.Windows;
 
-public sealed class WindowsOutputHandler : IPlatformOutput, ICursorVisibility
+[SupportedOSPlatform("windows")]
+public sealed class WindowsOutputHandler(ILogger<WindowsOutputHandler> log) : IPlatformOutput, ICursorVisibility
 {
     private bool _cursorHidden;
     // vk codes that require KEYEVENTF_EXTENDEDKEY (right-side modifiers, nav cluster, arrows)
@@ -19,8 +22,10 @@ public sealed class WindowsOutputHandler : IPlatformOutput, ICursorVisibility
         WinVirtualKey.Divide,   // numpad /
     ];
 
+    private readonly DesktopInputDispatcher _dispatcher = new(log);
 
-    public unsafe void MoveMouse(int x, int y)
+
+    public void MoveMouse(int x, int y)
     {
         var vLeft = NativeMethods.GetSystemMetrics(NativeMethods.SM_XVIRTUALSCREEN);
         var vTop = NativeMethods.GetSystemMetrics(NativeMethods.SM_YVIRTUALSCREEN);
@@ -33,6 +38,68 @@ public sealed class WindowsOutputHandler : IPlatformOutput, ICursorVisibility
         var dx = ((x - vLeft) * 65536 + vWidth / 2) / vWidth;
         var dy = ((y - vTop) * 65536 + vHeight / 2) / vHeight;
 
+        _dispatcher.Dispatch(() => DoMoveMouse(dx, dy));
+    }
+
+    public void MoveMouseRelative(int dx, int dy)
+    {
+        _dispatcher.Dispatch(() => DoMoveMouseRelative(dx, dy));
+    }
+
+    public void InjectKey(KeyEventMessage msg)
+    {
+        _dispatcher.Dispatch(() => DoInjectKey(msg));
+    }
+
+    public void InjectMouseButton(MouseButtonMessage msg)
+    {
+        _dispatcher.Dispatch(() => DoInjectMouseButton(msg));
+    }
+
+    public void InjectMouseScroll(MouseScrollMessage msg)
+    {
+        _dispatcher.Dispatch(() => DoInjectMouseScroll(msg));
+    }
+
+    public unsafe void HideCursor()
+    {
+        if (_cursorHidden) return;
+        byte andMask = 0xFF;
+        byte xorMask = 0x00;
+        var blank = NativeMethods.CreateCursor(nint.Zero, 0, 0, 1, 1, &andMask, &xorMask);
+        if (blank == nint.Zero) return;
+        foreach (var id in NativeMethods.AllCursorIds)
+        {
+            var copy = NativeMethods.CopyCursor(blank);
+            if (copy != nint.Zero)
+                NativeMethods.SetSystemCursor(copy, id);
+        }
+        NativeMethods.DestroyCursor(blank);
+        _cursorHidden = true;
+    }
+
+    public void ShowCursor()
+    {
+        if (!_cursorHidden) return;
+        NativeMethods.SystemParametersInfo(NativeMethods.SPI_SETCURSORS, 0, nint.Zero, 0);
+        _cursorHidden = false;
+    }
+
+    public CursorPosition GetCursorPosition()
+    {
+        NativeMethods.GetCursorPos(out var pt);
+        return new CursorPosition(pt.x, pt.y);
+    }
+
+    public void Dispose()
+    {
+        _dispatcher.Dispose();
+        if (_cursorHidden)
+            NativeMethods.SystemParametersInfo(NativeMethods.SPI_SETCURSORS, 0, nint.Zero, 0);
+    }
+
+    private static unsafe void DoMoveMouse(int dx, int dy)
+    {
         var input = new INPUT
         {
             type = NativeMethods.INPUT_MOUSE,
@@ -46,7 +113,7 @@ public sealed class WindowsOutputHandler : IPlatformOutput, ICursorVisibility
         _ = NativeMethods.SendInput(1, &input, sizeof(INPUT));
     }
 
-    public unsafe void MoveMouseRelative(int dx, int dy)
+    private static unsafe void DoMoveMouseRelative(int dx, int dy)
     {
         // disable mouse acceleration for 1:1 movement, then restore (matches input-leap approach)
         int* oldMouse = stackalloc int[3];
@@ -78,7 +145,7 @@ public sealed class WindowsOutputHandler : IPlatformOutput, ICursorVisibility
         }
     }
 
-    public unsafe void InjectKey(KeyEventMessage msg)
+    private static unsafe void DoInjectKey(KeyEventMessage msg)
     {
         var isUp = msg.Type == KeyEventType.KeyUp;
 
@@ -146,7 +213,7 @@ public sealed class WindowsOutputHandler : IPlatformOutput, ICursorVisibility
         }
     }
 
-    public unsafe void InjectMouseButton(MouseButtonMessage msg)
+    private static unsafe void DoInjectMouseButton(MouseButtonMessage msg)
     {
         var (downFlag, upFlag, mouseData) = msg.Button switch
         {
@@ -171,7 +238,7 @@ public sealed class WindowsOutputHandler : IPlatformOutput, ICursorVisibility
         _ = NativeMethods.SendInput(1, &input, sizeof(INPUT));
     }
 
-    public unsafe void InjectMouseScroll(MouseScrollMessage msg)
+    private static unsafe void DoInjectMouseScroll(MouseScrollMessage msg)
     {
         if (msg.YDelta != 0)
         {
@@ -192,41 +259,5 @@ public sealed class WindowsOutputHandler : IPlatformOutput, ICursorVisibility
             };
             _ = NativeMethods.SendInput(1, &input, sizeof(INPUT));
         }
-    }
-
-    public unsafe void HideCursor()
-    {
-        if (_cursorHidden) return;
-        byte andMask = 0xFF;
-        byte xorMask = 0x00;
-        var blank = NativeMethods.CreateCursor(nint.Zero, 0, 0, 1, 1, &andMask, &xorMask);
-        if (blank == nint.Zero) return;
-        foreach (var id in NativeMethods.AllCursorIds)
-        {
-            var copy = NativeMethods.CopyCursor(blank);
-            if (copy != nint.Zero)
-                NativeMethods.SetSystemCursor(copy, id);
-        }
-        NativeMethods.DestroyCursor(blank);
-        _cursorHidden = true;
-    }
-
-    public void ShowCursor()
-    {
-        if (!_cursorHidden) return;
-        NativeMethods.SystemParametersInfo(NativeMethods.SPI_SETCURSORS, 0, nint.Zero, 0);
-        _cursorHidden = false;
-    }
-
-    public CursorPosition GetCursorPosition()
-    {
-        NativeMethods.GetCursorPos(out var pt);
-        return new CursorPosition(pt.x, pt.y);
-    }
-
-    public void Dispose()
-    {
-        if (_cursorHidden)
-            NativeMethods.SystemParametersInfo(NativeMethods.SPI_SETCURSORS, 0, nint.Zero, 0);
     }
 }
