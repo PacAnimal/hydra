@@ -41,6 +41,10 @@ internal sealed class DesktopInputDispatcher : IDisposable
     private string _activeDesktopName;
     private bool _disposed;
 
+    // tracks win key modifier usage to suppress accidental start menu on release
+    private bool _winKeyDown;
+    private bool _winUsedAsModifier;
+
     internal DesktopInputDispatcher(ILogger log)
     {
         _log = log;
@@ -213,7 +217,7 @@ internal sealed class DesktopInputDispatcher : IDisposable
         return result;
     }
 
-    private static unsafe uint ExecuteInjectKey(KeyEventMessage msg)
+    private unsafe uint ExecuteInjectKey(KeyEventMessage msg)
     {
         var isUp = msg.Type == KeyEventType.KeyUp;
 
@@ -238,6 +242,7 @@ internal sealed class DesktopInputDispatcher : IDisposable
                 if (isSuper && !isUp)
                 {
                     // batch Win down + key down in one SendInput so the shell sees them atomically
+                    _winUsedAsModifier = true;
                     var inputs = stackalloc INPUT[2];
                     inputs[0] = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = WinVirtualKey.LWin, dwFlags = NativeMethods.KEYEVENTF_EXTENDEDKEY } };
                     inputs[1] = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = vk } };
@@ -245,6 +250,7 @@ internal sealed class DesktopInputDispatcher : IDisposable
                 }
                 else
                 {
+                    if (_winKeyDown) _winUsedAsModifier = true;
                     var flags = isUp ? NativeMethods.KEYEVENTF_KEYUP : 0u;
                     var input = new INPUT
                     {
@@ -257,6 +263,7 @@ internal sealed class DesktopInputDispatcher : IDisposable
             else
             {
                 // normal typing — unicode scan code, no vk mapping needed
+                if (_winKeyDown) _winUsedAsModifier = true;
                 var flags = NativeMethods.KEYEVENTF_UNICODE | (isUp ? NativeMethods.KEYEVENTF_KEYUP : 0);
                 var input = new INPUT
                 {
@@ -268,6 +275,30 @@ internal sealed class DesktopInputDispatcher : IDisposable
         }
         else if (msg.Key is { } key && WinSpecialKeyMap.Instance.Reverse.TryGetValue(key, out var vk))
         {
+            var isWin = vk == WinVirtualKey.LWin || vk == WinVirtualKey.RWin;
+            if (isWin)
+            {
+                if (!isUp)
+                {
+                    _winKeyDown = true;
+                    _winUsedAsModifier = false;
+                }
+                else
+                {
+                    _winKeyDown = false;
+                    if (_winUsedAsModifier)
+                    {
+                        // inject a no-op key alongside Win up so the shell doesn't treat this as a start menu tap
+                        _winUsedAsModifier = false;
+                        var inputs = stackalloc INPUT[3];
+                        inputs[0] = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = 0xFF } };
+                        inputs[1] = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = 0xFF, dwFlags = NativeMethods.KEYEVENTF_KEYUP } };
+                        inputs[2] = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = (ushort)vk, dwFlags = NativeMethods.KEYEVENTF_EXTENDEDKEY | NativeMethods.KEYEVENTF_KEYUP } };
+                        return NativeMethods.SendInput(3, inputs, sizeof(INPUT));
+                    }
+                }
+            }
+
             var flags = isUp ? NativeMethods.KEYEVENTF_KEYUP : 0u;
             if (ExtendedKeys.Contains(vk))
                 flags |= NativeMethods.KEYEVENTF_EXTENDEDKEY;
