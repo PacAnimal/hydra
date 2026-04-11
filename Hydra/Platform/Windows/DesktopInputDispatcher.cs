@@ -283,9 +283,9 @@ internal sealed class DesktopInputDispatcher : IDisposable
                     // buffer the Win down — only inject it paired with a shortcut key (see character path above).
                     // sending a standalone LWin down means the shell sees Win held with nothing between
                     // down and up, and opens the start menu on release even after a shortcut was used.
-                    _log.LogDebug("Win buffered (not injected)");
+                    // don't reset _winUsedAsModifier on repeats or it'll clear the flag set by the shortcut key
+                    if (!_winKeyDown) _winUsedAsModifier = false;
                     _winKeyDown = true;
-                    _winUsedAsModifier = false;
                     return 1;
                 }
                 else
