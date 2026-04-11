@@ -318,8 +318,10 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
         NativeMethods.CFRelease(eventRef);
     }
 
-    // build reverse map: unshifted character → vk code, from current keyboard layout.
-    // iterates vk 0–127 via UCKeyTranslate with no modifiers. mirrors MacKeyResolver.ResolveCharacter().
+    // build reverse map: character → vk code, from current keyboard layout.
+    // first pass: unshifted (ucMods=0); second pass: shifted (ucMods=2).
+    // unshifted mappings take priority. this ensures shifted chars like '%' map to their
+    // base vk (0x17 for '5'), so shortcuts like Cmd+Shift+5 inject the correct virtual key.
     private static unsafe Dictionary<char, ushort> BuildCharToVkMap()
     {
         var map = new Dictionary<char, ushort>();
@@ -338,27 +340,30 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
             var kbdType = NativeMethods.LMGetKbdType();
             ushort* chars = stackalloc ushort[2];
 
-            for (ushort vk = 0; vk < 128; vk++)
+            foreach (var ucMods in new uint[] { 0, 2 }) // unshifted, then shifted
             {
-                uint deadKeyState = 0;
-                var status = NativeMethods.UCKeyTranslate(
-                    layoutPtr,
-                    vk,
-                    NativeMethods.KUCKeyActionDown,
-                    0, // no modifiers
-                    kbdType,
-                    1, // kUCKeyTranslateNoDeadKeysBit — skip dead key composition
-                    ref deadKeyState,
-                    2,
-                    out var count,
-                    chars);
+                for (ushort vk = 0; vk < 128; vk++)
+                {
+                    uint deadKeyState = 0;
+                    var status = NativeMethods.UCKeyTranslate(
+                        layoutPtr,
+                        vk,
+                        NativeMethods.KUCKeyActionDown,
+                        ucMods,
+                        kbdType,
+                        1, // kUCKeyTranslateNoDeadKeysBit — skip dead key composition
+                        ref deadKeyState,
+                        2,
+                        out var count,
+                        chars);
 
-                if (status != 0 || count == 0) continue;
+                    if (status != 0 || count == 0) continue;
 
-                var ch = (char)chars[0];
-                // only map printable chars, skip control chars; first mapping wins
-                if (ch >= 0x20 && !map.ContainsKey(ch))
-                    map[ch] = vk;
+                    var ch = (char)chars[0];
+                    // only map printable chars, skip control chars; first mapping wins
+                    if (ch >= 0x20 && !map.ContainsKey(ch))
+                        map[ch] = vk;
+                }
             }
         }
         finally
