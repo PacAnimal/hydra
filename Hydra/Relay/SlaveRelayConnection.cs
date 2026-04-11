@@ -25,6 +25,11 @@ public class SlaveRelayConnection : RelayConnection
     // keys currently held down on the slave (for release-all on screen leave)
     private readonly HashSet<(char?, SpecialKey?)> _heldKeys = [];
 
+    // last pushed clipboard (fallback when GetText returns null because we own the selection)
+    private string? _lastPushedText;
+    private string? _lastPushedPrimaryText;
+    private byte[]? _lastPushedImage;
+
     // ReSharper disable once ConvertToPrimaryConstructor
 #pragma warning disable IDE0290
     public SlaveRelayConnection(IHydraProfile profile, ILogger<RelayConnection> log, IPlatformOutput output, IScreenDetector screens, IWorldState peerState, SlaveCursorHider cursorHider, IScreenSaverSync screenSaverSync, IScreensaverSuppressor screensaverSuppressor, IClipboardSync clipboardSync)
@@ -142,14 +147,17 @@ public class SlaveRelayConnection : RelayConnection
                         _log.LogWarning("Clipboard push from {Host}: primary text exceeds {Max} bytes, dropping", sourceHost, ClipboardUtils.MaxClipboardBytes);
                     if (pushImage == null && push.ImagePng != null)
                         _log.LogWarning("Clipboard push from {Host}: image exceeds {Max} bytes, dropping", sourceHost, ClipboardUtils.MaxClipboardBytes);
+                    if (pushText != null) _lastPushedText = pushText;
+                    if (pushPrimary != null) _lastPushedPrimaryText = pushPrimary;
+                    if (pushImage != null) _lastPushedImage = pushImage;
                     _clipboardSync.SetClipboard(pushText, pushPrimary, pushImage);
                 }
                 break;
             case MessageKind.ClipboardPull:
                 _log.LogDebug("Clipboard pull from {Host}", sourceHost);
-                var text = _clipboardSync.GetText();
-                var primary = _clipboardSync.GetPrimaryText();
-                var image = _clipboardSync.GetImagePng();
+                var text = _clipboardSync.GetText() ?? _lastPushedText;
+                var primary = _clipboardSync.GetPrimaryText() ?? _lastPushedPrimaryText;
+                var image = _clipboardSync.GetImagePng() ?? _lastPushedImage;
 
                 // drop fields in priority order until combined size fits
                 long textBytes = text != null ? Encoding.UTF8.GetByteCount(text) : 0;
