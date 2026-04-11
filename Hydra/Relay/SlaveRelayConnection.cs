@@ -1,3 +1,4 @@
+using System.Text;
 using Cathedral.Extensions;
 using Hydra.Config;
 using Hydra.Keyboard;
@@ -132,9 +133,16 @@ public class SlaveRelayConnection : RelayConnection
                 {
                     _log.LogDebug("Clipboard push from {Host}: text={TextLen}, primary={PrimaryLen}, image={ImageLen}",
                         sourceHost, push.Text.Length, push.PrimaryText?.Length, push.ImagePng?.Length);
-                    var pushText = string.IsNullOrEmpty(push.Text) ? null : push.Text;
-                    var pushPrimary = string.IsNullOrEmpty(push.PrimaryText) ? null : push.PrimaryText;
-                    _clipboardSync.SetClipboard(pushText, pushPrimary, push.ImagePng);
+                    var pushText = !string.IsNullOrEmpty(push.Text) && Encoding.UTF8.GetByteCount(push.Text) <= ClipboardUtils.MaxClipboardBytes ? push.Text : null;
+                    var pushPrimary = !string.IsNullOrEmpty(push.PrimaryText) && Encoding.UTF8.GetByteCount(push.PrimaryText) <= ClipboardUtils.MaxClipboardBytes ? push.PrimaryText : null;
+                    var pushImage = push.ImagePng?.Length <= ClipboardUtils.MaxClipboardBytes ? push.ImagePng : null;
+                    if (pushText == null && !string.IsNullOrEmpty(push.Text))
+                        _log.LogWarning("Clipboard push from {Host}: text exceeds {Max} bytes, dropping", sourceHost, ClipboardUtils.MaxClipboardBytes);
+                    if (pushPrimary == null && !string.IsNullOrEmpty(push.PrimaryText))
+                        _log.LogWarning("Clipboard push from {Host}: primary text exceeds {Max} bytes, dropping", sourceHost, ClipboardUtils.MaxClipboardBytes);
+                    if (pushImage == null && push.ImagePng != null)
+                        _log.LogWarning("Clipboard push from {Host}: image exceeds {Max} bytes, dropping", sourceHost, ClipboardUtils.MaxClipboardBytes);
+                    _clipboardSync.SetClipboard(pushText, pushPrimary, pushImage);
                 }
                 break;
             case MessageKind.ClipboardPull:
@@ -142,6 +150,27 @@ public class SlaveRelayConnection : RelayConnection
                 var text = _clipboardSync.GetText();
                 var primary = _clipboardSync.GetPrimaryText();
                 var image = _clipboardSync.GetImagePng();
+
+                // drop fields in priority order until combined size fits
+                long textBytes = text != null ? Encoding.UTF8.GetByteCount(text) : 0;
+                long primaryBytes = primary != null ? Encoding.UTF8.GetByteCount(primary) : 0;
+                long imageBytes = image?.Length ?? 0;
+                if (textBytes + primaryBytes + imageBytes > ClipboardUtils.MaxClipboardBytes)
+                {
+                    _log.LogWarning("Clipboard pull response too large ({Total} bytes), dropping image", textBytes + primaryBytes + imageBytes);
+                    image = null; imageBytes = 0;
+                }
+                if (textBytes + primaryBytes + imageBytes > ClipboardUtils.MaxClipboardBytes)
+                {
+                    _log.LogWarning("Clipboard pull response still too large ({Total} bytes), dropping primary text", textBytes + primaryBytes);
+                    primary = null; primaryBytes = 0;
+                }
+                if (textBytes + primaryBytes + imageBytes > ClipboardUtils.MaxClipboardBytes)
+                {
+                    _log.LogWarning("Clipboard pull response still too large ({Total} bytes), dropping text", textBytes);
+                    text = null;
+                }
+
                 _log.LogDebug("Pull response: text={TextLen}, primary={PrimaryLen}, image={ImageLen}", text?.Length, primary?.Length, image?.Length);
                 var response = MessageSerializer.Encode(MessageKind.ClipboardPullResponse, new ClipboardPullResponseMessage(text, primary, image));
                 _ = Send([sourceHost], response).AsTask();

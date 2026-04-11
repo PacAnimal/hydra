@@ -29,7 +29,7 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
     private byte[]? _ownedImagePng;
     private string? _lastSetText;
     private string? _lastSetPrimaryText;
-    private uint? _lastSetImageHash;
+    private ulong? _lastSetImageHash;
 
     // GetText/GetImagePng synchronization — only one read in flight at a time
     private readonly Lock _getLock = new();

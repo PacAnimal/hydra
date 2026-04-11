@@ -2,17 +2,19 @@ using System.Drawing;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform.Windows;
 
 [SupportedOSPlatform("windows")]
-public sealed class WindowsClipboardSync : IClipboardSync
+public sealed class WindowsClipboardSync(ILogger<WindowsClipboardSync> log) : IClipboardSync
 {
     // registered once per process; Windows caches the value
     private static readonly uint CfPng = NativeMethods.RegisterClipboardFormat("PNG");
 
+    private readonly ILogger<WindowsClipboardSync> _log = log;
     private string? _lastSetText;
-    private uint? _lastSetImageHash;
+    private ulong? _lastSetImageHash;
 
     public string? GetText()
     {
@@ -189,7 +191,7 @@ public sealed class WindowsClipboardSync : IClipboardSync
             NativeMethods.GlobalFree(hMem);
     }
 
-    private static byte[]? DibToPng(byte[] dib)
+    private byte[]? DibToPng(byte[] dib)
     {
         try
         {
@@ -236,8 +238,9 @@ public sealed class WindowsClipboardSync : IClipboardSync
             bitmap.Save(pngMs, ImageFormat.Png);
             return pngMs.ToArray();
         }
-        catch
+        catch (Exception ex)
         {
+            _log.LogWarning(ex, "DIB to PNG conversion failed");
             return null;
         }
     }

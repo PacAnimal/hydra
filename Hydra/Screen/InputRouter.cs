@@ -1,7 +1,6 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using ByteSizeLib;
 using Cathedral.Extensions;
 using Cathedral.Utils;
 using Hydra.Config;
@@ -43,7 +42,7 @@ public class InputRouter(
     private readonly IClipboardSync _clipboardSync = clipboardSync;
     private string? _lastReceivedPrimaryText;
 
-    private static readonly long MaxClipboardBytes = (long)ByteSize.FromMebiBytes(16).Bytes;
+    private static readonly long MaxClipboardBytes = ClipboardUtils.MaxClipboardBytes;
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
@@ -349,26 +348,30 @@ public class InputRouter(
     private void PushClipboardToHost(string host)
     {
         var text = _clipboardSync.GetText();
-        if (text != null && Encoding.UTF8.GetByteCount(text) > MaxClipboardBytes)
-        {
-            log.LogWarning("Clipboard text too large, skipping sync");
-            text = null;
-        }
-
         string? primaryText = null;
         var peerPlatform = AsyncHelper.RunSync(() => _peerState.GetPeerPlatform(host).AsTask());
         if (peerPlatform == PeerPlatform.Linux)
-        {
             primaryText = _clipboardSync.GetPrimaryText() ?? _lastReceivedPrimaryText;
-            if (primaryText != null && Encoding.UTF8.GetByteCount(primaryText) > MaxClipboardBytes)
-                primaryText = null;
-        }
-
         var image = _clipboardSync.GetImagePng();
-        if (image?.Length > MaxClipboardBytes)
+
+        // drop fields in priority order until combined size fits
+        long textBytes = text != null ? Encoding.UTF8.GetByteCount(text) : 0;
+        long primaryBytes = primaryText != null ? Encoding.UTF8.GetByteCount(primaryText) : 0;
+        long imageBytes = image?.Length ?? 0;
+        if (textBytes + primaryBytes + imageBytes > MaxClipboardBytes)
         {
-            log.LogWarning("Clipboard image too large ({Length} bytes), skipping sync", image.Length);
-            image = null;
+            log.LogWarning("Clipboard push too large ({Total} bytes), dropping image", textBytes + primaryBytes + imageBytes);
+            image = null; imageBytes = 0;
+        }
+        if (textBytes + primaryBytes + imageBytes > MaxClipboardBytes)
+        {
+            log.LogWarning("Clipboard push still too large ({Total} bytes), dropping primary text", textBytes + primaryBytes);
+            primaryText = null; primaryBytes = 0;
+        }
+        if (textBytes + primaryBytes + imageBytes > MaxClipboardBytes)
+        {
+            log.LogWarning("Clipboard push still too large ({Total} bytes), dropping text", textBytes);
+            text = null;
         }
 
         if (string.IsNullOrEmpty(text) && string.IsNullOrEmpty(primaryText) && image == null)
@@ -417,9 +420,18 @@ public class InputRouter(
                 {
                     log.LogDebug("Clipboard pull response from {Host}: text={TextLen}, primary={PrimaryLen}, image={ImageLen}",
                         sourceHost, clip.Text?.Length, clip.PrimaryText?.Length, clip.ImagePng?.Length);
-                    if (clip.PrimaryText != null)
-                        _lastReceivedPrimaryText = clip.PrimaryText;
-                    _clipboardSync.SetClipboard(clip.Text, clip.PrimaryText, clip.ImagePng);
+                    var clipText = !string.IsNullOrEmpty(clip.Text) && Encoding.UTF8.GetByteCount(clip.Text) <= MaxClipboardBytes ? clip.Text : null;
+                    var clipPrimary = !string.IsNullOrEmpty(clip.PrimaryText) && Encoding.UTF8.GetByteCount(clip.PrimaryText) <= MaxClipboardBytes ? clip.PrimaryText : null;
+                    var clipImage = clip.ImagePng?.Length <= MaxClipboardBytes ? clip.ImagePng : null;
+                    if (clipText == null && !string.IsNullOrEmpty(clip.Text))
+                        log.LogWarning("Clipboard pull response from {Host}: text exceeds {Max} bytes, dropping", sourceHost, MaxClipboardBytes);
+                    if (clipPrimary == null && !string.IsNullOrEmpty(clip.PrimaryText))
+                        log.LogWarning("Clipboard pull response from {Host}: primary text exceeds {Max} bytes, dropping", sourceHost, MaxClipboardBytes);
+                    if (clipImage == null && clip.ImagePng != null)
+                        log.LogWarning("Clipboard pull response from {Host}: image exceeds {Max} bytes, dropping", sourceHost, MaxClipboardBytes);
+                    if (clipPrimary != null)
+                        _lastReceivedPrimaryText = clipPrimary;
+                    _clipboardSync.SetClipboard(clipText, clipPrimary, clipImage);
                     // if cursor is currently on a remote screen, forward the clipboard to it
                     using var s = await _state.WaitForDisposable();
                     var activeHost = s.Value.Mouse.CurrentScreen?.Host;

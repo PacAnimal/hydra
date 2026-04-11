@@ -8,7 +8,7 @@ public sealed class MacClipboardSync : IClipboardSync
     private const string PasteboardTypePng = "public.png";
 
     private string? _lastSetText;
-    private uint? _lastSetImageHash;
+    private ulong? _lastSetImageHash;
 
     public MacClipboardSync()
     {
