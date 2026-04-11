@@ -290,6 +290,59 @@ public class SlaveCursorHiderTests
         _hider.OnMasterActivity("A"); // A is gone — no effect
         Assert.That(_hider.State, Is.EqualTo(SlaveCursorState.Hidden));
     }
+
+    [Test]
+    public void ActiveMaster_Disconnects_Hides_Cursor_When_Other_Masters_Connected()
+    {
+        _hider.OnMasterConnected();
+        _hider.OnMasterConnected();
+        _hider.OnEnterScreen("A");
+        _hider.OnMasterDisconnected("A");
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(_hider.State, Is.EqualTo(SlaveCursorState.Hidden));
+            Assert.That(_cursor.IsHidden, Is.True);
+        }
+    }
+
+    [Test]
+    public void NonActiveMaster_Disconnects_Does_Not_Hide_Cursor()
+    {
+        _hider.OnMasterConnected();
+        _hider.OnMasterConnected();
+        _hider.OnEnterScreen("A");
+        _hider.OnEnterScreen("B"); // B is now active
+        _hider.OnMasterDisconnected("A"); // A was not active
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(_hider.State, Is.EqualTo(SlaveCursorState.MasterActive));
+            Assert.That(_cursor.IsHidden, Is.False);
+        }
+    }
+
+    [Test]
+    public async Task ActiveMaster_Disconnects_From_LocalActive_Stays_LocalActive()
+    {
+        _hider.OnMasterConnected();
+        _hider.OnMasterConnected();
+        _hider.OnEnterScreen("A");
+        _hider.OnLeaveScreen("A"); // back to Hidden, poll starts
+
+        _cursor.Position = new CursorPosition(200, 300);
+        await Task.Delay(100); // poll detects movement → LocalActive
+
+        Assert.That(_hider.State, Is.EqualTo(SlaveCursorState.LocalActive));
+
+        _hider.OnMasterDisconnected("A"); // A disconnects from LocalActive
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(_hider.State, Is.EqualTo(SlaveCursorState.LocalActive));
+            Assert.That(_cursor.IsHidden, Is.False);
+        }
+    }
 }
 
 internal sealed class FakeCursorVisibility : ICursorVisibility

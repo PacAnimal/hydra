@@ -46,11 +46,14 @@ public sealed class SlaveCursorHider(ICursorVisibility cursor, ILogger<SlaveCurs
         lock (_lock)
         {
             _onScreenMasters.Remove(masterHost);
-            if (string.Equals(_activeMaster, masterHost, StringComparison.OrdinalIgnoreCase))
+            var wasActive = string.Equals(_activeMaster, masterHost, StringComparison.OrdinalIgnoreCase);
+            if (wasActive)
                 _activeMaster = null;
             if (_masterCount > 0) _masterCount--;
             if (_masterCount == 0)
                 EnterNoMaster();
+            else if (wasActive && _state == SlaveCursorState.MasterActive)
+                EnterHidden();
         }
     }
 
