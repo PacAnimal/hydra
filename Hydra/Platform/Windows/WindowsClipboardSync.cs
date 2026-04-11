@@ -115,8 +115,10 @@ public sealed class WindowsClipboardSync(ILogger<WindowsClipboardSync> log) : IC
         try
         {
             NativeMethods.EmptyClipboard();
-            if (text != null) WriteTextToOpenClipboard(text);
+            // write image before text so image formats appear first in enumeration —
+            // legacy apps (Paint, etc.) pick the first format they support
             if (imagePng != null) WriteImageToOpenClipboard(imagePng);
+            if (text != null) WriteTextToOpenClipboard(text);
         }
         finally
         {
