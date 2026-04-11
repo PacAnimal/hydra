@@ -7,9 +7,7 @@ namespace Hydra.Platform.Windows;
 [SupportedOSPlatform("windows")]
 public sealed class WindowsOutputHandler(ILogger<WindowsOutputHandler> log) : IPlatformOutput, ICursorVisibility
 {
-    private bool _cursorHidden;
-    private nint[]? _savedCursors;
-
+    private readonly WindowsCursorSnapshot _cursor = new();
     private readonly DesktopInputDispatcher _dispatcher = new(log);
 
     public void MoveMouse(int x, int y)
@@ -48,54 +46,9 @@ public sealed class WindowsOutputHandler(ILogger<WindowsOutputHandler> log) : IP
         _dispatcher.Dispatch(new InjectMouseScrollCommand(msg));
     }
 
-    public unsafe void HideCursor()
-    {
-        if (_cursorHidden) return;
+    public void HideCursor() => _cursor.Hide();
 
-        // save copies of the current system cursors so we can restore them exactly
-        // (SPI_SETCURSORS reloads from HKCU which maps to the wrong user when running under a winlogon token)
-        var ids = NativeMethods.AllCursorIds;
-        _savedCursors = new nint[ids.Length];
-        for (var i = 0; i < ids.Length; i++)
-        {
-            var shared = NativeMethods.LoadCursor(nint.Zero, (nint)ids[i]);
-            _savedCursors[i] = shared != nint.Zero ? NativeMethods.CopyCursor(shared) : nint.Zero;
-        }
-
-        byte andMask = 0xFF;
-        byte xorMask = 0x00;
-        var blank = NativeMethods.CreateCursor(nint.Zero, 0, 0, 1, 1, &andMask, &xorMask);
-        if (blank == nint.Zero) return;
-        foreach (var id in ids)
-        {
-            var copy = NativeMethods.CopyCursor(blank);
-            if (copy != nint.Zero)
-                NativeMethods.SetSystemCursor(copy, id);
-        }
-        NativeMethods.DestroyCursor(blank);
-        _cursorHidden = true;
-    }
-
-    public void ShowCursor()
-    {
-        if (!_cursorHidden) return;
-        RestoreSavedCursors();
-        _cursorHidden = false;
-    }
-
-    private void RestoreSavedCursors()
-    {
-        if (_savedCursors == null) return;
-        var ids = NativeMethods.AllCursorIds;
-        for (var i = 0; i < ids.Length; i++)
-        {
-            if (_savedCursors[i] == nint.Zero) continue;
-            // SetSystemCursor takes ownership; pass a fresh copy so we keep our saved handle
-            var copy = NativeMethods.CopyCursor(_savedCursors[i]);
-            if (copy != nint.Zero)
-                NativeMethods.SetSystemCursor(copy, ids[i]);
-        }
-    }
+    public void ShowCursor() => _cursor.Show();
 
     public CursorPosition GetCursorPosition()
     {
@@ -106,13 +59,6 @@ public sealed class WindowsOutputHandler(ILogger<WindowsOutputHandler> log) : IP
     public void Dispose()
     {
         _dispatcher.Dispose();
-        if (_cursorHidden)
-            RestoreSavedCursors();
-        if (_savedCursors != null)
-        {
-            foreach (var h in _savedCursors)
-                if (h != nint.Zero) NativeMethods.DestroyCursor(h);
-            _savedCursors = null;
-        }
+        _cursor.Dispose();
     }
 }
