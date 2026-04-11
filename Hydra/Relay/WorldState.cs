@@ -25,6 +25,10 @@ public interface IWorldState
 
     // -- master-side (relay reconnect) --
     ValueTask ClearPeers();
+
+    // -- master-side (peer platform) --
+    ValueTask SetPeerPlatform(string host, PeerPlatform platform);
+    ValueTask<PeerPlatform> GetPeerPlatform(string host);
 }
 
 public class WorldState : IWorldState
@@ -50,6 +54,7 @@ public class WorldState : IWorldState
             {
                 s.KnownPeers.Remove(host);
                 s.PeerScreens.Remove(host);
+                s.PeerPlatforms.Remove(host);
                 foreach (var k in _loggers.Keys.Where(k => k.StartsWithIgnoreCase($"slave:{host}/")).ToList())
                     _loggers.TryRemove(k, out _);
             }
@@ -118,7 +123,20 @@ public class WorldState : IWorldState
         var s = m.Value;
         s.KnownPeers.Clear();
         s.PeerScreens.Clear();
+        s.PeerPlatforms.Clear();
         _loggers.Clear();
+    }
+
+    public async ValueTask SetPeerPlatform(string host, PeerPlatform platform)
+    {
+        using var m = await _master.WaitForDisposable();
+        m.Value.PeerPlatforms[host] = platform;
+    }
+
+    public async ValueTask<PeerPlatform> GetPeerPlatform(string host)
+    {
+        using var m = await _master.WaitForDisposable();
+        return m.Value.PeerPlatforms.TryGetValue(host, out var p) ? p : PeerPlatform.Unknown;
     }
 
     public async ValueTask SetRemoteKey(string host, SimpleAesKey key)
@@ -137,6 +155,7 @@ public class WorldState : IWorldState
     {
         public HashSet<string> KnownPeers = new(StringComparer.OrdinalIgnoreCase);
         public Dictionary<string, List<ScreenInfoEntry>> PeerScreens = new(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<string, PeerPlatform> PeerPlatforms = new(StringComparer.OrdinalIgnoreCase);
     }
 
     private class SlaveState

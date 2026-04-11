@@ -128,15 +128,24 @@ public class SlaveRelayConnection : RelayConnection
                 break;
             case MessageKind.ClipboardPush:
                 var push = json.FromSaneJson<ClipboardPushMessage>();
-                if (push != null && !string.IsNullOrEmpty(push.Text))
+                if (push != null)
                 {
-                    _log.LogDebug("Clipboard push from {Host}: {Length} chars", sourceHost, push.Text.Length);
-                    _clipboardSync.SetText(push.Text);
+                    if (!string.IsNullOrEmpty(push.Text))
+                    {
+                        _log.LogDebug("Clipboard push from {Host}: {Length} chars", sourceHost, push.Text.Length);
+                        _clipboardSync.SetText(push.Text);
+                    }
+                    if (!string.IsNullOrEmpty(push.PrimaryText))
+                    {
+                        _log.LogDebug("Primary push from {Host}: {Length} chars", sourceHost, push.PrimaryText.Length);
+                        _clipboardSync.SetPrimaryText(push.PrimaryText);
+                    }
                 }
                 break;
             case MessageKind.ClipboardPull:
                 var text = _clipboardSync.GetText();
-                var response = MessageSerializer.Encode(MessageKind.ClipboardPullResponse, new ClipboardPullResponseMessage(text));
+                var primary = _clipboardSync.GetPrimaryText();
+                var response = MessageSerializer.Encode(MessageKind.ClipboardPullResponse, new ClipboardPullResponseMessage(text, primary));
                 _ = Send([sourceHost], response).AsTask();
                 break;
             default:
@@ -269,7 +278,14 @@ public class SlaveRelayConnection : RelayConnection
     private void SendScreenInfo(string masterHost, List<ScreenInfoEntry> entries)
     {
         _log.LogInformation("Sending screen info to {Master}: {Count} screen(s)", masterHost, entries.Count);
-        var payload = MessageSerializer.Encode(MessageKind.ScreenInfo, new ScreenInfoMessage(entries));
+        var platform = DetectLocalPlatform();
+        var payload = MessageSerializer.Encode(MessageKind.ScreenInfo, new ScreenInfoMessage(entries, platform));
         _ = Send([masterHost], payload).AsTask();
     }
+
+    private static PeerPlatform DetectLocalPlatform() =>
+        OperatingSystem.IsLinux() ? PeerPlatform.Linux :
+        OperatingSystem.IsMacOS() ? PeerPlatform.MacOS :
+        OperatingSystem.IsWindows() ? PeerPlatform.Windows :
+        PeerPlatform.Unknown;
 }

@@ -320,22 +320,6 @@ public class MasterSlaveProtocolTests
         public override void Dispose() { _hider.Dispose(); base.Dispose(); }
     }
 
-    private sealed class NullPlatformOutput : IPlatformOutput
-    {
-        public void MoveMouse(int x, int y) { }
-        public void MoveMouseRelative(int dx, int dy) { }
-        public void InjectKey(KeyEventMessage msg) { }
-        public void InjectMouseButton(MouseButtonMessage msg) { }
-        public void InjectMouseScroll(MouseScrollMessage msg) { }
-        public void Dispose() { }
-    }
-
-    private sealed class NullScreensaverSuppressor : IScreensaverSuppressor
-    {
-        public void Suppress() { }
-        public void Restore() { }
-    }
-
     private sealed class TestableMasterRelay : MasterRelayConnection
     {
         public TestableMasterRelay() : base(

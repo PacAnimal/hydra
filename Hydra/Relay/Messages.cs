@@ -28,7 +28,11 @@ public enum MessageKind : byte
 public record MouseMoveMessage(string Screen, int X, int Y);
 public record MouseMoveDeltaMessage(int Dx, int Dy);
 public record ScreenInfoEntry(string Name, int X, int Y, int Width, int Height, decimal MouseScale);
-public record ScreenInfoMessage(List<ScreenInfoEntry> Screens);
+
+// ReSharper disable once InconsistentNaming
+public enum PeerPlatform : byte { Unknown = 0, Linux = 1, MacOS = 2, Windows = 3 }
+
+public record ScreenInfoMessage(List<ScreenInfoEntry> Screens, PeerPlatform? Platform = null);
 public record MasterConfigMessage(LogLevel? LogLevel);
 public record SlaveLogMessage(int Level, string Category, string Message, string? Exception);
 public record KeyEventMessage(KeyEventType Type, KeyModifiers Modifiers, char? Character, SpecialKey? Key, int? RepeatDelayMs = null, int? RepeatRateMs = null);
@@ -36,8 +40,8 @@ public record MouseButtonMessage(MouseButton Button, bool IsPressed);
 public record MouseScrollMessage(short XDelta, short YDelta);
 public record EnterScreenMessage(string Screen, int X, int Y, int Width, int Height);
 public record ScreensaverSyncMessage(bool Active);
-public record ClipboardPushMessage(string Text);
-public record ClipboardPullResponseMessage(string? Text);
+public record ClipboardPushMessage(string Text, string? PrimaryText = null);
+public record ClipboardPullResponseMessage(string? Text, string? PrimaryText = null);
 
 public static class MessageSerializer
 {

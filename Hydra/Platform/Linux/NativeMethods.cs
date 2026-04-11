@@ -30,6 +30,7 @@ internal static partial class NativeMethods
 
     // -- built-in atoms (no XInternAtom needed) --
 
+    internal const nint XA_PRIMARY = 1;
     internal const nint XA_ATOM = 4;
     internal const nint XA_STRING = 31;
 
@@ -491,6 +492,9 @@ internal struct XEvent
     [FieldOffset(48)] internal nint SelectionNotifyTarget;
     [FieldOffset(56)] internal nint SelectionNotifyProperty;
     [FieldOffset(64)] internal nuint SelectionNotifyTime;
+
+    // XSelectionClearEvent (type = SelectionClear = 29) — selection at offset 40
+    [FieldOffset(40)] internal nint SelectionClearSelection;
 
     // XPropertyEvent (type = PropertyNotify = 28) — LP64 offsets
     // window field reuses EventWindow at offset 32

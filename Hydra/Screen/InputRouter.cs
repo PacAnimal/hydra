@@ -39,6 +39,7 @@ public class InputRouter(
     private CancellationTokenSource? _pollCts;
     private readonly IScreenSaverSync _screenSaverSync = screenSaverSync;
     private readonly IClipboardSync _clipboardSync = clipboardSync;
+    private string? _lastReceivedPrimaryText;
 
     private const int MaxClipboardTextChars = 1_000_000;
 
@@ -346,13 +347,25 @@ public class InputRouter(
     private void PushClipboardToHost(string host)
     {
         var text = _clipboardSync.GetText();
-        if (string.IsNullOrEmpty(text) || text.Length > MaxClipboardTextChars)
+        if (text?.Length > MaxClipboardTextChars)
         {
-            if (text?.Length > MaxClipboardTextChars)
-                log.LogWarning("Clipboard too large ({Length} chars), skipping sync", text.Length);
-            return;
+            log.LogWarning("Clipboard too large ({Length} chars), skipping sync", text.Length);
+            text = null;
         }
-        var payload = MessageSerializer.Encode(MessageKind.ClipboardPush, new ClipboardPushMessage(text));
+
+        string? primaryText = null;
+        var peerPlatform = AsyncHelper.RunSync(() => _peerState.GetPeerPlatform(host).AsTask());
+        if (peerPlatform == PeerPlatform.Linux)
+        {
+            primaryText = _clipboardSync.GetPrimaryText() ?? _lastReceivedPrimaryText;
+            if (primaryText?.Length > MaxClipboardTextChars)
+                primaryText = null;
+        }
+
+        if (string.IsNullOrEmpty(text) && string.IsNullOrEmpty(primaryText))
+            return;
+
+        var payload = MessageSerializer.Encode(MessageKind.ClipboardPush, new ClipboardPushMessage(text ?? "", primaryText));
         _ = relay.Send([host], payload).AsTask();
     }
 
@@ -371,6 +384,8 @@ public class InputRouter(
                 if (info != null && info.Screens.Count > 0)
                 {
                     await _peerState.SetPeerScreens(sourceHost, info.Screens);
+                    if (info.Platform.HasValue)
+                        await _peerState.SetPeerPlatform(sourceHost, info.Platform.Value);
                     var snapshot = await _peerState.GetPeerScreensSnapshot();
                     using (var s = await _state.WaitForDisposable())
                     {
@@ -388,9 +403,15 @@ public class InputRouter(
                 break; // master never acts on screensaver sync messages
             case MessageKind.ClipboardPullResponse:
                 var clip = json.FromSaneJson<ClipboardPullResponseMessage>();
-                if (clip?.Text != null)
+                if (clip != null)
                 {
-                    _clipboardSync.SetText(clip.Text);
+                    if (clip.Text != null)
+                        _clipboardSync.SetText(clip.Text);
+                    if (clip.PrimaryText != null)
+                    {
+                        _lastReceivedPrimaryText = clip.PrimaryText;
+                        _clipboardSync.SetPrimaryText(clip.PrimaryText);
+                    }
                     // if cursor is currently on a remote screen, forward the clipboard to it
                     using var s = await _state.WaitForDisposable();
                     var activeHost = s.Value.Mouse.CurrentScreen?.Host;
