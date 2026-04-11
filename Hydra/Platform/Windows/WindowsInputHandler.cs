@@ -21,6 +21,7 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log) : IPla
     private Action<MouseButtonEvent>? _onMouseButton;
     private Action<MouseScrollEvent>? _onMouseScroll;
     private bool _cursorHidden;
+    private nint[]? _savedCursors;
     private int _lastWarpX = -1;
     private int _lastWarpY = -1;
     private readonly Toggle _isOnVirtualScreen = new();
@@ -52,10 +53,22 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log) : IPla
     public Task ShowCursor()
     {
         if (!_cursorHidden) return Task.CompletedTask;
-        // restore all system cursors to their defaults
-        NativeMethods.SystemParametersInfo(NativeMethods.SPI_SETCURSORS, 0, nint.Zero, 0);
+        RestoreSavedCursors();
         _cursorHidden = false;
         return Task.CompletedTask;
+    }
+
+    private void RestoreSavedCursors()
+    {
+        if (_savedCursors == null) return;
+        var ids = NativeMethods.AllCursorIds;
+        for (var i = 0; i < ids.Length; i++)
+        {
+            if (_savedCursors[i] == nint.Zero) continue;
+            var copy = NativeMethods.CopyCursor(_savedCursors[i]);
+            if (copy != nint.Zero)
+                NativeMethods.SetSystemCursor(copy, ids[i]);
+        }
     }
 
     private unsafe void HideCursorSync()
@@ -63,18 +76,24 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log) : IPla
         // replace all system cursors with a 1x1 transparent cursor so no cursor type leaks through.
         // ShowCursor(false) alone doesn't work — other windows re-show the cursor via WM_SETCURSOR.
         // SetSystemCursor takes ownership of each handle, so we copy the blank for each cursor type.
-        byte andMask = 0xFF; // AND=1 means no invert (transparent)
-        byte xorMask = 0x00; // XOR=0 means draw nothing
+        var ids = NativeMethods.AllCursorIds;
+        _savedCursors = new nint[ids.Length];
+        for (var i = 0; i < ids.Length; i++)
+        {
+            var shared = NativeMethods.LoadCursor(nint.Zero, (nint)ids[i]);
+            _savedCursors[i] = shared != nint.Zero ? NativeMethods.CopyCursor(shared) : nint.Zero;
+        }
+
+        byte andMask = 0xFF;
+        byte xorMask = 0x00;
         var blank = NativeMethods.CreateCursor(nint.Zero, 0, 0, 1, 1, &andMask, &xorMask);
         if (blank == nint.Zero) return;
-
-        foreach (var id in NativeMethods.AllCursorIds)
+        foreach (var id in ids)
         {
             var copy = NativeMethods.CopyCursor(blank);
             if (copy != nint.Zero)
                 NativeMethods.SetSystemCursor(copy, id);
         }
-
         NativeMethods.DestroyCursor(blank);
         _cursorHidden = true;
     }
@@ -166,6 +185,12 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log) : IPla
     {
         StopEventTap();
         if (_cursorHidden) _ = ShowCursor();
+        if (_savedCursors != null)
+        {
+            foreach (var h in _savedCursors)
+                if (h != nint.Zero) NativeMethods.DestroyCursor(h);
+            _savedCursors = null;
+        }
     }
 
     // called on the hook thread — checks if the desktop has changed and reinstalls hooks if needed
