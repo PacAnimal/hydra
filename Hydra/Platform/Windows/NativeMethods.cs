@@ -288,6 +288,51 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     internal static partial uint SetThreadExecutionState(uint esFlags);
 
+    // -- clipboard --
+
+    internal const uint CF_UNICODETEXT = 13;
+    internal const uint GMEM_MOVEABLE = 0x0002;
+
+    [LibraryImport(User32, SetLastError = true)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool OpenClipboard(nint hWndNewOwner);
+
+    [LibraryImport(User32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool CloseClipboard();
+
+    [LibraryImport(User32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool EmptyClipboard();
+
+    [LibraryImport(User32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial nint GetClipboardData(uint uFormat);
+
+    [LibraryImport(User32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial nint SetClipboardData(uint uFormat, nint hMem);
+
+    [LibraryImport(Kernel32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial nint GlobalAlloc(uint uFlags, nuint dwBytes);
+
+    [LibraryImport(Kernel32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial nint GlobalLock(nint hMem);
+
+    [LibraryImport(Kernel32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool GlobalUnlock(nint hMem);
+
+    [LibraryImport(Kernel32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial nint GlobalFree(nint hMem);
+
     // -- desktop --
 
     internal const uint GENERIC_READ = 0x80000000;

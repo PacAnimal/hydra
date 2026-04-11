@@ -16,6 +16,7 @@ public class SlaveRelayConnection : RelayConnection
     private readonly SlaveCursorHider _cursorHider;
     private readonly IScreenSaverSync _screenSaverSync;
     private readonly IScreensaverSuppressor _screensaverSuppressor;
+    private readonly IClipboardSync _clipboardSync;
 
     // active key repeat timers keyed by (char?, SpecialKey?)
     private readonly Dictionary<(char?, SpecialKey?), CancellationTokenSource> _repeatTimers = [];
@@ -25,7 +26,7 @@ public class SlaveRelayConnection : RelayConnection
 
     // ReSharper disable once ConvertToPrimaryConstructor
 #pragma warning disable IDE0290
-    public SlaveRelayConnection(IHydraProfile profile, ILogger<RelayConnection> log, IPlatformOutput output, IScreenDetector screens, IWorldState peerState, SlaveCursorHider cursorHider, IScreenSaverSync screenSaverSync, IScreensaverSuppressor screensaverSuppressor)
+    public SlaveRelayConnection(IHydraProfile profile, ILogger<RelayConnection> log, IPlatformOutput output, IScreenDetector screens, IWorldState peerState, SlaveCursorHider cursorHider, IScreenSaverSync screenSaverSync, IScreensaverSuppressor screensaverSuppressor, IClipboardSync clipboardSync)
         : base(profile, log, peerState)
     {
         _output = output;
@@ -35,6 +36,7 @@ public class SlaveRelayConnection : RelayConnection
         _cursorHider = cursorHider;
         _screenSaverSync = screenSaverSync;
         _screensaverSuppressor = screensaverSuppressor;
+        _clipboardSync = clipboardSync;
 
         _screens.ScreensChanged += async snapshot =>
         {
@@ -123,6 +125,19 @@ public class SlaveRelayConnection : RelayConnection
                     if (ss.Active) _screenSaverSync.Activate();
                     else _screenSaverSync.Deactivate();
                 }
+                break;
+            case MessageKind.ClipboardPush:
+                var push = json.FromSaneJson<ClipboardPushMessage>();
+                if (push != null && !string.IsNullOrEmpty(push.Text))
+                {
+                    _log.LogDebug("Clipboard push from {Host}: {Length} chars", sourceHost, push.Text.Length);
+                    _clipboardSync.SetText(push.Text);
+                }
+                break;
+            case MessageKind.ClipboardPull:
+                var text = _clipboardSync.GetText();
+                var response = MessageSerializer.Encode(MessageKind.ClipboardPullResponse, new ClipboardPullResponseMessage(text));
+                _ = Send([sourceHost], response).AsTask();
                 break;
             default:
                 _log.LogDebug("Unhandled message kind {Kind} from {Host}", kind, sourceHost);

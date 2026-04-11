@@ -38,7 +38,7 @@ public static class TransitionTestHelper
         var platform = new FakePlatform();
         var relay = new FakeRelay();
         var screens = new FakeScreenDetector();
-        var service = new InputRouter(platform, TestConfig, relay, screens, NullLoggerFactory.Instance, NullLogger<InputRouter>.Instance, new NullScreenSaverSync());
+        var service = new InputRouter(platform, TestConfig, relay, screens, NullLoggerFactory.Instance, NullLogger<InputRouter>.Instance, new NullScreenSaverSync(), new NullClipboardSync());
         return new TestServiceBundle(platform, relay, service);
     }
 
@@ -62,7 +62,7 @@ public static class TransitionTestHelper
         var platform = new FakePlatform();
         var relay = new FakeRelay();
         var screens = new FakeScreenDetector();
-        var service = new InputRouter(platform, config ?? RemoteOnlyConfig, relay, screens, NullLoggerFactory.Instance, NullLogger<InputRouter>.Instance, new NullScreenSaverSync());
+        var service = new InputRouter(platform, config ?? RemoteOnlyConfig, relay, screens, NullLoggerFactory.Instance, NullLogger<InputRouter>.Instance, new NullScreenSaverSync(), new NullClipboardSync());
         return new TestServiceBundle(platform, relay, service);
     }
 

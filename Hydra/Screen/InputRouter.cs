@@ -20,6 +20,7 @@ public class InputRouter(
     ILoggerFactory loggerFactory,
     ILogger<InputRouter> log,
     IScreenSaverSync screenSaverSync,
+    IClipboardSync clipboardSync,
     IWorldState? peerState = null)
     : IHostedService
 {
@@ -37,6 +38,9 @@ public class InputRouter(
     private readonly SemaphoreSlimValue<LocalMasterState> _state = new(new LocalMasterState(), disposeValue: false);
     private CancellationTokenSource? _pollCts;
     private readonly IScreenSaverSync _screenSaverSync = screenSaverSync;
+    private readonly IClipboardSync _clipboardSync = clipboardSync;
+
+    private const int MaxClipboardTextChars = 1_000_000;
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
@@ -324,6 +328,7 @@ public class InputRouter(
                 var enterPayload = MessageSerializer.Encode(MessageKind.EnterScreen,
                     new EnterScreenMessage(dest.Name, savedX, savedY, dest.Width, dest.Height));
                 _ = relay.Send([dest.Host], enterPayload).AsTask();
+                PushClipboardToHost(dest.Host);
                 log.LogInformation("Restored cursor to '{Screen}' after screensaver", savedScreen);
             }
         }
@@ -336,6 +341,25 @@ public class InputRouter(
         if (hosts.Length == 0) return;
         var payload = MessageSerializer.Encode(MessageKind.ScreensaverSync, new ScreensaverSyncMessage(active));
         _ = relay.Send(hosts, payload).AsTask();
+    }
+
+    private void PushClipboardToHost(string host)
+    {
+        var text = _clipboardSync.GetText();
+        if (string.IsNullOrEmpty(text) || text.Length > MaxClipboardTextChars)
+        {
+            if (text?.Length > MaxClipboardTextChars)
+                log.LogWarning("Clipboard too large ({Length} chars), skipping sync", text.Length);
+            return;
+        }
+        var payload = MessageSerializer.Encode(MessageKind.ClipboardPush, new ClipboardPushMessage(text));
+        _ = relay.Send([host], payload).AsTask();
+    }
+
+    private void PullClipboardFromHost(string host)
+    {
+        var payload = MessageSerializer.Encode(MessageKind.ClipboardPull, new { });
+        _ = relay.Send([host], payload).AsTask();
     }
 
     private async Task OnMessageReceived(string sourceHost, MessageKind kind, string json)
@@ -362,6 +386,18 @@ public class InputRouter(
                 break;
             case MessageKind.ScreensaverSync:
                 break; // master never acts on screensaver sync messages
+            case MessageKind.ClipboardPullResponse:
+                var clip = json.FromSaneJson<ClipboardPullResponseMessage>();
+                if (clip?.Text != null)
+                {
+                    _clipboardSync.SetText(clip.Text);
+                    // if cursor is currently on a remote screen, forward the clipboard to it
+                    using var s = await _state.WaitForDisposable();
+                    var activeHost = s.Value.Mouse.CurrentScreen?.Host;
+                    if (activeHost != null)
+                        PushClipboardToHost(activeHost);
+                }
+                break;
             default:
                 log.LogDebug("Unhandled message kind {Kind} from {Host}", kind, sourceHost);
                 break;
@@ -500,6 +536,7 @@ public class InputRouter(
                             AsyncHelper.RunSync(platform.ShowCursor);
                             var payload = MessageSerializer.Encode(MessageKind.LeaveScreen, new { });
                             _ = relay.Send([leavingHost], payload).AsTask();
+                            PullClipboardFromHost(leavingHost);
                         }
                     }
                 }
@@ -646,6 +683,7 @@ public class InputRouter(
         {
             var payload = MessageSerializer.Encode(MessageKind.EnterScreen, new EnterScreenMessage(hit.Destination.Name, hit.EntryX, hit.EntryY, hit.Destination.Width, hit.Destination.Height));
             _ = relay.Send([hit.Destination.Host], payload).AsTask();
+            PushClipboardToHost(hit.Destination.Host);
         }
     }
 
@@ -711,10 +749,12 @@ public class InputRouter(
                             {
                                 var leavePayload = MessageSerializer.Encode(MessageKind.LeaveScreen, new { });
                                 _ = relay.Send([leavingScreen.Host], leavePayload).AsTask();
+                                PullClipboardFromHost(leavingScreen.Host);
                             }
                             var enterPayload = MessageSerializer.Encode(MessageKind.EnterScreen,
                                 new EnterScreenMessage(hit.Destination.Name, hit.EntryX, hit.EntryY, hit.Destination.Width, hit.Destination.Height));
                             _ = relay.Send([hit.Destination.Host], enterPayload).AsTask();
+                            PushClipboardToHost(hit.Destination.Host);
                         }
                         return;
                     }
@@ -740,6 +780,7 @@ public class InputRouter(
                     {
                         var payload = MessageSerializer.Encode(MessageKind.LeaveScreen, new { });
                         _ = relay.Send([leavingScreen.Host], payload).AsTask();
+                        PullClipboardFromHost(leavingScreen.Host);
                     }
                     return;
                 }
@@ -799,6 +840,7 @@ public class InputRouter(
 
         var payload = MessageSerializer.Encode(MessageKind.EnterScreen, new EnterScreenMessage(target.Name, entryX, entryY, target.Width, target.Height));
         _ = relay.Send([target.Host], payload).AsTask();
+        PushClipboardToHost(target.Host);
     }
 
     // handles raw mouse deltas from evdev (remote-only/console mode).
@@ -832,10 +874,12 @@ public class InputRouter(
                 {
                     var leavePayload = MessageSerializer.Encode(MessageKind.LeaveScreen, new { });
                     _ = relay.Send([leavingScreen.Host], leavePayload).AsTask();
+                    PullClipboardFromHost(leavingScreen.Host);
                 }
                 var crossPayload = MessageSerializer.Encode(MessageKind.EnterScreen,
                     new EnterScreenMessage(hit.Destination.Name, hit.EntryX, hit.EntryY, hit.Destination.Width, hit.Destination.Height));
                 _ = relay.Send([hit.Destination.Host], crossPayload).AsTask();
+                PushClipboardToHost(hit.Destination.Host);
                 return;
             }
 

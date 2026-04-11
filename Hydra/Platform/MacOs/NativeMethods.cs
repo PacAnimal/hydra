@@ -319,6 +319,16 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial double objc_msgSend_double(nint obj, nint sel);
 
+    // receiver + selector + two nint args → nint (used for NSPasteboard setString:forType:)
+    [LibraryImport(ObjC, EntryPoint = "objc_msgSend")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint objc_msgSend_2arg(nint obj, nint sel, nint arg1, nint arg2);
+
+    [LibraryImport(CoreFoundation, EntryPoint = "CFStringGetCString")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static unsafe partial bool CFStringGetCString(nint theString, byte* buffer, nint bufferSize, uint encoding);
+
     // NX_SYSDEFINED event type constant (NSSystemDefined, subtype 8 = media key)
     internal const int KNXSysDefined = 14;
 

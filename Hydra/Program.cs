@@ -207,6 +207,15 @@ if (config != null)
     else
         services.AddSingleton<IScreenSaverSync, NullScreenSaverSync>();
 
+    if (OperatingSystem.IsMacOS())
+        services.AddSingleton<IClipboardSync, MacClipboardSync>();
+    else if (OperatingSystem.IsWindows())
+        services.AddSingleton<IClipboardSync, WindowsClipboardSync>();
+    else if (OperatingSystem.IsLinux() && !linuxConsoleMode)
+        services.AddSingleton<IClipboardSync, XorgClipboardSync>();
+    else
+        services.AddSingleton<IClipboardSync, NullClipboardSync>();
+
     if (!RunMode.IsSessionChild)
         services.AddHostedService<SelfUpdater>();
 

@@ -15,6 +15,23 @@ internal static partial class NativeMethods
     internal const int GenericEvent = 35;
     internal const int KeyPress = 2;
     internal const int KeyRelease = 3;
+    internal const int PropertyNotify = 28;
+    internal const int SelectionClear = 29;
+    internal const int SelectionRequest = 30;
+    internal const int SelectionNotify = 31;
+
+    // -- property mode / event mask --
+
+    internal const int PropModeReplace = 0;
+    internal const int PropertyNewValue = 0;
+    internal const int PropertyDelete = 1;
+    internal const nint AnyPropertyType = 0;
+    internal const nint PropertyChangeMask = 1 << 22; // 0x400000
+
+    // -- built-in atoms (no XInternAtom needed) --
+
+    internal const nint XA_ATOM = 4;
+    internal const nint XA_STRING = 31;
 
     // -- XI2 event type constants --
 
@@ -375,6 +392,58 @@ internal static partial class NativeMethods
     [LibraryImport(X11)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial int XFree(nint data);
+
+    // -- clipboard / selection --
+
+    [LibraryImport(X11, StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint XInternAtom(nint display, string atomName, [MarshalAs(UnmanagedType.Bool)] bool onlyIfExists);
+
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int XSetSelectionOwner(nint display, nint selection, nint owner, nuint time);
+
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint XGetSelectionOwner(nint display, nint selection);
+
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int XConvertSelection(nint display, nint selection, nint target, nint property, nint requestor, nuint time);
+
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int XSendEvent(nint display, nint window, [MarshalAs(UnmanagedType.Bool)] bool propagate, nint eventMask, ref XEvent ev);
+
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint XSelectInput(nint display, nint window, nint eventMask);
+
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint XCreateSimpleWindow(nint display, nint parent, int x, int y, uint width, uint height, uint borderWidth, nint border, nint background);
+
+    // format=8: text/binary data; nelements = byte count
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int XChangeProperty(nint display, nint window, nint property, nint type, int format, int mode, byte[] data, int nelements);
+
+    // format=32: atom arrays; nelements = atom count
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int XChangeProperty(nint display, nint window, nint property, nint type, int format, int mode, nint[] data, int nelements);
+
+    // longLength is in 32-bit units; prop must be XFree'd by caller
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int XGetWindowProperty(nint display, nint window, nint property,
+        nint longOffset, nint longLength, [MarshalAs(UnmanagedType.Bool)] bool delete,
+        nint reqType, out nint actualType, out int actualFormat, out nint nitems,
+        out nint bytesAfter, out nint prop);
+
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int XDeleteProperty(nint display, nint window, nint property);
 }
 
 // struct pollfd for use with poll()
@@ -401,6 +470,33 @@ internal struct XEvent
     [FieldOffset(32)] internal int XCookieExtension;
     [FieldOffset(36)] internal int XCookieEvType;
     [FieldOffset(48)] internal nint XCookieData;   // void* filled by XGetEventData
+
+    // common header fields (all X events share these at the same offsets on LP64)
+    [FieldOffset(8)] internal nuint Serial;
+    [FieldOffset(16)] internal int SendEvent;
+    [FieldOffset(24)] internal nint EventDisplay;
+    [FieldOffset(32)] internal nint EventWindow;   // "window" field present in most event types
+
+    // XSelectionRequestEvent (type = SelectionRequest = 30) — LP64 offsets
+    [FieldOffset(32)] internal nint SelectionRequestOwner;
+    [FieldOffset(40)] internal nint SelectionRequestRequestor;
+    [FieldOffset(48)] internal nint SelectionRequestSelection;
+    [FieldOffset(56)] internal nint SelectionRequestTarget;
+    [FieldOffset(64)] internal nint SelectionRequestProperty;
+    [FieldOffset(72)] internal nuint SelectionRequestTime;
+
+    // XSelectionEvent (type = SelectionNotify = 31) — LP64 offsets
+    [FieldOffset(32)] internal nint SelectionNotifyRequestor;
+    [FieldOffset(40)] internal nint SelectionNotifySelection;
+    [FieldOffset(48)] internal nint SelectionNotifyTarget;
+    [FieldOffset(56)] internal nint SelectionNotifyProperty;
+    [FieldOffset(64)] internal nuint SelectionNotifyTime;
+
+    // XPropertyEvent (type = PropertyNotify = 28) — LP64 offsets
+    // window field reuses EventWindow at offset 32
+    [FieldOffset(40)] internal nint PropertyNotifyAtom;
+    [FieldOffset(48)] internal nuint PropertyNotifyTime;
+    [FieldOffset(56)] internal int PropertyNotifyState;
 }
 
 // passed to XISelectEvents — deviceid, mask_len, and a pointer to the event mask bytes
