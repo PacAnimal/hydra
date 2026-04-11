@@ -40,7 +40,9 @@ public class InputRouter(
     private CancellationTokenSource? _pollCts;
     private readonly IScreenSaverSync _screenSaverSync = screenSaverSync;
     private readonly IClipboardSync _clipboardSync = clipboardSync;
+    private string? _lastReceivedText;
     private string? _lastReceivedPrimaryText;
+    private byte[]? _lastReceivedImage;
 
     private static readonly long MaxClipboardBytes = ClipboardUtils.MaxClipboardBytes;
 
@@ -347,12 +349,12 @@ public class InputRouter(
 
     private void PushClipboardToHost(string host)
     {
-        var text = _clipboardSync.GetText();
+        var text = _clipboardSync.GetText() ?? _lastReceivedText;
         string? primaryText = null;
         var peerPlatform = AsyncHelper.RunSync(() => _peerState.GetPeerPlatform(host).AsTask());
         if (peerPlatform == PeerPlatform.Linux)
             primaryText = _clipboardSync.GetPrimaryText() ?? _lastReceivedPrimaryText;
-        var image = _clipboardSync.GetImagePng();
+        var image = _clipboardSync.GetImagePng() ?? _lastReceivedImage;
 
         // drop fields in priority order until combined size fits
         long textBytes = text != null ? Encoding.UTF8.GetByteCount(text) : 0;
@@ -429,8 +431,12 @@ public class InputRouter(
                         log.LogWarning("Clipboard pull response from {Host}: primary text exceeds {Max} bytes, dropping", sourceHost, MaxClipboardBytes);
                     if (clipImage == null && clip.ImagePng != null)
                         log.LogWarning("Clipboard pull response from {Host}: image exceeds {Max} bytes, dropping", sourceHost, MaxClipboardBytes);
+                    if (clipText != null)
+                        _lastReceivedText = clipText;
                     if (clipPrimary != null)
                         _lastReceivedPrimaryText = clipPrimary;
+                    if (clipImage != null)
+                        _lastReceivedImage = clipImage;
                     _clipboardSync.SetClipboard(clipText, clipPrimary, clipImage);
                     // if cursor is currently on a remote screen, forward the clipboard to it
                     using var s = await _state.WaitForDisposable();
