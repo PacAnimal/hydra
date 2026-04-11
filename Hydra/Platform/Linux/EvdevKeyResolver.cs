@@ -72,43 +72,9 @@ internal sealed class EvdevKeyResolver : IDisposable
         var downMods = GetModifiers();
         var type = KeyEventType.KeyDown;
 
-        // dead key: store combining char and spacing form, then wait for next character
-        var dead = XorgKeyResolver.DeadKeyLookup(keysym);
-        if (dead.Combining != '\0')
-        {
-            _pendingDeadKey = dead.Combining;
-            _pendingDeadSpacing = dead.Spacing;
-            _keyDownId[evdevCode] = new CharClassification(null, null);  // placeholder for key-up replay
-            return null;
-        }
-
-        // special key (arrows, function keys, modifiers, keypad)?
-        var special = XorgKeyResolver.KeySymToSpecialKey(keysym);
-        if (special.HasValue)
-        {
-            _pendingDeadKey = '\0';
-            _pendingDeadSpacing = '\0';
-            _keyDownId[evdevCode] = new CharClassification(null, special.Value);
-            return KeyEvent.Special(type, special.Value, downMods);
-        }
-
-        // character key
-        var ch = XorgKeyResolver.KeySymToChar(keysym);
-        if (ch.HasValue)
-        {
-            if (_pendingDeadKey != '\0')
-            {
-                var pendingDead = _pendingDeadKey;
-                var spc = _pendingDeadSpacing;
-                _pendingDeadKey = '\0';
-                _pendingDeadSpacing = '\0';
-                ch = KeyResolver.ComposeOrSpacing(ch.Value, pendingDead, spc);
-            }
-            _keyDownId[evdevCode] = new CharClassification(ch, null);
-            return KeyEvent.Char(type, ch.Value, downMods);
-        }
-
-        return null;
+        // evdev needs a placeholder _keyDownId entry for dead keys to support key-up replay
+        return XorgKeyResolver.ResolveKeysym(keysym, evdevCode, _keyDownId,
+            ref _pendingDeadKey, ref _pendingDeadSpacing, downMods, type, trackDeadKey: true);
     }
 
     private KeyModifiers GetModifiers()

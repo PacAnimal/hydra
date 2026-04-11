@@ -37,12 +37,23 @@ internal sealed class XorgKeyResolver
         // suppress auto-repeat: if keycode already in _keyDownId, this is an OS repeat — drop it
         if (_keyDownId.ContainsKey(keycode)) return null;
 
-        // dead key: store combining char and its spacing form, then wait for the next character
+        return ResolveKeysym(keysym, keycode, _keyDownId, ref _pendingDeadKey, ref _pendingDeadSpacing, mods, type);
+    }
+
+    // shared dead-key → special → char resolution pipeline, used by XorgKeyResolver and EvdevKeyResolver.
+    // trackDeadKey: evdev needs a placeholder _keyDownId entry for dead keys to support key-up replay.
+    internal static KeyEvent? ResolveKeysym(
+        ulong keysym, uint keycode, Dictionary<uint, CharClassification> keyDownId,
+        ref char pendingDeadKey, ref char pendingDeadSpacing,
+        KeyModifiers mods, KeyEventType type, bool trackDeadKey = false)
+    {
+        // dead key: store combining char and spacing form, then wait for the next character
         var dead = DeadKeyLookup(keysym);
         if (dead.Combining != '\0')
         {
-            _pendingDeadKey = dead.Combining;
-            _pendingDeadSpacing = dead.Spacing;
+            pendingDeadKey = dead.Combining;
+            pendingDeadSpacing = dead.Spacing;
+            if (trackDeadKey) keyDownId[keycode] = new CharClassification(null, null);
             return null;
         }
 
@@ -50,9 +61,9 @@ internal sealed class XorgKeyResolver
         var special = KeySymToSpecialKey(keysym);
         if (special.HasValue)
         {
-            _pendingDeadKey = '\0';
-            _pendingDeadSpacing = '\0';
-            _keyDownId[keycode] = new CharClassification(null, special.Value);
+            pendingDeadKey = '\0';
+            pendingDeadSpacing = '\0';
+            keyDownId[keycode] = new CharClassification(null, special.Value);
             return KeyEvent.Special(type, special.Value, mods);
         }
 
@@ -60,15 +71,15 @@ internal sealed class XorgKeyResolver
         var ch = KeySymToChar(keysym);
         if (ch.HasValue)
         {
-            if (_pendingDeadKey != '\0')
+            if (pendingDeadKey != '\0')
             {
-                var pendingDead = _pendingDeadKey;
-                var spc = _pendingDeadSpacing;
-                _pendingDeadKey = '\0';
-                _pendingDeadSpacing = '\0';
-                ch = KeyResolver.ComposeOrSpacing(ch.Value, pendingDead, spc);
+                var pd = pendingDeadKey;
+                var spc = pendingDeadSpacing;
+                pendingDeadKey = '\0';
+                pendingDeadSpacing = '\0';
+                ch = KeyResolver.ComposeOrSpacing(ch.Value, pd, spc);
             }
-            _keyDownId[keycode] = new CharClassification(ch, null);
+            keyDownId[keycode] = new CharClassification(ch, null);
             return KeyEvent.Char(type, ch.Value, mods);
         }
 

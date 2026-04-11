@@ -222,6 +222,18 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void CFRelease(nint cf);
 
+    private static readonly nint KCFBooleanTrue = Marshal.ReadIntPtr(
+        NativeLibrary.GetExport(NativeLibrary.Load(CoreFoundation), "kCFBooleanTrue"));
+
+    // allow cursor manipulation from a background thread (private CGS API — matches synergy)
+    internal static void EnableBackgroundCursorManipulation()
+    {
+        var cid = CGSMainConnectionID();
+        var key = CFStringCreateWithCString(nint.Zero, "SetsCursorInBackground", KCFStringEncodingUtf8);
+        _ = CGSSetConnectionProperty(cid, cid, key, KCFBooleanTrue);
+        CFRelease(key);
+    }
+
     // -- CoreFoundation: data --
 
     [LibraryImport(CoreFoundation)]

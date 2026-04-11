@@ -11,7 +11,6 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
 {
     private readonly MacShieldProcess _shield = shield;
     private readonly uint _display = NativeMethods.CGMainDisplayID();
-    private readonly nint _cfBooleanTrue = GetCfBooleanTrue();
     private readonly MacKeyResolver _keyResolver = new();
 
     // stored as fields to prevent GC collection while the tap is active
@@ -53,11 +52,7 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
         _cursorHidden = true; // set before await so racing ShowCursor sees correct state
         await _shield.Show();
 
-        // allow cursor manipulation from background (private CGS API -- matches synergy)
-        var cid = NativeMethods.CGSMainConnectionID();
-        var key = NativeMethods.CFStringCreateWithCString(nint.Zero, "SetsCursorInBackground", NativeMethods.KCFStringEncodingUtf8);
-        _ = NativeMethods.CGSSetConnectionProperty(cid, cid, key, _cfBooleanTrue);
-        NativeMethods.CFRelease(key);
+        NativeMethods.EnableBackgroundCursorManipulation();
 
         if (!_shield.DebugShield)
             _ = NativeMethods.CGDisplayHideCursor(_display);
@@ -279,7 +274,6 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
     };
 
     private static nint GetCfRunLoopCommonModes() => ReadCoreFoundationSymbol("kCFRunLoopCommonModes");
-    private static nint GetCfBooleanTrue() => ReadCoreFoundationSymbol("kCFBooleanTrue");
 
     private static readonly nint CoreFoundation =
         NativeLibrary.Load("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation");

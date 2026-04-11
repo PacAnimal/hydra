@@ -666,18 +666,7 @@ public class InputRouter(
 
         var prevScreen = st.Mouse.ApplyDelta(dx, dy);
         if (prevScreen != null)
-        {
-            // intra-host screen transition: reset accumulators and send EnterScreen for new screen
-            st.PendingDx = 0;
-            st.PendingDy = 0;
-            if (relay.IsConnected && st.Mouse.CurrentScreen != null)
-            {
-                var s = st.Mouse.CurrentScreen;
-                var enterPayload = MessageSerializer.Encode(MessageKind.EnterScreen,
-                    new EnterScreenMessage(s.Name, (int)st.Mouse.X, (int)st.Mouse.Y, s.Width, s.Height));
-                _ = relay.Send([s.Host], enterPayload).AsTask();
-            }
-        }
+            HandleIntraHostTransition(st);
         else
         {
             // same screen — accumulate scaled deltas for throttle
@@ -767,6 +756,17 @@ public class InputRouter(
         st.LastWarpY = st.WarpY;
     }
 
+    private void HandleIntraHostTransition(LocalMasterState st)
+    {
+        st.PendingDx = 0;
+        st.PendingDy = 0;
+        if (!relay.IsConnected || st.Mouse.CurrentScreen == null) return;
+        var s = st.Mouse.CurrentScreen;
+        var payload = MessageSerializer.Encode(MessageKind.EnterScreen,
+            new EnterScreenMessage(s.Name, (int)st.Mouse.X, (int)st.Mouse.Y, s.Width, s.Height));
+        _ = relay.Send([s.Host], payload).AsTask();
+    }
+
     private void ReturnToLocalScreen(int x, int y)
     {
         platform.IsOnVirtualScreen = false;
@@ -812,18 +812,7 @@ public class InputRouter(
         var leavingScreen = st.Mouse.CurrentScreen!;
         var prevScreen = st.Mouse.ApplyDelta(dx, dy);
         if (prevScreen != null)
-        {
-            // intra-host screen transition
-            st.PendingDx = 0;
-            st.PendingDy = 0;
-            if (relay.IsConnected && st.Mouse.CurrentScreen != null)
-            {
-                var sc = st.Mouse.CurrentScreen;
-                var enterPayload = MessageSerializer.Encode(MessageKind.EnterScreen,
-                    new EnterScreenMessage(sc.Name, (int)st.Mouse.X, (int)st.Mouse.Y, sc.Width, sc.Height));
-                _ = relay.Send([sc.Host], enterPayload).AsTask();
-            }
-        }
+            HandleIntraHostTransition(st);
         else
         {
             // check for cross-host edge exit (cursor clamped at edge by ApplyDelta)

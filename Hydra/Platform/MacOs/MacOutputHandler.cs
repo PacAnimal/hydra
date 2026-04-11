@@ -42,12 +42,6 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
     private static readonly uint MachTaskSelf = (uint)Marshal.ReadInt32(
         NativeLibrary.GetExport(NativeLibrary.Load("/usr/lib/libSystem.B.dylib"), "mach_task_self_"));
 
-    // kCFBooleanTrue for CGSSetConnectionProperty("SetsCursorInBackground")
-    private static readonly nint CfBooleanTrue = Marshal.ReadIntPtr(
-        NativeLibrary.GetExport(
-            NativeLibrary.Load("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"),
-            "kCFBooleanTrue"));
-
     // combined session state source — used for mouse events and CGEvent fallback paths
     private static readonly nint EventSource = NativeMethods.CGEventSourceCreate(NativeMethods.KCGEventSourceStateCombinedSessionState);
 
@@ -454,11 +448,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
     public void HideCursor()
     {
         if (_cursorHidden) return;
-        // allow cursor manipulation from background (private CGS API — matches master + synergy)
-        var cid = NativeMethods.CGSMainConnectionID();
-        var key = NativeMethods.CFStringCreateWithCString(nint.Zero, "SetsCursorInBackground", NativeMethods.KCFStringEncodingUtf8);
-        _ = NativeMethods.CGSSetConnectionProperty(cid, cid, key, CfBooleanTrue);
-        NativeMethods.CFRelease(key);
+        NativeMethods.EnableBackgroundCursorManipulation();
         _ = NativeMethods.CGDisplayHideCursor(_display);
         _cursorHidden = true;
     }
