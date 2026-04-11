@@ -8,6 +8,13 @@ public sealed class MacClipboardSync : IClipboardSync
 
     private string? _lastSetText;
 
+    public MacClipboardSync()
+    {
+        // NSPasteboard lives in AppKit — must be loaded before objc_getClass can find it.
+        // Slaves don't open an event tap, so AppKit may not be loaded otherwise.
+        NativeLibrary.Load("/System/Library/Frameworks/AppKit.framework/AppKit");
+    }
+
     public string? GetText()
     {
         var pasteboard = GetGeneralPasteboard();

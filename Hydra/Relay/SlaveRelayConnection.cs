@@ -143,8 +143,10 @@ public class SlaveRelayConnection : RelayConnection
                 }
                 break;
             case MessageKind.ClipboardPull:
+                _log.LogDebug("Clipboard pull from {Host}", sourceHost);
                 var text = _clipboardSync.GetText();
                 var primary = _clipboardSync.GetPrimaryText();
+                _log.LogDebug("Pull response: text={TextLen}, primary={PrimaryLen}", text?.Length, primary?.Length);
                 var response = MessageSerializer.Encode(MessageKind.ClipboardPullResponse, new ClipboardPullResponseMessage(text, primary));
                 _ = Send([sourceHost], response).AsTask();
                 break;

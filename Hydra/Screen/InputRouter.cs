@@ -371,6 +371,7 @@ public class InputRouter(
 
     private void PullClipboardFromHost(string host)
     {
+        log.LogDebug("Pulling clipboard from {Host}", host);
         var payload = MessageSerializer.Encode(MessageKind.ClipboardPull, new { });
         _ = relay.Send([host], payload).AsTask();
     }
@@ -405,6 +406,8 @@ public class InputRouter(
                 var clip = json.FromSaneJson<ClipboardPullResponseMessage>();
                 if (clip != null)
                 {
+                    log.LogDebug("Clipboard pull response from {Host}: text={TextLen}, primary={PrimaryLen}",
+                        sourceHost, clip.Text?.Length, clip.PrimaryText?.Length);
                     if (clip.Text != null)
                         _clipboardSync.SetText(clip.Text);
                     if (clip.PrimaryText != null)
