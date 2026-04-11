@@ -1,5 +1,7 @@
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using ByteSizeLib;
 using Cathedral.Extensions;
 using Cathedral.Utils;
 using Hydra.Config;
@@ -41,7 +43,7 @@ public class InputRouter(
     private readonly IClipboardSync _clipboardSync = clipboardSync;
     private string? _lastReceivedPrimaryText;
 
-    private const int MaxClipboardTextChars = 1_000_000;
+    private static readonly long MaxClipboardBytes = (long)ByteSize.FromMebiBytes(16).Bytes;
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
@@ -347,9 +349,9 @@ public class InputRouter(
     private void PushClipboardToHost(string host)
     {
         var text = _clipboardSync.GetText();
-        if (text?.Length > MaxClipboardTextChars)
+        if (text != null && Encoding.UTF8.GetByteCount(text) > MaxClipboardBytes)
         {
-            log.LogWarning("Clipboard too large ({Length} chars), skipping sync", text.Length);
+            log.LogWarning("Clipboard text too large, skipping sync");
             text = null;
         }
 
@@ -358,14 +360,21 @@ public class InputRouter(
         if (peerPlatform == PeerPlatform.Linux)
         {
             primaryText = _clipboardSync.GetPrimaryText() ?? _lastReceivedPrimaryText;
-            if (primaryText?.Length > MaxClipboardTextChars)
+            if (primaryText != null && Encoding.UTF8.GetByteCount(primaryText) > MaxClipboardBytes)
                 primaryText = null;
         }
 
-        if (string.IsNullOrEmpty(text) && string.IsNullOrEmpty(primaryText))
+        var image = _clipboardSync.GetImagePng();
+        if (image?.Length > MaxClipboardBytes)
+        {
+            log.LogWarning("Clipboard image too large ({Length} bytes), skipping sync", image.Length);
+            image = null;
+        }
+
+        if (string.IsNullOrEmpty(text) && string.IsNullOrEmpty(primaryText) && image == null)
             return;
 
-        var payload = MessageSerializer.Encode(MessageKind.ClipboardPush, new ClipboardPushMessage(text ?? "", primaryText));
+        var payload = MessageSerializer.Encode(MessageKind.ClipboardPush, new ClipboardPushMessage(text ?? "", primaryText, image));
         _ = relay.Send([host], payload).AsTask();
     }
 
@@ -406,15 +415,11 @@ public class InputRouter(
                 var clip = json.FromSaneJson<ClipboardPullResponseMessage>();
                 if (clip != null)
                 {
-                    log.LogDebug("Clipboard pull response from {Host}: text={TextLen}, primary={PrimaryLen}",
-                        sourceHost, clip.Text?.Length, clip.PrimaryText?.Length);
-                    if (clip.Text != null)
-                        _clipboardSync.SetText(clip.Text);
+                    log.LogDebug("Clipboard pull response from {Host}: text={TextLen}, primary={PrimaryLen}, image={ImageLen}",
+                        sourceHost, clip.Text?.Length, clip.PrimaryText?.Length, clip.ImagePng?.Length);
                     if (clip.PrimaryText != null)
-                    {
                         _lastReceivedPrimaryText = clip.PrimaryText;
-                        _clipboardSync.SetPrimaryText(clip.PrimaryText);
-                    }
+                    _clipboardSync.SetClipboard(clip.Text, clip.PrimaryText, clip.ImagePng);
                     // if cursor is currently on a remote screen, forward the clipboard to it
                     using var s = await _state.WaitForDisposable();
                     var activeHost = s.Value.Mouse.CurrentScreen?.Host;

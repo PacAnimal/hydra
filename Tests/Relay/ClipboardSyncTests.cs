@@ -53,10 +53,10 @@ public class ClipboardSyncTests
     }
 
     [Test]
-    public async Task OnEnterRemoteScreen_OversizedClipboard_NoPushSent()
+    public async Task OnEnterRemoteScreen_OversizedText_NoPushSent()
     {
         var clipboard = new FakeClipboardSync();
-        clipboard.SetText(new string('x', 1_000_001));
+        clipboard.SetText(new string('x', 16 * 1024 * 1024 + 1)); // > 16 MiB UTF-8
 
         var (platform, relay, service) = CreateMasterService(clipboard);
         await service.StartAsync(CancellationToken.None);
@@ -291,6 +291,134 @@ public class ClipboardSyncTests
 
         Assert.That(clipboard.GetTextCallCount, Is.GreaterThan(before));
     }
+
+    // -- image clipboard sync --
+
+    [Test]
+    public async Task OnEnterRemoteScreen_PushesImageToSlave()
+    {
+        var png = MakeFakePng();
+        var clipboard = new FakeClipboardSync();
+        clipboard.SetupImage(png);
+
+        var (platform, relay, service) = CreateMasterService(clipboard);
+        await service.StartAsync(CancellationToken.None);
+        await TransitionTestHelper.BringRemoteOnline(relay);
+
+        platform.FireMouseMove(2559, 720);
+
+        var push = relay.Sent.Where(s => s.Kind == MessageKind.ClipboardPush).ToList();
+        Assert.That(push, Has.Count.EqualTo(1));
+        var msg = JsonSerializer.Deserialize<ClipboardPushMessage>(push[0].Json, SaneJson.Options);
+        Assert.That(msg?.ImagePng, Is.EqualTo(png));
+
+        await service.StopAsync(CancellationToken.None);
+        platform.Dispose();
+    }
+
+    [Test]
+    public async Task OnEnterRemoteScreen_OversizedImage_NoPushSent()
+    {
+        var clipboard = new FakeClipboardSync();
+        clipboard.SetupImage(new byte[16 * 1024 * 1024 + 1]); // > 16 MiB
+
+        var (platform, relay, service) = CreateMasterService(clipboard);
+        await service.StartAsync(CancellationToken.None);
+        await TransitionTestHelper.BringRemoteOnline(relay);
+
+        platform.FireMouseMove(2559, 720);
+
+        Assert.That(relay.Sent.Where(s => s.Kind == MessageKind.ClipboardPush), Is.Empty);
+
+        await service.StopAsync(CancellationToken.None);
+        platform.Dispose();
+    }
+
+    [Test]
+    public async Task OnEnterRemoteScreen_ImageAndText_BothInSamePush()
+    {
+        var png = MakeFakePng();
+        var clipboard = new FakeClipboardSync();
+        clipboard.SetText("alt text");
+        clipboard.SetupImage(png);
+
+        var (platform, relay, service) = CreateMasterService(clipboard);
+        await service.StartAsync(CancellationToken.None);
+        await TransitionTestHelper.BringRemoteOnline(relay);
+
+        platform.FireMouseMove(2559, 720);
+
+        var push = relay.Sent.Where(s => s.Kind == MessageKind.ClipboardPush).ToList();
+        Assert.That(push, Has.Count.EqualTo(1));
+        var msg = JsonSerializer.Deserialize<ClipboardPushMessage>(push[0].Json, SaneJson.Options);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(msg?.Text, Is.EqualTo("alt text"));
+            Assert.That(msg?.ImagePng, Is.EqualTo(png));
+        }
+
+        await service.StopAsync(CancellationToken.None);
+        platform.Dispose();
+    }
+
+    [Test]
+    public async Task OnClipboardPullResponse_SetsLocalImage()
+    {
+        var png = MakeFakePng();
+        var clipboard = new FakeClipboardSync();
+        var (platform, relay, service) = CreateMasterService(clipboard);
+        await service.StartAsync(CancellationToken.None);
+        await TransitionTestHelper.BringRemoteOnline(relay);
+
+        var response = new ClipboardPullResponseMessage(null, null, png);
+        await relay.FireMessageReceived("remote", MessageKind.ClipboardPullResponse,
+            JsonSerializer.Serialize(response, SaneJson.Options));
+
+        Assert.That(clipboard.ImagePng, Is.EqualTo(png));
+
+        await service.StopAsync(CancellationToken.None);
+        platform.Dispose();
+    }
+
+    [Test]
+    public async Task SlaveReceivesClipboardPush_SetsImage()
+    {
+        var png = MakeFakePng();
+        var clipboard = new FakeClipboardSync();
+        var slave = MakeTestableSlaveRelay(clipboard);
+
+        var push = new ClipboardPushMessage("", null, png);
+        await slave.SimulateReceive("master-pc", MessageKind.ClipboardPush,
+            JsonSerializer.Serialize(push, SaneJson.Options));
+
+        Assert.That(clipboard.ImagePng, Is.EqualTo(png));
+    }
+
+    [Test]
+    public async Task SlaveReceivesClipboardPull_CallsGetImagePng()
+    {
+        var png = MakeFakePng();
+        var clipboard = new FakeClipboardSync();
+        clipboard.SetupImage(png);
+
+        var slave = MakeTestableSlaveRelay(clipboard);
+        var before = clipboard.GetImagePngCallCount;
+
+        await slave.SimulateReceive("master-pc", MessageKind.ClipboardPull, "{}");
+
+        Assert.That(clipboard.GetImagePngCallCount, Is.GreaterThan(before));
+    }
+
+    // minimal valid-ish PNG bytes (just needs to be non-null and distinguishable)
+    private static byte[] MakeFakePng() =>
+    [
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // PNG signature
+        0x00, 0x00, 0x00, 0x0D,                          // IHDR length
+        0x49, 0x48, 0x44, 0x52,                          // "IHDR"
+        0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, // 1x1 pixel
+        0x08, 0x02, 0x00, 0x00, 0x00,                    // 8bit RGB
+        0x90, 0x77, 0x53, 0xDE,                          // CRC
+    ];
 
     // -- helpers --
 

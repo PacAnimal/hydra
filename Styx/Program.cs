@@ -1,3 +1,4 @@
+using ByteSizeLib;
 using Cathedral.Config;
 using Cathedral.Extensions;
 using Cathedral.Logging;
@@ -31,6 +32,7 @@ services.AddSignalR(options =>
     options.KeepAliveInterval = TimeSpan.FromSeconds(15);
     options.ClientTimeoutInterval = TimeSpan.FromSeconds(60);
     options.EnableDetailedErrors = true;
+    options.MaximumReceiveMessageSize = (long)ByteSize.FromMebiBytes(32).Bytes;
 }).AddJsonProtocol(hubOptions =>
 {
     SaneJson.Configure(hubOptions.PayloadSerializerOptions);

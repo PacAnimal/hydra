@@ -1,6 +1,7 @@
 using Hydra.Keyboard;
 using Hydra.Mouse;
 using Hydra.Relay;
+using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform.Linux;
 
@@ -11,8 +12,13 @@ public sealed class XorgOutputHandler : IPlatformOutput, ICursorVisibility
     private readonly int _screen;
     private readonly nint _rootWindow;
     private bool _disposed;
-    public XorgOutputHandler()
+    private readonly Queue<int> _unusedKeycodes = [];
+    private readonly Dictionary<ulong, int> _tempBindings = [];
+    private readonly ILogger<XorgOutputHandler> _log;
+
+    public XorgOutputHandler(ILogger<XorgOutputHandler> log)
     {
+        _log = log;
         _ = NativeMethods.XInitThreads();
         _display = NativeMethods.XOpenDisplay(null);
         if (_display == nint.Zero)
@@ -22,8 +28,30 @@ public sealed class XorgOutputHandler : IPlatformOutput, ICursorVisibility
         _rootWindow = NativeMethods.XDefaultRootWindow(_display);
         // allow XTest events during active grabs (e.g. fullscreen games)
         _ = NativeMethods.XTestGrabControl(_display, true);
+        FindUnusedKeycodes();
     }
 
+    private unsafe void FindUnusedKeycodes()
+    {
+        _ = NativeMethods.XDisplayKeycodes(_display, out var minKeycode, out var maxKeycode);
+        var count = maxKeycode - minKeycode + 1;
+        var map = NativeMethods.XGetKeyboardMapping(_display, (uint)minKeycode, count, out var keysymsPerKeycode);
+        if (map == nint.Zero) return;
+
+        var keysyms = (ulong*)map;
+        for (var i = 0; i < count; i++)
+        {
+            var allEmpty = true;
+            for (var j = 0; j < keysymsPerKeycode; j++)
+            {
+                if (keysyms[i * keysymsPerKeycode + j] != 0) { allEmpty = false; break; }
+            }
+            if (allEmpty)
+                _unusedKeycodes.Enqueue(minKeycode + i);
+        }
+
+        _ = NativeMethods.XFree(map);
+    }
 
     public void MoveMouse(int x, int y)
     {
@@ -97,9 +125,44 @@ public sealed class XorgOutputHandler : IPlatformOutput, ICursorVisibility
     private void InjectKeysym(ulong keysym, bool isDown)
     {
         var keycode = NativeMethods.XKeysymToKeycode(_display, keysym);
-        if (keycode == 0) return;
-        _ = NativeMethods.XTestFakeKeyEvent(_display, keycode, isDown, 0);
-        _ = NativeMethods.XFlush(_display);
+        if (keycode != 0)
+        {
+            _ = NativeMethods.XTestFakeKeyEvent(_display, keycode, isDown, 0);
+            _ = NativeMethods.XFlush(_display);
+            return;
+        }
+
+        // keysym has no keycode in the slave's layout — temporarily bind it to an unused keycode
+        if (isDown)
+        {
+            if (_unusedKeycodes.Count == 0)
+            {
+                _log.LogWarning("No unused keycodes available — dropping keysym 0x{Keysym:X}", keysym);
+                return;
+            }
+            // clear any existing binding for this keysym before creating a new one
+            if (_tempBindings.TryGetValue(keysym, out var stale))
+            {
+                _ = NativeMethods.XChangeKeyboardMapping(_display, stale, 1, [0UL], 1);
+                _ = NativeMethods.XSync(_display, false);
+                _unusedKeycodes.Enqueue(stale);
+            }
+            var tempKeycode = _unusedKeycodes.Dequeue();
+            _ = NativeMethods.XChangeKeyboardMapping(_display, tempKeycode, 1, [keysym], 1);
+            _ = NativeMethods.XSync(_display, false);
+            _ = NativeMethods.XTestFakeKeyEvent(_display, (uint)tempKeycode, true, 0);
+            _ = NativeMethods.XFlush(_display);
+            _tempBindings[keysym] = tempKeycode;
+        }
+        else
+        {
+            if (!_tempBindings.TryGetValue(keysym, out var tempKeycode)) return;
+            _ = NativeMethods.XTestFakeKeyEvent(_display, (uint)tempKeycode, false, 0);
+            _ = NativeMethods.XChangeKeyboardMapping(_display, tempKeycode, 1, [0UL], 1);
+            _ = NativeMethods.XSync(_display, false);
+            _unusedKeycodes.Enqueue(tempKeycode);
+            _tempBindings.Remove(keysym);
+        }
     }
 
     private static ulong SpecialKeyToKeysym(SpecialKey key)
@@ -145,6 +208,10 @@ public sealed class XorgOutputHandler : IPlatformOutput, ICursorVisibility
         _disposed = true;
         if (_display != nint.Zero)
         {
+            foreach (var tempKeycode in _tempBindings.Values)
+                _ = NativeMethods.XChangeKeyboardMapping(_display, tempKeycode, 1, [0UL], 1);
+            if (_tempBindings.Count > 0)
+                _ = NativeMethods.XSync(_display, false);
             if (_cursorHidden)
                 NativeMethods.XFixesShowCursor(_display, _rootWindow);
             _ = NativeMethods.XCloseDisplay(_display);

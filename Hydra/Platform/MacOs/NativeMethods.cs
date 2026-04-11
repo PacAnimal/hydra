@@ -319,10 +319,15 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial double objc_msgSend_double(nint obj, nint sel);
 
-    // receiver + selector + two nint args → nint (used for NSPasteboard setString:forType:)
+    // receiver + selector + two nint args → nint (used for NSPasteboard setString:forType: and setData:forType:)
     [LibraryImport(ObjC, EntryPoint = "objc_msgSend")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial nint objc_msgSend_2arg(nint obj, nint sel, nint arg1, nint arg2);
+
+    // receiver + selector + pointer + nuint → nint (used for [NSData dataWithBytes:length:])
+    [LibraryImport(ObjC, EntryPoint = "objc_msgSend")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static unsafe partial nint objc_msgSend_ptr_nuint(nint obj, nint sel, void* ptr, nuint length);
 
     [LibraryImport(CoreFoundation, EntryPoint = "CFStringGetCString")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]

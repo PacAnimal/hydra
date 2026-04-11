@@ -289,6 +289,24 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial uint XKeysymToKeycode(nint display, ulong keysym);
 
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int XDisplayKeycodes(nint display, out int minKeycodesReturn, out int maxKeycodesReturn);
+
+    // returns heap-allocated KeySym* (ulong array) of length keycodeCount * keysymsPerKeycode — caller must XFree
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint XGetKeyboardMapping(nint display, uint firstKeycode, int keycodeCount, out int keysymsPerKeycode);
+
+    // keysyms array length must equal keysymsPerKeycode * numCodes
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int XChangeKeyboardMapping(nint display, int firstKeycode, int keysymsPerKeycode, ulong[] keysyms, int numCodes);
+
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int XSync(nint display, [MarshalAs(UnmanagedType.Bool)] bool discard);
+
     // XkbUseCoreKbd = 0x0100 (use the core keyboard device)
     internal const uint XkbUseCoreKbd = 0x0100;
 

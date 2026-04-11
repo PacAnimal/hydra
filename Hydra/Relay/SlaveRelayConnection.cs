@@ -130,24 +130,20 @@ public class SlaveRelayConnection : RelayConnection
                 var push = json.FromSaneJson<ClipboardPushMessage>();
                 if (push != null)
                 {
-                    if (!string.IsNullOrEmpty(push.Text))
-                    {
-                        _log.LogDebug("Clipboard push from {Host}: {Length} chars", sourceHost, push.Text.Length);
-                        _clipboardSync.SetText(push.Text);
-                    }
-                    if (!string.IsNullOrEmpty(push.PrimaryText))
-                    {
-                        _log.LogDebug("Primary push from {Host}: {Length} chars", sourceHost, push.PrimaryText.Length);
-                        _clipboardSync.SetPrimaryText(push.PrimaryText);
-                    }
+                    _log.LogDebug("Clipboard push from {Host}: text={TextLen}, primary={PrimaryLen}, image={ImageLen}",
+                        sourceHost, push.Text.Length, push.PrimaryText?.Length, push.ImagePng?.Length);
+                    var pushText = string.IsNullOrEmpty(push.Text) ? null : push.Text;
+                    var pushPrimary = string.IsNullOrEmpty(push.PrimaryText) ? null : push.PrimaryText;
+                    _clipboardSync.SetClipboard(pushText, pushPrimary, push.ImagePng);
                 }
                 break;
             case MessageKind.ClipboardPull:
                 _log.LogDebug("Clipboard pull from {Host}", sourceHost);
                 var text = _clipboardSync.GetText();
                 var primary = _clipboardSync.GetPrimaryText();
-                _log.LogDebug("Pull response: text={TextLen}, primary={PrimaryLen}", text?.Length, primary?.Length);
-                var response = MessageSerializer.Encode(MessageKind.ClipboardPullResponse, new ClipboardPullResponseMessage(text, primary));
+                var image = _clipboardSync.GetImagePng();
+                _log.LogDebug("Pull response: text={TextLen}, primary={PrimaryLen}, image={ImageLen}", text?.Length, primary?.Length, image?.Length);
+                var response = MessageSerializer.Encode(MessageKind.ClipboardPullResponse, new ClipboardPullResponseMessage(text, primary, image));
                 _ = Send([sourceHost], response).AsTask();
                 break;
             default:

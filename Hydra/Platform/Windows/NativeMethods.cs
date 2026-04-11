@@ -291,7 +291,23 @@ internal static partial class NativeMethods
     // -- clipboard --
 
     internal const uint CF_UNICODETEXT = 13;
+    internal const uint CF_BITMAP = 2;
+    internal const uint CF_DIB = 8;
     internal const uint GMEM_MOVEABLE = 0x0002;
+    internal const uint GMEM_DDESHARE = 0x2000;
+
+    [LibraryImport(User32, EntryPoint = "RegisterClipboardFormatW", StringMarshalling = StringMarshalling.Utf16)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial uint RegisterClipboardFormat(string lpszFormat);
+
+    [LibraryImport(User32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool IsClipboardFormatAvailable(uint format);
+
+    [LibraryImport(Kernel32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial nuint GlobalSize(nint hMem);
 
     [LibraryImport(User32, SetLastError = true)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]

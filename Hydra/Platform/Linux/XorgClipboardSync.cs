@@ -17,23 +17,28 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
     private readonly nint _atomTargets;
     private readonly nint _atomUtf8String;
     private readonly nint _atomIncr;
-    private readonly nint _atomHydraClipboard; // property for CLIPBOARD ConvertSelection responses
-    private readonly nint _atomHydraPrimary;   // property for PRIMARY ConvertSelection responses
+    private readonly nint _atomImagePng;
+    private readonly nint _atomHydraClipboard;  // property for CLIPBOARD ConvertSelection responses
+    private readonly nint _atomHydraPrimary;    // property for PRIMARY ConvertSelection responses
+    private readonly nint _atomHydraImageClip;  // property for image ConvertSelection responses
 
-    // owned clipboard state (written by SetText/SetPrimaryText, read by event loop thread)
+    // owned clipboard state (written by Set*, read by event loop thread)
     private readonly Lock _dataLock = new();
     private string? _ownedText;
     private string? _ownedPrimaryText;
+    private byte[]? _ownedImagePng;
     private string? _lastSetText;
     private string? _lastSetPrimaryText;
+    private uint? _lastSetImageHash;
 
-    // GetText/GetPrimaryText synchronization — only one read in flight at a time
+    // GetText/GetImagePng synchronization — only one read in flight at a time
     private readonly Lock _getLock = new();
-    private volatile ManualResetEventSlim? _getTextSignal;
-    private volatile string? _getTextResult;
+    private volatile ManualResetEventSlim? _getSignal;
+    private volatile byte[]? _getResult;
     private volatile bool _fallbackToString; // true when UTF8_STRING failed, retrying with STRING
     private volatile nint _activeReadSelection; // selection atom being read
     private volatile nint _activeReadProperty;  // property atom being read
+    private volatile nint _activeReadTarget;    // target atom being read
 
     // INCR receive: accumulates chunks for a large clipboard read
     private MemoryStream? _incrReceiveBuffer;
@@ -61,8 +66,10 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
         _atomTargets = NativeMethods.XInternAtom(_display, "TARGETS", false);
         _atomUtf8String = NativeMethods.XInternAtom(_display, "UTF8_STRING", false);
         _atomIncr = NativeMethods.XInternAtom(_display, "INCR", false);
+        _atomImagePng = NativeMethods.XInternAtom(_display, "image/png", false);
         _atomHydraClipboard = NativeMethods.XInternAtom(_display, "HYDRA_CLIPBOARD", false);
         _atomHydraPrimary = NativeMethods.XInternAtom(_display, "HYDRA_PRIMARY", false);
+        _atomHydraImageClip = NativeMethods.XInternAtom(_display, "HYDRA_IMAGE_CLIP", false);
 
         _running = true;
         _eventThread = new Thread(EventLoop) { IsBackground = true, Name = "HydraClipboardEventLoop" };
@@ -74,21 +81,41 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
         // fast path: we own the clipboard — return null to prevent re-syncing our own write
         if (NativeMethods.XGetSelectionOwner(_display, _atomClipboard) == _window)
             return null;
-        return ReadSelection(_atomClipboard, _atomHydraClipboard, _lastSetText);
+        var bytes = ReadSelectionBytes(_atomClipboard, _atomHydraClipboard, _atomUtf8String);
+        if (bytes == null) return null;
+        var text = Encoding.UTF8.GetString(bytes);
+        return text == _lastSetText ? null : text;
     }
 
     public string? GetPrimaryText()
     {
         if (NativeMethods.XGetSelectionOwner(_display, NativeMethods.XA_PRIMARY) == _window)
             return null;
-        return ReadSelection(NativeMethods.XA_PRIMARY, _atomHydraPrimary, _lastSetPrimaryText);
+        var bytes = ReadSelectionBytes(NativeMethods.XA_PRIMARY, _atomHydraPrimary, _atomUtf8String);
+        if (bytes == null) return null;
+        var text = Encoding.UTF8.GetString(bytes);
+        return text == _lastSetPrimaryText ? null : text;
+    }
+
+    public byte[]? GetImagePng()
+    {
+        if (NativeMethods.XGetSelectionOwner(_display, _atomClipboard) == _window)
+            return null;
+        var bytes = ReadSelectionBytes(_atomClipboard, _atomHydraImageClip, _atomImagePng);
+        if (bytes == null) return null;
+        if (_lastSetImageHash.HasValue && ClipboardUtils.QuickHash(bytes) == _lastSetImageHash.Value)
+            return null;
+        return bytes;
     }
 
     public void SetText(string text)
     {
         _lastSetText = text;
         lock (_dataLock)
+        {
             _ownedText = text;
+            _ownedImagePng = null; // replacing clipboard content
+        }
         _ = NativeMethods.XSetSelectionOwner(_display, _atomClipboard, _window, NativeMethods.CurrentTime);
         _ = NativeMethods.XFlush(_display);
     }
@@ -102,10 +129,51 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
         _ = NativeMethods.XFlush(_display);
     }
 
+    public void SetImagePng(byte[] pngData)
+    {
+        _lastSetImageHash = ClipboardUtils.QuickHash(pngData);
+        lock (_dataLock)
+        {
+            _ownedImagePng = pngData;
+            _ownedText = null; // replacing clipboard content
+        }
+        _ = NativeMethods.XSetSelectionOwner(_display, _atomClipboard, _window, NativeMethods.CurrentTime);
+        _ = NativeMethods.XFlush(_display);
+    }
+
+    public void SetClipboard(string? text, string? primaryText, byte[]? imagePng)
+    {
+        if (text == null && primaryText == null && imagePng == null) return;
+
+        if (text != null) _lastSetText = text;
+        if (imagePng != null) _lastSetImageHash = ClipboardUtils.QuickHash(imagePng);
+
+        lock (_dataLock)
+        {
+            if (text != null) _ownedText = text;
+            if (imagePng != null) _ownedImagePng = imagePng;
+            // only clear the other field if we're setting something exclusive
+            if (text != null && imagePng == null) _ownedImagePng = null;
+            if (imagePng != null && text == null) _ownedText = null;
+        }
+
+        _ = NativeMethods.XSetSelectionOwner(_display, _atomClipboard, _window, NativeMethods.CurrentTime);
+        _ = NativeMethods.XFlush(_display);
+
+        if (primaryText != null)
+        {
+            _lastSetPrimaryText = primaryText;
+            lock (_dataLock)
+                _ownedPrimaryText = primaryText;
+            _ = NativeMethods.XSetSelectionOwner(_display, NativeMethods.XA_PRIMARY, _window, NativeMethods.CurrentTime);
+            _ = NativeMethods.XFlush(_display);
+        }
+    }
+
     public void Dispose()
     {
         _running = false;
-        SignalGetText(); // unblock any waiting GetText
+        SignalGet(); // unblock any waiting read
         _eventThread?.Join(TimeSpan.FromSeconds(2));
         _eventThread = null;
 
@@ -151,7 +219,7 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
                     var sel = ev.SelectionClearSelection;
                     lock (_dataLock)
                     {
-                        if (sel == _atomClipboard) _ownedText = null;
+                        if (sel == _atomClipboard) { _ownedText = null; _ownedImagePng = null; }
                         else if (sel == NativeMethods.XA_PRIMARY) _ownedPrimaryText = null;
                     }
                     break;
@@ -195,10 +263,31 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
     {
         if (target == _atomTargets)
         {
-            var atoms = new[] { _atomTargets, _atomUtf8String, NativeMethods.XA_STRING };
+            var atoms = new List<nint> { _atomTargets, _atomUtf8String, NativeMethods.XA_STRING };
+            bool hasImage;
+            lock (_dataLock)
+                hasImage = selection == _atomClipboard && _ownedImagePng != null;
+            if (hasImage) atoms.Add(_atomImagePng);
+
             _ = NativeMethods.XChangeProperty(_display, requestor, property,
-                NativeMethods.XA_ATOM, 32, NativeMethods.PropModeReplace, atoms, atoms.Length);
+                NativeMethods.XA_ATOM, 32, NativeMethods.PropModeReplace, atoms.ToArray(), atoms.Count);
             return property;
+        }
+
+        if (target == _atomImagePng)
+        {
+            byte[]? img;
+            lock (_dataLock)
+                img = selection == _atomClipboard ? _ownedImagePng : null;
+            if (img == null) return nint.Zero;
+
+            if (img.Length <= MaxPropertyBytes)
+            {
+                _ = NativeMethods.XChangeProperty(_display, requestor, property,
+                    _atomImagePng, 8, NativeMethods.PropModeReplace, img, img.Length);
+                return property;
+            }
+            return StartIncrSend(requestor, property, _atomImagePng, img);
         }
 
         if (target != _atomUtf8String && target != NativeMethods.XA_STRING)
@@ -255,35 +344,37 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
         send.Offset += chunkSize;
     }
 
-    // -- reading data from another app (GetText/GetPrimaryText path) --
+    // -- reading data from another app --
 
-    private string? ReadSelection(nint selectionAtom, nint propertyAtom, string? lastSetText)
+    // returns raw bytes for the selection, or null on failure/timeout
+    private byte[]? ReadSelectionBytes(nint selectionAtom, nint propertyAtom, nint targetAtom)
     {
         lock (_getLock)
         {
-            _getTextResult = null;
+            _getResult = null;
             _fallbackToString = false;
             _activeReadSelection = selectionAtom;
             _activeReadProperty = propertyAtom;
+            _activeReadTarget = targetAtom;
             using var signal = new ManualResetEventSlim(false);
-            _getTextSignal = signal;
+            _getSignal = signal;
             try
             {
-                _ = NativeMethods.XConvertSelection(_display, selectionAtom, _atomUtf8String,
+                _ = NativeMethods.XConvertSelection(_display, selectionAtom, targetAtom,
                     propertyAtom, _window, NativeMethods.CurrentTime);
                 _ = NativeMethods.XFlush(_display);
 
                 if (!signal.Wait(ClipboardTimeoutMs))
                     return null;
 
-                var text = _getTextResult;
-                return text == lastSetText ? null : text;
+                return _getResult;
             }
             finally
             {
-                _getTextSignal = null;
+                _getSignal = null;
                 _activeReadSelection = nint.Zero;
                 _activeReadProperty = nint.Zero;
+                _activeReadTarget = nint.Zero;
             }
         }
     }
@@ -295,21 +386,22 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
             return;
 
         var propertyAtom = _activeReadProperty;
+        var targetAtom = _activeReadTarget;
 
         if (ev.SelectionNotifyProperty == nint.Zero)
         {
-            // conversion failed — try STRING fallback once
-            if (!_fallbackToString)
+            // conversion failed — try STRING fallback once (text only)
+            if (_fallbackToString || targetAtom != _atomUtf8String)
+            {
+                _getResult = null;
+                SignalGet();
+            }
+            else
             {
                 _fallbackToString = true;
                 _ = NativeMethods.XConvertSelection(_display, activeSelection, NativeMethods.XA_STRING,
                     propertyAtom, _window, NativeMethods.CurrentTime);
                 _ = NativeMethods.XFlush(_display);
-            }
-            else
-            {
-                _getTextResult = null;
-                SignalGetText();
             }
             return;
         }
@@ -321,8 +413,8 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
 
         if (rc != 0)
         {
-            _getTextResult = null;
-            SignalGetText();
+            _getResult = null;
+            SignalGet();
             return;
         }
 
@@ -334,16 +426,17 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
             return;
         }
 
-        string? text = null;
+        byte[]? result = null;
         if (nitems != nint.Zero && prop != nint.Zero)
         {
             var byteCount = (int)nitems * (format / 8);
-            text = Marshal.PtrToStringUTF8(prop, byteCount);
+            result = new byte[byteCount];
+            Marshal.Copy(prop, result, 0, byteCount);
         }
         if (prop != nint.Zero) _ = NativeMethods.XFree(prop);
 
-        _getTextResult = text;
-        SignalGetText();
+        _getResult = result;
+        SignalGet();
     }
 
     private void HandlePropertyNotify(ref XEvent ev)
@@ -371,8 +464,8 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
 
     private void HandleIncrReceiveChunk()
     {
-        // GetText timed out — discard remaining chunks and clean up
-        if (_getTextSignal == null)
+        // read timed out — discard remaining chunks and clean up
+        if (_getSignal == null)
         {
             _incrReceiveBuffer?.Dispose();
             _incrReceiveBuffer = null;
@@ -395,8 +488,7 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
         {
             // zero-length chunk = end of transfer
             if (prop != nint.Zero) _ = NativeMethods.XFree(prop);
-            var text = Encoding.UTF8.GetString(_incrReceiveBuffer!.ToArray());
-            FinishIncrReceive(text);
+            FinishIncrReceive(_incrReceiveBuffer!.ToArray());
             return;
         }
 
@@ -407,18 +499,18 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
         _incrReceiveBuffer!.Write(chunk);
     }
 
-    private void FinishIncrReceive(string? text)
+    private void FinishIncrReceive(byte[]? result)
     {
         _incrReceiveBuffer?.Dispose();
         _incrReceiveBuffer = null;
-        _getTextResult = text;
-        SignalGetText();
+        _getResult = result;
+        SignalGet();
     }
 
-    // safe to call from event loop — the MRE may already be disposed if GetText timed out
-    private void SignalGetText()
+    // safe to call from event loop — the MRE may already be disposed if read timed out
+    private void SignalGet()
     {
-        try { _getTextSignal?.Set(); }
+        try { _getSignal?.Set(); }
         catch (ObjectDisposedException) { }
     }
 
