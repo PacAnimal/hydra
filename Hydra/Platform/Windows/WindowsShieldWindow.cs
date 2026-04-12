@@ -78,9 +78,12 @@ internal sealed class WindowsShieldWindow
 
         NativeMethods.SetActiveWindow(_hwnd);
         NativeMethods.SetForegroundWindow(_hwnd);
+    }
 
-        if (!_debugShield)
-            HideCursorCounter();
+    // called inline from HideCursor() — fast counter op, safe inside a hook callback
+    internal void HideCursorNow()
+    {
+        if (!_debugShield) HideCursorCounter();
     }
 
     internal void Hide()
@@ -103,12 +106,6 @@ internal sealed class WindowsShieldWindow
         if (_cursorHidden) ShowCursorCounter();
         if (_hwnd != nint.Zero) { NativeMethods.DestroyWindow(_hwnd); _hwnd = nint.Zero; }
         if (_debugBrush != nint.Zero) { NativeMethods.DeleteObject(_debugBrush); _debugBrush = nint.Zero; }
-    }
-
-    // called directly from HideCursor() so it fires before the first WarpCursor call
-    internal void HideCursorNow()
-    {
-        if (!_debugShield) HideCursorCounter();
     }
 
     // loop until display counter goes negative (cursor hidden)
