@@ -17,10 +17,10 @@ public class TempFileManager : IDisposable
     private readonly string _baseDir;
     private readonly Lock _lock = new();
 
-    public TempFileManager(ILogger<TempFileManager> log)
+    public TempFileManager(ILogger<TempFileManager> log, string? basePath = null)
     {
         _log = log;
-        _baseDir = Path.Combine(Path.GetTempPath(), "Hydra", "clipboard-files");
+        _baseDir = basePath ?? Path.Combine(Path.GetTempPath(), "Hydra", "clipboard-files");
         _log.LogInformation("Clipboard temp directory: {Path}", _baseDir);
         Cleanup(); // clean up leftovers from previous runs
     }

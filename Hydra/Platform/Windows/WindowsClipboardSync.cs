@@ -140,7 +140,11 @@ public sealed class WindowsClipboardSync(ILogger<WindowsClipboardSync> log) : IC
 
     public List<string>? GetFilePaths()
     {
-        if (!NativeMethods.IsClipboardFormatAvailable(NativeMethods.CF_HDROP)) return null;
+        if (!NativeMethods.IsClipboardFormatAvailable(NativeMethods.CF_HDROP))
+        {
+            _log.LogDebug("CF_HDROP not available on clipboard");
+            return null;
+        }
         if (!OpenClipboard()) return null;
         try
         {
@@ -173,6 +177,7 @@ public sealed class WindowsClipboardSync(ILogger<WindowsClipboardSync> log) : IC
             if (_lastSetFilePaths != null && paths.Count == _lastSetFilePaths.Count && paths.All(p => _lastSetFilePaths.Contains(p)))
                 return null;
 
+            _log.LogDebug("GetFilePaths: {Count} path(s) from clipboard", paths.Count);
             return paths.Count > 0 ? paths : null;
         }
         finally
@@ -226,10 +231,11 @@ public sealed class WindowsClipboardSync(ILogger<WindowsClipboardSync> log) : IC
 
         if (NativeMethods.SetClipboardData(NativeMethods.CF_HDROP, hMem) == nint.Zero)
         {
-            _log.LogWarning("SetClipboardData(CF_HDROP) failed for {Count} path(s)", paths.Count);
+            _log.LogWarning("SetClipboardData(CF_HDROP) failed for {Count} path(s) (error {Error})", paths.Count, Marshal.GetLastWin32Error());
             NativeMethods.GlobalFree(hMem);
             return;
         }
+        _log.LogDebug("WriteFilesToOpenClipboard: set {Count} path(s)", paths.Count);
 
         // Preferred DropEffect tells Explorer this is a Copy, not a Move
         var hEffect = NativeMethods.GlobalAlloc(NativeMethods.GMEM_MOVEABLE | NativeMethods.GMEM_DDESHARE, 4);
