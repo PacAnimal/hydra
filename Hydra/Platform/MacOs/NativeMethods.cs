@@ -31,8 +31,8 @@ internal static partial class NativeMethods
 
     // CGEventField values for mouse click state, movement deltas, and button number
     internal const int KCGMouseEventClickState = 1;
-    internal const int KCGMouseEventDeltaX = 5;
-    internal const int KCGMouseEventDeltaY = 6;
+    internal const int KCGMouseEventDeltaX = 4;
+    internal const int KCGMouseEventDeltaY = 5;
     internal const int KCGMouseEventButtonNumber = 3;
     internal const int KCGScrollWheelEventDeltaAxis1 = 11;        // integer line delta, vertical (positive = up)
     internal const int KCGScrollWheelEventDeltaAxis2 = 12;        // integer line delta, horizontal (positive = right)
@@ -358,9 +358,9 @@ internal static partial class NativeMethods
     private const string IOKit = "/System/Library/Frameworks/IOKit.framework/IOKit";
 
     // NX event types (IOLLEvent.h) — same numeric values as the CG equivalents
-    internal const uint NxFlagsChanged = 12;
     internal const uint NxKeyDown = 10;
     internal const uint NxKeyUp = 11;
+    internal const uint NxFlagsChanged = 12;
 
     // kNXEventDataVersion (IOLLEvent.h)
     internal const uint KNxEventDataVersion = 2;

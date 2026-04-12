@@ -21,6 +21,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
     private double _lastSingleClickX;
     private double _lastSingleClickY;
     private bool _cursorHidden;
+    private bool _mousePositionInitialized;
 
     // accumulated modifier state — updated on each modifier keydown/up
     private ulong _modifierFlags;        // generic CGEventFlag masks (e.g. kCGEventFlagMaskCommand)
@@ -42,7 +43,8 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
     private static readonly uint MachTaskSelf = (uint)Marshal.ReadInt32(
         NativeLibrary.GetExport(NativeLibrary.Load("/usr/lib/libSystem.B.dylib"), "mach_task_self_"));
 
-    // combined session state source — used for mouse events and CGEvent fallback paths
+    // combined session state source — used only for keyboard CGEvent fallback paths.
+    // mouse events use nint.Zero (null source) so system UI does not filter them as synthetic.
     private static readonly nint EventSource = NativeMethods.CGEventSourceCreate(NativeMethods.KCGEventSourceStateCombinedSessionState);
 
     private static readonly double DoubleClickMaxDist = Math.Sqrt(2) + 0.0001;
@@ -53,16 +55,26 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
 
     public void MoveMouse(int x, int y)
     {
+        var dx = _mousePositionInitialized ? x - _mouseX : 0.0;
+        var dy = _mousePositionInitialized ? y - _mouseY : 0.0;
         _mouseX = x;
         _mouseY = y;
+        _mousePositionInitialized = true;
         var pos = new CGPoint { X = x, Y = y };
 
         // post a real event so apps and OS features (dock, hot corners) see the movement.
         // use drag event type when a button is held, otherwise plain moved
         var move = GetMoveEventType();
 
-        var eventRef = NativeMethods.CGEventCreateMouseEvent(EventSource, move.EventType, pos, move.Button);
+        var eventRef = NativeMethods.CGEventCreateMouseEvent(nint.Zero, move.EventType, pos, move.Button);
         if (eventRef == nint.Zero) return;
+        NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGMouseEventClickState, _clickState);
+        NativeMethods.CGEventSetFlags(eventRef, _modifierFlags);
+        // delta fields needed for drag operations (e.g. screenshot overlay resize)
+        NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGMouseEventDeltaX, (long)dx);
+        NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGMouseEventDeltaY, (long)dy);
+        NativeMethods.CGEventSetDoubleValueField(eventRef, NativeMethods.KCGMouseEventDeltaX, dx);
+        NativeMethods.CGEventSetDoubleValueField(eventRef, NativeMethods.KCGMouseEventDeltaY, dy);
         NativeMethods.CGEventPost(NativeMethods.KCGHidEventTap, eventRef);
         NativeMethods.CFRelease(eventRef);
     }
@@ -89,8 +101,10 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
 
         var move = GetMoveEventType();
 
-        var eventRef = NativeMethods.CGEventCreateMouseEvent(EventSource, move.EventType, pos, move.Button);
+        var eventRef = NativeMethods.CGEventCreateMouseEvent(nint.Zero, move.EventType, pos, move.Button);
         if (eventRef == nint.Zero) return;
+        NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGMouseEventClickState, _clickState);
+        NativeMethods.CGEventSetFlags(eventRef, _modifierFlags);
         // set integer AND double delta fields — some 3D apps/games read the double variant (barrier comment)
         NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGMouseEventDeltaX, dx);
         NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGMouseEventDeltaY, dy);
@@ -167,13 +181,14 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
         UpdateClickState(msg.IsPressed);
 
         var pos = new CGPoint { X = _mouseX, Y = _mouseY };
-        var eventRef = NativeMethods.CGEventCreateMouseEvent(EventSource, mouseType, pos, mouseButton);
+        var eventRef = NativeMethods.CGEventCreateMouseEvent(nint.Zero, mouseType, pos, mouseButton);
         if (eventRef == nint.Zero) return;
 
         if (msg.Button is not MouseButton.Left and not MouseButton.Right)
             NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGMouseEventButtonNumber, mouseButton);
 
         NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGMouseEventClickState, _clickState);
+        NativeMethods.CGEventSetFlags(eventRef, _modifierFlags);
 
         NativeMethods.CGEventPost(NativeMethods.KCGHidEventTap, eventRef);
         NativeMethods.CFRelease(eventRef);
@@ -185,7 +200,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
 
         // wire format: 120 = 1 line. convert to integer line counts for the event constructor.
         // kCGScrollEventUnitLine = 1
-        var eventRef = NativeMethods.CGEventCreateScrollWheelEvent(EventSource, 1, 2, msg.YDelta / 120, msg.XDelta / 120);
+        var eventRef = NativeMethods.CGEventCreateScrollWheelEvent(nint.Zero, 1, 2, msg.YDelta / 120, msg.XDelta / 120);
         if (eventRef == nint.Zero) return;
 
         // set 16.16 fixed-point line deltas for sub-line precision (reverses input handler's fpDelta * 120 >> 16)
