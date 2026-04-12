@@ -342,11 +342,6 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     internal static partial nint GetModuleHandleW(nint lpModuleName);
 
-    // win32 ShowCursor returns int (the new display counter); renamed to avoid clash with IPlatformInput.ShowCursor
-    [LibraryImport(User32, EntryPoint = "ShowCursor")]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
-    internal static partial int ShowCursorWin32([MarshalAs(UnmanagedType.Bool)] bool bShow);
-
     // -- gdi --
 
     private const string Gdi32 = "gdi32.dll";

@@ -13,7 +13,7 @@ internal sealed class WindowsShieldWindow
     private WndProc? _wndProc; // prevent GC while window exists
     private nint _debugBrush;
     private bool _debugShield;
-    private bool _cursorHidden;
+    private readonly WindowsCursorSnapshot _cursor = new();
 
     internal void Create(bool debugShield)
     {
@@ -80,17 +80,17 @@ internal sealed class WindowsShieldWindow
         NativeMethods.SetForegroundWindow(_hwnd);
     }
 
-    // called inline from HideCursor() — fast counter op, safe inside a hook callback
+    // called inline from HideCursor() — SetSystemCursor is system-wide, safe inside a hook callback
     internal void HideCursorNow()
     {
-        if (!_debugShield) HideCursorCounter();
+        if (!_debugShield) _cursor.Hide();
     }
 
     internal void Hide()
     {
         if (_hwnd == nint.Zero) return;
 
-        ShowCursorCounter();
+        _cursor.Show();
 
         NativeMethods.ShowWindow(_hwnd, NativeMethods.SW_HIDE);
         NativeMethods.SetWindowPos(_hwnd, NativeMethods.HWND_BOTTOM, 0, 0, 0, 0,
@@ -103,27 +103,9 @@ internal sealed class WindowsShieldWindow
 
     internal void Destroy()
     {
-        if (_cursorHidden) ShowCursorCounter();
+        _cursor.Dispose();
         if (_hwnd != nint.Zero) { NativeMethods.DestroyWindow(_hwnd); _hwnd = nint.Zero; }
         if (_debugBrush != nint.Zero) { NativeMethods.DeleteObject(_debugBrush); _debugBrush = nint.Zero; }
-    }
-
-    // loop until display counter goes negative (cursor hidden)
-    private void HideCursorCounter()
-    {
-        if (_cursorHidden) return;
-        for (var i = 0; i < 10; i++)
-            if (NativeMethods.ShowCursorWin32(false) < 0) break;
-        _cursorHidden = true;
-    }
-
-    // loop until display counter is non-negative (cursor visible)
-    private void ShowCursorCounter()
-    {
-        if (!_cursorHidden) return;
-        for (var i = 0; i < 10; i++)
-            if (NativeMethods.ShowCursorWin32(true) >= 0) break;
-        _cursorHidden = false;
     }
 
     private nint WndProcImpl(nint hWnd, uint msg, nint wParam, nint lParam)
