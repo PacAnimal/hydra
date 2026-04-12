@@ -4,7 +4,7 @@ namespace Hydra.Platform.MacOs;
 
 // equivalent to @autoreleasepool {} — drains autoreleased ObjC objects deterministically
 // on threadpool threads that have no implicit pool.
-internal readonly struct ObjcAutoreleasePool : IDisposable
+internal readonly partial struct ObjcAutoreleasePool : IDisposable
 {
     private readonly nint _context;
 
@@ -20,10 +20,10 @@ internal readonly struct ObjcAutoreleasePool : IDisposable
     }
 
     // ReSharper disable InconsistentNaming
-    [DllImport("libobjc.dylib")]
-    private static extern nint objc_autoreleasePoolPush();
+    [LibraryImport("libobjc.dylib")]
+    private static partial nint objc_autoreleasePoolPush();
 
-    [DllImport("libobjc.dylib")]
-    private static extern void objc_autoreleasePoolPop(nint context);
+    [LibraryImport("libobjc.dylib")]
+    private static partial void objc_autoreleasePoolPop(nint context);
     // ReSharper restore InconsistentNaming
 }
