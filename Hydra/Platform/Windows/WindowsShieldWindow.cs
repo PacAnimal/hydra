@@ -64,7 +64,9 @@ internal sealed class WindowsShieldWindow
     {
         if (_hwnd == nint.Zero) return;
 
+        // don't show while a fullscreen app (e.g. a game) is active — avoid anti-cheat detection
         _savedForeground = NativeMethods.GetForegroundWindow();
+        if (IsFullscreenAppActive(_savedForeground)) return;
 
         // match mac shield: centered on main screen, 20% of screen dimensions
         var sw = NativeMethods.GetSystemMetrics(NativeMethods.SM_CXSCREEN);
@@ -106,6 +108,16 @@ internal sealed class WindowsShieldWindow
         _cursor.Dispose();
         if (_hwnd != nint.Zero) { NativeMethods.DestroyWindow(_hwnd); _hwnd = nint.Zero; }
         if (_debugBrush != nint.Zero) { NativeMethods.DeleteObject(_debugBrush); _debugBrush = nint.Zero; }
+    }
+
+    // foreground window covers the full primary screen — likely a fullscreen game or exclusive app
+    private static bool IsFullscreenAppActive(nint hwnd)
+    {
+        if (hwnd == nint.Zero) return false;
+        if (!NativeMethods.GetWindowRect(hwnd, out var rect)) return false;
+        var sw = NativeMethods.GetSystemMetrics(NativeMethods.SM_CXSCREEN);
+        var sh = NativeMethods.GetSystemMetrics(NativeMethods.SM_CYSCREEN);
+        return rect.Left <= 0 && rect.Top <= 0 && rect.Right >= sw && rect.Bottom >= sh;
     }
 
     private nint WndProcImpl(nint hWnd, uint msg, nint wParam, nint lParam)

@@ -363,6 +363,11 @@ internal static partial class NativeMethods
 
     [LibraryImport(User32)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool GetWindowRect(nint hWnd, out WINRECT lpRect);
+
+    [LibraryImport(User32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     internal static partial uint GetWindowThreadProcessId(nint hWnd, out uint lpdwProcessId);
 
     // low word: toggle state (bit 0); high word: pressed state (bit 15)
