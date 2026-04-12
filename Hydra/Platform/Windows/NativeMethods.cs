@@ -506,6 +506,18 @@ internal static partial class NativeMethods
     [LibraryImport(Shell32, EntryPoint = "DragQueryFileW")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     internal static unsafe partial uint DragQueryFileW(nint hDrop, uint iFile, char* lpszFile, uint cch);
+
+    // -- OLE (required for clipboard interop with Explorer) --
+
+    private const string Ole32 = "ole32.dll";
+
+    [LibraryImport(Ole32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial int OleInitialize(nint pvReserved);
+
+    [LibraryImport(Ole32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial void OleUninitialize();
 }
 
 [UnmanagedFunctionPointer(CallingConvention.StdCall)]

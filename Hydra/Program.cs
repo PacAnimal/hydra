@@ -226,10 +226,11 @@ if (config != null)
         services.AddSingleton<IClipboardSync, XorgClipboardSync>();
     else
         services.AddSingleton<IClipboardSync, NullClipboardSync>();
-    // use a shared, user-accessible path when running as service child (process token is SYSTEM,
-    // so Path.GetTempPath() resolves to SYSTEM's temp which Explorer can't access for paste)
+    // when running as service child, the process token is SYSTEM so Path.GetTempPath() resolves
+    // to SYSTEM's temp dir. read %TEMP% from the environment instead — it was set from the user
+    // token's profile when the child was launched via CreateProcessAsUser + CreateEnvironmentBlock.
     var tempBasePath = OperatingSystem.IsWindows() && RunMode.IsSessionChild
-        ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Hydra", "clipboard-files")
+        ? Path.Combine(Environment.GetEnvironmentVariable("TEMP") ?? Path.GetTempPath(), "Hydra", "clipboard-files")
         : null;
     services.AddSingleton(sp => new TempFileManager(sp.GetRequiredService<ILogger<TempFileManager>>(), tempBasePath));
 

@@ -140,11 +140,47 @@ public sealed class WindowsClipboardSync(ILogger<WindowsClipboardSync> log) : IC
 
     public List<string>? GetFilePaths()
     {
+        // Explorer places files via OLE clipboard. Windows auto-synthesises text/bitmap formats
+        // at the Win32 level but CF_HDROP is NOT synthesised — it requires the OLE bridge, which
+        // only works when COM/OLE is initialised on the calling thread. Thread-pool threads are MTA
+        // and have no OLE; we fall back to a temporary STA thread with OleInitialize in that case.
         if (!NativeMethods.IsClipboardFormatAvailable(NativeMethods.CF_HDROP))
         {
-            _log.LogDebug("CF_HDROP not available on clipboard");
-            return null;
+            _log.LogDebug("CF_HDROP not available via Win32; retrying on OLE-initialised STA thread");
+            return GetFilePathsOnStaThread();
         }
+
+        return ReadFilePathsFromOpenClipboard();
+    }
+
+    private List<string>? GetFilePathsOnStaThread()
+    {
+        List<string>? result = null;
+        var t = new Thread(() =>
+        {
+            // ReSharper disable once MustUseReturnValue
+            _ = NativeMethods.OleInitialize(nint.Zero);
+            try
+            {
+                if (NativeMethods.IsClipboardFormatAvailable(NativeMethods.CF_HDROP))
+                    result = ReadFilePathsFromOpenClipboard();
+                else
+                    _log.LogDebug("CF_HDROP still not available after OLE init");
+            }
+            finally
+            {
+                NativeMethods.OleUninitialize();
+            }
+        })
+        { IsBackground = true, Name = "HydraClipboardSta" };
+        t.SetApartmentState(ApartmentState.STA);
+        t.Start();
+        t.Join();
+        return result;
+    }
+
+    private List<string>? ReadFilePathsFromOpenClipboard()
+    {
         if (!OpenClipboard()) return null;
         try
         {
