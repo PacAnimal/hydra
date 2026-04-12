@@ -29,11 +29,6 @@ public class SlaveRelayConnection : RelayConnection
     // fallback clipboard when Get* returns null because we own the selection (echo suppression)
     private ClipboardSnapshot? _lastPushed;
 
-    private const int MouseLogIntervalMs = 100;
-
-    // throttle mouse receive debug logging
-    private long _lastMoveLogTick;
-
     // ReSharper disable once ConvertToPrimaryConstructor
 #pragma warning disable IDE0290
     public SlaveRelayConnection(IHydraProfile profile, ILogger<RelayConnection> log, IPlatformOutput output, IScreenDetector screens, IWorldState peerState, SlaveCursorHider cursorHider, IScreenSaverSync screenSaverSync, IScreensaverSuppressor screensaverSuppressor, IClipboardSync clipboardSync, TempFileManager tempFileManager)
@@ -80,12 +75,6 @@ public class SlaveRelayConnection : RelayConnection
                 if (move != null)
                 {
                     _cursorHider.OnMasterActivity(sourceHost);
-                    var moveNow = Environment.TickCount64;
-                    if (moveNow - _lastMoveLogTick >= MouseLogIntervalMs)
-                    {
-                        _lastMoveLogTick = moveNow;
-                        _log.LogDebug("Mouse recv: ({X}, {Y})", move.X, move.Y);
-                    }
                     await MoveToScreen(move.Screen, move.X, move.Y);
                 }
                 break;
@@ -102,12 +91,6 @@ public class SlaveRelayConnection : RelayConnection
                 if (delta != null)
                 {
                     _cursorHider.OnMasterActivity(sourceHost);
-                    var deltaNow = Environment.TickCount64;
-                    if (deltaNow - _lastMoveLogTick >= MouseLogIntervalMs)
-                    {
-                        _lastMoveLogTick = deltaNow;
-                        _log.LogDebug("Mouse recv delta: ({DX}, {DY})", delta.Dx, delta.Dy);
-                    }
                     _output.MoveMouseRelative(delta.Dx, delta.Dy);
                 }
                 break;
