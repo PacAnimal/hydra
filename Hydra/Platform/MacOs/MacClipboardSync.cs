@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform.MacOs;
 
@@ -9,19 +10,35 @@ public sealed class MacClipboardSync : IClipboardSync
 
     public bool SupportsFiles => true;
 
+    private readonly ILogger<MacClipboardSync> _log;
     private string? _lastSetText;
     private ulong? _lastSetImageHash;
     private HashSet<string>? _lastSetFilePaths;
     private string? _storedPrimaryText;
 
-    public MacClipboardSync()
+    public MacClipboardSync(ILogger<MacClipboardSync> log)
     {
+        _log = log;
         // NSPasteboard lives in AppKit — must be loaded before objc_getClass can find it.
         // Slaves don't open an event tap, so AppKit may not be loaded otherwise.
         NativeLibrary.Load("/System/Library/Frameworks/AppKit.framework/AppKit");
     }
 
     public string? GetText()
+    {
+        using var pool = new ObjcAutoreleasePool();
+        try
+        {
+            return GetTextInner();
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Failed to read clipboard text");
+            return null;
+        }
+    }
+
+    private string? GetTextInner()
     {
         var pasteboard = GetGeneralPasteboard();
         if (pasteboard == nint.Zero) return null;
@@ -40,6 +57,7 @@ public sealed class MacClipboardSync : IClipboardSync
     {
         _lastSetText = text;
 
+        using var pool = new ObjcAutoreleasePool();
         var pasteboard = GetGeneralPasteboard();
         if (pasteboard == nint.Zero) return;
 
@@ -53,6 +71,20 @@ public sealed class MacClipboardSync : IClipboardSync
     public void SetPrimaryText(string text) => _storedPrimaryText = text;
 
     public byte[]? GetImagePng()
+    {
+        using var pool = new ObjcAutoreleasePool();
+        try
+        {
+            return GetImagePngInner();
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Failed to read clipboard image");
+            return null;
+        }
+    }
+
+    private byte[]? GetImagePngInner()
     {
         var pasteboard = GetGeneralPasteboard();
         if (pasteboard == nint.Zero) return null;
@@ -84,6 +116,7 @@ public sealed class MacClipboardSync : IClipboardSync
     {
         _lastSetImageHash = ClipboardUtils.QuickHash(pngData);
 
+        using var pool = new ObjcAutoreleasePool();
         var pasteboard = GetGeneralPasteboard();
         if (pasteboard == nint.Zero) return;
 
@@ -93,6 +126,19 @@ public sealed class MacClipboardSync : IClipboardSync
     }
 
     public void SetClipboard(string? text, string? primaryText, byte[]? imagePng, List<TempFileEntry>? files = null)
+    {
+        using var pool = new ObjcAutoreleasePool();
+        try
+        {
+            SetClipboardInner(text, primaryText, imagePng, files);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Failed to write clipboard");
+        }
+    }
+
+    private void SetClipboardInner(string? text, string? primaryText, byte[]? imagePng, List<TempFileEntry>? files)
     {
         if (text == null && primaryText == null && imagePng == null && files == null) return;
 
@@ -114,6 +160,20 @@ public sealed class MacClipboardSync : IClipboardSync
     }
 
     public List<string>? GetFilePaths()
+    {
+        using var pool = new ObjcAutoreleasePool();
+        try
+        {
+            return GetFilePathsInner();
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Failed to read clipboard file paths");
+            return null;
+        }
+    }
+
+    private List<string>? GetFilePathsInner()
     {
         var pasteboard = GetGeneralPasteboard();
         if (pasteboard == nint.Zero) return null;
@@ -178,9 +238,13 @@ public sealed class MacClipboardSync : IClipboardSync
     private static void WritePasteboardFileList(nint pasteboard, List<string> paths)
     {
         // build an NSMutableArray of NSString paths for NSFilenamesPboardType
+        // use alloc+init (not the `array` factory) so we own the returned object and
+        // our CFRelease in the finally block is balanced.
         var nsArrayClass = NativeMethods.objc_getClass("NSMutableArray");
-        var arraySel = NativeMethods.sel_registerName("array");
-        var array = NativeMethods.objc_msgSend_noarg(nsArrayClass, arraySel);
+        var allocSel = NativeMethods.sel_registerName("alloc");
+        var initSel = NativeMethods.sel_registerName("init");
+        var array = NativeMethods.objc_msgSend_noarg(
+            NativeMethods.objc_msgSend_noarg(nsArrayClass, allocSel), initSel);
         if (array == nint.Zero) return;
 
         var typeStr = nint.Zero;

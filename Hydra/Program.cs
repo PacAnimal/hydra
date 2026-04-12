@@ -17,6 +17,15 @@ using Microsoft.Extensions.Logging;
 // ensure console can display non-ASCII characters (e.g. '€', 'ø') in debug logs
 Console.OutputEncoding = Encoding.UTF8;
 
+// catch unhandled exceptions on any thread before they silently kill the process
+AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+    Console.Error.WriteLine($"[FATAL] Unhandled exception (terminating={e.IsTerminating}): {e.ExceptionObject}");
+TaskScheduler.UnobservedTaskException += (_, e) =>
+{
+    Console.Error.WriteLine($"[FATAL] Unobserved task exception: {e.Exception}");
+    e.SetObserved();
+};
+
 if (OperatingSystem.IsWindows())
 {
     if (args.Contains("--install-service")) { ServiceCommands.Install(); return; }

@@ -349,6 +349,18 @@ public class InputRouter(
 
     private void PushClipboardToHost(string host)
     {
+        try
+        {
+            PushClipboardToHostInner(host);
+        }
+        catch (Exception ex)
+        {
+            log.LogWarning(ex, "Failed to push clipboard to {Host}", host);
+        }
+    }
+
+    private void PushClipboardToHostInner(string host)
+    {
         var text = _clipboardSync.GetText() ?? _lastReceived?.Text;
         var primaryText = _clipboardSync.GetPrimaryText() ?? _lastReceived?.PrimaryText;
         var image = _clipboardSync.GetImagePng() ?? _lastReceived?.ImagePng;

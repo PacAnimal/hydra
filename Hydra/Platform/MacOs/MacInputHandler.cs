@@ -157,6 +157,19 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
             return eventRef;
         }
 
+        try
+        {
+            return TapCallbackInner(type, eventRef);
+        }
+        catch (Exception ex)
+        {
+            log.LogError(ex, "Unhandled exception in event tap callback (type={Type})", type);
+            return eventRef;
+        }
+    }
+
+    private nint TapCallbackInner(int type, nint eventRef)
+    {
         if (type is NativeMethods.KCGEventMouseMoved
             or NativeMethods.KCGEventLeftMouseDragged
             or NativeMethods.KCGEventRightMouseDragged
