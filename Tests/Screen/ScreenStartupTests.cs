@@ -27,7 +27,7 @@ public class ScreenStartupTests
         var logs = new ErrorCapture();
         var service = new InputRouter(
             new FakePlatform(), profile, new NullRelaySender(),
-            new FakeScreenDetector(), NullLoggerFactory.Instance, logs.CreateLogger(), new NullScreenSaverSync(), new NullClipboardSync());
+            new FakeScreenDetector(), NullLoggerFactory.Instance, logs.CreateLogger(), new NullScreenSaverSync(), new NullClipboardSync(), TransitionTestHelper.TempFiles);
 
         // must not throw
         await service.StartAsync(CancellationToken.None);

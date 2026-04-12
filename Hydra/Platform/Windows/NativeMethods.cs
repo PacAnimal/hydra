@@ -407,6 +407,7 @@ internal static partial class NativeMethods
     internal const uint CF_UNICODETEXT = 13;
     internal const uint CF_BITMAP = 2;
     internal const uint CF_DIB = 8;
+    internal const uint CF_HDROP = 15;
     internal const uint GMEM_MOVEABLE = 0x0002;
     internal const uint GMEM_DDESHARE = 0x2000;
 
@@ -496,6 +497,15 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool CloseDesktop(nint hDesktop);
+
+    // -- shell (file clipboard) --
+
+    private const string Shell32 = "shell32.dll";
+
+    // iFile = 0xFFFFFFFF → returns count; otherwise fills lpszFile with the Nth path
+    [LibraryImport(Shell32, EntryPoint = "DragQueryFileW")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static unsafe partial uint DragQueryFileW(nint hDrop, uint iFile, char* lpszFile, uint cch);
 }
 
 [UnmanagedFunctionPointer(CallingConvention.StdCall)]

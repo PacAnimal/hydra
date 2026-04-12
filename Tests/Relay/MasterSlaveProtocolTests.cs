@@ -62,7 +62,7 @@ public class MasterSlaveProtocolTests
         var config = MakeConfig("slave-pc");
         var relay = new FakeRelay();
         var logs = new LogCapture();
-        var service = new InputRouter(new FakePlatform(), config, relay, new FakeScreenDetector(), logs, NullLogger<InputRouter>.Instance, new NullScreenSaverSync(), new NullClipboardSync());
+        var service = new InputRouter(new FakePlatform(), config, relay, new FakeScreenDetector(), logs, NullLogger<InputRouter>.Instance, new NullScreenSaverSync(), new NullClipboardSync(), TransitionTestHelper.TempFiles);
         await service.StartAsync(CancellationToken.None);
 
         var msg = new SlaveLogMessage((int)LogLevel.Warning, "MyService", "something went wrong", null);
@@ -85,7 +85,7 @@ public class MasterSlaveProtocolTests
         var config = MakeConfig("slave-pc");
         var relay = new FakeRelay();
         var logs = new LogCapture();
-        var service = new InputRouter(new FakePlatform(), config, relay, new FakeScreenDetector(), logs, NullLogger<InputRouter>.Instance, new NullScreenSaverSync(), new NullClipboardSync());
+        var service = new InputRouter(new FakePlatform(), config, relay, new FakeScreenDetector(), logs, NullLogger<InputRouter>.Instance, new NullScreenSaverSync(), new NullClipboardSync(), TransitionTestHelper.TempFiles);
         await service.StartAsync(CancellationToken.None);
 
         var msg = new SlaveLogMessage((int)LogLevel.Error, "Crasher", "boom", "System.Exception: kaboom");
@@ -272,7 +272,7 @@ public class MasterSlaveProtocolTests
         });
 
     private static InputRouter MakeService(IHydraProfile profile, IRelaySender relay) =>
-        new(new FakePlatform(), profile, relay, new FakeScreenDetector(), NullLoggerFactory.Instance, NullLogger<InputRouter>.Instance, new NullScreenSaverSync(), new NullClipboardSync());
+        new(new FakePlatform(), profile, relay, new FakeScreenDetector(), NullLoggerFactory.Instance, NullLogger<InputRouter>.Instance, new NullScreenSaverSync(), new NullClipboardSync(), TransitionTestHelper.TempFiles);
 
     private static List<string> MasterConfigTargets(FakeRelay relay) =>
         [.. relay.Sent.Where(s => s.Kind == MessageKind.MasterConfig).SelectMany(s => s.Targets)];
@@ -286,7 +286,8 @@ public class MasterSlaveProtocolTests
         hider,
         new NullScreenSaverSync(),
         new NullScreensaverSuppressor(),
-        new NullClipboardSync())
+        new NullClipboardSync(),
+        TransitionTestHelper.TempFiles)
     {
         // simulates a legacy master that sends no log level
         public Task SimulateMasterConfig(string host) => OnReceive(host, MessageKind.MasterConfig, "{}");
@@ -311,7 +312,8 @@ public class MasterSlaveProtocolTests
             hider,
             new NullScreenSaverSync(),
             new NullScreensaverSuppressor(),
-            new NullClipboardSync())
+            new NullClipboardSync(),
+            TransitionTestHelper.TempFiles)
         {
             _hider = hider;
         }

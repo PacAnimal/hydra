@@ -216,6 +216,7 @@ if (config != null)
         services.AddSingleton<IClipboardSync, XorgClipboardSync>();
     else
         services.AddSingleton<IClipboardSync, NullClipboardSync>();
+    services.AddSingleton<TempFileManager>();
 
     if (!RunMode.IsSessionChild)
         services.AddHostedService<SelfUpdater>();

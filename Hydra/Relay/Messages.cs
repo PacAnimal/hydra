@@ -20,9 +20,9 @@ public enum MessageKind : byte
     SlaveLog = 9,
     MouseMoveDelta = 10,
     ScreensaverSync = 11,
-    ClipboardPush = 12,         // master → slave: apply this text
-    ClipboardPull = 13,         // master → slave: send me your text
-    ClipboardPullResponse = 14, // slave → master: here's my text
+    ClipboardPush = 12,         // master → slave: apply this clipboard (text/image/files)
+    ClipboardPull = 13,         // master → slave: send me your clipboard
+    ClipboardPullResponse = 14, // slave → master: here's my clipboard
 }
 
 public record MouseMoveMessage(string Screen, int X, int Y);
@@ -40,8 +40,8 @@ public record MouseButtonMessage(MouseButton Button, bool IsPressed);
 public record MouseScrollMessage(short XDelta, short YDelta);
 public record EnterScreenMessage(string Screen, int X, int Y, int Width, int Height);
 public record ScreensaverSyncMessage(bool Active);
-public record ClipboardPushMessage(string Text, string? PrimaryText = null, byte[]? ImagePng = null);
-public record ClipboardPullResponseMessage(string? Text, string? PrimaryText = null, byte[]? ImagePng = null);
+public record ClipboardPushMessage(string Text, string? PrimaryText = null, byte[]? ImagePng = null, byte[]? Zip = null);
+public record ClipboardPullResponseMessage(string? Text, string? PrimaryText = null, byte[]? ImagePng = null, byte[]? Zip = null);
 
 public static class MessageSerializer
 {

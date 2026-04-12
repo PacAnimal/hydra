@@ -12,9 +12,13 @@ public sealed class WindowsClipboardSync(ILogger<WindowsClipboardSync> log) : IC
     // registered once per process; Windows caches the value
     private static readonly uint CfPng = NativeMethods.RegisterClipboardFormat("PNG");
 
+    public bool SupportsFiles => true;
+
     private readonly ILogger<WindowsClipboardSync> _log = log;
     private string? _lastSetText;
     private ulong? _lastSetImageHash;
+    private HashSet<string>? _lastSetFilePaths;
+    private string? _storedPrimaryText;
 
     public string? GetText()
     {
@@ -57,6 +61,10 @@ public sealed class WindowsClipboardSync(ILogger<WindowsClipboardSync> log) : IC
             NativeMethods.CloseClipboard();
         }
     }
+
+    public string? GetPrimaryText() => _storedPrimaryText;
+
+    public void SetPrimaryText(string text) => _storedPrimaryText = text;
 
     public byte[]? GetImagePng()
     {
@@ -104,12 +112,14 @@ public sealed class WindowsClipboardSync(ILogger<WindowsClipboardSync> log) : IC
         }
     }
 
-    public void SetClipboard(string? text, string? primaryText, byte[]? imagePng)
+    public void SetClipboard(string? text, string? primaryText, byte[]? imagePng, List<TempFileEntry>? files = null)
     {
-        if (text == null && primaryText == null && imagePng == null) return;
+        if (text == null && primaryText == null && imagePng == null && files == null) return;
 
         if (text != null) _lastSetText = text;
+        if (primaryText != null) _storedPrimaryText = primaryText;
         if (imagePng != null) _lastSetImageHash = ClipboardUtils.QuickHash(imagePng);
+        if (files != null) _lastSetFilePaths = files.ToPathSet();
 
         if (!OpenClipboard()) return;
         try
@@ -119,6 +129,50 @@ public sealed class WindowsClipboardSync(ILogger<WindowsClipboardSync> log) : IC
             // legacy apps (Paint, etc.) pick the first format they support
             if (imagePng != null) WriteImageToOpenClipboard(imagePng);
             if (text != null) WriteTextToOpenClipboard(text);
+            if (files != null) WriteFilesToOpenClipboard(files.ToPaths());
+        }
+        finally
+        {
+            NativeMethods.CloseClipboard();
+        }
+    }
+
+    public List<string>? GetFilePaths()
+    {
+        if (!NativeMethods.IsClipboardFormatAvailable(NativeMethods.CF_HDROP)) return null;
+        if (!OpenClipboard()) return null;
+        try
+        {
+            var hDrop = NativeMethods.GetClipboardData(NativeMethods.CF_HDROP);
+            if (hDrop == nint.Zero) return null;
+
+            uint count;
+            unsafe { count = NativeMethods.DragQueryFileW(hDrop, 0xFFFFFFFF, null, 0); }
+            if (count == 0) return null;
+
+            var paths = new List<string>((int)count);
+            for (uint i = 0; i < count; i++)
+            {
+                // query required length first (returns char count, excluding null terminator)
+                uint needed;
+                unsafe { needed = NativeMethods.DragQueryFileW(hDrop, i, null, 0); }
+                if (needed == 0) continue;
+                var buf = new char[needed + 1];
+                unsafe
+                {
+                    fixed (char* p = buf)
+                    {
+                        var len = NativeMethods.DragQueryFileW(hDrop, i, p, needed + 1);
+                        if (len > 0) paths.Add(new string(p, 0, (int)len));
+                    }
+                }
+            }
+
+            // echo suppression: return null if these are the same paths we just set
+            if (_lastSetFilePaths != null && paths.Count == _lastSetFilePaths.Count && paths.All(p => _lastSetFilePaths.Contains(p)))
+                return null;
+
+            return paths.Count > 0 ? paths : null;
         }
         finally
         {
@@ -127,6 +181,52 @@ public sealed class WindowsClipboardSync(ILogger<WindowsClipboardSync> log) : IC
     }
 
     // clipboard must already be open and emptied before calling these
+    private static void WriteFilesToOpenClipboard(List<string> paths)
+    {
+        // DROPFILES struct layout (total 20 bytes):
+        //   DWORD pFiles  @ 0  — byte offset of file list from start of struct
+        //   POINT pt      @ 4  — drop point (unused, set to 0,0)
+        //   BOOL  fNC     @ 12 — non-client area flag (unused)
+        //   BOOL  fWide   @ 16 — 1 = UTF-16 paths
+        const int offPFiles = 0;
+        const int offPt = 4;
+        const int offFnc = 12;
+        const int offFWide = 16;
+        const int headerSize = 20;
+
+        // file list: each path as null-terminated UTF-16, then a double-null terminator
+        using var pathBlob = new MemoryStream();
+        foreach (var path in paths)
+            pathBlob.Write(System.Text.Encoding.Unicode.GetBytes(path + "\0"));
+        pathBlob.Write(new byte[2]); // double-null terminator
+
+        var data = pathBlob.ToArray();
+        var totalSize = headerSize + data.Length;
+
+        var hMem = NativeMethods.GlobalAlloc(NativeMethods.GMEM_MOVEABLE | NativeMethods.GMEM_DDESHARE, (nuint)totalSize);
+        if (hMem == nint.Zero) return;
+
+        var ptr = NativeMethods.GlobalLock(hMem);
+        if (ptr == nint.Zero) { NativeMethods.GlobalFree(hMem); return; }
+
+        try
+        {
+            Marshal.WriteInt32(ptr, offPFiles, headerSize); // pFiles: file list starts right after header
+            Marshal.WriteInt32(ptr, offPt, 0);              // pt.x
+            Marshal.WriteInt32(ptr, offPt + 4, 0);          // pt.y
+            Marshal.WriteInt32(ptr, offFnc, 0);             // fNC
+            Marshal.WriteInt32(ptr, offFWide, 1);           // fWide: Unicode paths
+            Marshal.Copy(data, 0, ptr + headerSize, data.Length);
+        }
+        finally
+        {
+            NativeMethods.GlobalUnlock(hMem);
+        }
+
+        if (NativeMethods.SetClipboardData(NativeMethods.CF_HDROP, hMem) == nint.Zero)
+            NativeMethods.GlobalFree(hMem);
+    }
+
     private static void WriteTextToOpenClipboard(string text)
     {
         // CF_UNICODETEXT requires null-terminated UTF-16; allocate (length + 1) chars
