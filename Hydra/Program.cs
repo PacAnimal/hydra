@@ -107,11 +107,12 @@ services.AddSingleton<IHydraProfile>(profile);
 
 services.AddSereneConsoleLogging(c => c.MinLogLevel = profile.LogLevel);
 
-if (!RunMode.IsSessionChild && configFile.LogFile is { } logFileSetting)
+var logFileSetting = RunMode.IsSessionChild ? configFile.SessionLogFile : configFile.LogFile;
+if (logFileSetting is { } logFile)
 {
-    var logPath = Path.IsPathRooted(logFileSetting)
-        ? logFileSetting
-        : Path.GetFullPath(logFileSetting, Path.GetDirectoryName(configPath)!);
+    var logPath = Path.IsPathRooted(logFile)
+        ? logFile
+        : Path.GetFullPath(logFile, Path.GetDirectoryName(configPath)!);
     services.AddSereneFileLogging(logPath, c => c.MinLogLevel = profile.LogLevel);
 }
 

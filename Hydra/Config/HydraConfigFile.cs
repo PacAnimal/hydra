@@ -19,6 +19,9 @@ public class HydraConfigFile
     // optional — if set, log output is also written to this file
     public string? LogFile { get; init; }
 
+    // optional — if set, the session child writes log output to this file (service mode only)
+    public string? SessionLogFile { get; init; }
+
     // optional — defaults to machine hostname without domain
     public string? Name { get; init; }
 
