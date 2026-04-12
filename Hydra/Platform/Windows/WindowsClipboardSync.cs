@@ -145,17 +145,16 @@ public sealed class WindowsClipboardSync(ILogger<WindowsClipboardSync> log) : IC
             NativeMethods.GlobalFree(hMem);
     }
 
-    private static void WriteImageToOpenClipboard(byte[] pngData)
+    private void WriteImageToOpenClipboard(byte[] pngData)
     {
         // write as "PNG" registered format (raw bytes — modern apps prefer this)
         WriteGlobalMemory(CfPng, pngData);
 
-        // also write as CF_BITMAP so legacy apps can paste
-        using var ms = new MemoryStream(pngData);
-        using var bitmap = new Bitmap(ms);
-        var hBitmap = bitmap.GetHbitmap();
-        if (hBitmap != nint.Zero)
-            NativeMethods.SetClipboardData(NativeMethods.CF_BITMAP, hBitmap);
+        // also write as CF_DIB so legacy apps (Paint, etc.) can paste.
+        // windows auto-synthesizes CF_BITMAP from CF_DIB on demand — the reliable direction.
+        var dib = PngToDib(pngData);
+        if (dib != null)
+            WriteGlobalMemory(NativeMethods.CF_DIB, dib);
     }
 
     private static byte[]? ReadGlobalMemory(nint hMem)
@@ -191,6 +190,58 @@ public sealed class WindowsClipboardSync(ILogger<WindowsClipboardSync> log) : IC
 
         if (NativeMethods.SetClipboardData(format, hMem) == nint.Zero)
             NativeMethods.GlobalFree(hMem);
+    }
+
+    private byte[]? PngToDib(byte[] pngData)
+    {
+        try
+        {
+            using var ms = new MemoryStream(pngData);
+            using var bitmap = new Bitmap(ms);
+
+            var width = bitmap.Width;
+            var height = bitmap.Height;
+            const int bpp = 24;
+            const int headerSize = 40; // BITMAPINFOHEADER
+
+            // DIB rows are padded to 4-byte boundary
+            var dibStride = ((width * bpp + 31) & ~31) >> 3;
+            var imageSize = dibStride * height;
+            var dib = new byte[headerSize + imageSize];
+
+            // BITMAPINFOHEADER (40 bytes, remaining fields are 0 = BI_RGB)
+            BitConverter.GetBytes(headerSize).CopyTo(dib, 0);  // biSize
+            BitConverter.GetBytes(width).CopyTo(dib, 4);       // biWidth
+            BitConverter.GetBytes(height).CopyTo(dib, 8);      // biHeight (positive = bottom-up)
+            BitConverter.GetBytes((short)1).CopyTo(dib, 12);   // biPlanes
+            BitConverter.GetBytes((short)bpp).CopyTo(dib, 14); // biBitCount
+            BitConverter.GetBytes(imageSize).CopyTo(dib, 20);  // biSizeImage
+
+            var rect = new Rectangle(0, 0, width, height);
+            var bmpData = bitmap.LockBits(rect, ImageLockMode.ReadOnly, PixelFormat.Format24bppRgb);
+            try
+            {
+                var srcStride = Math.Abs(bmpData.Stride);
+                // LockBits gives top-down rows; DIB needs bottom-up — copy in reverse
+                for (var y = 0; y < height; y++)
+                {
+                    var srcOffset = y * bmpData.Stride;
+                    var dstOffset = headerSize + (height - 1 - y) * dibStride;
+                    Marshal.Copy(bmpData.Scan0 + srcOffset, dib, dstOffset, Math.Min(srcStride, dibStride));
+                }
+            }
+            finally
+            {
+                bitmap.UnlockBits(bmpData);
+            }
+
+            return dib;
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "PNG to DIB conversion failed");
+            return null;
+        }
     }
 
     private byte[]? DibToPng(byte[] dib)
