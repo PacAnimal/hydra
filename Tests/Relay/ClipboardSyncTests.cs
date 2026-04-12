@@ -497,6 +497,37 @@ public class ClipboardSyncTests
         }
     }
 
+    [Test]
+    public async Task SlaveReceivesClipboardPush_WithCorruptZip_StillSetsText()
+    {
+        var clipboard = new FakeClipboardSync();
+        var slave = MakeTestableSlaveRelay(clipboard);
+
+        var push = new ClipboardPushMessage("important text", null, null, [0xFF, 0xFF]);
+        await slave.SimulateReceive("master-pc", MessageKind.ClipboardPush,
+            JsonSerializer.Serialize(push, SaneJson.Options));
+
+        Assert.That(clipboard.Text, Is.EqualTo("important text"));
+    }
+
+    [Test]
+    public async Task OnClipboardPullResponse_WithCorruptZip_StillSetsText()
+    {
+        var clipboard = new FakeClipboardSync();
+        var (platform, relay, service) = CreateMasterService(clipboard);
+        await service.StartAsync(CancellationToken.None);
+        await TransitionTestHelper.BringRemoteOnline(relay);
+
+        var response = new ClipboardPullResponseMessage("slave text", null, null, [0xFF, 0xFF]);
+        await relay.FireMessageReceived("remote", MessageKind.ClipboardPullResponse,
+            JsonSerializer.Serialize(response, SaneJson.Options));
+
+        Assert.That(clipboard.Text, Is.EqualTo("slave text"));
+
+        await service.StopAsync(CancellationToken.None);
+        platform.Dispose();
+    }
+
     // -- slave pull response includes files --
 
     [Test]
