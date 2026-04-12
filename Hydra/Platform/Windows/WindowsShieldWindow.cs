@@ -105,6 +105,12 @@ internal sealed class WindowsShieldWindow
         if (_debugBrush != nint.Zero) { NativeMethods.DeleteObject(_debugBrush); _debugBrush = nint.Zero; }
     }
 
+    // called directly from HideCursor() so it fires before the first WarpCursor call
+    internal void HideCursorNow()
+    {
+        if (!_debugShield) HideCursorCounter();
+    }
+
     // loop until display counter goes negative (cursor hidden)
     private void HideCursorCounter()
     {

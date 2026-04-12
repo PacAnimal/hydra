@@ -30,8 +30,6 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, bool d
 
     // posted to the hook thread to trigger a desktop check
     private const uint WmCheckHealth = NativeMethods.WM_USER + 1;
-    private const uint WmShieldShow = NativeMethods.WM_USER + 2;
-    private const uint WmShieldHide = NativeMethods.WM_USER + 3;
 
 
     // low-level hooks work without elevation for non-elevated processes
@@ -44,17 +42,9 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, bool d
         NativeMethods.SetCursorPos(x, y);
     }
 
-    public Task HideCursor()
-    {
-        NativeMethods.PostThreadMessage(_hookThreadId, WmShieldShow, nint.Zero, nint.Zero);
-        return Task.CompletedTask;
-    }
+    public Task HideCursor() { _shield.Show(); return Task.CompletedTask; }
 
-    public Task ShowCursor()
-    {
-        NativeMethods.PostThreadMessage(_hookThreadId, WmShieldHide, nint.Zero, nint.Zero);
-        return Task.CompletedTask;
-    }
+    public Task ShowCursor() { _shield.Hide(); return Task.CompletedTask; }
 
     public async Task StartEventTap(
         Action<double, double> onMouseMove,
@@ -98,16 +88,6 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, bool d
                 if (msg.message == WmCheckHealth)
                 {
                     CheckHookHealth();
-                    continue;
-                }
-                if (msg.message == WmShieldShow)
-                {
-                    _shield.Show();
-                    continue;
-                }
-                if (msg.message == WmShieldHide)
-                {
-                    _shield.Hide();
                     continue;
                 }
                 NativeMethods.TranslateMessage(in msg);
@@ -172,7 +152,7 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, bool d
         _shield.Destroy();
         _shield.Create(debugShield);
         if (IsOnVirtualScreen)
-            _shield.Show();
+            _shield.Show(); // re-show on new desktop
     }
 
     private nint MouseHookCallback(int nCode, nint wParam, nint lParam)
