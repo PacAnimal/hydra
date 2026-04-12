@@ -33,6 +33,7 @@ services.AddSignalR(options =>
     options.ClientTimeoutInterval = TimeSpan.FromSeconds(60);
     options.EnableDetailedErrors = true;
     options.MaximumReceiveMessageSize = (long)ByteSize.FromMebiBytes(32).Bytes;
+    options.MaximumParallelInvocationsPerClient = 4;
 }).AddJsonProtocol(hubOptions =>
 {
     SaneJson.Configure(hubOptions.PayloadSerializerOptions);
