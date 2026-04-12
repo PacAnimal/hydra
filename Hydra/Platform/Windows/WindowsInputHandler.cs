@@ -6,7 +6,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform.Windows;
 
-public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log) : IPlatformInput
+public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, bool debugShield) : IPlatformInput
 {
     // stored as fields to prevent GC collection while hooks are active
     private HookProc? _mouseHookProc;
@@ -20,7 +20,7 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log) : IPla
     private Action<KeyEvent>? _onKeyEvent;
     private Action<MouseButtonEvent>? _onMouseButton;
     private Action<MouseScrollEvent>? _onMouseScroll;
-    private readonly WindowsCursorSnapshot _cursor = new();
+    private readonly WindowsShieldWindow _shield = new();
     private int _lastWarpX = -1;
     private int _lastWarpY = -1;
     private readonly Toggle _isOnVirtualScreen = new();
@@ -30,6 +30,8 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log) : IPla
 
     // posted to the hook thread to trigger a desktop check
     private const uint WmCheckHealth = NativeMethods.WM_USER + 1;
+    private const uint WmShieldShow = NativeMethods.WM_USER + 2;
+    private const uint WmShieldHide = NativeMethods.WM_USER + 3;
 
 
     // low-level hooks work without elevation for non-elevated processes
@@ -42,9 +44,17 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log) : IPla
         NativeMethods.SetCursorPos(x, y);
     }
 
-    public Task HideCursor() { _cursor.Hide(); return Task.CompletedTask; }
+    public Task HideCursor()
+    {
+        NativeMethods.PostThreadMessage(_hookThreadId, WmShieldShow, nint.Zero, nint.Zero);
+        return Task.CompletedTask;
+    }
 
-    public Task ShowCursor() { _cursor.Show(); return Task.CompletedTask; }
+    public Task ShowCursor()
+    {
+        NativeMethods.PostThreadMessage(_hookThreadId, WmShieldHide, nint.Zero, nint.Zero);
+        return Task.CompletedTask;
+    }
 
     public async Task StartEventTap(
         Action<double, double> onMouseMove,
@@ -79,6 +89,7 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log) : IPla
             }
 
             _currentDesktop = NativeMethods.GetThreadDesktop(_hookThreadId);
+            _shield.Create(debugShield);
             ready.TrySetResult(true);
 
             // message pump — hooks fire during GetMessage
@@ -89,10 +100,21 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log) : IPla
                     CheckHookHealth();
                     continue;
                 }
+                if (msg.message == WmShieldShow)
+                {
+                    _shield.Show(_lastWarpX, _lastWarpY);
+                    continue;
+                }
+                if (msg.message == WmShieldHide)
+                {
+                    _shield.Hide();
+                    continue;
+                }
                 NativeMethods.TranslateMessage(in msg);
                 NativeMethods.DispatchMessage(in msg);
             }
 
+            _shield.Destroy();
             if (_mouseHook != nint.Zero) NativeMethods.UnhookWindowsHookEx(_mouseHook);
             if (_keyboardHook != nint.Zero) NativeMethods.UnhookWindowsHookEx(_keyboardHook);
         })
@@ -129,11 +151,7 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log) : IPla
         _hookThread?.Join(TimeSpan.FromSeconds(2));
     }
 
-    public void Dispose()
-    {
-        StopEventTap();
-        _cursor.Dispose();
-    }
+    public void Dispose() => StopEventTap();
 
     // called on the hook thread — checks if the desktop has changed and reinstalls hooks if needed
     private void CheckHookHealth()
@@ -149,6 +167,12 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log) : IPla
         _keyboardHook = NativeMethods.SetWindowsHookExW(NativeMethods.WH_KEYBOARD_LL, _keyboardHookProc!, nint.Zero, 0);
         if (_mouseHook == nint.Zero || _keyboardHook == nint.Zero)
             log.LogWarning("Hook reinstall failed after desktop change");
+
+        // recreate shield on new desktop; re-show if we were on a virtual screen
+        _shield.Destroy();
+        _shield.Create(debugShield);
+        if (IsOnVirtualScreen)
+            _shield.Show(_lastWarpX, _lastWarpY);
     }
 
     private nint MouseHookCallback(int nCode, nint wParam, nint lParam)

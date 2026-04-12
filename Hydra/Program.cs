@@ -156,7 +156,8 @@ if (config != null)
         if (OperatingSystem.IsMacOS())
             services.AddSingleton<IPlatformInput, MacInputHandler>();
         else if (OperatingSystem.IsWindows())
-            services.AddSingleton<IPlatformInput, WindowsInputHandler>();
+            services.AddSingleton<IPlatformInput>(sp =>
+                new WindowsInputHandler(sp.GetRequiredService<ILogger<WindowsInputHandler>>(), profile.DebugShield));
         else if (linuxConsoleMode)
         {
             if (!profile.RemoteOnly)

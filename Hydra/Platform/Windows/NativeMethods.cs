@@ -246,6 +246,114 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     internal static partial uint GetCurrentThreadId();
 
+    // -- window management --
+
+    internal const uint WS_POPUP = 0x80000000;
+    internal const uint WS_DISABLED = 0x08000000;
+    internal const uint WS_EX_TOPMOST = 0x00000008;
+    internal const uint WS_EX_TOOLWINDOW = 0x00000080;
+    internal const uint WS_EX_LAYERED = 0x00080000;
+
+    internal static readonly nint HWND_TOPMOST = new(-1);
+    internal static readonly nint HWND_BOTTOM = new(1);
+
+    internal const uint SWP_NOSIZE = 0x0001;
+    internal const uint SWP_NOMOVE = 0x0002;
+    internal const uint SWP_NOACTIVATE = 0x0010;
+    internal const uint SWP_SHOWWINDOW = 0x0040;
+    internal const uint SWP_HIDEWINDOW = 0x0080;
+
+    internal const int SW_HIDE = 0;
+    internal const uint LWA_ALPHA = 0x00000002;
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    internal struct WNDCLASSEXW
+    {
+        internal uint cbSize;
+        internal uint style;
+        internal nint lpfnWndProc;
+        internal int cbClsExtra;
+        internal int cbWndExtra;
+        internal nint hInstance;
+        internal nint hIcon;
+        internal nint hCursor;
+        internal nint hbrBackground;
+        internal nint lpszMenuName;
+        internal nint lpszClassName;
+        internal nint hIconSm;
+    }
+
+    [LibraryImport(User32, EntryPoint = "RegisterClassExW")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial ushort RegisterClassExW(in WNDCLASSEXW lpwcx);
+
+    [LibraryImport(User32, EntryPoint = "CreateWindowExW")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial nint CreateWindowExW(
+        uint dwExStyle, nint lpClassName, nint lpWindowName,
+        uint dwStyle, int x, int y, int nWidth, int nHeight,
+        nint hWndParent, nint hMenu, nint hInstance, nint lpParam);
+
+    [LibraryImport(User32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool DestroyWindow(nint hWnd);
+
+    [LibraryImport(User32, EntryPoint = "DefWindowProcW")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial nint DefWindowProcW(nint hWnd, uint msg, nint wParam, nint lParam);
+
+    [LibraryImport(User32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool ShowWindow(nint hWnd, int nCmdShow);
+
+    [LibraryImport(User32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool SetWindowPos(nint hWnd, nint hWndInsertAfter, int x, int y, int cx, int cy, uint uFlags);
+
+    [LibraryImport(User32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool EnableWindow(nint hWnd, [MarshalAs(UnmanagedType.Bool)] bool bEnable);
+
+    [LibraryImport(User32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial nint SetActiveWindow(nint hWnd);
+
+    [LibraryImport(User32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool SetForegroundWindow(nint hWnd);
+
+    [LibraryImport(User32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool SetLayeredWindowAttributes(nint hwnd, uint crKey, byte bAlpha, uint dwFlags);
+
+    [LibraryImport(Kernel32, EntryPoint = "GetModuleHandleW")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial nint GetModuleHandleW(nint lpModuleName);
+
+    // win32 ShowCursor returns int (the new display counter); renamed to avoid clash with IPlatformInput.ShowCursor
+    [LibraryImport(User32, EntryPoint = "ShowCursor")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial int ShowCursorWin32([MarshalAs(UnmanagedType.Bool)] bool bShow);
+
+    // -- gdi --
+
+    private const string Gdi32 = "gdi32.dll";
+
+    [LibraryImport(Gdi32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial nint CreateSolidBrush(uint crColor);
+
+    [LibraryImport(Gdi32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool DeleteObject(nint ho);
+
     // -- foreground window (for keyboard layout detection) --
 
     [LibraryImport(User32)]
@@ -389,6 +497,9 @@ internal delegate bool MonitorEnumProc(nint hMonitor, nint hdcMonitor, ref WINRE
 
 [UnmanagedFunctionPointer(CallingConvention.StdCall)]
 internal delegate nint HookProc(int nCode, nint wParam, nint lParam);
+
+[UnmanagedFunctionPointer(CallingConvention.StdCall)]
+internal delegate nint WndProc(nint hWnd, uint msg, nint wParam, nint lParam);
 
 [StructLayout(LayoutKind.Sequential)]
 internal struct MSLLHOOKSTRUCT
