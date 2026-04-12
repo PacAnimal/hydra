@@ -10,7 +10,7 @@ internal sealed class SessionWatchdog(ILogger<SessionWatchdog> log)
     : SimpleHostedService(log, TimeSpan.FromMilliseconds(500))
 {
     private uint _lastSession = Win32Session.NoSession;
-    private ChildProcess? _child;
+    private readonly Boxed<ChildProcess?> _child = new(null);
     private SafeFileHandle? _stopEvent;
     private TimeSpan _backoff = TimeSpan.FromSeconds(1);
 
@@ -32,11 +32,10 @@ internal sealed class SessionWatchdog(ILogger<SessionWatchdog> log)
             if (session != Win32Session.NoSession)
                 StartChild(session);
         }
-        else if (_child != null && Win32Session.HasProcessExited(_child.Handle))
+        else if (ClaimIfExited() is { } exited)
         {
             log.LogWarning("Child exited unexpectedly, restarting in {Backoff}s", (int)_backoff.TotalSeconds);
-            _child.Dispose();
-            _child = null;
+            exited.Dispose();
             await Task.Delay(_backoff, cancel);
             _backoff = TimeSpan.FromSeconds(Math.Min(_backoff.TotalSeconds * 2, 30));
             if (session != Win32Session.NoSession)
@@ -54,13 +53,25 @@ internal sealed class SessionWatchdog(ILogger<SessionWatchdog> log)
         _stopEvent?.Dispose();
     }
 
+    private ChildProcess? ClaimIfExited()
+    {
+        lock (_child)
+        {
+            if (_child.Value == null || !Win32Session.HasProcessExited(_child.Value.Handle)) return null;
+            var child = _child.Value;
+            _child.Value = null;
+            return child;
+        }
+    }
+
     private void StartChild(uint session)
     {
         var exe = Environment.ProcessPath!;
         try
         {
-            _child = Win32Session.LaunchInSession(session, exe, "--session");
-            log.LogInformation("Child launched in session {Session} (PID {Pid})", session, _child.Pid);
+            var child = Win32Session.LaunchInSession(session, exe, "--session");
+            lock (_child) { _child.Value = child; }
+            log.LogInformation("Child launched in session {Session} (PID {Pid})", session, child.Pid);
         }
         catch (Exception ex)
         {
@@ -70,23 +81,28 @@ internal sealed class SessionWatchdog(ILogger<SessionWatchdog> log)
 
     internal async Task StopChildAsync()
     {
-        if (_child == null) return;
+        ChildProcess? child;
+        lock (_child) { child = _child.Value; _child.Value = null; }
+        if (child == null) return;
 
         if (_stopEvent != null) Win32Session.SignalEvent(_stopEvent);
 
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
-        while (DateTime.UtcNow < deadline && !Win32Session.HasProcessExited(_child.Handle))
-            await Task.Delay(100);
-
-        if (!Win32Session.HasProcessExited(_child.Handle))
+        try
         {
-            log.LogWarning("Child did not stop in time, terminating");
-            Win32Session.KillProcess(_child.Handle);
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+            while (DateTime.UtcNow < deadline && !Win32Session.HasProcessExited(child.Handle))
+                await Task.Delay(100);
+
+            if (!Win32Session.HasProcessExited(child.Handle))
+            {
+                log.LogWarning("Child did not stop in time, terminating");
+                Win32Session.KillProcess(child.Handle);
+            }
         }
-
-        _child.Dispose();
-        _child = null;
-
-        if (_stopEvent != null) Win32Session.ResetGlobalEvent(_stopEvent);
+        finally
+        {
+            child.Dispose();
+            if (_stopEvent != null) Win32Session.ResetGlobalEvent(_stopEvent);
+        }
     }
 }
