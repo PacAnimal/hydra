@@ -11,6 +11,7 @@ public sealed class WindowsClipboardSync(ILogger<WindowsClipboardSync> log) : IC
 {
     // registered once per process; Windows caches the value
     private static readonly uint CfPng = NativeMethods.RegisterClipboardFormat("PNG");
+    private static readonly uint CfPreferredDropEffect = NativeMethods.RegisterClipboardFormat("Preferred DropEffect");
 
     public bool SupportsFiles => true;
 
@@ -181,7 +182,7 @@ public sealed class WindowsClipboardSync(ILogger<WindowsClipboardSync> log) : IC
     }
 
     // clipboard must already be open and emptied before calling these
-    private static void WriteFilesToOpenClipboard(List<string> paths)
+    private void WriteFilesToOpenClipboard(List<string> paths)
     {
         // DROPFILES struct layout (total 20 bytes):
         //   DWORD pFiles  @ 0  — byte offset of file list from start of struct
@@ -224,7 +225,29 @@ public sealed class WindowsClipboardSync(ILogger<WindowsClipboardSync> log) : IC
         }
 
         if (NativeMethods.SetClipboardData(NativeMethods.CF_HDROP, hMem) == nint.Zero)
+        {
+            _log.LogWarning("SetClipboardData(CF_HDROP) failed for {Count} path(s)", paths.Count);
             NativeMethods.GlobalFree(hMem);
+            return;
+        }
+
+        // Preferred DropEffect tells Explorer this is a Copy, not a Move
+        var hEffect = NativeMethods.GlobalAlloc(NativeMethods.GMEM_MOVEABLE | NativeMethods.GMEM_DDESHARE, 4);
+        if (hEffect != nint.Zero)
+        {
+            var pEffect = NativeMethods.GlobalLock(hEffect);
+            if (pEffect != nint.Zero)
+            {
+                Marshal.WriteInt32(pEffect, 1); // DROPEFFECT_COPY
+                NativeMethods.GlobalUnlock(hEffect);
+                if (NativeMethods.SetClipboardData(CfPreferredDropEffect, hEffect) == nint.Zero)
+                    NativeMethods.GlobalFree(hEffect);
+            }
+            else
+            {
+                NativeMethods.GlobalFree(hEffect);
+            }
+        }
     }
 
     private static void WriteTextToOpenClipboard(string text)
@@ -398,7 +421,7 @@ public sealed class WindowsClipboardSync(ILogger<WindowsClipboardSync> log) : IC
         }
     }
 
-    private static bool OpenClipboard()
+    private bool OpenClipboard()
     {
         // clipboard is a global mutex; retry a few times if another app has it
         for (var i = 0; i < 5; i++)
@@ -406,6 +429,7 @@ public sealed class WindowsClipboardSync(ILogger<WindowsClipboardSync> log) : IC
             if (NativeMethods.OpenClipboard(nint.Zero)) return true;
             Thread.Sleep(5);
         }
+        _log.LogWarning("Failed to open clipboard after 5 retries");
         return false;
     }
 }

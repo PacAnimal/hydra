@@ -438,7 +438,12 @@ public class InputRouter(
                         log.LogWarning("Clipboard pull response from {Host}: image exceeds {Max} bytes, dropping", sourceHost, MaxClipboardBytes);
                     var clipZip = clip.Zip?.Length > 0 ? clip.Zip : null;
                     _lastReceived = new ClipboardSnapshot(clipText, clipPrimary, clipImage, clipZip);
-                    List<TempFileEntry>? tempFiles = clipZip != null && _clipboardSync.SupportsFiles ? _tempFileManager.ExtractZip(clipZip) : null;
+                    List<TempFileEntry>? tempFiles = null;
+                    if (clipZip != null && _clipboardSync.SupportsFiles)
+                    {
+                        try { tempFiles = _tempFileManager.ExtractZip(clipZip); }
+                        catch (Exception ex) { log.LogWarning(ex, "Failed to extract clipboard zip from {Host}", sourceHost); }
+                    }
                     _clipboardSync.SetClipboard(clipText, clipPrimary, clipImage, tempFiles);
                     // if cursor is currently on a remote screen, forward the clipboard to it
                     using var s = await _state.WaitForDisposable();

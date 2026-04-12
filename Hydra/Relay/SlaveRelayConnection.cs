@@ -149,7 +149,12 @@ public class SlaveRelayConnection : RelayConnection
                         _log.LogWarning("Clipboard push from {Host}: image exceeds {Max} bytes, dropping", sourceHost, ClipboardUtils.MaxClipboardBytes);
                     var pushZip = push.Zip?.Length > 0 ? push.Zip : null;
                     _lastPushed = new ClipboardSnapshot(pushText, pushPrimary, pushImage, pushZip);
-                    List<TempFileEntry>? tempFiles = pushZip != null && _clipboardSync.SupportsFiles ? _tempFileManager.ExtractZip(pushZip) : null;
+                    List<TempFileEntry>? tempFiles = null;
+                    if (pushZip != null && _clipboardSync.SupportsFiles)
+                    {
+                        try { tempFiles = _tempFileManager.ExtractZip(pushZip); }
+                        catch (Exception ex) { _log.LogWarning(ex, "Failed to extract clipboard zip from {Host}", sourceHost); }
+                    }
                     _clipboardSync.SetClipboard(pushText, pushPrimary, pushImage, tempFiles);
                 }
                 break;

@@ -21,6 +21,7 @@ public class TempFileManager : IDisposable
     {
         _log = log;
         _baseDir = Path.Combine(Path.GetTempPath(), "Hydra", "clipboard-files");
+        _log.LogInformation("Clipboard temp directory: {Path}", _baseDir);
         Cleanup(); // clean up leftovers from previous runs
     }
 
