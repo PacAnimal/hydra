@@ -332,6 +332,12 @@ internal static partial class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool SetLayeredWindowAttributes(nint hwnd, uint crKey, byte bAlpha, uint dwFlags);
 
+    [LibraryImport(User32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial nint SetCursor(nint hCursor);
+
+    internal const uint WM_SETCURSOR = 0x0020;
+
     [LibraryImport(Kernel32, EntryPoint = "GetModuleHandleW")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     internal static partial nint GetModuleHandleW(nint lpModuleName);

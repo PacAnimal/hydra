@@ -102,7 +102,7 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, bool d
                 }
                 if (msg.message == WmShieldShow)
                 {
-                    _shield.Show(_lastWarpX, _lastWarpY);
+                    _shield.Show();
                     continue;
                 }
                 if (msg.message == WmShieldHide)
@@ -172,7 +172,7 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, bool d
         _shield.Destroy();
         _shield.Create(debugShield);
         if (IsOnVirtualScreen)
-            _shield.Show(_lastWarpX, _lastWarpY);
+            _shield.Show();
     }
 
     private nint MouseHookCallback(int nCode, nint wParam, nint lParam)

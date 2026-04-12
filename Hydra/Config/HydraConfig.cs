@@ -47,7 +47,6 @@ public class HydraConfig
 
     public bool RemoteOnly { get; init; } = false;
     public bool SyncScreensaver { get; init; } = true;
-    public bool DebugShield { get; init; } = false;
     public int? DeadCorners { get; init; }  // pixel dead zone at screen corners; scaled by screen scale; per-host setting overrides this
 
     // optional — if set, this config only activates when all specified conditions are met

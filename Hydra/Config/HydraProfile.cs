@@ -9,6 +9,7 @@ public interface IHydraProfile
     string Name { get; }
     LogLevel LogLevel { get; }
     bool AutoUpdate { get; }
+    bool DebugShield { get; }
 
     // active profile settings
     string? ProfileName { get; }
@@ -19,7 +20,6 @@ public interface IHydraProfile
     string? NetworkConfig { get; }
     bool RemoteOnly { get; }
     bool SyncScreensaver { get; }
-    bool DebugShield { get; }
     int? DeadCorners { get; }
 
     // computed from Name + Hosts
@@ -34,6 +34,7 @@ public class HydraProfile(HydraConfigFile configFile, HydraConfig? activeProfile
     public string Name { get; } = configFile.Name ?? Environment.MachineName.Split('.')[0];
     public LogLevel LogLevel { get; } = configFile.LogLevel;
     public bool AutoUpdate { get; } = configFile.AutoUpdate;
+    public bool DebugShield { get; } = configFile.DebugShield;
 
     public string? ProfileName => _activeProfile?.ProfileName;
     public Mode Mode => _activeProfile?.Mode ?? Mode.Slave;
@@ -43,7 +44,6 @@ public class HydraProfile(HydraConfigFile configFile, HydraConfig? activeProfile
     public string? NetworkConfig => _activeProfile?.NetworkConfig;
     public bool RemoteOnly => _activeProfile?.RemoteOnly ?? false;
     public bool SyncScreensaver => _activeProfile?.SyncScreensaver ?? true;
-    public bool DebugShield => _activeProfile?.DebugShield ?? false;
     public int? DeadCorners => _activeProfile?.DeadCorners;
 
     public HostConfig? LocalHost => Hosts.FirstOrDefault(h => h.Name.EqualsIgnoreCase(Name));

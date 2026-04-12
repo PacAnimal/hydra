@@ -25,6 +25,8 @@ public class HydraConfigFile
     // optional — if set, this profile is always selected regardless of conditions (useful for debugging)
     public string? Profile { get; init; }
 
+    public bool DebugShield { get; init; } = false;
+
     public List<HydraConfig> Profiles { get; init; } = [];
 
     // convenience method for single-profile scenarios (tests, simple setups)

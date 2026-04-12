@@ -2,9 +2,9 @@ using System.Runtime.InteropServices;
 
 namespace Hydra.Platform.Windows;
 
-// topmost invisible window that steals foreground focus when active on a virtual screen,
-// preventing hover effects (taskbar highlights, tooltips, button states) on the master.
-// also owns cursor visibility via ShowCursor loops (true hide, not 1x1 blank replacement).
+// topmost window that covers the entire virtual desktop when active on a virtual screen.
+// steals foreground focus so other windows stop receiving hover events.
+// handles WM_SETCURSOR to hide the cursor (true invisible, not 1x1 blank replacement).
 // must only be called from the thread that owns the message pump (HydraHookPump).
 internal sealed class WindowsShieldWindow
 {
@@ -41,10 +41,11 @@ internal sealed class WindowsShieldWindow
             var exStyle = NativeMethods.WS_EX_TOOLWINDOW | NativeMethods.WS_EX_TOPMOST;
             if (debugShield) exStyle |= NativeMethods.WS_EX_LAYERED;
 
+            // start hidden, no WS_DISABLED — disabled windows can't be activated/set foreground
             _hwnd = NativeMethods.CreateWindowExW(
                 exStyle,
                 atom, nint.Zero,
-                NativeMethods.WS_POPUP | NativeMethods.WS_DISABLED,
+                NativeMethods.WS_POPUP,
                 0, 0, 1, 1,
                 nint.Zero, nint.Zero, hInstance, nint.Zero);
 
@@ -59,18 +60,22 @@ internal sealed class WindowsShieldWindow
         }
     }
 
-    internal void Show(int x, int y)
+    internal void Show()
     {
         if (_hwnd == nint.Zero) return;
 
         _savedForeground = NativeMethods.GetForegroundWindow();
 
-        var size = _debugShield ? 200 : 32;
-        NativeMethods.SetWindowPos(_hwnd, NativeMethods.HWND_TOPMOST,
-            x - size / 2, y - size / 2, size, size,
-            NativeMethods.SWP_SHOWWINDOW);
+        // match mac shield: centered on main screen, 20% of screen dimensions
+        var sw = NativeMethods.GetSystemMetrics(NativeMethods.SM_CXSCREEN);
+        var sh = NativeMethods.GetSystemMetrics(NativeMethods.SM_CYSCREEN);
+        var w = (int)(sw * 0.2);
+        var h = (int)(sh * 0.2);
+        var x = (sw - w) / 2;
+        var y = (sh - h) / 2;
 
-        NativeMethods.EnableWindow(_hwnd, true);
+        NativeMethods.SetWindowPos(_hwnd, NativeMethods.HWND_TOPMOST, x, y, w, h, NativeMethods.SWP_SHOWWINDOW);
+
         NativeMethods.SetActiveWindow(_hwnd);
         NativeMethods.SetForegroundWindow(_hwnd);
 
@@ -87,7 +92,6 @@ internal sealed class WindowsShieldWindow
         NativeMethods.ShowWindow(_hwnd, NativeMethods.SW_HIDE);
         NativeMethods.SetWindowPos(_hwnd, NativeMethods.HWND_BOTTOM, 0, 0, 0, 0,
             NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_HIDEWINDOW);
-        NativeMethods.EnableWindow(_hwnd, false);
 
         if (_savedForeground != nint.Zero)
             NativeMethods.SetForegroundWindow(_savedForeground);
@@ -119,6 +123,15 @@ internal sealed class WindowsShieldWindow
         _cursorHidden = false;
     }
 
-    private static nint WndProcImpl(nint hWnd, uint msg, nint wParam, nint lParam) =>
-        NativeMethods.DefWindowProcW(hWnd, msg, wParam, lParam);
+    private nint WndProcImpl(nint hWnd, uint msg, nint wParam, nint lParam)
+    {
+        // hide cursor whenever Windows asks what cursor to show over this window
+        // in debug mode, let DefWindowProc handle it so the cursor remains visible
+        if (!_debugShield && msg == NativeMethods.WM_SETCURSOR)
+        {
+            NativeMethods.SetCursor(nint.Zero);
+            return 1;
+        }
+        return NativeMethods.DefWindowProcW(hWnd, msg, wParam, lParam);
+    }
 }
