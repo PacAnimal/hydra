@@ -140,37 +140,45 @@ public sealed class WindowsClipboardSync(ILogger<WindowsClipboardSync> log) : IC
 
     public List<string>? GetFilePaths()
     {
-        // Explorer places files via OLE clipboard. Windows auto-synthesises text/bitmap formats
-        // at the Win32 level but CF_HDROP is NOT synthesised — it requires the OLE bridge, which
-        // only works when COM/OLE is initialised on the calling thread. Thread-pool threads are MTA
-        // and have no OLE; we fall back to a temporary STA thread with OleInitialize in that case.
-        if (!NativeMethods.IsClipboardFormatAvailable(NativeMethods.CF_HDROP))
-        {
-            _log.LogDebug("CF_HDROP not available via Win32; retrying on OLE-initialised STA thread");
-            return GetFilePathsOnStaThread();
-        }
+        // try Win32 first. if IsClipboardFormatAvailable returns true but GetClipboardData returns
+        // null, Explorer registered CF_HDROP as delayed render and our SYSTEM token can't trigger
+        // WM_RENDERFORMAT on its OLE proxy — fall through to OLE in that case too.
+        var paths = TryReadFilePathsWin32() ?? ReadFilePathsOle();
+        if (paths == null || paths.Count == 0) return null;
 
-        return ReadFilePathsFromOpenClipboard();
+        // echo suppression: return null if these are the same paths we just set
+        if (_lastSetFilePaths != null && paths.Count == _lastSetFilePaths.Count && paths.All(p => _lastSetFilePaths.Contains(p)))
+            return null;
+
+        _log.LogDebug("GetFilePaths: {Count} path(s) from clipboard", paths.Count);
+        return paths;
     }
 
-    private List<string>? GetFilePathsOnStaThread()
+    // returns null if CF_HDROP is not on the Win32 clipboard or GetClipboardData fails
+    private List<string>? TryReadFilePathsWin32()
+    {
+        if (!NativeMethods.IsClipboardFormatAvailable(NativeMethods.CF_HDROP)) return null;
+        if (!OpenClipboard()) return null;
+        try
+        {
+            var hDrop = NativeMethods.GetClipboardData(NativeMethods.CF_HDROP);
+            return hDrop == nint.Zero ? null : ExtractPathsFromHDrop(hDrop);
+        }
+        finally
+        {
+            NativeMethods.CloseClipboard();
+        }
+    }
+
+    private List<string>? ReadFilePathsOle()
     {
         List<string>? result = null;
         var t = new Thread(() =>
         {
             // ReSharper disable once MustUseReturnValue
             _ = NativeMethods.OleInitialize(nint.Zero);
-            try
-            {
-                if (NativeMethods.IsClipboardFormatAvailable(NativeMethods.CF_HDROP))
-                    result = ReadFilePathsFromOpenClipboard();
-                else
-                    _log.LogDebug("CF_HDROP still not available after OLE init");
-            }
-            finally
-            {
-                NativeMethods.OleUninitialize();
-            }
+            try { result = ReadFilePathsFromDataObject(); }
+            finally { NativeMethods.OleUninitialize(); }
         })
         { IsBackground = true, Name = "HydraClipboardSta" };
         t.SetApartmentState(ApartmentState.STA);
@@ -179,47 +187,62 @@ public sealed class WindowsClipboardSync(ILogger<WindowsClipboardSync> log) : IC
         return result;
     }
 
-    private List<string>? ReadFilePathsFromOpenClipboard()
+    private List<string>? ReadFilePathsFromDataObject()
     {
-        if (!OpenClipboard()) return null;
-        try
+        if (NativeMethods.OleGetClipboard(out var dataObj) != 0) return null;
+
+        var fmt = new System.Runtime.InteropServices.ComTypes.FORMATETC
         {
-            var hDrop = NativeMethods.GetClipboardData(NativeMethods.CF_HDROP);
-            if (hDrop == nint.Zero) return null;
+            cfFormat = (short)NativeMethods.CF_HDROP,
+            ptd = nint.Zero,
+            dwAspect = System.Runtime.InteropServices.ComTypes.DVASPECT.DVASPECT_CONTENT,
+            lindex = -1,
+            tymed = System.Runtime.InteropServices.ComTypes.TYMED.TYMED_HGLOBAL,
+        };
 
-            uint count;
-            unsafe { count = NativeMethods.DragQueryFileW(hDrop, 0xFFFFFFFF, null, 0); }
-            if (count == 0) return null;
+        System.Runtime.InteropServices.ComTypes.STGMEDIUM medium;
+        try { dataObj.GetData(ref fmt, out medium); }
+        catch (Exception ex)
+        {
+            _log.LogDebug(ex, "OLE GetData(CF_HDROP) failed — no files on clipboard");
+            return null;
+        }
 
-            var paths = new List<string>((int)count);
-            for (uint i = 0; i < count; i++)
+        if (medium.tymed != System.Runtime.InteropServices.ComTypes.TYMED.TYMED_HGLOBAL || medium.unionmember == nint.Zero)
+        {
+            NativeMethods.ReleaseStgMedium(ref medium);
+            return null;
+        }
+
+        try { return ExtractPathsFromHDrop(medium.unionmember); }
+        finally { NativeMethods.ReleaseStgMedium(ref medium); }
+    }
+
+    private static List<string>? ExtractPathsFromHDrop(nint hDrop)
+    {
+        uint count;
+        unsafe { count = NativeMethods.DragQueryFileW(hDrop, 0xFFFFFFFF, null, 0); }
+        if (count == 0) return null;
+
+        var paths = new List<string>((int)count);
+        for (uint i = 0; i < count; i++)
+        {
+            // query required length first (returns char count, excluding null terminator)
+            uint needed;
+            unsafe { needed = NativeMethods.DragQueryFileW(hDrop, i, null, 0); }
+            if (needed == 0) continue;
+            var buf = new char[needed + 1];
+            unsafe
             {
-                // query required length first (returns char count, excluding null terminator)
-                uint needed;
-                unsafe { needed = NativeMethods.DragQueryFileW(hDrop, i, null, 0); }
-                if (needed == 0) continue;
-                var buf = new char[needed + 1];
-                unsafe
+                fixed (char* p = buf)
                 {
-                    fixed (char* p = buf)
-                    {
-                        var len = NativeMethods.DragQueryFileW(hDrop, i, p, needed + 1);
-                        if (len > 0) paths.Add(new string(p, 0, (int)len));
-                    }
+                    var len = NativeMethods.DragQueryFileW(hDrop, i, p, needed + 1);
+                    if (len > 0) paths.Add(new string(p, 0, (int)len));
                 }
             }
-
-            // echo suppression: return null if these are the same paths we just set
-            if (_lastSetFilePaths != null && paths.Count == _lastSetFilePaths.Count && paths.All(p => _lastSetFilePaths.Contains(p)))
-                return null;
-
-            _log.LogDebug("GetFilePaths: {Count} path(s) from clipboard", paths.Count);
-            return paths.Count > 0 ? paths : null;
         }
-        finally
-        {
-            NativeMethods.CloseClipboard();
-        }
+
+        return paths.Count > 0 ? paths : null;
     }
 
     // clipboard must already be open and emptied before calling these

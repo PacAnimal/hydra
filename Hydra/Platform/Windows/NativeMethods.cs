@@ -518,6 +518,15 @@ internal static partial class NativeMethods
     [LibraryImport(Ole32)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     internal static partial void OleUninitialize();
+
+    [LibraryImport(Ole32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial int OleGetClipboard([MarshalAs(UnmanagedType.Interface)] out System.Runtime.InteropServices.ComTypes.IDataObject ppDataObj);
+
+#pragma warning disable SYSLIB1054
+    [DllImport(Ole32)]
+    internal static extern void ReleaseStgMedium(ref System.Runtime.InteropServices.ComTypes.STGMEDIUM pMedium);
+#pragma warning restore SYSLIB1054
 }
 
 [UnmanagedFunctionPointer(CallingConvention.StdCall)]
