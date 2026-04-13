@@ -157,17 +157,30 @@ public sealed class WindowsClipboardSync(ILogger<WindowsClipboardSync> log) : IC
     // returns null if CF_HDROP is not on the Win32 clipboard or GetClipboardData fails
     private List<string>? TryReadFilePathsWin32()
     {
-        if (!NativeMethods.IsClipboardFormatAvailable(NativeMethods.CF_HDROP)) return null;
         using var userToken = AcquireSessionUserToken();
-        _log.LogDebug("TryReadFilePathsWin32: CF_HDROP available, userToken={HasToken}", userToken != null);
         if (userToken != null) NativeMethods.ImpersonateLoggedOnUser(userToken);
         try
         {
             if (!OpenClipboard()) return null;
             try
             {
+                // dump all formats so we can diagnose what Explorer actually put on the clipboard
+                if (_log.IsEnabled(Microsoft.Extensions.Logging.LogLevel.Debug))
+                {
+                    var fmt = NativeMethods.EnumClipboardFormats(0);
+                    var nameBuf = new System.Text.StringBuilder(256);
+                    while (fmt != 0)
+                    {
+                        nameBuf.Clear();
+                        var name = NativeMethods.GetClipboardFormatName(fmt, nameBuf, nameBuf.Capacity) > 0
+                            ? nameBuf.ToString() : $"#{fmt}";
+                        _log.LogDebug("Win32 clipboard format: {Fmt} ({Name})", fmt, name);
+                        fmt = NativeMethods.EnumClipboardFormats(fmt);
+                    }
+                }
+
                 var hDrop = NativeMethods.GetClipboardData(NativeMethods.CF_HDROP);
-                _log.LogDebug("TryReadFilePathsWin32: GetClipboardData hDrop={Drop}", hDrop);
+                _log.LogDebug("TryReadFilePathsWin32: GetClipboardData(CF_HDROP) hDrop={Drop}", hDrop);
                 return hDrop == nint.Zero ? null : ExtractPathsFromHDrop(hDrop);
             }
             finally
@@ -226,24 +239,6 @@ public sealed class WindowsClipboardSync(ILogger<WindowsClipboardSync> log) : IC
             var hr = NativeMethods.OleGetClipboard(out var dataObj);
             _log.LogDebug("OleGetClipboard hr={Hr:X}", hr);
             if (hr != 0) return null;
-
-            // CoInitializeSecurity is often RPC_E_TOO_LATE by the time we call it, so set
-            // dynamic cloaking directly on this proxy — COM then uses the thread's impersonated
-            // user token instead of the process (SYSTEM) token when calling into Explorer
-            if (RunMode.IsSessionChild)
-            {
-                var pProxy = Marshal.GetComInterfaceForObject(dataObj,
-                    typeof(System.Runtime.InteropServices.ComTypes.IDataObject));
-                try
-                {
-                    var blanketHr = NativeMethods.CoSetProxyBlanket(pProxy,
-                        0xFFFFFFFF, 0xFFFFFFFF, nint.Zero,  // RPC_C_AUTHN_DEFAULT, RPC_C_AUTHZ_DEFAULT, COLE_DEFAULT_PRINCIPAL
-                        0xFFFFFFFF, 3,                       // RPC_C_AUTHN_LEVEL_DEFAULT, RPC_C_IMP_LEVEL_IMPERSONATE
-                        nint.Zero, 0x40);                    // pAuthInfo=null (use thread token), EOAC_DYNAMIC_CLOAKING
-                    _log.LogDebug("CoSetProxyBlanket hr={Hr:X}", blanketHr);
-                }
-                finally { Marshal.Release(pProxy); }
-            }
 
             // log all available formats so we can see what Explorer actually exposes
             var enumFmt = dataObj.EnumFormatEtc(System.Runtime.InteropServices.ComTypes.DATADIR.DATADIR_GET);

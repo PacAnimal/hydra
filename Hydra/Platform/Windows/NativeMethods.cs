@@ -420,6 +420,15 @@ internal static partial class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool IsClipboardFormatAvailable(uint format);
 
+    [LibraryImport(User32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial uint EnumClipboardFormats(uint format);
+
+#pragma warning disable SYSLIB1054
+    [DllImport(User32, EntryPoint = "GetClipboardFormatNameW", CharSet = CharSet.Unicode)]
+    internal static extern int GetClipboardFormatName(uint format, System.Text.StringBuilder lpszFormatName, int cchMaxCount);
+#pragma warning restore SYSLIB1054
+
     [LibraryImport(Kernel32)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     internal static partial nuint GlobalSize(nint hMem);
