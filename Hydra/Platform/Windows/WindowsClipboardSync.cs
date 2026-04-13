@@ -158,33 +158,62 @@ public sealed class WindowsClipboardSync(ILogger<WindowsClipboardSync> log) : IC
     private List<string>? TryReadFilePathsWin32()
     {
         if (!NativeMethods.IsClipboardFormatAvailable(NativeMethods.CF_HDROP)) return null;
-        if (!OpenClipboard()) return null;
+        using var userToken = AcquireSessionUserToken();
+        if (userToken != null) NativeMethods.ImpersonateLoggedOnUser(userToken);
         try
         {
-            var hDrop = NativeMethods.GetClipboardData(NativeMethods.CF_HDROP);
-            return hDrop == nint.Zero ? null : ExtractPathsFromHDrop(hDrop);
+            if (!OpenClipboard()) return null;
+            try
+            {
+                var hDrop = NativeMethods.GetClipboardData(NativeMethods.CF_HDROP);
+                return hDrop == nint.Zero ? null : ExtractPathsFromHDrop(hDrop);
+            }
+            finally
+            {
+                NativeMethods.CloseClipboard();
+            }
         }
         finally
         {
-            NativeMethods.CloseClipboard();
+            if (userToken != null) NativeMethods.RevertToSelf();
         }
     }
 
     private List<string>? ReadFilePathsOle()
     {
         List<string>? result = null;
+        using var userToken = AcquireSessionUserToken();
         var t = new Thread(() =>
         {
+            // impersonate the interactive user so Explorer's OLE proxy allows the data object request
+            if (userToken != null) NativeMethods.ImpersonateLoggedOnUser(userToken);
             // ReSharper disable once MustUseReturnValue
             _ = NativeMethods.OleInitialize(nint.Zero);
             try { result = ReadFilePathsFromDataObject(); }
-            finally { NativeMethods.OleUninitialize(); }
+            finally
+            {
+                NativeMethods.OleUninitialize();
+                if (userToken != null) NativeMethods.RevertToSelf();
+            }
         })
         { IsBackground = true, Name = "HydraClipboardSta" };
         t.SetApartmentState(ApartmentState.STA);
         t.Start();
         t.Join();
         return result;
+    }
+
+    // in session child mode, returns the interactive user's token so clipboard calls can be impersonated.
+    // the session child runs as SYSTEM (winlogon token) — Explorer's delayed-render CF_HDROP and OLE
+    // data object both require a user-security-context call to succeed.
+    private static Microsoft.Win32.SafeHandles.SafeAccessTokenHandle? AcquireSessionUserToken()
+    {
+        if (!RunMode.IsSessionChild) return null;
+        var session = NativeMethods.GetActiveConsoleSessionId();
+        if (NativeMethods.WTSQueryUserToken(session, out var token) && !token.IsInvalid)
+            return token;
+        token.Dispose();
+        return null;
     }
 
     private List<string>? ReadFilePathsFromDataObject()

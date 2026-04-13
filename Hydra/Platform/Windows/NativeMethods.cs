@@ -527,6 +527,26 @@ internal static partial class NativeMethods
     [DllImport(Ole32)]
     internal static extern void ReleaseStgMedium(ref System.Runtime.InteropServices.ComTypes.STGMEDIUM pMedium);
 #pragma warning restore SYSLIB1054
+
+    // -- impersonation (for clipboard file reads under SYSTEM token) --
+
+    private const string Advapi32 = "advapi32.dll";
+    private const string Wtsapi32 = "wtsapi32.dll";
+
+    [LibraryImport(Kernel32, EntryPoint = "WTSGetActiveConsoleSessionId")]
+    internal static partial uint GetActiveConsoleSessionId();
+
+    [LibraryImport(Wtsapi32, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool WTSQueryUserToken(uint sessionId, out Microsoft.Win32.SafeHandles.SafeAccessTokenHandle phToken);
+
+    [LibraryImport(Advapi32, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool ImpersonateLoggedOnUser(Microsoft.Win32.SafeHandles.SafeAccessTokenHandle hToken);
+
+    [LibraryImport(Advapi32, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool RevertToSelf();
 }
 
 [UnmanagedFunctionPointer(CallingConvention.StdCall)]
