@@ -54,9 +54,10 @@ public sealed class FakeClipboardSync : IClipboardSync
     public void SetClipboard(string? text, string? primaryText, byte[]? imagePng)
     {
         SetClipboardCallCount++;
-        if (text != null) Text = text;
-        if (primaryText != null) PrimaryText = primaryText;
-        if (imagePng != null) ImagePng = imagePng;
+        // mirror real implementations: clear all formats first, then write non-null ones
+        Text = text;
+        PrimaryText = primaryText;
+        ImagePng = imagePng;
     }
 
     // helper for test setup (bypasses call counter)
