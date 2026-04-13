@@ -18,7 +18,6 @@ public class SlaveRelayConnection : RelayConnection
     private readonly IScreenSaverSync _screenSaverSync;
     private readonly IScreensaverSuppressor _screensaverSuppressor;
     private readonly IClipboardSync _clipboardSync;
-    private readonly TempFileManager _tempFileManager;
 
     // active key repeat timers keyed by (char?, SpecialKey?)
     private readonly Dictionary<(char?, SpecialKey?), CancellationTokenSource> _repeatTimers = [];
@@ -31,7 +30,7 @@ public class SlaveRelayConnection : RelayConnection
 
     // ReSharper disable once ConvertToPrimaryConstructor
 #pragma warning disable IDE0290
-    public SlaveRelayConnection(IHydraProfile profile, ILogger<RelayConnection> log, IPlatformOutput output, IScreenDetector screens, IWorldState peerState, SlaveCursorHider cursorHider, IScreenSaverSync screenSaverSync, IScreensaverSuppressor screensaverSuppressor, IClipboardSync clipboardSync, TempFileManager tempFileManager)
+    public SlaveRelayConnection(IHydraProfile profile, ILogger<RelayConnection> log, IPlatformOutput output, IScreenDetector screens, IWorldState peerState, SlaveCursorHider cursorHider, IScreenSaverSync screenSaverSync, IScreensaverSuppressor screensaverSuppressor, IClipboardSync clipboardSync)
         : base(profile, log, peerState)
     {
         _output = output;
@@ -42,7 +41,6 @@ public class SlaveRelayConnection : RelayConnection
         _screenSaverSync = screenSaverSync;
         _screensaverSuppressor = screensaverSuppressor;
         _clipboardSync = clipboardSync;
-        _tempFileManager = tempFileManager;
 
         _screens.ScreensChanged += async snapshot =>
         {
@@ -136,8 +134,8 @@ public class SlaveRelayConnection : RelayConnection
                 var push = json.FromSaneJson<ClipboardPushMessage>();
                 if (push != null)
                 {
-                    _log.LogDebug("Clipboard push from {Host}: text={TextLen}, primary={PrimaryLen}, image={ImageLen}, zip={ZipLen}",
-                        sourceHost, push.Text.Length, push.PrimaryText?.Length, push.ImagePng?.Length, push.Zip?.Length);
+                    _log.LogDebug("Clipboard push from {Host}: text={TextLen}, primary={PrimaryLen}, image={ImageLen}",
+                        sourceHost, push.Text.Length, push.PrimaryText?.Length, push.ImagePng?.Length);
                     var pushText = !string.IsNullOrEmpty(push.Text) && Encoding.UTF8.GetByteCount(push.Text) <= ClipboardUtils.MaxClipboardBytes ? push.Text : null;
                     var pushPrimary = !string.IsNullOrEmpty(push.PrimaryText) && Encoding.UTF8.GetByteCount(push.PrimaryText) <= ClipboardUtils.MaxClipboardBytes ? push.PrimaryText : null;
                     var pushImage = push.ImagePng?.Length <= ClipboardUtils.MaxClipboardBytes ? push.ImagePng : null;
@@ -147,15 +145,8 @@ public class SlaveRelayConnection : RelayConnection
                         _log.LogWarning("Clipboard push from {Host}: primary text exceeds {Max} bytes, dropping", sourceHost, ClipboardUtils.MaxClipboardBytes);
                     if (pushImage == null && push.ImagePng != null)
                         _log.LogWarning("Clipboard push from {Host}: image exceeds {Max} bytes, dropping", sourceHost, ClipboardUtils.MaxClipboardBytes);
-                    var pushZip = push.Zip?.Length > 0 ? push.Zip : null;
-                    _lastPushed = new ClipboardSnapshot(pushText, pushPrimary, pushImage, pushZip);
-                    List<TempFileEntry>? tempFiles = null;
-                    if (pushZip != null && _clipboardSync.SupportsFiles)
-                    {
-                        try { tempFiles = _tempFileManager.ExtractZip(pushZip); }
-                        catch (Exception ex) { _log.LogWarning(ex, "Failed to extract clipboard zip from {Host}", sourceHost); }
-                    }
-                    _clipboardSync.SetClipboard(pushText, pushPrimary, pushImage, tempFiles);
+                    _lastPushed = new ClipboardSnapshot(pushText, pushPrimary, pushImage);
+                    _clipboardSync.SetClipboard(pushText, pushPrimary, pushImage);
                 }
                 break;
             case MessageKind.ClipboardPull:
@@ -184,15 +175,8 @@ public class SlaveRelayConnection : RelayConnection
                     text = null;
                 }
 
-                var pullZip = (_clipboardSync.SupportsFiles ? ClipboardUtils.CreateClipboardZip(_clipboardSync.GetFilePaths(), _log) : null) ?? _lastPushed?.Zip;
-                long zipBytes = pullZip?.Length ?? 0;
-                if (textBytes + primaryBytes + imageBytes + zipBytes > ClipboardUtils.MaxClipboardBytes)
-                {
-                    _log.LogWarning("Clipboard pull response still too large ({Total} bytes), dropping zip", textBytes + primaryBytes + imageBytes + zipBytes);
-                    pullZip = null;
-                }
-                _log.LogDebug("Pull response: text={TextLen}, primary={PrimaryLen}, image={ImageLen}, zip={ZipLen}", text?.Length, primary?.Length, image?.Length, pullZip?.Length);
-                var response = MessageSerializer.Encode(MessageKind.ClipboardPullResponse, new ClipboardPullResponseMessage(text, primary, image, pullZip));
+                _log.LogDebug("Pull response: text={TextLen}, primary={PrimaryLen}, image={ImageLen}", text?.Length, primary?.Length, image?.Length);
+                var response = MessageSerializer.Encode(MessageKind.ClipboardPullResponse, new ClipboardPullResponseMessage(text, primary, image));
                 _ = Send([sourceHost], response).AsTask();
                 break;
             default:

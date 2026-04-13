@@ -37,21 +37,7 @@ if (OperatingSystem.IsWindows())
     if (args.Contains("--uninstall-service")) { ServiceCommands.Uninstall(); return; }
     if (args.Contains("--service")) { ServiceHost.Run(args); return; }
     if (args.Contains("--session"))
-    {
         RunMode.IsSessionChild = true;
-        // enable dynamic cloaking so COM outgoing calls use the thread's impersonation token
-        // rather than the process (SYSTEM/winlogon) token. must be called before any COM init.
-        // without this, OleGetClipboard / IDataObject.GetData reject requests from SYSTEM.
-        const uint rpcAuthnLevelDefault = 0;
-        const uint rpcImpLevelImpersonate = 3;
-        const uint eoaDynamicCloaking = 0x40;
-        // RPC_E_TOO_LATE (0x80010119) if COM was already initialised — log so we know
-        var coHr = Hydra.Platform.Windows.NativeMethods.CoInitializeSecurity(
-            nint.Zero, -1, nint.Zero, nint.Zero,
-            rpcAuthnLevelDefault, rpcImpLevelImpersonate,
-            nint.Zero, eoaDynamicCloaking, nint.Zero);
-        Console.Error.WriteLine($"[dbg] CoInitializeSecurity hr=0x{coHr:X}");
-    }
 }
 
 HydraConfigFile configFile;
@@ -246,13 +232,6 @@ if (config != null)
         services.AddSingleton<IClipboardSync, XorgClipboardSync>();
     else
         services.AddSingleton<IClipboardSync, NullClipboardSync>();
-    // when running as service child, the process token is SYSTEM so Path.GetTempPath() resolves
-    // to SYSTEM's temp dir. read %TEMP% from the environment instead — it was set from the user
-    // token's profile when the child was launched via CreateProcessAsUser + CreateEnvironmentBlock.
-    var tempBasePath = OperatingSystem.IsWindows() && RunMode.IsSessionChild
-        ? Path.Combine(Environment.GetEnvironmentVariable("TEMP") ?? Path.GetTempPath(), "Hydra", "clipboard-files")
-        : null;
-    services.AddSingleton(sp => new TempFileManager(sp.GetRequiredService<ILogger<TempFileManager>>(), tempBasePath));
 
     if (!RunMode.IsSessionChild)
         services.AddHostedService<SelfUpdater>();

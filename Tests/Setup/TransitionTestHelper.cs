@@ -14,8 +14,6 @@ public static class TransitionTestHelper
     public static IHydraProfile Profile(string name, HydraConfig? config = null) =>
         new HydraProfile(new HydraConfigFile { Name = name }, config);
 
-    public static readonly TempFileManager TempFiles = new(NullLogger<TempFileManager>.Instance);
-
     // "home" is the local screen; "remote" is a real remote host
     public static readonly IHydraProfile TestConfig = Profile("home", new HydraConfig
     {
@@ -40,7 +38,7 @@ public static class TransitionTestHelper
         var platform = new FakePlatform();
         var relay = new FakeRelay();
         var screens = new FakeScreenDetector();
-        var service = new InputRouter(platform, TestConfig, relay, screens, NullLoggerFactory.Instance, NullLogger<InputRouter>.Instance, new NullScreenSaverSync(), new NullClipboardSync(), TempFiles);
+        var service = new InputRouter(platform, TestConfig, relay, screens, NullLoggerFactory.Instance, NullLogger<InputRouter>.Instance, new NullScreenSaverSync(), new NullClipboardSync());
         return new TestServiceBundle(platform, relay, service);
     }
 
@@ -64,7 +62,7 @@ public static class TransitionTestHelper
         var platform = new FakePlatform();
         var relay = new FakeRelay();
         var screens = new FakeScreenDetector();
-        var service = new InputRouter(platform, config ?? RemoteOnlyConfig, relay, screens, NullLoggerFactory.Instance, NullLogger<InputRouter>.Instance, new NullScreenSaverSync(), new NullClipboardSync(), TempFiles);
+        var service = new InputRouter(platform, config ?? RemoteOnlyConfig, relay, screens, NullLoggerFactory.Instance, NullLogger<InputRouter>.Instance, new NullScreenSaverSync(), new NullClipboardSync());
         return new TestServiceBundle(platform, relay, service);
     }
 

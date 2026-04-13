@@ -141,9 +141,9 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
         _ = NativeMethods.XFlush(_display);
     }
 
-    public void SetClipboard(string? text, string? primaryText, byte[]? imagePng, List<TempFileEntry>? files = null)
+    public void SetClipboard(string? text, string? primaryText, byte[]? imagePng)
     {
-        if (text == null && primaryText == null && imagePng == null && files == null) return;
+        if (text == null && primaryText == null && imagePng == null) return;
 
         if (text != null) _lastSetText = text;
         if (imagePng != null) _lastSetImageHash = ClipboardUtils.QuickHash(imagePng);

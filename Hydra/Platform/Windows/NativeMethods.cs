@@ -407,7 +407,6 @@ internal static partial class NativeMethods
     internal const uint CF_UNICODETEXT = 13;
     internal const uint CF_BITMAP = 2;
     internal const uint CF_DIB = 8;
-    internal const uint CF_HDROP = 15;
     internal const uint GMEM_MOVEABLE = 0x0002;
     internal const uint GMEM_DDESHARE = 0x2000;
 
@@ -419,15 +418,6 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool IsClipboardFormatAvailable(uint format);
-
-    [LibraryImport(User32)]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
-    internal static partial uint EnumClipboardFormats(uint format);
-
-#pragma warning disable SYSLIB1054
-    [DllImport(User32, EntryPoint = "GetClipboardFormatNameW", CharSet = CharSet.Unicode)]
-    internal static extern int GetClipboardFormatName(uint format, System.Text.StringBuilder lpszFormatName, int cchMaxCount);
-#pragma warning restore SYSLIB1054
 
     [LibraryImport(Kernel32)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
@@ -507,16 +497,7 @@ internal static partial class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool CloseDesktop(nint hDesktop);
 
-    // -- shell (file clipboard) --
-
-    private const string Shell32 = "shell32.dll";
-
-    // iFile = 0xFFFFFFFF → returns count; otherwise fills lpszFile with the Nth path
-    [LibraryImport(Shell32, EntryPoint = "DragQueryFileW")]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
-    internal static unsafe partial uint DragQueryFileW(nint hDrop, uint iFile, char* lpszFile, uint cch);
-
-    // -- OLE (required for clipboard interop with Explorer) --
+    // -- OLE (required for clipboard image interop) --
 
     private const string Ole32 = "ole32.dll";
 
@@ -537,37 +518,6 @@ internal static partial class NativeMethods
     internal static extern void ReleaseStgMedium(ref System.Runtime.InteropServices.ComTypes.STGMEDIUM pMedium);
 #pragma warning restore SYSLIB1054
 
-    // -- COM security --
-
-    [LibraryImport(Ole32)]
-    internal static partial int CoInitializeSecurity(
-        nint pSecDesc, int cAuthSvc, nint asAuthSvc, nint pReserved1,
-        uint dwAuthnLevel, uint dwImpLevel, nint pAuthList, uint dwCapabilities, nint pReserved3);
-
-    [LibraryImport(Ole32)]
-    internal static partial int CoSetProxyBlanket(
-        nint pProxy, uint dwAuthnSvc, uint dwAuthzSvc, nint pServerPrincName,
-        uint dwAuthnLevel, uint dwImpLevel, nint pAuthInfo, uint dwCapabilities);
-
-    // -- impersonation (for clipboard file reads under SYSTEM token) --
-
-    private const string Advapi32 = "advapi32.dll";
-    private const string Wtsapi32 = "wtsapi32.dll";
-
-    [LibraryImport(Kernel32, EntryPoint = "WTSGetActiveConsoleSessionId")]
-    internal static partial uint GetActiveConsoleSessionId();
-
-    [LibraryImport(Wtsapi32, SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    internal static partial bool WTSQueryUserToken(uint sessionId, out Microsoft.Win32.SafeHandles.SafeAccessTokenHandle phToken);
-
-    [LibraryImport(Advapi32, SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    internal static partial bool ImpersonateLoggedOnUser(Microsoft.Win32.SafeHandles.SafeAccessTokenHandle hToken);
-
-    [LibraryImport(Advapi32, SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    internal static partial bool RevertToSelf();
 }
 
 [UnmanagedFunctionPointer(CallingConvention.StdCall)]
