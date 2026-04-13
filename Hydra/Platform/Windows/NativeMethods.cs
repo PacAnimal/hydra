@@ -528,6 +528,13 @@ internal static partial class NativeMethods
     internal static extern void ReleaseStgMedium(ref System.Runtime.InteropServices.ComTypes.STGMEDIUM pMedium);
 #pragma warning restore SYSLIB1054
 
+    // -- COM security --
+
+    [LibraryImport(Ole32)]
+    internal static partial int CoInitializeSecurity(
+        nint pSecDesc, int cAuthSvc, nint asAuthSvc, nint pReserved1,
+        uint dwAuthnLevel, uint dwImpLevel, nint pAuthList, uint dwCapabilities, nint pReserved3);
+
     // -- impersonation (for clipboard file reads under SYSTEM token) --
 
     private const string Advapi32 = "advapi32.dll";

@@ -36,7 +36,21 @@ if (OperatingSystem.IsWindows())
     if (args.Contains("--install-service")) { ServiceCommands.Install(); return; }
     if (args.Contains("--uninstall-service")) { ServiceCommands.Uninstall(); return; }
     if (args.Contains("--service")) { ServiceHost.Run(args); return; }
-    if (args.Contains("--session")) RunMode.IsSessionChild = true;
+    if (args.Contains("--session"))
+    {
+        RunMode.IsSessionChild = true;
+        // enable dynamic cloaking so COM outgoing calls use the thread's impersonation token
+        // rather than the process (SYSTEM/winlogon) token. must be called before any COM init.
+        // without this, OleGetClipboard / IDataObject.GetData reject requests from SYSTEM.
+        const uint rpcAuthnLevelDefault = 0;
+        const uint rpcImpLevelImpersonate = 3;
+        const uint eoaDynamicCloaking = 0x40;
+        // RPC_E_TOO_LATE if COM was already initialised — ignore, best effort
+        _ = Hydra.Platform.Windows.NativeMethods.CoInitializeSecurity(
+            nint.Zero, -1, nint.Zero, nint.Zero,
+            rpcAuthnLevelDefault, rpcImpLevelImpersonate,
+            nint.Zero, eoaDynamicCloaking, nint.Zero);
+    }
 }
 
 HydraConfigFile configFile;

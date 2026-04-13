@@ -159,6 +159,7 @@ public sealed class WindowsClipboardSync(ILogger<WindowsClipboardSync> log) : IC
     {
         if (!NativeMethods.IsClipboardFormatAvailable(NativeMethods.CF_HDROP)) return null;
         using var userToken = AcquireSessionUserToken();
+        _log.LogDebug("TryReadFilePathsWin32: CF_HDROP available, userToken={HasToken}", userToken != null);
         if (userToken != null) NativeMethods.ImpersonateLoggedOnUser(userToken);
         try
         {
@@ -166,6 +167,7 @@ public sealed class WindowsClipboardSync(ILogger<WindowsClipboardSync> log) : IC
             try
             {
                 var hDrop = NativeMethods.GetClipboardData(NativeMethods.CF_HDROP);
+                _log.LogDebug("TryReadFilePathsWin32: GetClipboardData hDrop={Drop}", hDrop);
                 return hDrop == nint.Zero ? null : ExtractPathsFromHDrop(hDrop);
             }
             finally
@@ -183,6 +185,7 @@ public sealed class WindowsClipboardSync(ILogger<WindowsClipboardSync> log) : IC
     {
         List<string>? result = null;
         using var userToken = AcquireSessionUserToken();
+        _log.LogDebug("ReadFilePathsOle: userToken={HasToken}", userToken != null);
         var t = new Thread(() =>
         {
             // impersonate the interactive user so Explorer's OLE proxy allows the data object request
@@ -220,7 +223,9 @@ public sealed class WindowsClipboardSync(ILogger<WindowsClipboardSync> log) : IC
     {
         try
         {
-            if (NativeMethods.OleGetClipboard(out var dataObj) != 0) return null;
+            var hr = NativeMethods.OleGetClipboard(out var dataObj);
+            _log.LogDebug("OleGetClipboard hr={Hr:X}", hr);
+            if (hr != 0) return null;
 
             var fmt = new System.Runtime.InteropServices.ComTypes.FORMATETC
             {
