@@ -45,11 +45,12 @@ if (OperatingSystem.IsWindows())
         const uint rpcAuthnLevelDefault = 0;
         const uint rpcImpLevelImpersonate = 3;
         const uint eoaDynamicCloaking = 0x40;
-        // RPC_E_TOO_LATE if COM was already initialised — ignore, best effort
-        _ = Hydra.Platform.Windows.NativeMethods.CoInitializeSecurity(
+        // RPC_E_TOO_LATE (0x80010119) if COM was already initialised — log so we know
+        var coHr = Hydra.Platform.Windows.NativeMethods.CoInitializeSecurity(
             nint.Zero, -1, nint.Zero, nint.Zero,
             rpcAuthnLevelDefault, rpcImpLevelImpersonate,
             nint.Zero, eoaDynamicCloaking, nint.Zero);
+        Console.Error.WriteLine($"[dbg] CoInitializeSecurity hr=0x{coHr:X}");
     }
 }
 

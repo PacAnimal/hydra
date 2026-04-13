@@ -227,6 +227,35 @@ public sealed class WindowsClipboardSync(ILogger<WindowsClipboardSync> log) : IC
             _log.LogDebug("OleGetClipboard hr={Hr:X}", hr);
             if (hr != 0) return null;
 
+            // CoInitializeSecurity is often RPC_E_TOO_LATE by the time we call it, so set
+            // dynamic cloaking directly on this proxy — COM then uses the thread's impersonated
+            // user token instead of the process (SYSTEM) token when calling into Explorer
+            if (RunMode.IsSessionChild)
+            {
+                var pProxy = Marshal.GetComInterfaceForObject(dataObj,
+                    typeof(System.Runtime.InteropServices.ComTypes.IDataObject));
+                try
+                {
+                    var blanketHr = NativeMethods.CoSetProxyBlanket(pProxy,
+                        0xFFFFFFFF, 0xFFFFFFFF, nint.Zero,  // RPC_C_AUTHN_DEFAULT, RPC_C_AUTHZ_DEFAULT, COLE_DEFAULT_PRINCIPAL
+                        0xFFFFFFFF, 3,                       // RPC_C_AUTHN_LEVEL_DEFAULT, RPC_C_IMP_LEVEL_IMPERSONATE
+                        nint.Zero, 0x40);                    // pAuthInfo=null (use thread token), EOAC_DYNAMIC_CLOAKING
+                    _log.LogDebug("CoSetProxyBlanket hr={Hr:X}", blanketHr);
+                }
+                finally { Marshal.Release(pProxy); }
+            }
+
+            // log all available formats so we can see what Explorer actually exposes
+            var enumFmt = dataObj.EnumFormatEtc(System.Runtime.InteropServices.ComTypes.DATADIR.DATADIR_GET);
+            if (enumFmt != null)
+            {
+                enumFmt.Reset();
+                var buf = new System.Runtime.InteropServices.ComTypes.FORMATETC[1];
+                var fetched = new int[1];
+                while (enumFmt.Next(1, buf, fetched) == 0)
+                    _log.LogDebug("OLE available format: cfFormat={Fmt} tymed={Tymed}", (ushort)buf[0].cfFormat, buf[0].tymed);
+            }
+
             var fmt = new System.Runtime.InteropServices.ComTypes.FORMATETC
             {
                 cfFormat = (short)NativeMethods.CF_HDROP,

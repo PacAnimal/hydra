@@ -535,6 +535,11 @@ internal static partial class NativeMethods
         nint pSecDesc, int cAuthSvc, nint asAuthSvc, nint pReserved1,
         uint dwAuthnLevel, uint dwImpLevel, nint pAuthList, uint dwCapabilities, nint pReserved3);
 
+    [LibraryImport(Ole32)]
+    internal static partial int CoSetProxyBlanket(
+        nint pProxy, uint dwAuthnSvc, uint dwAuthzSvc, nint pServerPrincName,
+        uint dwAuthnLevel, uint dwImpLevel, nint pAuthInfo, uint dwCapabilities);
+
     // -- impersonation (for clipboard file reads under SYSTEM token) --
 
     private const string Advapi32 = "advapi32.dll";
