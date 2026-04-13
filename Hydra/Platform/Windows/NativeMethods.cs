@@ -519,11 +519,11 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     internal static partial void OleUninitialize();
 
-    [LibraryImport(Ole32)]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
-    internal static partial int OleGetClipboard([MarshalAs(UnmanagedType.Interface)] out System.Runtime.InteropServices.ComTypes.IDataObject ppDataObj);
-
 #pragma warning disable SYSLIB1054
+    // DllImport required — LibraryImport's new COM marshaller returns ComObject which can't cast to legacy IDataObject
+    [DllImport(Ole32)]
+    internal static extern int OleGetClipboard([MarshalAs(UnmanagedType.Interface)] out System.Runtime.InteropServices.ComTypes.IDataObject ppDataObj);
+
     [DllImport(Ole32)]
     internal static extern void ReleaseStgMedium(ref System.Runtime.InteropServices.ComTypes.STGMEDIUM pMedium);
 #pragma warning restore SYSLIB1054

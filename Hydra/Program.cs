@@ -19,7 +19,12 @@ Console.OutputEncoding = Encoding.UTF8;
 
 // catch unhandled exceptions on any thread before they silently kill the process
 AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+{
     Console.Error.WriteLine($"[FATAL] Unhandled exception (terminating={e.IsTerminating}): {e.ExceptionObject}");
+    // restore system cursors in case we crash while they're blanked
+    if (OperatingSystem.IsWindows())
+        Hydra.Platform.Windows.WindowsCursorSnapshot.RestoreDefaults();
+};
 TaskScheduler.UnobservedTaskException += (_, e) =>
 {
     Console.Error.WriteLine($"[FATAL] Unobserved task exception: {e.Exception}");

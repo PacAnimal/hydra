@@ -189,33 +189,41 @@ public sealed class WindowsClipboardSync(ILogger<WindowsClipboardSync> log) : IC
 
     private List<string>? ReadFilePathsFromDataObject()
     {
-        if (NativeMethods.OleGetClipboard(out var dataObj) != 0) return null;
-
-        var fmt = new System.Runtime.InteropServices.ComTypes.FORMATETC
+        try
         {
-            cfFormat = (short)NativeMethods.CF_HDROP,
-            ptd = nint.Zero,
-            dwAspect = System.Runtime.InteropServices.ComTypes.DVASPECT.DVASPECT_CONTENT,
-            lindex = -1,
-            tymed = System.Runtime.InteropServices.ComTypes.TYMED.TYMED_HGLOBAL,
-        };
+            if (NativeMethods.OleGetClipboard(out var dataObj) != 0) return null;
 
-        System.Runtime.InteropServices.ComTypes.STGMEDIUM medium;
-        try { dataObj.GetData(ref fmt, out medium); }
+            var fmt = new System.Runtime.InteropServices.ComTypes.FORMATETC
+            {
+                cfFormat = (short)NativeMethods.CF_HDROP,
+                ptd = nint.Zero,
+                dwAspect = System.Runtime.InteropServices.ComTypes.DVASPECT.DVASPECT_CONTENT,
+                lindex = -1,
+                tymed = System.Runtime.InteropServices.ComTypes.TYMED.TYMED_HGLOBAL,
+            };
+
+            System.Runtime.InteropServices.ComTypes.STGMEDIUM medium;
+            try { dataObj.GetData(ref fmt, out medium); }
+            catch (Exception ex)
+            {
+                _log.LogDebug(ex, "OLE GetData(CF_HDROP) failed — no files on clipboard");
+                return null;
+            }
+
+            if (medium.tymed != System.Runtime.InteropServices.ComTypes.TYMED.TYMED_HGLOBAL || medium.unionmember == nint.Zero)
+            {
+                NativeMethods.ReleaseStgMedium(ref medium);
+                return null;
+            }
+
+            try { return ExtractPathsFromHDrop(medium.unionmember); }
+            finally { NativeMethods.ReleaseStgMedium(ref medium); }
+        }
         catch (Exception ex)
         {
-            _log.LogDebug(ex, "OLE GetData(CF_HDROP) failed — no files on clipboard");
+            _log.LogDebug(ex, "OLE clipboard read failed");
             return null;
         }
-
-        if (medium.tymed != System.Runtime.InteropServices.ComTypes.TYMED.TYMED_HGLOBAL || medium.unionmember == nint.Zero)
-        {
-            NativeMethods.ReleaseStgMedium(ref medium);
-            return null;
-        }
-
-        try { return ExtractPathsFromHDrop(medium.unionmember); }
-        finally { NativeMethods.ReleaseStgMedium(ref medium); }
     }
 
     private static List<string>? ExtractPathsFromHDrop(nint hDrop)

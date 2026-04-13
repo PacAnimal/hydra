@@ -54,6 +54,10 @@ internal sealed class WindowsCursorSnapshot : IDisposable
         }
     }
 
+    // last-resort crash recovery — reloads defaults from the registry
+    internal static void RestoreDefaults() =>
+        NativeMethods.SystemParametersInfo(NativeMethods.SPI_SETCURSORS, 0, nint.Zero, 0);
+
     public void Dispose()
     {
         if (IsHidden) Restore();

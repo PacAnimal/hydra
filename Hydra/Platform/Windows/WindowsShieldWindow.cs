@@ -82,10 +82,15 @@ internal sealed class WindowsShieldWindow
         NativeMethods.SetForegroundWindow(_hwnd);
     }
 
-    // called inline from HideCursor() — SetSystemCursor is system-wide, safe inside a hook callback
+    // called inline from HideCursor()/ShowCursor() — SetSystemCursor is system-wide, safe inside a hook callback
     internal void HideCursorNow()
     {
         if (!_debugShield) _cursor.Hide();
+    }
+
+    internal void ShowCursorNow()
+    {
+        if (!_debugShield) _cursor.Show();
     }
 
     internal void Hide()

@@ -56,6 +56,8 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, bool d
 
     public Task ShowCursor()
     {
+        // restore cursor synchronously, same as HideCursor hides it — then post shield teardown
+        _shield.ShowCursorNow();
         NativeMethods.PostThreadMessage(_hookThreadId, WmShieldHide, nint.Zero, nint.Zero);
         return Task.CompletedTask;
     }
