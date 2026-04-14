@@ -187,6 +187,30 @@ public class ScreenLayout(List<ScreenRect> screens, List<HostConfig> configs, in
         };
     }
 
+    // returns the active edge ranges for all local screens, with dead corners trimmed.
+    // each entry describes a pixel range along one edge of one local screen where a transition exists.
+    public List<ActiveEdgeRange> GetLocalEdgeRanges()
+    {
+        var result = new List<ActiveEdgeRange>();
+        foreach (var ((name, dir), links) in _graph)
+        {
+            var screen = screens.FirstOrDefault(s => s.Name == name && s.IsLocal);
+            if (screen == null) continue;
+            var edgeLen = dir is Direction.Left or Direction.Right ? screen.Height : screen.Width;
+            if (edgeLen <= 0) continue;
+            var dc = _deadCorners.GetValueOrDefault(name);
+
+            foreach (var link in links)
+            {
+                var pxStart = Math.Max((int)(link.SourceStart * edgeLen), dc);
+                var pxEnd = Math.Min((int)(link.SourceEnd * edgeLen), edgeLen - dc);
+                if (pxStart >= pxEnd) continue;
+                result.Add(new ActiveEdgeRange(screen, dir, pxStart, pxEnd));
+            }
+        }
+        return result;
+    }
+
     private record EntryPoint(int X, int Y);
 
     // one entry per edge segment connection
@@ -195,3 +219,6 @@ public class ScreenLayout(List<ScreenRect> screens, List<HostConfig> configs, in
         float DestStart, float DestEnd,       // normalized [0,1] range on dest edge
         ScreenRect Destination);
 }
+
+// pixel range along one edge of a local screen where a transition exists
+public record ActiveEdgeRange(ScreenRect Screen, Direction Direction, int PixelStart, int PixelEnd);

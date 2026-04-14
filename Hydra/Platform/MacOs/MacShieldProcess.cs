@@ -1,17 +1,20 @@
 using System.Diagnostics;
 using Cathedral.Extensions;
+using Cathedral.Utils;
+using Hydra.FileTransfer;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform.MacOs;
 
 // launches the hydra-shield Swift binary (shipped alongside the executable).
-// provides two services:
+// provides three services:
 //   1. cursor shielding window — controlled via stdin (CmdHide/CmdShow/CmdDebug)
 //      shield echoes the command back on stdout after applying state; C# holds the send lock until the echo arrives
 //   2. network state detection — send CmdWifi via stdin to activate; shield reports PfxSsid/PfxWifiAuth on stdout
+//   3. file transfer progress panel — fire-and-forget stdin commands, cancel via stdout
 // always runs on macOS (both master and slave) so network detection is always available.
-internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsWifi) : IHostedService, IDisposable
+internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsWifi) : IHostedService, IDisposable, IFileTransferDialog
 {
     // stdin commands (C# → shield)
     private const string CmdHide = "0"; // pass-through: ignoresMouseEvents = true
@@ -22,14 +25,24 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
     // stdout prefixes (shield → C#)
     private const string PfxSsid = "ssid:";
     private const string PfxWifiAuth = "wifiauth:";
+    private const string PfxTransferCancel = "transfer:cancel";
+
+    // IFileTransferDialog
+    public event Action? CancelRequested;
 
     private readonly string _binaryPath = Path.Combine(AppContext.BaseDirectory, "Resources", "MacShield", "hydra-shield.app", "Contents", "MacOS", "hydra-shield");
     private readonly SemaphoreSlim _sendSemaphore = new(1, 1);
     private volatile TaskCompletionSource<string>? _pendingReply; // completed by ReadOutput when echo arrives
     private Process? _process;
     private TaskCompletionSource? _initialStateTcs;
-    private volatile bool _stopping;
+    private readonly Toggle _stopping = new();
     private volatile string _lastState = CmdHide; // last show/hide command; re-applied after unexpected restart
+    private const int SendReplyTimeoutMs = 5_000;     // how long to wait for shield to echo a command back
+    private const int RestartInitialDelayMs = 500;    // initial backoff before restarting a crashed shield
+    private const int RestartMaxDelayMs = 30_000;     // backoff cap
+
+    // only accessed from ReadOutput's single async continuation — no locking needed
+    private TimeSpan _restartDelay = TimeSpan.FromMilliseconds(RestartInitialDelayMs); // exponential backoff; reset on healthy output
 
     // assigned after DI builds so post-startup state changes are logged through the normal pipeline
     internal ILogger? Log { get; set; }
@@ -66,6 +79,27 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
     internal Task Show() { _lastState = DebugShield ? CmdDebug : CmdShow; return SendWithReply(_lastState); }
     internal Task Hide() { _lastState = CmdHide; return SendWithReply(CmdHide); }
 
+    // -- IFileTransferDialog --
+
+    public void ShowPending(FileTransferInfo info)
+    {
+        // format: transfer:pending;{totalBytes};{fileCount};{isSender};{b64name1|b64name2|...}
+        // names are base64-encoded to handle filenames containing ; or |
+        var names = string.Join("|", info.FileNames.Select(n => Base64(n)));
+        _ = SendFireAndForget($"transfer:pending;{info.TotalBytes};{info.FileCount};{info.IsSender.ToString().ToLowerInvariant()};{names}");
+    }
+
+    public void ShowTransferring(FileTransferInfo info) => _ = SendFireAndForget("transfer:start");
+
+    public void UpdateProgress(long bytesTransferred, double bytesPerSecond)
+        => _ = SendFireAndForget($"transfer:progress:{bytesTransferred}:{bytesPerSecond:F0}");
+
+    public void ShowCompleted() => _ = SendFireAndForget("transfer:done");
+
+    public void ShowError(string message) => _ = SendFireAndForget($"transfer:error:{Base64(message)}");
+
+    public void Close() => _ = SendFireAndForget("transfer:close");
+
     public void Dispose()
     {
         Stop();
@@ -77,6 +111,7 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
         if (OperatingSystem.IsMacOS()) EnsureExecutable();
         if (!File.Exists(_binaryPath)) return;
 
+        _process?.Dispose();
         _process = Process.Start(new ProcessStartInfo
         {
             FileName = _binaryPath,
@@ -101,7 +136,7 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
 
     private void Stop()
     {
-        _stopping = true;
+        _stopping.TrySet();
         if (_process is null || _process.HasExited) return;
         try
         {
@@ -128,8 +163,8 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
             _pendingReply = null;
             return;
         }
-        // 5-second safety timeout: if the shield dies without echoing, don't deadlock forever
-        await Task.WhenAny(tcs.Task, Task.Delay(5000));
+        // safety timeout: if the shield dies without echoing, don't deadlock forever
+        await Task.WhenAny(tcs.Task, Task.Delay(SendReplyTimeoutMs));
         _pendingReply = null;
     }
 
@@ -174,6 +209,9 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
                 break;
             }
 
+            // any successful output means the process is healthy — reset restart backoff
+            _restartDelay = TimeSpan.FromMilliseconds(500);
+
             if (line is CmdHide or CmdShow or CmdDebug)
             {
                 // echo from shield confirming show/hide state was applied
@@ -200,18 +238,26 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
                     _ => authStatus.ToString()
                 });
             }
+            else if (line == PfxTransferCancel)
+            {
+                CancelRequested?.Invoke();
+            }
         }
 
         if (!_stopping)
         {
-            // unexpected exit — restart and restore state
-            Log?.LogWarning("Shield process exited unexpectedly — restarting");
-            await Task.Delay(500);
+            // unexpected exit — restart with exponential backoff to avoid rapid crash-loops
+            Log?.LogWarning("Shield process exited unexpectedly — restarting in {Delay}ms", (long)_restartDelay.TotalMilliseconds);
+            await Task.Delay(_restartDelay);
+            _restartDelay = TimeSpan.FromTicks(Math.Min(_restartDelay.Ticks * 2, TimeSpan.FromMilliseconds(RestartMaxDelayMs).Ticks)); // cap
+            var stateToRestore = _lastState; // save before StartProcess calls Hide() which resets _lastState
             StartProcess();
-            if (_lastState != CmdHide)
-                _ = SendWithReply(_lastState);
+            if (stateToRestore != CmdHide)
+                _ = SendWithReply(stateToRestore);
         }
     }
+
+    private static string Base64(string s) => Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(s));
 
     [System.Runtime.Versioning.SupportedOSPlatform("macos")]
     private void EnsureExecutable()

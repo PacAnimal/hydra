@@ -13,16 +13,27 @@ import CoreLocation
 //   stdout PfxSsid+Name   — current WiFi SSID (empty = not connected / not authorized)
 //   stdout PfxWifiAuth+n  — CLAuthorizationStatus raw value (0=notDetermined 1=restricted 2=denied 3/4=authorized)
 // emitted on activation and whenever SSID changes.
+//
+// also manages a file transfer progress panel:
+//   stdin "transfer:pending;{totalBytes};{fileCount};{isSender};{b64name1|b64name2|...}" — show pending state (names are base64-encoded utf-8)
+//   stdin "transfer:start"                                                              — show progress bar
+//   stdin "transfer:progress:{bytes}:{speed}"                                          — update progress
+//   stdin "transfer:done"                                                              — show completed, auto-close
+//   stdin "transfer:error:{message}"                                                   — show error
+//   stdin "transfer:close"                                                             — force close
+//   stdout "transfer:cancel"                                                           — user clicked cancel
 
 // stdin commands (C# → shield)
 let CmdHide  = "0"
 let CmdShow  = "1"
 let CmdDebug = "2"
 let CmdWifi  = "wifi"
+let CmdTransferPrefix  = "transfer:"
 
 // stdout prefixes (shield → C#)
-let PfxSsid     = "ssid:"
-let PfxWifiAuth = "wifiauth:"
+let PfxSsid             = "ssid:"
+let PfxWifiAuth         = "wifiauth:"
+let PfxTransferCancel   = "transfer:cancel"
 
 // writes a line to stdout; exits cleanly if the pipe is broken (parent restarted)
 func writeState(_ line: String) {
@@ -66,6 +77,7 @@ class ShieldDelegate: NSObject, NSApplicationDelegate, CLLocationManagerDelegate
 
     private var locationManager: CLLocationManager?
     private var wifiActive = false // guard against duplicate "wifi" commands
+    private let transferPanel = TransferPanel()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard let screen = NSScreen.main else {
@@ -105,24 +117,28 @@ class ShieldDelegate: NSObject, NSApplicationDelegate, CLLocationManagerDelegate
             while let line = readLine(strippingNewline: true) {
                 DispatchQueue.main.async {
                     guard let self else { return }
-                    switch line {
-                    case CmdShow:
-                        self.desiredAbsorb = true
-                        self.debugMode = false
-                        self.applyState()
-                        writeState(CmdShow)
-                    case CmdDebug:
-                        self.desiredAbsorb = true
-                        self.debugMode = true
-                        self.applyState()
-                        writeState(CmdDebug)
-                    case CmdWifi:
-                        self.startWifiMonitoring()
-                    default: // CmdHide
-                        self.desiredAbsorb = false
-                        self.debugMode = false
-                        self.applyState()
-                        writeState(CmdHide)
+                    if line.hasPrefix(CmdTransferPrefix) {
+                        self.handleTransferCommand(line)
+                    } else {
+                        switch line {
+                        case CmdShow:
+                            self.desiredAbsorb = true
+                            self.debugMode = false
+                            self.applyState()
+                            writeState(CmdShow)
+                        case CmdDebug:
+                            self.desiredAbsorb = true
+                            self.debugMode = true
+                            self.applyState()
+                            writeState(CmdDebug)
+                        case CmdWifi:
+                            self.startWifiMonitoring()
+                        default: // CmdHide
+                            self.desiredAbsorb = false
+                            self.debugMode = false
+                            self.applyState()
+                            writeState(CmdHide)
+                        }
                     }
                 }
             }
@@ -181,6 +197,61 @@ class ShieldDelegate: NSObject, NSApplicationDelegate, CLLocationManagerDelegate
         writeState("\(PfxSsid)\(ssid)")
     }
 
+    // MARK: - Transfer panel commands
+
+    // handles "transfer:pending;{totalBytes};{fileCount};{isSender};{b64name1|b64name2|...}"
+    //          "transfer:start"
+    //          "transfer:progress:{bytes}:{speed}"
+    //          "transfer:done"
+    //          "transfer:error:{message}"
+    //          "transfer:close"
+    private func handleTransferCommand(_ line: String) {
+        let payload = String(line.dropFirst(CmdTransferPrefix.count))
+        if payload == "start" {
+            transferPanel.showTransferring()
+            return
+        }
+        if payload == "done" {
+            transferPanel.showCompleted()
+            return
+        }
+        if payload == "close" {
+            transferPanel.close()
+            return
+        }
+        if payload.hasPrefix("progress:") {
+            let parts = payload.dropFirst("progress:".count).split(separator: ":", maxSplits: 1)
+            if parts.count == 2,
+               let bytes = Int64(parts[0]),
+               let speed = Double(parts[1]) {
+                transferPanel.updateProgress(bytes: bytes, speed: speed)
+            }
+            return
+        }
+        if payload.hasPrefix("error:") {
+            let b64 = String(payload.dropFirst("error:".count))
+            let msg = Data(base64Encoded: b64).flatMap { String(data: $0, encoding: .utf8) } ?? b64
+            transferPanel.showError(msg)
+            return
+        }
+        if payload.hasPrefix("pending;") {
+            // format: pending;{totalBytes};{fileCount};{isSender};{b64name1|b64name2|...}
+            // names are base64-encoded utf-8 to handle special characters
+            let parts = payload.dropFirst("pending;".count).split(separator: ";", maxSplits: 3)
+            if parts.count == 4,
+               let totalBytes = Int64(parts[0]),
+               let fileCount = Int(parts[1]),
+               let isSender = Bool(String(parts[2])) {
+                let names = parts[3].split(separator: "|").compactMap { b64 -> String? in
+                    guard let data = Data(base64Encoded: String(b64)) else { return nil }
+                    return String(data: data, encoding: .utf8)
+                }
+                transferPanel.showPending(names: names, totalBytes: totalBytes, fileCount: fileCount, isSender: isSender)
+            }
+            return
+        }
+    }
+
     // MARK: - Shield window
 
     func applyState() {
@@ -203,6 +274,156 @@ class ShieldDelegate: NSObject, NSApplicationDelegate, CLLocationManagerDelegate
         return opts.contains(.fullScreen)
             || opts.contains(.hideMenuBar)
             || opts.contains(.autoHideMenuBar)
+    }
+}
+
+// MARK: - Transfer panel
+
+class TransferPanel: NSObject {
+    private var panel: NSPanel?
+    private var titleLabel: NSTextField?
+    private var subtitleLabel: NSTextField?
+    private var progressBar: NSProgressIndicator?
+    private var statusLabel: NSTextField?
+    private var cancelButton: NSButton?
+    private var autoCloseTimer: Timer?
+
+    private var totalBytes: Int64 = 0
+
+    func showPending(names: [String], totalBytes: Int64, fileCount: Int, isSender: Bool) {
+        self.totalBytes = totalBytes
+        buildPanelIfNeeded()
+        autoCloseTimer?.invalidate()
+
+        let verb = isSender ? "Sending" : "Receiving"
+        let nameList = names.prefix(3).joined(separator: ", ") + (names.count > 3 ? ", …" : "")
+        titleLabel?.stringValue = "\(verb) \(fileCount) file\(fileCount == 1 ? "" : "s")"
+        subtitleLabel?.stringValue = nameList
+        statusLabel?.stringValue = isSender ? "Drop to send" : "Waiting for sender…"
+        progressBar?.isIndeterminate = true
+        progressBar?.startAnimation(nil)
+        cancelButton?.title = "Cancel"
+        cancelButton?.isHidden = false
+        panel?.orderFrontRegardless()
+    }
+
+    func showTransferring() {
+        statusLabel?.stringValue = "Transferring…"
+        progressBar?.isIndeterminate = false
+        progressBar?.doubleValue = 0
+    }
+
+    func updateProgress(bytes: Int64, speed: Double) {
+        if totalBytes > 0 {
+            progressBar?.doubleValue = Double(bytes) / Double(totalBytes) * 100.0
+        }
+        let speedStr = TransferPanel.formatSpeed(speed)
+        statusLabel?.stringValue = "\(TransferPanel.formatBytes(bytes)) / \(TransferPanel.formatBytes(totalBytes))  ·  \(speedStr)"
+    }
+
+    func showCompleted() {
+        progressBar?.doubleValue = 100
+        statusLabel?.stringValue = "Transfer complete"
+        cancelButton?.isHidden = true
+        autoCloseTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [weak self] _ in
+            self?.close()
+        }
+    }
+
+    func showError(_ message: String) {
+        progressBar?.isIndeterminate = false
+        statusLabel?.stringValue = "Error: \(message)"
+        cancelButton?.title = "Close"
+    }
+
+    func close() {
+        autoCloseTimer?.invalidate()
+        autoCloseTimer = nil
+        panel?.orderOut(nil)
+    }
+
+    private func buildPanelIfNeeded() {
+        guard panel == nil else { return }
+
+        let w: CGFloat = 360, h: CGFloat = 140
+        let screen = NSScreen.main ?? NSScreen.screens[0]
+        let sx = screen.visibleFrame.midX - w / 2
+        let sy = screen.visibleFrame.maxY - h - 60
+
+        let p = NSPanel(
+            contentRect: NSRect(x: sx, y: sy, width: w, height: h),
+            styleMask: [.titled, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false)
+        p.title = "Hydra File Transfer"
+        p.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.floatingWindow)))
+        p.collectionBehavior = [.canJoinAllSpaces, .stationary]
+        p.isReleasedWhenClosed = false
+
+        let cv = p.contentView!
+
+        // title
+        let tl = NSTextField(labelWithString: "")
+        tl.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
+        tl.frame = NSRect(x: 16, y: h - 38, width: w - 32, height: 20)
+        cv.addSubview(tl)
+        titleLabel = tl
+
+        // subtitle (file names)
+        let sl = NSTextField(labelWithString: "")
+        sl.font = NSFont.systemFont(ofSize: 11)
+        sl.textColor = .secondaryLabelColor
+        sl.lineBreakMode = .byTruncatingTail
+        sl.frame = NSRect(x: 16, y: h - 58, width: w - 32, height: 16)
+        cv.addSubview(sl)
+        subtitleLabel = sl
+
+        // progress bar
+        let pb = NSProgressIndicator()
+        pb.style = .bar
+        pb.minValue = 0
+        pb.maxValue = 100
+        pb.frame = NSRect(x: 16, y: h - 88, width: w - 32, height: 16)
+        cv.addSubview(pb)
+        progressBar = pb
+
+        // status label
+        let stl = NSTextField(labelWithString: "")
+        stl.font = NSFont.systemFont(ofSize: 10)
+        stl.textColor = .secondaryLabelColor
+        stl.frame = NSRect(x: 16, y: h - 106, width: w - 100, height: 14)
+        cv.addSubview(stl)
+        statusLabel = stl
+
+        // cancel button
+        let btn = NSButton(title: "Cancel", target: self, action: #selector(onCancel))
+        btn.frame = NSRect(x: w - 88, y: 12, width: 72, height: 22)
+        btn.bezelStyle = .rounded
+        cv.addSubview(btn)
+        cancelButton = btn
+
+        panel = p
+    }
+
+    @objc private func onCancel() {
+        writeState(PfxTransferCancel)
+        close()
+    }
+
+    private static func formatBytes(_ bytes: Int64) -> String {
+        let kb: Double = 1024, mb = kb * 1024, gb = mb * 1024
+        let d = Double(bytes)
+        if d >= gb { return String(format: "%.1f GB", d / gb) }
+        if d >= mb { return String(format: "%.1f MB", d / mb) }
+        if d >= kb { return String(format: "%.0f KB", d / kb) }
+        return "\(bytes) B"
+    }
+
+    private static func formatSpeed(_ bps: Double) -> String {
+        let kb: Double = 1024, mb = kb * 1024
+        if bps >= mb { return String(format: "%.1f MB/s", bps / mb) }
+        if bps >= kb { return String(format: "%.0f KB/s", bps / kb) }
+        return String(format: "%.0f B/s", bps)
     }
 }
 

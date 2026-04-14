@@ -3,6 +3,7 @@ using Cathedral.Extensions;
 using Cathedral.Logging;
 using Cathedral.Utils;
 using Hydra.Config;
+using Hydra.FileTransfer;
 using Hydra.Platform;
 using Hydra.Platform.Linux;
 using Hydra.Platform.MacOs;
@@ -23,7 +24,7 @@ AppDomain.CurrentDomain.UnhandledException += (_, e) =>
     Console.Error.WriteLine($"[FATAL] Unhandled exception (terminating={e.IsTerminating}): {e.ExceptionObject}");
     // restore system cursors in case we crash while they're blanked
     if (OperatingSystem.IsWindows())
-        Hydra.Platform.Windows.WindowsCursorSnapshot.RestoreDefaults();
+        WindowsCursorSnapshot.RestoreDefaults();
 };
 TaskScheduler.UnobservedTaskException += (_, e) =>
 {
@@ -235,6 +236,29 @@ if (config != null)
 
     if (!RunMode.IsSessionChild)
         services.AddHostedService<SelfUpdater>();
+
+    // file transfer: drag source, dialog, and drop target resolver depend on platform; service is shared master/slave
+    if (OperatingSystem.IsMacOS())
+    {
+        services.AddSingleton<IFileDragSource, MacFileDragSource>();
+        // macShield implements IFileTransferDialog (already registered as singleton above)
+        services.AddSingleton<IFileTransferDialog>(sp => sp.GetRequiredService<MacShieldProcess>());
+        services.AddSingleton<IDropTargetResolver, MacDropTargetResolver>();
+    }
+    else if (OperatingSystem.IsWindows())
+    {
+        services.AddSingleton<IFileDragSource, WindowsFileDragSource>();
+        services.AddSingleton<IFileTransferDialog, WindowsTransferDialog>();
+        services.AddSingleton<IDropTargetResolver, WindowsDropTargetResolver>();
+    }
+    else
+    {
+        startupLog.LogInformation("File drag-and-drop not supported on this platform — transfer disabled");
+        services.AddSingleton<IFileDragSource, NullFileDragSource>();
+        services.AddSingleton<IFileTransferDialog, NullFileTransferDialog>();
+        services.AddSingleton<IDropTargetResolver, NullDropTargetResolver>();
+    }
+    services.AddSingleton<FileTransferService>();
 
     if (profile.NetworkConfig != null)
     {

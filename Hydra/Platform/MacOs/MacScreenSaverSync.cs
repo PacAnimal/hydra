@@ -1,10 +1,9 @@
 using System.Diagnostics;
-using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform.MacOs;
 
-public sealed partial class MacScreenSaverSync(ILogger<MacScreenSaverSync> log) : IScreenSaverSync
+public sealed class MacScreenSaverSync(ILogger<MacScreenSaverSync> log) : IScreenSaverSync
 {
     // distributed notification names posted by ScreenSaverEngine
     private const string DidStart = "com.apple.screensaver.didstart";
@@ -31,7 +30,7 @@ public sealed partial class MacScreenSaverSync(ILogger<MacScreenSaverSync> log) 
         _callback = (_, _, name, _, _) =>
         {
             // resolve CFStringRef name to a managed string for comparison
-            var str = CfStringToString(name);
+            var str = NativeMethods.CfStringToManaged(name) ?? "";
             if (str == DidStart)
             {
                 log.LogInformation("Screensaver started (notification received)");
@@ -44,8 +43,8 @@ public sealed partial class MacScreenSaverSync(ILogger<MacScreenSaverSync> log) 
             }
         };
 
-        var nameStart = NativeMethods.CFStringCreateWithCString(nint.Zero, DidStart, NativeMethods.KCFStringEncodingUtf8);
-        var nameStop = NativeMethods.CFStringCreateWithCString(nint.Zero, DidStop, NativeMethods.KCFStringEncodingUtf8);
+        var nameStart = NativeMethods.MakeNsString(DidStart);
+        var nameStop = NativeMethods.MakeNsString(DidStop);
 
         // use a stable observer pointer (1 / 2) to distinguish the two registrations on removal
         NativeMethods.CFNotificationCenterAddObserver(_center, 1, _callback, nameStart, nint.Zero,
@@ -62,8 +61,8 @@ public sealed partial class MacScreenSaverSync(ILogger<MacScreenSaverSync> log) 
         if (_center == nint.Zero) return;
         log.LogInformation("Stopped watching for screensaver notifications");
 
-        var nameStart = NativeMethods.CFStringCreateWithCString(nint.Zero, DidStart, NativeMethods.KCFStringEncodingUtf8);
-        var nameStop = NativeMethods.CFStringCreateWithCString(nint.Zero, DidStop, NativeMethods.KCFStringEncodingUtf8);
+        var nameStart = NativeMethods.MakeNsString(DidStart);
+        var nameStop = NativeMethods.MakeNsString(DidStop);
         NativeMethods.CFNotificationCenterRemoveObserver(_center, 1, nameStart, nint.Zero);
         NativeMethods.CFNotificationCenterRemoveObserver(_center, 2, nameStop, nint.Zero);
         NativeMethods.CFRelease(nameStart);
@@ -103,8 +102,8 @@ public sealed partial class MacScreenSaverSync(ILogger<MacScreenSaverSync> log) 
             log.LogDebug("IOPMAssertion already active (id={Id})", _assertionId);
             return;
         }
-        var typeStr = NativeMethods.CFStringCreateWithCString(nint.Zero, AssertionType, NativeMethods.KCFStringEncodingUtf8);
-        var nameStr = NativeMethods.CFStringCreateWithCString(nint.Zero, AssertionReason, NativeMethods.KCFStringEncodingUtf8);
+        var typeStr = NativeMethods.MakeNsString(AssertionType);
+        var nameStr = NativeMethods.MakeNsString(AssertionReason);
         var result = NativeMethods.IOPMAssertionCreateWithName(typeStr, NativeMethods.KIOPMAssertionLevelOn, nameStr, out _assertionId);
         NativeMethods.CFRelease(typeStr);
         NativeMethods.CFRelease(nameStr);
@@ -122,18 +121,4 @@ public sealed partial class MacScreenSaverSync(ILogger<MacScreenSaverSync> log) 
         _assertionId = 0;
     }
 
-    private static unsafe string CfStringToString(nint cfString)
-    {
-        if (cfString == nint.Zero) return "";
-        // use CFStringGetCString into a stack buffer — fine for short notification names
-        var buf = stackalloc byte[256];
-        if (CfStringGetCString(cfString, buf, 256, NativeMethods.KCFStringEncodingUtf8))
-            return Marshal.PtrToStringUTF8((nint)buf) ?? "";
-        return "";
-    }
-
-    [LibraryImport(
-        "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation", EntryPoint = "CFStringGetCString")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static unsafe partial bool CfStringGetCString(nint theString, byte* buffer, nint bufferSize, uint encoding);
 }

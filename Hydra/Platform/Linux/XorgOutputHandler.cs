@@ -1,3 +1,4 @@
+using Cathedral.Utils;
 using Hydra.Keyboard;
 using Hydra.Mouse;
 using Hydra.Relay;
@@ -11,7 +12,7 @@ public sealed class XorgOutputHandler : IPlatformOutput, ICursorVisibility
     private readonly nint _display;
     private readonly int _screen;
     private readonly nint _rootWindow;
-    private bool _disposed;
+    private readonly Toggle _disposed = new();
     private readonly Queue<int> _unusedKeycodes = [];
     private readonly Dictionary<ulong, int> _tempBindings = [];
     private readonly ILogger<XorgOutputHandler> _log;
@@ -204,8 +205,7 @@ public sealed class XorgOutputHandler : IPlatformOutput, ICursorVisibility
 
     public void Dispose()
     {
-        if (_disposed) return;
-        _disposed = true;
+        if (!_disposed.TrySet()) return;
         if (_display != nint.Zero)
         {
             foreach (var tempKeycode in _tempBindings.Values)

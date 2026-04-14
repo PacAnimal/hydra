@@ -18,7 +18,7 @@ public sealed class MacClipboardSync : IClipboardSync
         _log = log;
         // NSPasteboard lives in AppKit — must be loaded before objc_getClass can find it.
         // Slaves don't open an event tap, so AppKit may not be loaded otherwise.
-        NativeLibrary.Load("/System/Library/Frameworks/AppKit.framework/AppKit");
+        NativeMethods.EnsureAppKitLoaded();
     }
 
     public string? GetText()
@@ -40,13 +40,13 @@ public sealed class MacClipboardSync : IClipboardSync
         var pasteboard = GetGeneralPasteboard();
         if (pasteboard == nint.Zero) return null;
 
-        var typeStr = MakeNsString(PasteboardTypeString);
+        var typeStr = NativeMethods.MakeNsString(PasteboardTypeString);
         var sel = NativeMethods.sel_registerName("stringForType:");
         var result = NativeMethods.objc_msgSend(pasteboard, sel, typeStr);
         NativeMethods.CFRelease(typeStr);
 
         if (result == nint.Zero) return null;
-        var text = NsStringToManaged(result);
+        var text = NativeMethods.CfStringToManaged(result);
         return text == _lastSetText ? null : text;
     }
 
@@ -86,7 +86,7 @@ public sealed class MacClipboardSync : IClipboardSync
         var pasteboard = GetGeneralPasteboard();
         if (pasteboard == nint.Zero) return null;
 
-        var typeStr = MakeNsString(PasteboardTypePng);
+        var typeStr = NativeMethods.MakeNsString(PasteboardTypePng);
         var sel = NativeMethods.sel_registerName("dataForType:");
         var nsData = NativeMethods.objc_msgSend(pasteboard, sel, typeStr);
         NativeMethods.CFRelease(typeStr);
@@ -151,8 +151,8 @@ public sealed class MacClipboardSync : IClipboardSync
 
     private static void WriteText(nint pasteboard, string text)
     {
-        var nsStr = MakeNsString(text);
-        var typeStr = MakeNsString(PasteboardTypeString);
+        var nsStr = NativeMethods.MakeNsString(text);
+        var typeStr = NativeMethods.MakeNsString(PasteboardTypeString);
         var setSel = NativeMethods.sel_registerName("setString:forType:");
         NativeMethods.objc_msgSend_2arg(pasteboard, setSel, nsStr, typeStr);
         NativeMethods.CFRelease(nsStr);
@@ -168,7 +168,7 @@ public sealed class MacClipboardSync : IClipboardSync
             nsData = NativeMethods.objc_msgSend_ptr_nuint(nsDataClass, dataSel, ptr, (nuint)pngData.Length);
         if (nsData == nint.Zero) return;
 
-        var typeStr = MakeNsString(PasteboardTypePng);
+        var typeStr = NativeMethods.MakeNsString(PasteboardTypePng);
         var setSel = NativeMethods.sel_registerName("setData:forType:");
         NativeMethods.objc_msgSend_2arg(pasteboard, setSel, nsData, typeStr);
         NativeMethods.CFRelease(typeStr);
@@ -182,29 +182,4 @@ public sealed class MacClipboardSync : IClipboardSync
         return NativeMethods.objc_msgSend_noarg(cls, sel);
     }
 
-    // CFStringCreateWithCString is toll-free bridged to NSString
-    private static nint MakeNsString(string s)
-        => NativeMethods.CFStringCreateWithCString(nint.Zero, s, NativeMethods.KCFStringEncodingUtf8);
-
-    private static unsafe string? NsStringToManaged(nint nsStr)
-    {
-        if (nsStr == nint.Zero) return null;
-
-        // get UTF-16 char count, then compute worst-case UTF-8 byte count (4 bytes per char + null)
-        var lenSel = NativeMethods.sel_registerName("length");
-        var charCount = NativeMethods.objc_msgSend_long(nsStr, lenSel);
-        var bufSize = (nint)(charCount * 4 + 1);
-
-        var buf = Marshal.AllocHGlobal(bufSize);
-        try
-        {
-            return NativeMethods.CFStringGetCString(nsStr, (byte*)buf, bufSize, NativeMethods.KCFStringEncodingUtf8)
-                ? Marshal.PtrToStringUTF8(buf)
-                : null;
-        }
-        finally
-        {
-            Marshal.FreeHGlobal(buf);
-        }
-    }
 }

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Cathedral.Config;
 using Hydra.Config;
+using Hydra.FileTransfer;
 using Hydra.Platform;
 using Hydra.Relay;
 using Hydra.Screen;
@@ -429,7 +430,8 @@ public class ClipboardSyncTests
         var service = new InputRouter(
             platform, TransitionTestHelper.TestConfig, relay,
             new FakeScreenDetector(), NullLoggerFactory.Instance, NullLogger<InputRouter>.Instance,
-            new NullScreenSaverSync(), clipboard);
+            new NullScreenSaverSync(), clipboard,
+            FileTransferService.Null());
         return (platform, relay, service);
     }
 
@@ -458,7 +460,8 @@ public class ClipboardSyncTests
         hider,
         new NullScreenSaverSync(),
         new NullScreensaverSuppressor(),
-        clipboard)
+        clipboard,
+        FileTransferService.Null())
     {
         public Task SimulateReceive(string host, MessageKind kind, string json) => OnReceive(host, kind, json);
     }

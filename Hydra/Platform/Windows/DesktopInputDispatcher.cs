@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using Cathedral.Utils;
 using Hydra.Keyboard;
 using Hydra.Mouse;
 using Hydra.Relay;
@@ -39,7 +40,7 @@ internal sealed class DesktopInputDispatcher : IDisposable
     private readonly Timer _pollTimer;
     private nint _activeDesktop;
     private string _activeDesktopName;
-    private bool _disposed;
+    private readonly Toggle _disposed = new();
 
     // tracks win key modifier usage to suppress accidental start menu on release
     private bool _winKeyDown;
@@ -66,8 +67,7 @@ internal sealed class DesktopInputDispatcher : IDisposable
 
     public void Dispose()
     {
-        if (_disposed) return;
-        _disposed = true;
+        if (!_disposed.TrySet()) return;
         _pollTimer.Dispose();
         _queue.CompleteAdding();
         if (_activeDesktop != nint.Zero)

@@ -4,6 +4,7 @@ using System.Text.Json.Serialization;
 using Cathedral.Extensions;
 using Cathedral.Utils;
 using Hydra.Config;
+using Hydra.FileTransfer;
 using Hydra.Keyboard;
 using Hydra.Mouse;
 using Hydra.Platform;
@@ -22,6 +23,7 @@ public class InputRouter(
     ILogger<InputRouter> log,
     IScreenSaverSync screenSaverSync,
     IClipboardSync clipboardSync,
+    FileTransferService fileTransfer,
     IWorldState? peerState = null)
     : IHostedService
 {
@@ -40,6 +42,7 @@ public class InputRouter(
     private CancellationTokenSource? _pollCts;
     private readonly IScreenSaverSync _screenSaverSync = screenSaverSync;
     private readonly IClipboardSync _clipboardSync = clipboardSync;
+    private readonly FileTransferService _fileTransfer = fileTransfer;
     private ClipboardSnapshot? _lastReceived;
 
     private static readonly long MaxClipboardBytes = ClipboardUtils.MaxClipboardBytes;
@@ -81,6 +84,7 @@ public class InputRouter(
                 st.LockedToScreen = true;  // default: locked to remote; hotkey unlocks to local
             st.Screens = BuildAllScreens(st.LocalScreens);
             st.Layout = new ScreenLayout(st.Screens, profile.Hosts, profile.DeadCorners, BuildScaleMap(st.LocalScreenEntries, []), log);
+            _fileTransfer.UpdateActiveEdges(st.Layout.GetLocalEdgeRanges());
 
             foreach (var remote in st.Screens.Where(r => !r.IsLocal))
                 log.LogInformation("Remote screen '{Name}': waiting for peer", remote.Name);
@@ -140,6 +144,7 @@ public class InputRouter(
         st.LocalScreenEntries = snapshot.Entries;
         st.Screens = newScreens;
         st.Layout = new ScreenLayout(newScreens, profile.Hosts, profile.DeadCorners, BuildScaleMap(st.LocalScreenEntries, peerScreens), log);
+        _fileTransfer.UpdateActiveEdges(st.Layout.GetLocalEdgeRanges());
 
         if (!st.Mouse.IsOnVirtualScreen)
         {
@@ -180,19 +185,8 @@ public class InputRouter(
             var st = s.Value;
 
             // snap back if the peer we're currently on has disconnected
-            if (st.Mouse.IsOnVirtualScreen && st.Mouse.CurrentScreen != null)
-            {
-                var currentHost = st.Mouse.CurrentScreen.Host;
-                if (!current.Contains(currentHost))
-                {
-                    st.Mouse.LeaveScreen();
-                    st.PendingDx = 0;
-                    st.PendingDy = 0;
-                    disconnectedHost = currentHost;
-                    warpX = st.WarpX;
-                    warpY = st.WarpY;
-                }
-            }
+            if (st.Mouse.CurrentScreen != null && !current.Contains(st.Mouse.CurrentScreen.Host))
+                disconnectedHost = LeaveVirtualScreen(st, out warpX, out warpY);
 
             // rebuild layout so departed screens go back to Width=0 (offline)
             if (delta.AnyDeparted) RebuildLayout(st, delta.PeerScreensSnapshot);
@@ -200,6 +194,7 @@ public class InputRouter(
 
         if (disconnectedHost != null)
         {
+            _fileTransfer.Abort(relay, $"peer '{disconnectedHost}' disconnected");
             ReturnToLocalScreen(warpX, warpY);
             await platform.ShowCursor();
             log.LogInformation("Remote peer '{Name}' disconnected — returned to local screen", disconnectedHost);
@@ -222,21 +217,12 @@ public class InputRouter(
 
     private async Task OnRelayDisconnected()
     {
-        string? disconnectedHost = null;
-        int warpX = 0, warpY = 0;
+        string? disconnectedHost;
+        int warpX, warpY;
 
         using (var s = await _state.WaitForDisposable())
         {
-            var st = s.Value;
-            if (st.Mouse.IsOnVirtualScreen && st.Mouse.CurrentScreen != null)
-            {
-                disconnectedHost = st.Mouse.CurrentScreen.Host;
-                st.Mouse.LeaveScreen();
-                st.PendingDx = 0;
-                st.PendingDy = 0;
-                warpX = st.WarpX;
-                warpY = st.WarpY;
-            }
+            disconnectedHost = LeaveVirtualScreen(s.Value, out warpX, out warpY);
         }
 
         // reset known peers so all slaves get a fresh MasterConfig on reconnect
@@ -244,6 +230,7 @@ public class InputRouter(
 
         if (disconnectedHost != null)
         {
+            _fileTransfer.Abort(relay, "relay disconnected");
             ReturnToLocalScreen(warpX, warpY);
             await platform.ShowCursor();
             log.LogWarning("Relay disconnected — returned to local screen from '{Host}'", disconnectedHost);
@@ -267,20 +254,15 @@ public class InputRouter(
                 st.SavedScreenName = st.Mouse.CurrentScreen.Name;
                 st.SavedCursorX = (int)st.Mouse.X;
                 st.SavedCursorY = (int)st.Mouse.Y;
-
                 FlushMouseDelta(st);
-                disconnectedHost = st.Mouse.CurrentScreen.Host;
-                st.Mouse.LeaveScreen();
-                st.PendingDx = 0;
-                st.PendingDy = 0;
-                warpX = st.WarpX;
-                warpY = st.WarpY;
+                disconnectedHost = LeaveVirtualScreen(st, out warpX, out warpY);
             }
         }
 
         if (disconnectedHost != null)
         {
-            var leavePayload = MessageSerializer.Encode(MessageKind.LeaveScreen, new { });
+            _fileTransfer.Abort(relay, "screensaver activated");
+            var leavePayload = MessageSerializer.Encode(MessageKind.LeaveScreen, new LeaveScreenMessage());
             _ = relay.Send([disconnectedHost], leavePayload).AsTask();
             ReturnToLocalScreen(warpX, warpY);
             AsyncHelper.RunSync(platform.ShowCursor);
@@ -393,7 +375,7 @@ public class InputRouter(
     private void PullClipboardFromHost(string host)
     {
         log.LogDebug("Pulling clipboard from {Host}", host);
-        var payload = MessageSerializer.Encode(MessageKind.ClipboardPull, new { });
+        var payload = MessageSerializer.Encode(MessageKind.ClipboardPull, new ClipboardPullMessage());
         _ = relay.Send([host], payload).AsTask();
     }
 
@@ -447,6 +429,9 @@ public class InputRouter(
                         PushClipboardToHost(activeHost);
                 }
                 break;
+            case var _ when FileTransferService.IsFileTransferMessage(kind):
+                await _fileTransfer.OnMessageAsync(sourceHost, kind, json, relay);
+                break;
             default:
                 log.LogDebug("Unhandled message kind {Kind} from {Host}", kind, sourceHost);
                 break;
@@ -477,6 +462,7 @@ public class InputRouter(
         var newLayout = new ScreenLayout(newScreens, profile.Hosts, profile.DeadCorners, BuildScaleMap(st.LocalScreenEntries, peerScreens), log);
         st.Screens = newScreens;
         st.Layout = newLayout;
+        _fileTransfer.UpdateActiveEdges(newLayout.GetLocalEdgeRanges());
         st.ActiveLocalScreen = st.ActiveLocalScreen == null ? null
             : st.LocalScreens.FirstOrDefault(s => s.Name.EqualsIgnoreCase(st.ActiveLocalScreen.Name)) ?? st.LocalScreens.FirstOrDefault() ?? st.ActiveLocalScreen;
 
@@ -583,7 +569,7 @@ public class InputRouter(
                             st.Mouse.LeaveScreen();
                             platform.IsOnVirtualScreen = false;
                             AsyncHelper.RunSync(platform.ShowCursor);
-                            var payload = MessageSerializer.Encode(MessageKind.LeaveScreen, new { });
+                            var payload = MessageSerializer.Encode(MessageKind.LeaveScreen, new LeaveScreenMessage());
                             _ = relay.Send([leavingHost], payload).AsTask();
                             PullClipboardFromHost(leavingHost);
                         }
@@ -618,8 +604,16 @@ public class InputRouter(
     {
         using var s = AsyncHelper.RunSync(() => _state.WaitForDisposable());
         var st = s.Value;
+
+        if (e.Button == MouseButton.Left)
+            st.LeftButtonHeld = e.IsPressed;
+
         if (st.Mouse.IsOnVirtualScreen && relay.IsConnected)
         {
+            // left button released while drag is pending → start the transfer
+            if (e.Button == MouseButton.Left && !e.IsPressed && _fileTransfer.IsDragReady)
+                _fileTransfer.Drop(relay);
+
             log.LogDebug("Mouse: {Type} {Button}", e.IsPressed ? "down" : "up", e.Button);
             ForwardToVirtualScreen(st, MessageKind.MouseButton, new MouseButtonMessage(e.Button, e.IsPressed));
         }
@@ -719,6 +713,14 @@ public class InputRouter(
         var scale = GetRemoteScale(peerScreens, hit.Destination);
         var remoteInfo = GetRemoteScreensAndScales(st.Screens, peerScreens, hit.Destination);
 
+        // block edge crossing with button held if a transfer is already in progress
+        if (st.LeftButtonHeld && _fileTransfer.FileTransferOngoing)
+            return;
+
+        // check for an active OS drag before hiding the cursor
+        if (st.LeftButtonHeld)
+            _fileTransfer.TryBeginDrag(hit.Destination.Host, relay);
+
         AsyncHelper.RunSync(platform.HideCursor);
         platform.IsOnVirtualScreen = true;
         st.Mouse.EnterScreen(hit.Destination, remoteInfo.Screens, hit.EntryX, hit.EntryY, scale, remoteInfo.ScaleMap);
@@ -796,7 +798,10 @@ public class InputRouter(
                         {
                             if (leavingScreen != null && leavingScreen.Host != hit.Destination.Host)
                             {
-                                var leavePayload = MessageSerializer.Encode(MessageKind.LeaveScreen, new { });
+                                // retarget any pending drag to the new host before sending LeaveScreen
+                                if (st.LeftButtonHeld && _fileTransfer.IsDragReady)
+                                    _fileTransfer.ReTargetDrag(hit.Destination.Host, relay);
+                                var leavePayload = MessageSerializer.Encode(MessageKind.LeaveScreen, new LeaveScreenMessage());
                                 _ = relay.Send([leavingScreen.Host], leavePayload).AsTask();
                                 PullClipboardFromHost(leavingScreen.Host);
                             }
@@ -815,6 +820,10 @@ public class InputRouter(
 
                     FlushMouseDelta(st);
 
+                    // drag returning to source — cancel any pending transfer
+                    if (_fileTransfer.IsDragReady)
+                        _fileTransfer.CancelDrag(relay);
+
                     var globalX = targetScreen.X + hit.EntryX;
                     var globalY = targetScreen.Y + hit.EntryY;
                     var leavingScreen = st.Mouse.CurrentScreen;
@@ -827,7 +836,7 @@ public class InputRouter(
 
                     if (relay.IsConnected && leavingScreen != null)
                     {
-                        var payload = MessageSerializer.Encode(MessageKind.LeaveScreen, new { });
+                        var payload = MessageSerializer.Encode(MessageKind.LeaveScreen, new LeaveScreenMessage());
                         _ = relay.Send([leavingScreen.Host], payload).AsTask();
                         PullClipboardFromHost(leavingScreen.Host);
                     }
@@ -861,6 +870,22 @@ public class InputRouter(
     {
         platform.IsOnVirtualScreen = false;
         platform.WarpCursor(x, y);
+    }
+
+    // shared in-lock cleanup for peer-disconnect / relay-disconnect / screensaver snap-back.
+    // call while holding the _state lock; returns the host we left (null if already on local screen).
+    private static string? LeaveVirtualScreen(LocalMasterState st, out int warpX, out int warpY)
+    {
+        warpX = warpY = 0;
+        if (!st.Mouse.IsOnVirtualScreen || st.Mouse.CurrentScreen == null) return null;
+        var host = st.Mouse.CurrentScreen.Host;
+        st.Mouse.LeaveScreen();
+        st.PendingDx = 0;
+        st.PendingDy = 0;
+        st.LeftButtonHeld = false;
+        warpX = st.WarpX;
+        warpY = st.WarpY;
+        return host;
     }
 
     // enters remote-only mode targeting the first remote screen with known dimensions.
@@ -910,6 +935,9 @@ public class InputRouter(
             var hit = st.Layout?.DetectEdgeExit(st.Mouse.CurrentScreen!, (int)st.Mouse.X, (int)st.Mouse.Y);
             if (hit is not null && !hit.Destination.IsLocal && relay.IsConnected)
             {
+                // block edge crossing with button held if a transfer is already in progress
+                if (st.LeftButtonHeld && _fileTransfer.FileTransferOngoing)
+                    return;
                 FlushMouseDelta(st);
                 var peerScreens = AsyncHelper.RunSync(() => _peerState.GetPeerScreensSnapshot().AsTask());
                 var remoteInfo = GetRemoteScreensAndScales(st.Screens, peerScreens, hit.Destination);
@@ -921,7 +949,9 @@ public class InputRouter(
 
                 if (leavingScreen.Host != hit.Destination.Host)
                 {
-                    var leavePayload = MessageSerializer.Encode(MessageKind.LeaveScreen, new { });
+                    if (st.LeftButtonHeld && _fileTransfer.IsDragReady)
+                        _fileTransfer.ReTargetDrag(hit.Destination.Host, relay);
+                    var leavePayload = MessageSerializer.Encode(MessageKind.LeaveScreen, new LeaveScreenMessage());
                     _ = relay.Send([leavingScreen.Host], leavePayload).AsTask();
                     PullClipboardFromHost(leavingScreen.Host);
                 }
@@ -986,6 +1016,7 @@ public class InputRouter(
         public double LastWarpX, LastWarpY;
         public long LastVirtualLogTick;
         public bool LockedToScreen;
+        public bool LeftButtonHeld;
 
         // per-screen relative mouse mode (true = relative, false/absent = absolute)
         public Dictionary<string, bool> RelativeMouseScreens = new(StringComparer.OrdinalIgnoreCase);

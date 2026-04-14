@@ -9,6 +9,12 @@ internal static partial class NativeMethods
     private const string CoreGraphics = "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics";
     private const string CoreFoundation = "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation";
     private const string ApplicationServices = "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices";
+    private const string AppKit = "/System/Library/Frameworks/AppKit.framework/AppKit";
+
+    // ensure frameworks are loaded before calling into objc_getClass for their classes.
+    // NativeLibrary.Load is idempotent — safe to call from multiple constructors.
+    internal static void EnsureAppKitLoaded() => NativeLibrary.Load(AppKit);
+    internal static void EnsureApplicationServicesLoaded() => NativeLibrary.Load(ApplicationServices);
 
     // -- event tap constants --
 
@@ -58,12 +64,48 @@ internal static partial class NativeMethods
 
     internal const uint KCFStringEncodingUtf8 = 0x08000100;
 
+    // convenience wrapper: creates a CFString/NSString from a managed string (toll-free bridged)
+    internal static nint MakeNsString(string s) => CFStringCreateWithCString(nint.Zero, s, KCFStringEncodingUtf8);
+
     // -- ApplicationServices --
 
     [LibraryImport(ApplicationServices)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool AXIsProcessTrusted();
+
+    [LibraryImport(ApplicationServices)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint AXUIElementCreateSystemWide();
+
+    [LibraryImport(ApplicationServices)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint AXUIElementCreateApplication(int pid);
+
+    // returns AXError (0 = kAXErrorSuccess); element is a CFTypeRef (caller must CFRelease)
+    [LibraryImport(ApplicationServices)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int AXUIElementCopyElementAtPosition(nint application, float x, float y, out nint element);
+
+    // returns AXError (0 = kAXErrorSuccess); value is a CFTypeRef (caller must CFRelease)
+    [LibraryImport(ApplicationServices)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int AXUIElementCopyAttributeValue(nint element, nint attribute, out nint value);
+
+    // toll-free bridged NSString/CFString → managed string
+    internal static unsafe string? CfStringToManaged(nint cfStr)
+    {
+        if (cfStr == nint.Zero) return null;
+        var charCount = objc_msgSend_long(cfStr, sel_registerName("length"));
+        var bufSize = (nint)(charCount * 4 + 1);
+        var buf = Marshal.AllocHGlobal(bufSize);
+        try
+        {
+            return CFStringGetCString(cfStr, (byte*)buf, bufSize, KCFStringEncodingUtf8)
+                ? Marshal.PtrToStringUTF8(buf) : null;
+        }
+        finally { Marshal.FreeHGlobal(buf); }
+    }
 
     // -- CoreGraphics: display --
 
@@ -229,7 +271,7 @@ internal static partial class NativeMethods
     internal static void EnableBackgroundCursorManipulation()
     {
         var cid = CGSMainConnectionID();
-        var key = CFStringCreateWithCString(nint.Zero, "SetsCursorInBackground", KCFStringEncodingUtf8);
+        var key = MakeNsString("SetsCursorInBackground");
         _ = CGSSetConnectionProperty(cid, cid, key, KCFBooleanTrue);
         CFRelease(key);
     }

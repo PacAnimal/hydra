@@ -12,9 +12,10 @@ public class MouseMoveDeltaTests
     {
         var original = new MouseMoveDeltaMessage(42, -17);
         var payload = MessageSerializer.Encode(MessageKind.MouseMoveDelta, original);
-        var (kind, json) = MessageSerializer.Decode(payload);
+        var msg = MessageSerializer.Decode(payload);
+        var json = msg.Json;
 
-        Assert.That(kind, Is.EqualTo(MessageKind.MouseMoveDelta));
+        Assert.That(msg.Kind, Is.EqualTo(MessageKind.MouseMoveDelta));
         var decoded = json.FromSaneJson<MouseMoveDeltaMessage>();
         Assert.That(decoded, Is.Not.Null);
         using (Assert.EnterMultipleScope())
@@ -31,7 +32,7 @@ public class MouseMoveDeltaTests
     {
         var original = new MouseMoveDeltaMessage(dx, dy);
         var payload = MessageSerializer.Encode(MessageKind.MouseMoveDelta, original);
-        var (_, json) = MessageSerializer.Decode(payload);
+        var json = MessageSerializer.Decode(payload).Json;
         var decoded = json.FromSaneJson<MouseMoveDeltaMessage>();
 
         Assert.That(decoded, Is.Not.Null);
@@ -47,9 +48,10 @@ public class MouseMoveDeltaTests
     {
         var original = new KeyEventMessage(KeyEventType.KeyDown, KeyModifiers.None, 'w', null, 500, 33);
         var payload = MessageSerializer.Encode(MessageKind.KeyEvent, original);
-        var (kind, json) = MessageSerializer.Decode(payload);
+        var msg = MessageSerializer.Decode(payload);
+        var json = msg.Json;
 
-        Assert.That(kind, Is.EqualTo(MessageKind.KeyEvent));
+        Assert.That(msg.Kind, Is.EqualTo(MessageKind.KeyEvent));
         var decoded = json.FromSaneJson<KeyEventMessage>();
         Assert.That(decoded, Is.Not.Null);
         using (Assert.EnterMultipleScope())
@@ -66,7 +68,7 @@ public class MouseMoveDeltaTests
     {
         var original = new KeyEventMessage(KeyEventType.KeyUp, KeyModifiers.None, 'w', null);
         var payload = MessageSerializer.Encode(MessageKind.KeyEvent, original);
-        var (_, json) = MessageSerializer.Decode(payload);
+        var json = MessageSerializer.Decode(payload).Json;
         var decoded = json.FromSaneJson<KeyEventMessage>();
 
         Assert.That(decoded, Is.Not.Null);

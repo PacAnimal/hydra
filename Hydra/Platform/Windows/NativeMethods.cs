@@ -44,6 +44,9 @@ internal static partial class NativeMethods
     internal const uint WM_QUIT = 0x0012;
     internal const uint WM_USER = 0x0400;
 
+    // -- system colors (use as hbrBackground: cast to nint, add 1) --
+    internal const int COLOR_BTNFACE = 15;
+
     // -- GetSystemMetrics indices --
 
     internal const int SM_CXSCREEN = 0;
@@ -108,6 +111,16 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool GetCursorPos(out WINPOINT lpPoint);
+
+    [LibraryImport(User32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial nint WindowFromPoint(WINPOINT pt);
+
+    internal const uint GA_ROOTOWNER = 3;
+
+    [LibraryImport(User32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial nint GetAncestor(nint hwnd, uint gaFlags);
 
     // OCR_* = standard system cursor ids for SetSystemCursor
     internal const uint OCR_NORMAL = 32512;
@@ -179,6 +192,10 @@ internal static partial class NativeMethods
     [LibraryImport(User32)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     internal static partial int GetSystemMetrics(int nIndex);
+
+    [LibraryImport(User32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial uint GetDpiForSystem();
 
     // EnumDisplayMonitors: classic DllImport for managed delegate marshaling
     [LibraryImport(User32, SetLastError = true)]
@@ -253,6 +270,7 @@ internal static partial class NativeMethods
     internal const uint WS_EX_TOPMOST = 0x00000008;
     internal const uint WS_EX_TOOLWINDOW = 0x00000080;
     internal const uint WS_EX_LAYERED = 0x00080000;
+    internal const uint WS_EX_NOACTIVATE = 0x08000000;
 
     internal static readonly nint HWND_TOPMOST = new(-1);
     internal static readonly nint HWND_BOTTOM = new(1);
@@ -407,6 +425,7 @@ internal static partial class NativeMethods
     internal const uint CF_UNICODETEXT = 13;
     internal const uint CF_BITMAP = 2;
     internal const uint CF_DIB = 8;
+    internal const uint CF_HDROP = 15;
     internal const uint GMEM_MOVEABLE = 0x0002;
     internal const uint GMEM_DDESHARE = 0x2000;
 
@@ -497,6 +516,43 @@ internal static partial class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool CloseDesktop(nint hDesktop);
 
+    // -- window text --
+
+    [LibraryImport(User32, EntryPoint = "SetWindowTextW", StringMarshalling = StringMarshalling.Utf16)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool SetWindowTextW(nint hWnd, string lpString);
+
+    // -- common controls --
+
+    private const string ComCtl32 = "comctl32.dll";
+
+    internal const uint ICC_PROGRESS_CLASS = 0x00000020;
+    internal const uint PBS_SMOOTH = 0x01;
+    internal const uint PBM_SETRANGE32 = 0x0406;
+    internal const uint PBM_SETPOS = 0x0402;
+    internal const int WM_COMMAND = 0x0111;
+    internal const int BN_CLICKED = 0;
+    internal const uint BS_PUSHBUTTON = 0x00000000;
+    internal const uint SS_LEFT = 0x00000000;
+    internal const uint WS_CHILD = 0x40000000;
+    internal const uint WS_VISIBLE = 0x10000000;
+    internal const uint WS_CAPTION = 0x00C00000;
+    internal const uint WS_SYSMENU = 0x00080000;
+    internal const uint WS_OVERLAPPED = 0x00000000;
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct INITCOMMONCONTROLSEX
+    {
+        internal uint dwSize;
+        internal uint dwICC;
+    }
+
+    [LibraryImport(ComCtl32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool InitCommonControlsEx(in INITCOMMONCONTROLSEX lpInitCtrls);
+
     // -- OLE (required for clipboard image interop) --
 
     private const string Ole32 = "ole32.dll";
@@ -509,6 +565,14 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     internal static partial void OleUninitialize();
 
+    [LibraryImport(Ole32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial int RegisterDragDrop(nint hwnd, nint pDropTarget);
+
+    [LibraryImport(Ole32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial int RevokeDragDrop(nint hwnd);
+
 #pragma warning disable SYSLIB1054
     // DllImport required — LibraryImport's new COM marshaller returns ComObject which can't cast to legacy IDataObject
     [DllImport(Ole32)]
@@ -516,6 +580,40 @@ internal static partial class NativeMethods
 
     [DllImport(Ole32)]
     internal static extern void ReleaseStgMedium(ref System.Runtime.InteropServices.ComTypes.STGMEDIUM pMedium);
+#pragma warning restore SYSLIB1054
+
+    // -- shell: drag-and-drop file query --
+
+    private const string Shell32 = "shell32.dll";
+
+    // pass 0xFFFFFFFF as iFile to query file count; otherwise retrieves the i-th path
+    [LibraryImport(Shell32, EntryPoint = "DragQueryFileW")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static unsafe partial uint DragQueryFileW(nint hDrop, uint iFile, char* lpszFile, uint cch);
+
+    // -- shell: file operations (move/copy/delete with native conflict dialog) --
+
+    internal const uint FO_MOVE = 0x0001;
+    internal const ushort FOF_NOCONFIRMMKDIR = 0x0200;
+    internal const ushort FOF_ALLOWUNDO = 0x0040;
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    internal struct SHFILEOPSTRUCTW
+    {
+        internal nint hwnd;
+        internal uint wFunc;
+        [MarshalAs(UnmanagedType.LPWStr)] internal string pFrom;
+        [MarshalAs(UnmanagedType.LPWStr)] internal string pTo;
+        internal ushort fFlags;
+        [MarshalAs(UnmanagedType.Bool)] internal bool fAnyOperationsAborted;
+        internal nint hNameMappings;
+        [MarshalAs(UnmanagedType.LPWStr)] internal string? lpszProgressTitle;
+    }
+
+#pragma warning disable SYSLIB1054
+    // DllImport required — struct contains LPWStr fields that LibraryImport cannot marshal
+    [DllImport(Shell32, CharSet = CharSet.Unicode)]
+    internal static extern int SHFileOperationW(ref SHFILEOPSTRUCTW lpFileOp);
 #pragma warning restore SYSLIB1054
 
 }
@@ -603,6 +701,12 @@ internal struct INPUT
 internal struct WINRECT
 {
     internal int Left, Top, Right, Bottom;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct POINTL
+{
+    internal int x, y;
 }
 
 [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode, Pack = 4)]

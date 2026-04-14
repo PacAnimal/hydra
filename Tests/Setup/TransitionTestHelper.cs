@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Cathedral.Config;
 using Hydra.Config;
+using Hydra.FileTransfer;
 using Hydra.Platform;
 using Hydra.Relay;
 using Hydra.Screen;
@@ -38,7 +39,8 @@ public static class TransitionTestHelper
         var platform = new FakePlatform();
         var relay = new FakeRelay();
         var screens = new FakeScreenDetector();
-        var service = new InputRouter(platform, TestConfig, relay, screens, NullLoggerFactory.Instance, NullLogger<InputRouter>.Instance, new NullScreenSaverSync(), new NullClipboardSync());
+        var service = new InputRouter(platform, TestConfig, relay, screens, NullLoggerFactory.Instance, NullLogger<InputRouter>.Instance, new NullScreenSaverSync(), new NullClipboardSync(),
+            FileTransferService.Null());
         return new TestServiceBundle(platform, relay, service);
     }
 
@@ -62,7 +64,8 @@ public static class TransitionTestHelper
         var platform = new FakePlatform();
         var relay = new FakeRelay();
         var screens = new FakeScreenDetector();
-        var service = new InputRouter(platform, config ?? RemoteOnlyConfig, relay, screens, NullLoggerFactory.Instance, NullLogger<InputRouter>.Instance, new NullScreenSaverSync(), new NullClipboardSync());
+        var service = new InputRouter(platform, config ?? RemoteOnlyConfig, relay, screens, NullLoggerFactory.Instance, NullLogger<InputRouter>.Instance, new NullScreenSaverSync(), new NullClipboardSync(),
+            FileTransferService.Null());
         return new TestServiceBundle(platform, relay, service);
     }
 

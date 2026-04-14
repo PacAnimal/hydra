@@ -138,11 +138,12 @@ public class RelayEncryptionTests
     {
         var move = new MouseMoveMessage("", 100, 200);
         var bytes = MessageSerializer.Encode(MessageKind.MouseMove, move);
-        var (kind, json) = MessageSerializer.Decode(bytes);
+        var msg = MessageSerializer.Decode(bytes);
+        var json = msg.Json;
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(kind, Is.EqualTo(MessageKind.MouseMove));
+            Assert.That(msg.Kind, Is.EqualTo(MessageKind.MouseMove));
             Assert.That(json, Does.Contain("100"));
         }
         Assert.That(json, Does.Contain("200"));
@@ -153,7 +154,7 @@ public class RelayEncryptionTests
     {
         var original = new MouseMoveMessage("desktop:1", 500, 300);
         var bytes = MessageSerializer.Encode(MessageKind.MouseMove, original);
-        var (_, json) = MessageSerializer.Decode(bytes);
+        var json = MessageSerializer.Decode(bytes).Json;
         var decoded = json.FromSaneJson<MouseMoveMessage>();
 
         Assert.That(decoded, Is.Not.Null);

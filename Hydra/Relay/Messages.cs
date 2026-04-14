@@ -23,6 +23,12 @@ public enum MessageKind : byte
     ClipboardPush = 12,         // master → slave: apply this clipboard (text/image/files)
     ClipboardPull = 13,         // master → slave: send me your clipboard
     ClipboardPullResponse = 14, // slave → master: here's my clipboard
+    FileDragEnter = 15,         // sender → receiver: drag crossing detected with files
+    FileDragCancel = 16,        // sender → receiver: drag returned to source before release
+    FileTransferStart = 17,     // sender → receiver: mouse released, transfer beginning
+    FileTransferChunk = 18,     // sender → receiver: chunk of tar.gz data
+    FileTransferDone = 19,      // sender → receiver: all data sent
+    FileTransferAbort = 20,     // either → either: abort and clean up
 }
 
 public record MouseMoveMessage(string Screen, int X, int Y);
@@ -40,8 +46,17 @@ public record MouseButtonMessage(MouseButton Button, bool IsPressed);
 public record MouseScrollMessage(short XDelta, short YDelta);
 public record EnterScreenMessage(string Screen, int X, int Y, int Width, int Height);
 public record ScreensaverSyncMessage(bool Active);
+public record LeaveScreenMessage;
+public record ClipboardPullMessage;
 public record ClipboardPushMessage(string Text, string? PrimaryText = null, byte[]? ImagePng = null);
 public record ClipboardPullResponseMessage(string? Text, string? PrimaryText = null, byte[]? ImagePng = null);
+
+public record FileDragEnterMessage(string[] FileNames, long TotalBytes);
+public record FileDragCancelMessage;
+public record FileTransferStartMessage;
+public record FileTransferChunkMessage(int Sequence, byte[] Data);
+public record FileTransferDoneMessage(long TotalBytesSent, byte[] Sha256);
+public record FileTransferAbortMessage(string Reason);
 
 public static class MessageSerializer
 {
@@ -59,8 +74,7 @@ public static class MessageSerializer
     {
         if (payload.Length == 0) throw new ArgumentException("Empty payload", nameof(payload));
         var kind = (MessageKind)payload[0];
-        var json = Encoding.UTF8.GetString(payload, 1, payload.Length - 1);
-        return new DecodedMessage(kind, json);
+        return new DecodedMessage(kind, Encoding.UTF8.GetString(payload, 1, payload.Length - 1));
     }
 }
 
