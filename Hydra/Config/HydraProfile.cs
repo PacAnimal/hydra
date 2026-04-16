@@ -10,6 +10,7 @@ public interface IHydraProfile
     LogLevel LogLevel { get; }
     bool AutoUpdate { get; }
     bool DebugShield { get; }
+    bool DragDropEnabled { get; }
 
     // active profile settings
     string? ProfileName { get; }
@@ -35,6 +36,7 @@ public class HydraProfile(HydraConfigFile configFile, HydraConfig? activeProfile
     public LogLevel LogLevel { get; } = configFile.LogLevel;
     public bool AutoUpdate { get; } = configFile.AutoUpdate;
     public bool DebugShield { get; } = configFile.DebugShield;
+    public bool DragDropEnabled { get; } = configFile.DragDropEnabled;
 
     public string? ProfileName => _activeProfile?.ProfileName;
     public Mode Mode => _activeProfile?.Mode ?? Mode.Slave;

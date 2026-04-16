@@ -238,14 +238,14 @@ if (config != null)
         services.AddHostedService<SelfUpdater>();
 
     // file transfer: drag source, dialog, and drop target resolver depend on platform; service is shared master/slave
-    if (OperatingSystem.IsMacOS())
+    if (profile.DragDropEnabled && OperatingSystem.IsMacOS())
     {
         services.AddSingleton<IFileDragSource, MacFileDragSource>();
         // macShield implements IFileTransferDialog (already registered as singleton above)
         services.AddSingleton<IFileTransferDialog>(sp => sp.GetRequiredService<MacShieldProcess>());
         services.AddSingleton<IDropTargetResolver, MacDropTargetResolver>();
     }
-    else if (OperatingSystem.IsWindows())
+    else if (profile.DragDropEnabled && OperatingSystem.IsWindows())
     {
         services.AddSingleton<IFileDragSource, WindowsFileDragSource>();
         services.AddSingleton<IFileTransferDialog, WindowsTransferDialog>();
@@ -253,7 +253,8 @@ if (config != null)
     }
     else
     {
-        startupLog.LogInformation("File drag-and-drop not supported on this platform — transfer disabled");
+        if (profile.DragDropEnabled)
+            startupLog.LogInformation("File drag-and-drop not supported on this platform — transfer disabled");
         services.AddSingleton<IFileDragSource, NullFileDragSource>();
         services.AddSingleton<IFileTransferDialog, NullFileTransferDialog>();
         services.AddSingleton<IDropTargetResolver, NullDropTargetResolver>();
