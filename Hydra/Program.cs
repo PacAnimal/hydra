@@ -32,10 +32,21 @@ TaskScheduler.UnobservedTaskException += (_, e) =>
     e.SetObserved();
 };
 
+if (args.Contains("--install"))
+{
+    if (OperatingSystem.IsWindows()) ServiceCommands.Install();
+    else if (OperatingSystem.IsMacOS()) AgentCommands.Install();
+    return;
+}
+if (args.Contains("--uninstall"))
+{
+    if (OperatingSystem.IsWindows()) ServiceCommands.Uninstall();
+    else if (OperatingSystem.IsMacOS()) AgentCommands.Uninstall();
+    return;
+}
+
 if (OperatingSystem.IsWindows())
 {
-    if (args.Contains("--install-service")) { ServiceCommands.Install(); return; }
-    if (args.Contains("--uninstall-service")) { ServiceCommands.Uninstall(); return; }
     if (args.Contains("--service")) { ServiceHost.Run(args); return; }
     if (args.Contains("--session"))
         RunMode.IsSessionChild = true;

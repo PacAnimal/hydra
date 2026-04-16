@@ -76,6 +76,25 @@ internal static partial class NativeMethods
 
     [LibraryImport(ApplicationServices)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool AXIsProcessTrustedWithOptions(nint options);
+
+    // checks accessibility trust and, if not granted, triggers the system grant dialog
+    internal static bool AXIsProcessTrustedWithPrompt()
+    {
+        EnsureAppKitLoaded();
+        var cls = objc_getClass("NSMutableDictionary");
+        var dict = objc_msgSend_noarg(objc_msgSend_noarg(cls, sel_registerName("alloc")), sel_registerName("init"));
+        var key = MakeNsString("AXTrustedCheckOptionPrompt");
+        objc_msgSend_2arg(dict, sel_registerName("setObject:forKey:"), KCFBooleanTrue, key);
+        CFRelease(key);
+        var trusted = AXIsProcessTrustedWithOptions(dict);
+        objc_msgSend_noarg(dict, sel_registerName("release"));
+        return trusted;
+    }
+
+    [LibraryImport(ApplicationServices)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial nint AXUIElementCreateSystemWide();
 
     [LibraryImport(ApplicationServices)]

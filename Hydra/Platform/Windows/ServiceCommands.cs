@@ -12,10 +12,13 @@ internal static class ServiceCommands
 
     internal static void Install()
     {
-        EnsureElevated("--install-service");
+        EnsureElevated("--install");
 
         var exePath = Environment.ProcessPath
             ?? throw new InvalidOperationException("cannot determine process path");
+
+        // remove the "downloaded from internet" mark so windows doesn't block the service binary
+        File.Delete(exePath + ":Zone.Identifier");
 
         RunSc($"create {ServiceName} binPath= \"\\\"{exePath}\\\" --service\" start= auto obj= LocalSystem");
         RunSc($"description {ServiceName} \"Hydra KVM — seamless mouse and keyboard sharing\"");
@@ -32,7 +35,7 @@ internal static class ServiceCommands
 
     internal static void Uninstall()
     {
-        EnsureElevated("--uninstall-service");
+        EnsureElevated("--uninstall");
         RunSc($"stop {ServiceName}");
         RunSc($"delete {ServiceName}");
         Console.WriteLine("Hydra service removed.");

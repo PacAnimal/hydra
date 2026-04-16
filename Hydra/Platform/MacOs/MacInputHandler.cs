@@ -37,7 +37,7 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
     private static readonly nint SelData1 = NativeMethods.sel_registerName("data1");
 
 
-    public bool IsAccessibilityTrusted() => NativeMethods.AXIsProcessTrusted();
+    public bool IsAccessibilityTrusted() => NativeMethods.AXIsProcessTrustedWithPrompt();
 
     public void WarpCursor(int x, int y)
     {
