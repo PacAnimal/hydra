@@ -820,7 +820,9 @@ public class InputRouter(
                 }
                 else if (!st.LockedToScreen && !profile.RemoteOnly)
                 {
-                    // return to local: blocked by lock or remote-only mode
+                    // return to local: blocked by lock, remote-only mode, or held button
+                    if (platform.AnyMouseButtonHeld()) return;
+
                     var targetScreen = hit.Destination;
 
                     FlushMouseDelta(st);
