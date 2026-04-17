@@ -149,6 +149,15 @@ internal sealed class SelfUpdater(IHydraProfile profile, ILogger<SelfUpdater> lo
             File.Move(tmpPath, exePath, overwrite: true);
             var mode = File.GetUnixFileMode(exePath);
             File.SetUnixFileMode(exePath, mode | UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute);
+
+            if (OperatingSystem.IsMacOS())
+            {
+                // re-sign both binaries — github release won't match the local ad-hoc signature
+                Platform.MacOs.AgentCommands.Codesign(exePath);
+                var shieldPath = Path.Combine(appDir, "Resources", "MacShield", "hydra-shield.app");
+                if (Directory.Exists(shieldPath))
+                    Platform.MacOs.AgentCommands.Codesign(shieldPath);
+            }
         }
 
         log.LogInformation("Update applied, restarting");
