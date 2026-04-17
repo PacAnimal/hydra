@@ -785,69 +785,71 @@ public class InputRouter(
                     // remote→remote: always allowed in remote-only; locked prevents it in normal mode
                     if (profile.RemoteOnly || !st.LockedToScreen)
                     {
-                        // block if any button is held and no file drag is in progress
-                        if (platform.AnyMouseButtonHeld() && !_fileTransfer.IsDragReady)
-                            return;
-
-                        var leavingScreen = st.Mouse.CurrentScreen;
-                        FlushMouseDelta(st);
-                        var peerScreens = AsyncHelper.RunSync(() => _peerState.GetPeerScreensSnapshot().AsTask());
-                        var remoteInfo = GetRemoteScreensAndScales(st.Screens, peerScreens, hit.Destination);
-                        var scale = remoteInfo.ScaleMap.GetValueOrDefault(hit.Destination.Name, 1.0m);
-                        st.Mouse.EnterScreen(hit.Destination, remoteInfo.Screens, hit.EntryX, hit.EntryY, scale, remoteInfo.ScaleMap);
-                        st.PendingDx = 0;
-                        st.PendingDy = 0;
-                        log.LogInformation("Switched to remote screen '{Name}' → ({X}, {Y})", hit.Destination.Name, hit.EntryX, hit.EntryY);
-
-                        if (relay.IsConnected)
+                        // block transition (but not position updates) while any button is held
+                        if (!platform.AnyMouseButtonHeld() || _fileTransfer.IsDragReady)
                         {
-                            if (leavingScreen != null && leavingScreen.Host != hit.Destination.Host)
+                            var leavingScreen = st.Mouse.CurrentScreen;
+                            FlushMouseDelta(st);
+                            var peerScreens = AsyncHelper.RunSync(() => _peerState.GetPeerScreensSnapshot().AsTask());
+                            var remoteInfo = GetRemoteScreensAndScales(st.Screens, peerScreens, hit.Destination);
+                            var scale = remoteInfo.ScaleMap.GetValueOrDefault(hit.Destination.Name, 1.0m);
+                            st.Mouse.EnterScreen(hit.Destination, remoteInfo.Screens, hit.EntryX, hit.EntryY, scale, remoteInfo.ScaleMap);
+                            st.PendingDx = 0;
+                            st.PendingDy = 0;
+                            log.LogInformation("Switched to remote screen '{Name}' → ({X}, {Y})", hit.Destination.Name, hit.EntryX, hit.EntryY);
+
+                            if (relay.IsConnected)
                             {
-                                // retarget any pending drag to the new host before sending LeaveScreen
-                                if (st.LeftButtonHeld && _fileTransfer.IsDragReady)
-                                    _fileTransfer.ReTargetDrag(hit.Destination.Host, relay);
-                                var leavePayload = MessageSerializer.Encode(MessageKind.LeaveScreen, new LeaveScreenMessage());
-                                _ = relay.Send([leavingScreen.Host], leavePayload).AsTask();
-                                PullClipboardFromHost(leavingScreen.Host);
+                                if (leavingScreen != null && leavingScreen.Host != hit.Destination.Host)
+                                {
+                                    // retarget any pending drag to the new host before sending LeaveScreen
+                                    if (st.LeftButtonHeld && _fileTransfer.IsDragReady)
+                                        _fileTransfer.ReTargetDrag(hit.Destination.Host, relay);
+                                    var leavePayload = MessageSerializer.Encode(MessageKind.LeaveScreen, new LeaveScreenMessage());
+                                    _ = relay.Send([leavingScreen.Host], leavePayload).AsTask();
+                                    PullClipboardFromHost(leavingScreen.Host);
+                                }
+                                var enterPayload = MessageSerializer.Encode(MessageKind.EnterScreen,
+                                    new EnterScreenMessage(hit.Destination.Name, hit.EntryX, hit.EntryY, hit.Destination.Width, hit.Destination.Height));
+                                _ = relay.Send([hit.Destination.Host], enterPayload).AsTask();
+                                PushClipboardToHost(hit.Destination.Host);
                             }
-                            var enterPayload = MessageSerializer.Encode(MessageKind.EnterScreen,
-                                new EnterScreenMessage(hit.Destination.Name, hit.EntryX, hit.EntryY, hit.Destination.Width, hit.Destination.Height));
-                            _ = relay.Send([hit.Destination.Host], enterPayload).AsTask();
-                            PushClipboardToHost(hit.Destination.Host);
-                        }
-                        return;
+                            return;
+                        } // end !held block
                     }
                 }
                 else if (!st.LockedToScreen && !profile.RemoteOnly)
                 {
                     // return to local: blocked by lock, remote-only mode, or held button
-                    if (platform.AnyMouseButtonHeld()) return;
-
-                    var targetScreen = hit.Destination;
-
-                    FlushMouseDelta(st);
-
-                    // drag returning to source — cancel any pending transfer
-                    if (_fileTransfer.IsDragReady)
-                        _fileTransfer.CancelDrag(relay);
-
-                    var globalX = targetScreen.X + hit.EntryX;
-                    var globalY = targetScreen.Y + hit.EntryY;
-                    var leavingScreen = st.Mouse.CurrentScreen;
-                    st.Mouse.LeaveScreen();
-                    ReturnToLocalScreen(globalX, globalY);
-                    AsyncHelper.RunSync(platform.ShowCursor);
-                    st.ActiveLocalScreen = targetScreen;
-                    UpdateWarpPoint(st, targetScreen);
-                    log.LogInformation("Returned to local screen ← ({X}, {Y})", globalX, globalY);
-
-                    if (relay.IsConnected && leavingScreen != null)
+                    if (!platform.AnyMouseButtonHeld())
                     {
-                        var payload = MessageSerializer.Encode(MessageKind.LeaveScreen, new LeaveScreenMessage());
-                        _ = relay.Send([leavingScreen.Host], payload).AsTask();
-                        PullClipboardFromHost(leavingScreen.Host);
-                    }
-                    return;
+
+                        var targetScreen = hit.Destination;
+
+                        FlushMouseDelta(st);
+
+                        // drag returning to source — cancel any pending transfer
+                        if (_fileTransfer.IsDragReady)
+                            _fileTransfer.CancelDrag(relay);
+
+                        var globalX = targetScreen.X + hit.EntryX;
+                        var globalY = targetScreen.Y + hit.EntryY;
+                        var leavingScreen = st.Mouse.CurrentScreen;
+                        st.Mouse.LeaveScreen();
+                        ReturnToLocalScreen(globalX, globalY);
+                        AsyncHelper.RunSync(platform.ShowCursor);
+                        st.ActiveLocalScreen = targetScreen;
+                        UpdateWarpPoint(st, targetScreen);
+                        log.LogInformation("Returned to local screen ← ({X}, {Y})", globalX, globalY);
+
+                        if (relay.IsConnected && leavingScreen != null)
+                        {
+                            var payload = MessageSerializer.Encode(MessageKind.LeaveScreen, new LeaveScreenMessage());
+                            _ = relay.Send([leavingScreen.Host], payload).AsTask();
+                            PullClipboardFromHost(leavingScreen.Host);
+                        }
+                        return;
+                    } // end !held block
                 }
             }
         }
@@ -942,35 +944,35 @@ public class InputRouter(
             var hit = st.Layout?.DetectEdgeExit(st.Mouse.CurrentScreen!, (int)st.Mouse.X, (int)st.Mouse.Y);
             if (hit is not null && !hit.Destination.IsLocal && relay.IsConnected)
             {
-                // block edge crossing while any button is held unless a file drag is in progress
-                if (platform.AnyMouseButtonHeld())
+                // block transition (but not position updates) while any button is held
+                var transitionBlocked = platform.AnyMouseButtonHeld() &&
+                    (_fileTransfer.FileTransferOngoing ||
+                     !profile.DragDropEnabled || !st.LeftButtonHeld || !_fileTransfer.TryBeginDrag(hit.Destination.Host, relay));
+                if (!transitionBlocked)
                 {
-                    if (_fileTransfer.FileTransferOngoing) return;
-                    if (!profile.DragDropEnabled || !st.LeftButtonHeld || !_fileTransfer.TryBeginDrag(hit.Destination.Host, relay))
-                        return;
-                }
-                FlushMouseDelta(st);
-                var peerScreens = AsyncHelper.RunSync(() => _peerState.GetPeerScreensSnapshot().AsTask());
-                var remoteInfo = GetRemoteScreensAndScales(st.Screens, peerScreens, hit.Destination);
-                var scale = remoteInfo.ScaleMap.GetValueOrDefault(hit.Destination.Name, 1.0m);
-                st.Mouse.EnterScreen(hit.Destination, remoteInfo.Screens, hit.EntryX, hit.EntryY, scale, remoteInfo.ScaleMap);
-                st.PendingDx = 0;
-                st.PendingDy = 0;
-                log.LogInformation("Switched to remote screen '{Name}' → ({X}, {Y})", hit.Destination.Name, hit.EntryX, hit.EntryY);
+                    FlushMouseDelta(st);
+                    var peerScreens = AsyncHelper.RunSync(() => _peerState.GetPeerScreensSnapshot().AsTask());
+                    var remoteInfo = GetRemoteScreensAndScales(st.Screens, peerScreens, hit.Destination);
+                    var scale = remoteInfo.ScaleMap.GetValueOrDefault(hit.Destination.Name, 1.0m);
+                    st.Mouse.EnterScreen(hit.Destination, remoteInfo.Screens, hit.EntryX, hit.EntryY, scale, remoteInfo.ScaleMap);
+                    st.PendingDx = 0;
+                    st.PendingDy = 0;
+                    log.LogInformation("Switched to remote screen '{Name}' → ({X}, {Y})", hit.Destination.Name, hit.EntryX, hit.EntryY);
 
-                if (leavingScreen.Host != hit.Destination.Host)
-                {
-                    if (st.LeftButtonHeld && _fileTransfer.IsDragReady)
-                        _fileTransfer.ReTargetDrag(hit.Destination.Host, relay);
-                    var leavePayload = MessageSerializer.Encode(MessageKind.LeaveScreen, new LeaveScreenMessage());
-                    _ = relay.Send([leavingScreen.Host], leavePayload).AsTask();
-                    PullClipboardFromHost(leavingScreen.Host);
-                }
-                var crossPayload = MessageSerializer.Encode(MessageKind.EnterScreen,
-                    new EnterScreenMessage(hit.Destination.Name, hit.EntryX, hit.EntryY, hit.Destination.Width, hit.Destination.Height));
-                _ = relay.Send([hit.Destination.Host], crossPayload).AsTask();
-                PushClipboardToHost(hit.Destination.Host);
-                return;
+                    if (leavingScreen.Host != hit.Destination.Host)
+                    {
+                        if (st.LeftButtonHeld && _fileTransfer.IsDragReady)
+                            _fileTransfer.ReTargetDrag(hit.Destination.Host, relay);
+                        var leavePayload = MessageSerializer.Encode(MessageKind.LeaveScreen, new LeaveScreenMessage());
+                        _ = relay.Send([leavingScreen.Host], leavePayload).AsTask();
+                        PullClipboardFromHost(leavingScreen.Host);
+                    }
+                    var crossPayload = MessageSerializer.Encode(MessageKind.EnterScreen,
+                        new EnterScreenMessage(hit.Destination.Name, hit.EntryX, hit.EntryY, hit.Destination.Width, hit.Destination.Height));
+                    _ = relay.Send([hit.Destination.Host], crossPayload).AsTask();
+                    PushClipboardToHost(hit.Destination.Host);
+                    return;
+                } // end !transitionBlocked block
             }
 
             st.PendingDx += dx * (double)st.Mouse.MouseScale;
