@@ -431,7 +431,7 @@ public class ClipboardSyncTests
             platform, TransitionTestHelper.TestConfig, relay,
             new FakeScreenDetector(), NullLoggerFactory.Instance, NullLogger<InputRouter>.Instance,
             new NullScreenSaverSync(), clipboard,
-            FileTransferService.Null());
+            FileTransferService.Null(), new NullFileSelectionDetector());
         return (platform, relay, service);
     }
 
@@ -461,7 +461,7 @@ public class ClipboardSyncTests
         new NullScreenSaverSync(),
         new NullScreensaverSuppressor(),
         clipboard,
-        FileTransferService.Null())
+        FileTransferService.Null(), new NullFileSelectionDetector())
     {
         public Task SimulateReceive(string host, MessageKind kind, string json) => OnReceive(host, kind, json);
     }

@@ -248,25 +248,28 @@ if (config != null)
     if (!RunMode.IsSessionChild)
         services.AddHostedService<SelfUpdater>();
 
-    // file transfer: drag source, dialog, and drop target resolver depend on platform; service is shared master/slave
-    if (profile.DragDropEnabled && OperatingSystem.IsMacOS())
+    // file selection detector: reads selected files from Finder/Explorer for copy hotkey
+    if (OperatingSystem.IsMacOS())
+        services.AddSingleton<IFileSelectionDetector, MacFileSelectionDetector>();
+    else if (OperatingSystem.IsWindows())
+        services.AddSingleton<IFileSelectionDetector, WindowsFileSelectionDetector>();
+    else
+        services.AddSingleton<IFileSelectionDetector, NullFileSelectionDetector>();
+
+    // file transfer: dialog and drop target resolver depend on platform; service is shared master/slave
+    if (OperatingSystem.IsMacOS())
     {
-        services.AddSingleton<IFileDragSource, MacFileDragSource>();
         // macShield implements IFileTransferDialog (already registered as singleton above)
         services.AddSingleton<IFileTransferDialog>(sp => sp.GetRequiredService<MacShieldProcess>());
         services.AddSingleton<IDropTargetResolver, MacDropTargetResolver>();
     }
-    else if (profile.DragDropEnabled && OperatingSystem.IsWindows())
+    else if (OperatingSystem.IsWindows())
     {
-        services.AddSingleton<IFileDragSource, WindowsFileDragSource>();
         services.AddSingleton<IFileTransferDialog, WindowsTransferDialog>();
         services.AddSingleton<IDropTargetResolver, WindowsDropTargetResolver>();
     }
     else
     {
-        if (profile.DragDropEnabled)
-            startupLog.LogInformation("File drag-and-drop not supported on this platform — transfer disabled");
-        services.AddSingleton<IFileDragSource, NullFileDragSource>();
         services.AddSingleton<IFileTransferDialog, NullFileTransferDialog>();
         services.AddSingleton<IDropTargetResolver, NullDropTargetResolver>();
     }

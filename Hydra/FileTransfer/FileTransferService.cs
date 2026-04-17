@@ -8,7 +8,6 @@ namespace Hydra.FileTransfer;
 
 public sealed class FileTransferService : IDisposable
 {
-    private readonly IFileDragSource _dragSource;
     private readonly IFileTransferDialog _dialog;
     private readonly IDropTargetResolver _dropTargetResolver;
     private readonly ILogger<FileTransferService> _log;
@@ -19,8 +18,10 @@ public sealed class FileTransferService : IDisposable
 
     private readonly int _watchdogTimeoutMs;
 
+    // copy buffer (set on copy hotkey; consumed on paste hotkey)
+    private FileCopyState? _copyBuffer;
+
     // sender side
-    private SenderDrag? _drag;               // set during DragReady phase (mouse held, not yet released)
     private CancellationTokenSource? _sendCts;
     private string? _sendTargetHost;
     private IRelaySender? _sendRelay;
@@ -29,12 +30,28 @@ public sealed class FileTransferService : IDisposable
     private ReceiverTransfer? _receiver;
     private IRelaySender? _recvRelay;
 
-    public bool IsDragReady { get { lock (_lock) return _drag != null; } }
+    // true while any transfer is in flight (sending or receiving) — used to block new transfers
+    public bool FileTransferOngoing { get { lock (_lock) return _sendCts != null || _receiver != null; } }
 
-    // true while any transfer is in flight (drag pending, sending, or receiving) — used to block new drags
-    public bool FileTransferOngoing { get { lock (_lock) return _drag != null || _sendCts != null || _receiver != null; } }
+    // stores source host + paths from the last copy hotkey press
+    public void SetCopyBuffer(string sourceHost, List<string> paths)
+    {
+        lock (_lock) _copyBuffer = new FileCopyState(sourceHost, [.. paths]);
+        _log.LogInformation("Copy buffer set: {Count} item(s) from {Host}", paths.Count, sourceHost);
+    }
 
-    public void UpdateActiveEdges(List<ActiveEdgeRange> ranges) => _dragSource.UpdateActiveEdges(ranges);
+    // called when a FileSelectionResponse arrives for a remote copy
+    public void HandleSelectionResponse(string sourceHost, string json)
+    {
+        var msg = json.FromSaneJson<FileSelectionResponseMessage>();
+        if (msg?.Paths is { Length: > 0 })
+        {
+            lock (_lock) _copyBuffer = new FileCopyState(sourceHost, msg.Paths);
+            _log.LogInformation("Copy buffer set from {Host}: {Count} item(s)", sourceHost, msg.Paths.Length);
+        }
+    }
+
+    public FileCopyState? GetCopyBuffer() { lock (_lock) return _copyBuffer; }
 
     private static double CalcSpeed(long startTick, long bytes)
     {
@@ -70,16 +87,14 @@ public sealed class FileTransferService : IDisposable
     }
 
     public static bool IsFileTransferMessage(MessageKind kind) => kind is
-        MessageKind.FileDragEnter or MessageKind.FileDragCancel or
         MessageKind.FileTransferStart or MessageKind.FileTransferChunk or
         MessageKind.FileTransferDone or MessageKind.FileTransferAbort;
 
     internal static FileTransferService Null() =>
-        new(new NullFileDragSource(), new NullFileTransferDialog(), new NullDropTargetResolver(), Microsoft.Extensions.Logging.Abstractions.NullLogger<FileTransferService>.Instance);
+        new(new NullFileTransferDialog(), new NullDropTargetResolver(), Microsoft.Extensions.Logging.Abstractions.NullLogger<FileTransferService>.Instance);
 
-    public FileTransferService(IFileDragSource dragSource, IFileTransferDialog dialog, IDropTargetResolver dropTargetResolver, ILogger<FileTransferService> log, int watchdogTimeoutMs = 30_000)
+    public FileTransferService(IFileTransferDialog dialog, IDropTargetResolver dropTargetResolver, ILogger<FileTransferService> log, int watchdogTimeoutMs = 30_000)
     {
-        _dragSource = dragSource;
         _dialog = dialog;
         _dropTargetResolver = dropTargetResolver;
         _log = log;
@@ -88,105 +103,15 @@ public sealed class FileTransferService : IDisposable
         dialog.CancelRequested += HandleCancelRequested;
     }
 
-    // called by InputRouter when left button is held during edge crossing
-    public bool TryBeginDrag(string targetHost, IRelaySender relay)
-    {
-        if (FileTransferOngoing) return false;
-
-        _log.LogDebug("TryBeginDrag: querying drag source for {Host}", targetHost);
-        var paths = _dragSource.GetDraggedPaths();
-        if (paths == null || paths.Count == 0)
-        {
-            _log.LogDebug("TryBeginDrag: no dragged paths detected");
-            return false;
-        }
-
-        // NOTE: ComputeTotalBytes enumerates all files synchronously — for large directory trees this
-        // briefly blocks the input thread. Acceptable in practice; deferred async sizing would require
-        // a second message to update the receiver's TotalBytes.
-        var totalBytes = TarGzStreamer.ComputeTotalBytes(paths);
-        var names = paths.Select(Path.GetFileName).Where(n => n != null).Cast<string>().ToArray();
-        var drag = new SenderDrag(targetHost, paths, names, totalBytes);
-
-        lock (_lock) _drag = drag;
-
-        SendTo(relay, targetHost, MessageKind.FileDragEnter, new FileDragEnterMessage(names, totalBytes));
-        _dialog.ShowPending(drag.ToTransferInfo());
-        _log.LogInformation("Drag enter: {Count} item(s), {Bytes} bytes → {Host}", names.Length, ByteSize.FromBytes(totalBytes), targetHost);
-        return true;
-    }
-
-    // called when cursor crosses from one remote host to another while button is still held
-    public void ReTargetDrag(string newHost, IRelaySender relay)
-    {
-        SenderDrag? oldDrag;
-        lock (_lock)
-        {
-            oldDrag = _drag;
-            if (oldDrag == null) return;
-            _drag = new SenderDrag(newHost, oldDrag.Paths, oldDrag.FileNames, oldDrag.TotalBytes);
-        }
-
-        // cancel on the old target (may be Linux/non-transfer — it will just ignore it)
-        SendTo(relay, oldDrag.TargetHost, MessageKind.FileDragCancel, new FileDragCancelMessage());
-        SendTo(relay, newHost, MessageKind.FileDragEnter, new FileDragEnterMessage(oldDrag.FileNames, oldDrag.TotalBytes));
-        _dialog.ShowPending(oldDrag.ToTransferInfo());
-        _log.LogInformation("Drag retargeted: {Count} item(s) → {Host}", oldDrag.FileNames.Length, newHost);
-    }
-
-    // called by InputRouter when drag returns to source screen before release
-    public void CancelDrag(IRelaySender relay)
-    {
-        SenderDrag? drag;
-        lock (_lock) { drag = _drag; _drag = null; }
-        if (drag == null) return;
-
-        SendTo(relay, drag.TargetHost, MessageKind.FileDragCancel, new FileDragCancelMessage());
-        _dialog.Close();
-        _log.LogInformation("Drag cancelled");
-    }
-
-    // called by InputRouter when left button released on remote screen
-    public void Drop(IRelaySender relay)
-    {
-        SenderDrag? drag;
-        var cts = new CancellationTokenSource();
-        lock (_lock)
-        {
-            drag = _drag; _drag = null;
-            if (drag == null) { cts.Dispose(); return; }
-            drag.TransferStartTick = Environment.TickCount64;
-            _sendCts = cts;
-            _sendTargetHost = drag.TargetHost;
-            _sendRelay = relay;
-        }
-
-        _dialog.ShowTransferring(drag.ToTransferInfo());
-
-        // StreamAsync sends FileTransferStart before any chunks, ensuring ordering
-        _ = Task.Run(() => StreamAsync(drag, relay, cts.Token));
-    }
-
     // called when relay disconnects or peer departs during an active transfer
     public void Abort(IRelaySender? relay, string reason)
     {
-        SenderDrag? drag;
-
-        lock (_lock) { drag = _drag; _drag = null; }
         TryClearReceiver(out ReceiverTransfer? receiver, out IRelaySender? recvRelay);
         TryCancelSend(out var sendTargetHost, out var sendRelay);
 
-        // prefer the caller's relay; fall back to stored relays (e.g. Dispose() passes null)
         var effectiveSendRelay = relay ?? sendRelay;
-        if (effectiveSendRelay != null)
-        {
-            if (sendTargetHost != null)
-                // active send — abort with reason
-                SendTo(effectiveSendRelay, sendTargetHost, MessageKind.FileTransferAbort, new FileTransferAbortMessage(reason));
-            else if (drag != null)
-                // drag-only phase (before drop) — send cancel, not abort
-                SendTo(effectiveSendRelay, drag.TargetHost, MessageKind.FileDragCancel, new FileDragCancelMessage());
-        }
+        if (effectiveSendRelay != null && sendTargetHost != null)
+            SendTo(effectiveSendRelay, sendTargetHost, MessageKind.FileTransferAbort, new FileTransferAbortMessage(reason));
 
         if (receiver != null)
         {
@@ -203,51 +128,34 @@ public sealed class FileTransferService : IDisposable
     {
         switch (kind)
         {
-            case MessageKind.FileDragEnter: HandleFileDragEnter(sourceHost, json, relay); break;
-            case MessageKind.FileDragCancel: HandleFileDragCancel(sourceHost); break;
-            case MessageKind.FileTransferStart: HandleFileTransferStart(sourceHost, relay); break;
+            case MessageKind.FileTransferStart: HandleFileTransferStart(sourceHost, json, relay); break;
             case MessageKind.FileTransferChunk: await HandleFileTransferChunkAsync(sourceHost, json); break;
             case MessageKind.FileTransferDone: await HandleFileTransferDoneAsync(sourceHost, json, relay); break;
             case MessageKind.FileTransferAbort: HandleFileTransferAbort(sourceHost, json); break;
         }
     }
 
-    private void HandleFileDragEnter(string sourceHost, string json, IRelaySender relay)
+    private void HandleFileTransferStart(string sourceHost, string json, IRelaySender relay)
     {
-        var msg = json.FromSaneJson<FileDragEnterMessage>();
-        if (msg == null) { _log.LogWarning("Failed to deserialize FileDragEnter from {Host}", sourceHost); return; }
-        var newReceiver = new ReceiverTransfer(sourceHost, msg.FileNames, msg.TotalBytes, _watchdogTimeoutMs);
+        var msg = json.FromSaneJson<FileTransferStartMessage>();
+        if (msg == null) { _log.LogWarning("Failed to deserialize FileTransferStart from {Host}", sourceHost); return; }
+
+        // create (or replace) receiver — the message carries all metadata
+        var newReceiver = new ReceiverTransfer(sourceHost, msg.FileNames ?? [], msg.TotalBytes, _watchdogTimeoutMs);
         ReceiverTransfer? existing;
         lock (_lock) { existing = _receiver; _receiver = newReceiver; _recvRelay = relay; }
         if (existing != null) CleanupReceiver(existing);
-        _dialog.ShowPending(newReceiver.ToTransferInfo());
-        _log.LogInformation("Drag enter from {Host}: {Count} item(s), {Bytes}", sourceHost, msg.FileNames.Length, ByteSize.FromBytes(msg.TotalBytes));
-    }
-
-    private void HandleFileDragCancel(string sourceHost)
-    {
-        TryClearReceiver(out var receiver, out _);
-        if (receiver != null) CleanupReceiver(receiver);
-        _dialog.Close();
-        _log.LogInformation("Drag cancelled by {Host}", sourceHost);
-    }
-
-    private void HandleFileTransferStart(string sourceHost, IRelaySender relay)
-    {
-        ReceiverTransfer? receiver;
-        lock (_lock) receiver = _receiver;
-        if (receiver == null) return;
 
         var destFolder = _dropTargetResolver.GetDirectoryUnderCursor() ?? FallbackFolder();
         var tempDir = TransferTempDir();
         CleanupTempDir(tempDir);
-        var cts = receiver.Cts;
+        var cts = newReceiver.Cts;
         cts.Token.Register(() => CleanupTempDir(tempDir));
 
         var extractor = new TarGzExtractor(tempDir, cts.Token);
         lock (_lock)
         {
-            if (_receiver != receiver) { extractor.Dispose(); return; }
+            if (_receiver != newReceiver) { extractor.Dispose(); return; }
             var recv = _receiver!;
             recv.Extractor = extractor;
             recv.TempDir = tempDir;
@@ -259,13 +167,13 @@ public sealed class FileTransferService : IDisposable
             var watchdogRelay = relay;
             recv.Watchdog = new Timer(_ =>
             {
-                if (receiver.WatchdogExpired())
-                    AbortReceive(watchdogRelay, receiver, "transfer timed out");
+                if (newReceiver.WatchdogExpired())
+                    AbortReceive(watchdogRelay, newReceiver, "transfer timed out");
             }, null, TimeSpan.FromMilliseconds(_watchdogTimeoutMs), TimeSpan.FromMilliseconds(_watchdogTimeoutMs));
         }
 
-        _dialog.ShowTransferring(receiver.ToTransferInfo());
-        _log.LogInformation("Transfer start from {Host}", sourceHost);
+        _dialog.ShowTransferring(newReceiver.ToTransferInfo());
+        _log.LogInformation("Transfer start from {Host}: {Count} file(s)", sourceHost, msg.FileNames?.Length ?? 0);
     }
 
     private async Task HandleFileTransferChunkAsync(string sourceHost, string json)
@@ -366,28 +274,114 @@ public sealed class FileTransferService : IDisposable
             _log.LogInformation("Transfer receive cancelled by user (pending — no relay yet)");
     }
 
-    private async Task StreamAsync(SenderDrag drag, IRelaySender relay, CancellationToken cancel)
+    // orchestrates a paste: source→target file transfer, handling all three host-topology cases.
+    // localHost is the name of the local (master) machine.
+    public void InitiatePaste(FileCopyState copyBuffer, string targetHost, string localHost, IRelaySender relay)
+    {
+        var paths = copyBuffer.Paths.ToList();
+        if (string.Equals(copyBuffer.SourceHost, localHost, StringComparison.OrdinalIgnoreCase))
+        {
+            // case 1: source is local master → stream directly to target
+            StartSend(paths, targetHost, relay);
+        }
+        else
+        {
+            // cases 2 & 3: source is a remote slave → tell it to stream to targetHost
+            var req = new FileStreamRequestMessage(copyBuffer.Paths, targetHost);
+            SendTo(relay, copyBuffer.SourceHost, MessageKind.FileStreamRequest, req);
+            _log.LogInformation("Paste: requested {SourceHost} to stream {Count} file(s) → {TargetHost}",
+                copyBuffer.SourceHost, copyBuffer.Paths.Length, targetHost);
+        }
+    }
+
+    // streams files as tar.gz to targetHost. called on the slave side in response to FileStreamRequest.
+    public async Task StreamToHost(string[] paths, string targetHost, IRelaySender relay)
+    {
+        var cts = new CancellationTokenSource();
+        lock (_lock)
+        {
+            if (_sendCts != null || _receiver != null) { cts.Dispose(); return; }
+            _sendCts = cts;
+            _sendTargetHost = targetHost;
+            _sendRelay = relay;
+        }
+
+        List<string> pathList;
+        long totalBytes;
+        string[] names;
+        try
+        {
+            pathList = [.. paths];
+            totalBytes = TarGzStreamer.ComputeTotalBytes(pathList);
+            names = [.. pathList.Select(Path.GetFileName).Where(n => n != null).Cast<string>()];
+        }
+        catch (Exception ex)
+        {
+            TryCancelSend(out _, out _);
+            SendTo(relay, targetHost, MessageKind.FileTransferAbort, new FileTransferAbortMessage(ex.Message));
+            _dialog.ShowError($"Transfer failed: {ex.Message}");
+            _log.LogWarning(ex, "StreamToHost pre-stream setup failed");
+            return;
+        }
+
+        var startTick = Environment.TickCount64;
+        _dialog.ShowTransferring(new FileTransferInfo(names, totalBytes, IsSender: true));
+        await StreamAsync(pathList, names, totalBytes, startTick, targetHost, relay, cts.Token);
+    }
+
+    // starts an outbound transfer to targetHost. called on the sender side.
+    public void StartSend(List<string> paths, string targetHost, IRelaySender relay)
+    {
+        var cts = new CancellationTokenSource();
+        lock (_lock)
+        {
+            if (_sendCts != null || _receiver != null) { cts.Dispose(); return; }
+            _sendCts = cts;
+            _sendTargetHost = targetHost;
+            _sendRelay = relay;
+        }
+
+        long totalBytes;
+        string[] names;
+        try
+        {
+            totalBytes = TarGzStreamer.ComputeTotalBytes(paths);
+            names = [.. paths.Select(Path.GetFileName).Where(n => n != null).Cast<string>()];
+        }
+        catch (Exception ex)
+        {
+            TryCancelSend(out _, out _);
+            _log.LogWarning(ex, "StartSend pre-stream setup failed");
+            _dialog.ShowError($"Transfer failed: {ex.Message}");
+            return;
+        }
+
+        var tick = Environment.TickCount64;
+        _dialog.ShowTransferring(new FileTransferInfo(names, totalBytes, IsSender: true));
+        _ = Task.Run(() => StreamAsync(paths, names, totalBytes, tick, targetHost, relay, cts.Token));
+    }
+
+    private async Task StreamAsync(List<string> paths, string[] names, long totalBytes, long startTick, string targetHost, IRelaySender relay, CancellationToken cancel)
     {
         long totalSent = 0;
         try
         {
-            // send start before any chunks so the receiver always processes them in order
-            var startPayload = MessageSerializer.Encode(MessageKind.FileTransferStart, new FileTransferStartMessage());
-            await relay.Send([drag.TargetHost], startPayload);
+            var startPayload = MessageSerializer.Encode(MessageKind.FileTransferStart, new FileTransferStartMessage(names, totalBytes));
+            await relay.Send([targetHost], startPayload);
 
-            var sha = await TarGzStreamer.StreamAsync(drag.Paths, async (data, seq, uncompressedBytes) =>
+            var sha = await TarGzStreamer.StreamAsync(paths, async (data, seq, uncompressedBytes) =>
             {
                 cancel.ThrowIfCancellationRequested();
                 var chunkPayload = MessageSerializer.Encode(MessageKind.FileTransferChunk, new FileTransferChunkMessage(seq, data));
-                await relay.Send([drag.TargetHost], chunkPayload);
+                await relay.Send([targetHost], chunkPayload);
                 totalSent += data.Length;
-                var speed = CalcSpeed(drag.TransferStartTick, totalSent);
+                var speed = CalcSpeed(startTick, totalSent);
                 _dialog.UpdateProgress(uncompressedBytes, speed);
                 _log.LogDebug("Sent chunk #{Seq}: {Bytes} bytes", seq, data.Length);
             }, cancel);
 
             var donePayload = MessageSerializer.Encode(MessageKind.FileTransferDone, new FileTransferDoneMessage(totalSent, sha));
-            await relay.Send([drag.TargetHost], donePayload);
+            await relay.Send([targetHost], donePayload);
             _dialog.ShowCompleted();
             _log.LogInformation("Transfer complete: {Bytes} compressed bytes sent", ByteSize.FromBytes(totalSent));
         }
@@ -399,7 +393,7 @@ public sealed class FileTransferService : IDisposable
         catch (Exception ex)
         {
             _log.LogWarning(ex, "Transfer failed");
-            SendTo(relay, drag.TargetHost, MessageKind.FileTransferAbort, new FileTransferAbortMessage(ex.Message));
+            SendTo(relay, targetHost, MessageKind.FileTransferAbort, new FileTransferAbortMessage(ex.Message));
             _dialog.ShowError($"Transfer failed: {ex.Message}");
         }
         finally
@@ -509,20 +503,10 @@ public sealed class FileTransferService : IDisposable
         Abort(relay: null, "service stopped");
     }
 
-    // -- state records --
-
-    private sealed class SenderDrag(string targetHost, List<string> paths, string[] fileNames, long totalBytes)
-    {
-        public string TargetHost { get; } = targetHost;
-        public List<string> Paths { get; } = paths;
-        public string[] FileNames { get; } = fileNames;
-        public long TotalBytes { get; } = totalBytes;
-        public long TransferStartTick { get; set; }
-        public FileTransferInfo ToTransferInfo() => new(FileNames, TotalBytes, IsSender: true);
-    }
+    public sealed record FileCopyState(string SourceHost, string[] Paths);
 
     // lifecycle:
-    //   created on FileDragEnter  → SourceHost/FileNames/TotalBytes/Cts set
+    //   created on FileTransferStart  → SourceHost/FileNames/TotalBytes/Cts set
     //   advanced on FileTransferStart → Extractor/TempDir/DestFolder/TransferStartTick/Watchdog set
     //   finalised on FileTransferDone → FinalizeReceivingAsync runs, then CleanupReceiver
     // all nullable fields are null until the corresponding phase is reached

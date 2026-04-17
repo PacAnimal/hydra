@@ -29,7 +29,6 @@ public class HydraConfigFile
     public string? Profile { get; init; }
 
     public bool DebugShield { get; init; } = false;
-    public bool DragDropEnabled { get; init; } = false;
 
     public List<HydraConfig> Profiles { get; init; } = [];
 

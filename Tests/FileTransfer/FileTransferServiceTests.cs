@@ -9,23 +9,20 @@ namespace Tests.FileTransfer;
 [TestFixture]
 public class FileTransferServiceTests
 {
-    private FakeFileDragSource _dragSource = null!;
     private FakeFileTransferDialog _dialog = null!;
     private FakeRelay _relay = null!;
     private FileTransferService _service = null!;
+    private string _tempRoot = null!;
 
     [SetUp]
     public void SetUp()
     {
-        _dragSource = new FakeFileDragSource();
         _dialog = new FakeFileTransferDialog();
         _relay = new FakeRelay();
-        _service = new FileTransferService(_dragSource, _dialog, new NullDropTargetResolver(), NullLogger<FileTransferService>.Instance);
+        _service = new FileTransferService(_dialog, new NullDropTargetResolver(), NullLogger<FileTransferService>.Instance);
         _tempRoot = Path.Combine(Path.GetTempPath(), "hydra-test-" + Guid.NewGuid());
         Directory.CreateDirectory(_tempRoot);
     }
-
-    private string _tempRoot = null!;
 
     [TearDown]
     public void TearDown()
@@ -33,9 +30,6 @@ public class FileTransferServiceTests
         _service.Dispose();
         try { Directory.Delete(_tempRoot, recursive: true); } catch { /* best effort */ }
     }
-
-    private void BeginDrag(string target = "slave") { _dragSource.Paths = ["/tmp/a.txt"]; _service.TryBeginDrag(target, _relay); }
-    private void BeginDragAndDrop(string target = "slave") { BeginDrag(target); _service.Drop(_relay); }
 
     private Task Simulate(MessageKind kind, object msg) => Simulate(_service, "master", kind, msg, _relay);
 
@@ -45,123 +39,19 @@ public class FileTransferServiceTests
         await svc.OnMessageAsync(host, decoded.Kind, decoded.Json, relay);
     }
 
-    // -- TryBeginDrag --
+    // -- OnMessageAsync: FileTransferStart --
 
     [Test]
-    public void TryBeginDrag_NoPaths_ReturnsFalseAndSendsNothing()
+    public async Task OnMessage_FileTransferStart_ShowsTransferringDialog()
     {
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(_service.TryBeginDrag("slave", _relay), Is.False);
-            Assert.That(_relay.Sent, Is.Empty);
-        }
-    }
-
-    [Test]
-    public void TryBeginDrag_WithPaths_ReturnsTrueAndSendsDragEnter()
-    {
-        _dragSource.Paths = ["/tmp/a.txt"];
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(_service.TryBeginDrag("slave", _relay), Is.True);
-            Assert.That(_relay.Sent.Single().Kind, Is.EqualTo(MessageKind.FileDragEnter));
-            Assert.That(_relay.Sent.Single().Targets, Is.EqualTo(["slave"]));
-            Assert.That(_dialog.LastState, Is.EqualTo("pending"));
-        }
-    }
-
-    // -- ReTargetDrag --
-
-    [Test]
-    public void ReTargetDrag_SendsCancelToOldHostAndEnterToNewHost()
-    {
-        _dragSource.Paths = ["/tmp/a.txt"];
-        _service.TryBeginDrag("slave1", _relay);
-        _relay.Sent.Clear();
-
-        _service.ReTargetDrag("slave2", _relay);
-
-        Assert.That(_relay.Sent, Has.Count.EqualTo(2));
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(_relay.Sent[0].Kind, Is.EqualTo(MessageKind.FileDragCancel));
-            Assert.That(_relay.Sent[0].Targets, Is.EqualTo(["slave1"]));
-            Assert.That(_relay.Sent[1].Kind, Is.EqualTo(MessageKind.FileDragEnter));
-            Assert.That(_relay.Sent[1].Targets, Is.EqualTo(["slave2"]));
-        }
-    }
-
-    // -- CancelDrag --
-
-    [Test]
-    public void CancelDrag_SendsCancelAndClosesDialog()
-    {
-        _dragSource.Paths = ["/tmp/a.txt"];
-        _service.TryBeginDrag("slave", _relay);
-        _relay.Sent.Clear();
-
-        _service.CancelDrag(_relay);
-
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(_relay.Sent.Single().Kind, Is.EqualTo(MessageKind.FileDragCancel));
-            Assert.That(_dialog.LastState, Is.EqualTo("closed"));
-        }
-    }
-
-    // -- Drop --
-
-    [Test]
-    public void Drop_ShowsTransferringAndSetsState()
-    {
-        _dragSource.Paths = ["/tmp/nonexistent.txt"];
-        _service.TryBeginDrag("slave", _relay);
-
-        _service.Drop(_relay);
-
+        await Simulate(MessageKind.FileTransferStart, new FileTransferStartMessage(["a.txt"], 100));
         Assert.That(_dialog.LastState, Is.EqualTo("transferring"));
-    }
-
-    // -- Abort --
-
-    [Test]
-    public void Abort_DuringDrag_SendsCancelAndClosesDialog()
-    {
-        _dragSource.Paths = ["/tmp/a.txt"];
-        _service.TryBeginDrag("slave", _relay);
-        _relay.Sent.Clear();
-
-        _service.Abort(_relay, "connection lost");
-
-        using (Assert.EnterMultipleScope())
-        {
-            // drag-only phase uses FileDragCancel, not FileTransferAbort
-            Assert.That(_relay.Sent.Single().Kind, Is.EqualTo(MessageKind.FileDragCancel));
-            Assert.That(_dialog.LastState, Is.EqualTo("closed"));
-        }
-    }
-
-    // -- OnMessageAsync --
-
-    [Test]
-    public async Task OnMessage_FileDragEnter_ShowsPendingDialog()
-    {
-        await Simulate(MessageKind.FileDragEnter, new FileDragEnterMessage(["a.txt"], 100));
-        Assert.That(_dialog.LastState, Is.EqualTo("pending"));
-    }
-
-    [Test]
-    public async Task OnMessage_FileDragCancel_ClosesDialog()
-    {
-        await Simulate(MessageKind.FileDragEnter, new FileDragEnterMessage(["a.txt"], 100));
-        await Simulate(MessageKind.FileDragCancel, new FileDragCancelMessage());
-        Assert.That(_dialog.LastState, Is.EqualTo("closed"));
     }
 
     [Test]
     public async Task OnMessage_FileTransferAbort_ShowsErrorWithReason()
     {
-        await Simulate(MessageKind.FileDragEnter, new FileDragEnterMessage(["a.txt"], 100));
+        await Simulate(MessageKind.FileTransferStart, new FileTransferStartMessage(["a.txt"], 100));
         await Simulate(MessageKind.FileTransferAbort, new FileTransferAbortMessage("disk full"));
 
         using (Assert.EnterMultipleScope())
@@ -174,28 +64,27 @@ public class FileTransferServiceTests
     // -- CancelRequested --
 
     [Test]
-    public async Task CancelRequested_DuringPendingReceive_ClosesDialog()
+    public async Task CancelRequested_DuringReceive_ClosesDialog()
     {
-        await Simulate(MessageKind.FileDragEnter, new FileDragEnterMessage(["a.txt"], 100));
+        await Simulate(MessageKind.FileTransferStart, new FileTransferStartMessage(["a.txt"], 100));
         _dialog.TriggerCancel();
         Assert.That(_dialog.LastState, Is.EqualTo("closed"));
     }
 
-    // -- Abort during active send --
+    // -- Abort --
 
     [Test]
     public void Abort_DuringActiveSend_SendsAbortAndClosesDialog()
     {
-        _dragSource.Paths = ["/tmp/a.txt"];
-        _service.TryBeginDrag("slave", _relay);
-        _service.Drop(_relay);
+        var file = Path.Combine(_tempRoot, "a.txt");
+        File.WriteAllText(file, "hi");
+        _service.StartSend([file], "slave", _relay);
         _relay.Sent.Clear();
 
         _service.Abort(_relay, "peer disconnected");
 
         using (Assert.EnterMultipleScope())
         {
-            // active send → FileTransferAbort (not FileDragCancel)
             Assert.That(_relay.Sent.Any(m => m.Kind == MessageKind.FileTransferAbort), Is.True);
             Assert.That(_dialog.LastState, Is.EqualTo("closed"));
             Assert.That(_service.FileTransferOngoing, Is.False);
@@ -205,8 +94,7 @@ public class FileTransferServiceTests
     [Test]
     public async Task Abort_DuringActiveReceive_ClosesDialogAndSendsAbort()
     {
-        await Simulate(MessageKind.FileDragEnter, new FileDragEnterMessage(["a.txt"], 100));
-        await Simulate(MessageKind.FileTransferStart, new FileTransferStartMessage());
+        await Simulate(MessageKind.FileTransferStart, new FileTransferStartMessage(["a.txt"], 100));
         _relay.Sent.Clear();
 
         _service.Abort(_relay, "peer disconnected");
@@ -224,9 +112,9 @@ public class FileTransferServiceTests
     [Test]
     public void CancelRequested_DuringActiveSend_SendsAbortAndClosesDialog()
     {
-        _dragSource.Paths = ["/tmp/a.txt"];
-        _service.TryBeginDrag("slave", _relay);
-        _service.Drop(_relay);
+        var file = Path.Combine(_tempRoot, "a.txt");
+        File.WriteAllText(file, "hi");
+        _service.StartSend([file], "slave", _relay);
         _relay.Sent.Clear();
 
         _dialog.TriggerCancel();
@@ -241,54 +129,27 @@ public class FileTransferServiceTests
     // -- FileTransferOngoing guard --
 
     [Test]
-    public void FileTransferOngoing_TrueWhileDragPending()
-    {
-        _dragSource.Paths = ["/tmp/a.txt"];
-        _service.TryBeginDrag("slave", _relay);
-        Assert.That(_service.FileTransferOngoing, Is.True);
-    }
-
-    [Test]
     public void FileTransferOngoing_TrueWhileSending()
     {
-        _dragSource.Paths = ["/tmp/a.txt"];
-        _service.TryBeginDrag("slave", _relay);
-        _service.Drop(_relay);
+        var file = Path.Combine(_tempRoot, "a.txt");
+        File.WriteAllText(file, "hi");
+        _service.StartSend([file], "slave", _relay);
         Assert.That(_service.FileTransferOngoing, Is.True);
     }
 
     [Test]
     public async Task FileTransferOngoing_TrueWhileReceiving()
     {
-        await Simulate(MessageKind.FileDragEnter, new FileDragEnterMessage(["a.txt"], 100));
+        await Simulate(MessageKind.FileTransferStart, new FileTransferStartMessage(["a.txt"], 100));
         Assert.That(_service.FileTransferOngoing, Is.True);
     }
 
     [Test]
-    public void FileTransferOngoing_FalseAfterAbort()
+    public async Task FileTransferOngoing_FalseAfterAbort()
     {
-        _dragSource.Paths = ["/tmp/a.txt"];
-        _service.TryBeginDrag("slave", _relay);
+        await Simulate(MessageKind.FileTransferStart, new FileTransferStartMessage(["a.txt"], 100));
         _service.Abort(_relay, "test");
         Assert.That(_service.FileTransferOngoing, Is.False);
-    }
-
-    // -- slave-initiated reverse transfer (TryBeginDrag + Drop in sequence) --
-
-    [Test]
-    public void SlaveInitiatedTransfer_SendsDragEnterThenTransferStart()
-    {
-        // simulates what SlaveRelayConnection does on LeaveScreen: TryBeginDrag then Drop
-        _dragSource.Paths = ["/tmp/a.txt"];
-        var began = _service.TryBeginDrag("master", _relay);
-        Assert.That(began, Is.True);
-        _service.Drop(_relay);
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(_relay.Sent.Any(m => m.Kind == MessageKind.FileDragEnter && m.Targets.Contains("master")), Is.True);
-            // FileTransferStart is sent by StreamAsync on a Task.Run — we only verify the drag/send state was established
-            Assert.That(_dialog.LastState, Is.EqualTo("transferring"));
-        }
     }
 
     // -- FileTransferAbort when we are the sender --
@@ -296,9 +157,9 @@ public class FileTransferServiceTests
     [Test]
     public async Task OnMessage_FileTransferAbort_WhenSending_CancelsSendAndClosesDialog()
     {
-        _dragSource.Paths = ["/tmp/a.txt"];
-        _service.TryBeginDrag("slave", _relay);
-        _service.Drop(_relay);
+        var file = Path.Combine(_tempRoot, "a.txt");
+        File.WriteAllText(file, "hi");
+        _service.StartSend([file], "slave", _relay);
         _relay.Sent.Clear();
 
         // remote receiver ("slave") sends abort back — we are the sender
@@ -318,8 +179,7 @@ public class FileTransferServiceTests
     [Test]
     public async Task CancelRequested_DuringActiveReceive_ClosesDialogAndSendsAbort()
     {
-        await Simulate(MessageKind.FileDragEnter, new FileDragEnterMessage(["a.txt"], 100));
-        await Simulate(MessageKind.FileTransferStart, new FileTransferStartMessage());
+        await Simulate(MessageKind.FileTransferStart, new FileTransferStartMessage(["a.txt"], 100));
         _relay.Sent.Clear();
 
         _dialog.TriggerCancel();
@@ -330,15 +190,6 @@ public class FileTransferServiceTests
             Assert.That(_dialog.LastState, Is.EqualTo("closed"));
             Assert.That(_service.FileTransferOngoing, Is.False);
         }
-    }
-
-    // -- ReTargetDrag when no drag active --
-
-    [Test]
-    public void ReTargetDrag_WhenNoDragActive_DoesNothing()
-    {
-        _service.ReTargetDrag("slave2", _relay);
-        Assert.That(_relay.Sent, Is.Empty);
     }
 
     // -- full receive flow --
@@ -352,7 +203,7 @@ public class FileTransferServiceTests
         var destDir = Path.Combine(_tempRoot, "dest");
         Directory.CreateDirectory(destDir);
         using var service = new FileTransferService(
-            new NullFileDragSource(), _dialog,
+            _dialog,
             new FakeDropTargetResolver(destDir),
             NullLogger<FileTransferService>.Instance);
 
@@ -362,9 +213,8 @@ public class FileTransferServiceTests
             (data, seq, _) => { chunks.Add((data, seq)); return Task.CompletedTask; },
             CancellationToken.None);
 
-        // simulate protocol: enter → start → chunks → done
-        await Simulate(service, "master", MessageKind.FileDragEnter, new FileDragEnterMessage(["hello.txt"], 11), _relay);
-        await Simulate(service, "master", MessageKind.FileTransferStart, new FileTransferStartMessage(), _relay);
+        // simulate protocol: start → chunks → done
+        await Simulate(service, "master", MessageKind.FileTransferStart, new FileTransferStartMessage(["hello.txt"], 11), _relay);
         foreach (var (data, seq) in chunks)
             await Simulate(service, "master", MessageKind.FileTransferChunk, new FileTransferChunkMessage(seq, data), _relay);
         var totalSent = chunks.Sum(c => (long)c.data.Length);
@@ -382,7 +232,7 @@ public class FileTransferServiceTests
         var destDir = Path.Combine(_tempRoot, "dest");
         Directory.CreateDirectory(destDir);
         using var service = new FileTransferService(
-            new NullFileDragSource(), _dialog,
+            _dialog,
             new FakeDropTargetResolver(destDir),
             NullLogger<FileTransferService>.Instance);
 
@@ -391,8 +241,7 @@ public class FileTransferServiceTests
             (data, seq, _) => { chunks.Add((data, seq)); return Task.CompletedTask; },
             CancellationToken.None);
 
-        await Simulate(service, "master", MessageKind.FileDragEnter, new FileDragEnterMessage(["data.txt"], 4), _relay);
-        await Simulate(service, "master", MessageKind.FileTransferStart, new FileTransferStartMessage(), _relay);
+        await Simulate(service, "master", MessageKind.FileTransferStart, new FileTransferStartMessage(["data.txt"], 4), _relay);
         foreach (var (data, seq) in chunks)
             await Simulate(service, "master", MessageKind.FileTransferChunk, new FileTransferChunkMessage(seq, data), _relay);
 
@@ -401,17 +250,15 @@ public class FileTransferServiceTests
 
         Assert.That(_dialog.LastState, Is.EqualTo("error"));
     }
+
     // -- relay send failure during active transfer --
 
     [Test]
-    public async Task Drop_RelayThrows_ShowsError()
+    public async Task Send_RelayThrows_ShowsError()
     {
         var file = Path.Combine(_tempRoot, "data.txt");
         await File.WriteAllTextAsync(file, "hello");
-        _dragSource.Paths = [file];
-        _service.TryBeginDrag("slave", _relay);
-
-        _service.Drop(new ThrowingRelay());
+        _service.StartSend([file], "slave", new ThrowingRelay());
 
         // StreamAsync runs on Task.Run — poll until it completes
         var deadline = DateTime.UtcNow.AddSeconds(5);
@@ -431,11 +278,10 @@ public class FileTransferServiceTests
     public async Task Watchdog_NoChunksAfterTimeout_AbortsReceive()
     {
         using var service = new FileTransferService(
-            new NullFileDragSource(), _dialog, new NullDropTargetResolver(),
+            _dialog, new NullDropTargetResolver(),
             NullLogger<FileTransferService>.Instance, watchdogTimeoutMs: 100);
 
-        await Simulate(service, "master", MessageKind.FileDragEnter, new FileDragEnterMessage(["a.txt"], 100), _relay);
-        await Simulate(service, "master", MessageKind.FileTransferStart, new FileTransferStartMessage(), _relay);
+        await Simulate(service, "master", MessageKind.FileTransferStart, new FileTransferStartMessage(["a.txt"], 100), _relay);
 
         // no chunks arrive — watchdog should fire within ~200ms and abort
         var deadline = DateTime.UtcNow.AddSeconds(5);
@@ -449,12 +295,90 @@ public class FileTransferServiceTests
         }
     }
 
+    // -- copy buffer --
+
+    [Test]
+    public void GetCopyBuffer_InitiallyNull()
+    {
+        Assert.That(_service.GetCopyBuffer(), Is.Null);
+    }
+
+    [Test]
+    public void SetCopyBuffer_StoresState()
+    {
+        _service.SetCopyBuffer("host-a", ["file1.txt", "file2.txt"]);
+
+        var buf = _service.GetCopyBuffer();
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(buf, Is.Not.Null);
+            Assert.That(buf!.SourceHost, Is.EqualTo("host-a"));
+            Assert.That(buf.Paths, Is.EqualTo(["file1.txt", "file2.txt"]));
+        }
+    }
+
+    [Test]
+    public void HandleSelectionResponse_WithPaths_UpdatesBuffer()
+    {
+        var json = MessageSerializer.Decode(MessageSerializer.Encode(MessageKind.FileSelectionResponse, new FileSelectionResponseMessage(["a.txt", "b.txt"]))).Json;
+        _service.HandleSelectionResponse("remote-host", json);
+
+        var buf = _service.GetCopyBuffer();
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(buf, Is.Not.Null);
+            Assert.That(buf!.SourceHost, Is.EqualTo("remote-host"));
+            Assert.That(buf.Paths, Is.EqualTo(["a.txt", "b.txt"]));
+        }
+    }
+
+    [Test]
+    public void HandleSelectionResponse_NullPaths_DoesNotUpdateBuffer()
+    {
+        _service.SetCopyBuffer("original-host", ["existing.txt"]);
+        var json = MessageSerializer.Decode(MessageSerializer.Encode(MessageKind.FileSelectionResponse, new FileSelectionResponseMessage(null))).Json;
+        _service.HandleSelectionResponse("other-host", json);
+
+        Assert.That(_service.GetCopyBuffer()?.SourceHost, Is.EqualTo("original-host"));
+    }
+
+    // -- InitiatePaste --
+
+    [Test]
+    public void InitiatePaste_LocalSource_StartsLocalSend()
+    {
+        var file = Path.Combine(_tempRoot, "a.txt");
+        File.WriteAllText(file, "hi");
+        var copyBuffer = new FileTransferService.FileCopyState("local-host", [file]);
+
+        _service.InitiatePaste(copyBuffer, "slave-host", "local-host", _relay);
+
+        Assert.That(_service.FileTransferOngoing, Is.True);
+    }
+
+    [Test]
+    public void InitiatePaste_RemoteSource_SendsFileStreamRequest()
+    {
+        var copyBuffer = new FileTransferService.FileCopyState("source-slave", ["/remote/file.txt"]);
+
+        _service.InitiatePaste(copyBuffer, "target-slave", "local-host", _relay);
+
+        var req = _relay.Sent.FirstOrDefault(m => m.Kind == MessageKind.FileStreamRequest);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(req, Is.Not.EqualTo(default(ValueTuple<string[], MessageKind, string>)));
+            Assert.That(req.Targets, Contains.Item("source-slave"));
+        }
+    }
+
     // -- dispose during active transfer --
 
     [Test]
     public void Dispose_DuringActiveSend_CleansUp()
     {
-        BeginDragAndDrop();
+        var file = Path.Combine(_tempRoot, "a.txt");
+        File.WriteAllText(file, "hi");
+        _service.StartSend([file], "slave", _relay);
         _service.Dispose();
 
         using (Assert.EnterMultipleScope())
@@ -467,8 +391,7 @@ public class FileTransferServiceTests
     [Test]
     public async Task Dispose_DuringActiveReceive_CleansUp()
     {
-        await Simulate(MessageKind.FileDragEnter, new FileDragEnterMessage(["a.txt"], 100));
-        await Simulate(MessageKind.FileTransferStart, new FileTransferStartMessage());
+        await Simulate(MessageKind.FileTransferStart, new FileTransferStartMessage(["a.txt"], 100));
 
         _service.Dispose();
 
@@ -481,13 +404,6 @@ public class FileTransferServiceTests
 }
 
 // -- fakes (only used by this test class) --
-
-internal sealed class FakeFileDragSource : IFileDragSource
-{
-    public List<string>? Paths { get; set; }
-    public List<string>? GetDraggedPaths() => Paths;
-    public void UpdateActiveEdges(List<ActiveEdgeRange> ranges) { }
-}
 
 internal sealed class FakeFileTransferDialog : IFileTransferDialog
 {

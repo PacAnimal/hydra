@@ -20,6 +20,7 @@ public class SlaveRelayConnection : RelayConnection
     private readonly IScreensaverSuppressor _screensaverSuppressor;
     private readonly IClipboardSync _clipboardSync;
     private readonly FileTransferService _fileTransfer;
+    private readonly IFileSelectionDetector _selectionDetector;
 
     // active key repeat timers keyed by (char?, SpecialKey?)
     private readonly Dictionary<(char?, SpecialKey?), CancellationTokenSource> _repeatTimers = [];
@@ -32,7 +33,7 @@ public class SlaveRelayConnection : RelayConnection
 
     // ReSharper disable once ConvertToPrimaryConstructor
 #pragma warning disable IDE0290
-    public SlaveRelayConnection(IHydraProfile profile, ILogger<RelayConnection> log, IPlatformOutput output, IScreenDetector screens, IWorldState peerState, SlaveCursorHider cursorHider, IScreenSaverSync screenSaverSync, IScreensaverSuppressor screensaverSuppressor, IClipboardSync clipboardSync, FileTransferService fileTransfer)
+    public SlaveRelayConnection(IHydraProfile profile, ILogger<RelayConnection> log, IPlatformOutput output, IScreenDetector screens, IWorldState peerState, SlaveCursorHider cursorHider, IScreenSaverSync screenSaverSync, IScreensaverSuppressor screensaverSuppressor, IClipboardSync clipboardSync, FileTransferService fileTransfer, IFileSelectionDetector selectionDetector)
         : base(profile, log, peerState)
     {
         _output = output;
@@ -44,6 +45,7 @@ public class SlaveRelayConnection : RelayConnection
         _screensaverSuppressor = screensaverSuppressor;
         _clipboardSync = clipboardSync;
         _fileTransfer = fileTransfer;
+        _selectionDetector = selectionDetector;
 
         _screens.ScreensChanged += async snapshot =>
         {
@@ -123,12 +125,6 @@ public class SlaveRelayConnection : RelayConnection
                 ReleaseAllKeys();
                 CancelAllRepeatTimers();
                 _cursorHider.OnLeaveScreen(sourceHost);
-                // slave-initiated drag: if user is dragging files on this machine while master leaves,
-                // begin a reverse transfer immediately (slave is sender, master is receiver).
-                // FileDragEnter and FileTransferStart are sent in order via the same SignalR connection,
-                // so guaranteed delivery order means the receiver always processes Enter before Start.
-                if (!_fileTransfer.FileTransferOngoing && _fileTransfer.TryBeginDrag(sourceHost, this))
-                    _fileTransfer.Drop(this);
                 break;
             case MessageKind.ScreensaverSync:
                 var ss = json.FromSaneJson<ScreensaverSyncMessage>();
@@ -188,6 +184,20 @@ public class SlaveRelayConnection : RelayConnection
                 var response = MessageSerializer.Encode(MessageKind.ClipboardPullResponse, new ClipboardPullResponseMessage(text, primary, image));
                 _ = Send([sourceHost], response).AsTask();
                 break;
+            case MessageKind.FileSelectionQuery:
+                {
+                    var selectedPaths = _selectionDetector.GetSelectedPaths();
+                    var selectionPayload = MessageSerializer.Encode(MessageKind.FileSelectionResponse, new FileSelectionResponseMessage(selectedPaths?.ToArray()));
+                    _ = Send([sourceHost], selectionPayload).AsTask();
+                    break;
+                }
+            case MessageKind.FileStreamRequest:
+                {
+                    var req = json.FromSaneJson<FileStreamRequestMessage>();
+                    if (req != null)
+                        _ = _fileTransfer.StreamToHost(req.Paths, req.TargetHost, this);
+                    break;
+                }
             case var _ when FileTransferService.IsFileTransferMessage(kind):
                 await _fileTransfer.OnMessageAsync(sourceHost, kind, json, this);
                 break;

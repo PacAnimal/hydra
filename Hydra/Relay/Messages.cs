@@ -23,12 +23,13 @@ public enum MessageKind : byte
     ClipboardPush = 12,         // master → slave: apply this clipboard (text/image/files)
     ClipboardPull = 13,         // master → slave: send me your clipboard
     ClipboardPullResponse = 14, // slave → master: here's my clipboard
-    FileDragEnter = 15,         // sender → receiver: drag crossing detected with files
-    FileDragCancel = 16,        // sender → receiver: drag returned to source before release
-    FileTransferStart = 17,     // sender → receiver: mouse released, transfer beginning
+    FileTransferStart = 17,     // sender → receiver: transfer beginning
     FileTransferChunk = 18,     // sender → receiver: chunk of tar.gz data
     FileTransferDone = 19,      // sender → receiver: all data sent
     FileTransferAbort = 20,     // either → either: abort and clean up
+    FileSelectionQuery = 21,    // master → slave: what files are selected?
+    FileSelectionResponse = 22, // slave → master: here are the selected files
+    FileStreamRequest = 23,     // master → source slave: stream these files to target
 }
 
 public record MouseMoveMessage(string Screen, int X, int Y);
@@ -51,12 +52,13 @@ public record ClipboardPullMessage;
 public record ClipboardPushMessage(string Text, string? PrimaryText = null, byte[]? ImagePng = null);
 public record ClipboardPullResponseMessage(string? Text, string? PrimaryText = null, byte[]? ImagePng = null);
 
-public record FileDragEnterMessage(string[] FileNames, long TotalBytes);
-public record FileDragCancelMessage;
-public record FileTransferStartMessage;
+public record FileTransferStartMessage(string[]? FileNames = null, long TotalBytes = 0);
 public record FileTransferChunkMessage(int Sequence, byte[] Data);
 public record FileTransferDoneMessage(long TotalBytesSent, byte[] Sha256);
 public record FileTransferAbortMessage(string Reason);
+public record FileSelectionQueryMessage;
+public record FileSelectionResponseMessage(string[]? Paths);
+public record FileStreamRequestMessage(string[] Paths, string TargetHost);
 
 public static class MessageSerializer
 {
