@@ -408,7 +408,7 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     internal static partial nint GetDesktopWindow();
 
-    [LibraryImport(User32)]
+    [LibraryImport(User32, EntryPoint = "PostMessageW")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool PostMessage(nint hWnd, uint msg, nint wParam, nint lParam);
