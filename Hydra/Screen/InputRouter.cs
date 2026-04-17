@@ -593,15 +593,20 @@ public class InputRouter(
                 {
                     // cursor is local — query local file manager
                     var paths = _selectionDetector.GetSelectedPaths();
-                    if (paths != null) _fileTransfer.SetCopyBuffer(profile.Name, paths);
-                    else log.LogDebug("Copy hotkey: no files selected locally");
+                    if (paths != null)
+                    {
+                        log.LogInformation("Copy hotkey: {Count} file(s) selected locally: {Paths}", paths.Count, string.Join(", ", paths));
+                        _fileTransfer.SetCopyBuffer(profile.Name, paths);
+                    }
+                    else
+                        log.LogInformation("Copy hotkey: no files selected locally");
                 }
                 else if (st.Mouse.CurrentScreen != null && relay.IsConnected)
                 {
                     // cursor is remote — ask slave to report its selection
+                    log.LogInformation("Copy hotkey: querying file selection on {Host}", st.Mouse.CurrentScreen.Host);
                     var queryPayload = MessageSerializer.Encode(MessageKind.FileSelectionQuery, new FileSelectionQueryMessage());
                     _ = relay.Send([st.Mouse.CurrentScreen.Host], queryPayload).AsTask();
-                    log.LogDebug("Copy hotkey: sent FileSelectionQuery to {Host}", st.Mouse.CurrentScreen.Host);
                 }
             }
             else if (keyEvent.Character == 'v')
@@ -609,7 +614,7 @@ public class InputRouter(
                 var copyBuffer = _fileTransfer.GetCopyBuffer();
                 if (copyBuffer == null)
                 {
-                    log.LogDebug("Paste hotkey: copy buffer is empty");
+                    log.LogInformation("Paste hotkey: copy buffer is empty");
                 }
                 else
                 {
@@ -617,9 +622,12 @@ public class InputRouter(
                         ? st.Mouse.CurrentScreen.Host
                         : profile.Name;
                     if (string.Equals(copyBuffer.SourceHost, targetHost, StringComparison.OrdinalIgnoreCase))
-                        log.LogDebug("Paste hotkey: source and target are the same host ({Host})", targetHost);
+                        log.LogInformation("Paste hotkey: source and target are the same host ({Host}), nothing to do", targetHost);
                     else
+                    {
+                        log.LogInformation("Paste hotkey: {Count} file(s) from {Source} → {Target}", copyBuffer.Paths.Length, copyBuffer.SourceHost, targetHost);
                         _fileTransfer.InitiatePaste(copyBuffer, targetHost, profile.Name, relay);
+                    }
                 }
             }
         }

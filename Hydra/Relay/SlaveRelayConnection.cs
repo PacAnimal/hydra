@@ -187,6 +187,10 @@ public class SlaveRelayConnection : RelayConnection
             case MessageKind.FileSelectionQuery:
                 {
                     var selectedPaths = _selectionDetector.GetSelectedPaths();
+                    if (selectedPaths != null)
+                        _log.LogInformation("File selection query from {Host}: {Count} file(s) selected: {Paths}", sourceHost, selectedPaths.Count, string.Join(", ", selectedPaths));
+                    else
+                        _log.LogInformation("File selection query from {Host}: no files selected", sourceHost);
                     var selectionPayload = MessageSerializer.Encode(MessageKind.FileSelectionResponse, new FileSelectionResponseMessage(selectedPaths?.ToArray()));
                     _ = Send([sourceHost], selectionPayload).AsTask();
                     break;

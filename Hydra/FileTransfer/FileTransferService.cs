@@ -173,7 +173,7 @@ public sealed class FileTransferService : IDisposable
         }
 
         _dialog.ShowTransferring(newReceiver.ToTransferInfo());
-        _log.LogInformation("Transfer start from {Host}: {Count} file(s)", sourceHost, msg.FileNames?.Length ?? 0);
+        _log.LogInformation("Transfer start from {Host}: {Count} file(s) → {Dest}", sourceHost, msg.FileNames?.Length ?? 0, destFolder);
     }
 
     private async Task HandleFileTransferChunkAsync(string sourceHost, string json)
