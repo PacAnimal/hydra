@@ -33,4 +33,5 @@ public interface IPlatformInput : IDisposable
     bool IsOnVirtualScreen { get; set; }
 
     KeyRepeatSettings GetKeyRepeatSettings();
+    bool AnyMouseButtonHeld();
 }

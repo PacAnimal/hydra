@@ -199,6 +199,13 @@ public sealed class XorgInputHandler : IPlatformInput
         return new KeyRepeatSettings(500, 33);
     }
 
+    public bool AnyMouseButtonHeld()
+    {
+        // XQueryPointer mask_return bits 8-12 = Button1Mask through Button5Mask
+        NativeMethods.XQueryPointer(_display, _rootWindow, out _, out _, out _, out _, out _, out _, out var mask);
+        return (mask & 0x1F00) != 0;
+    }
+
     public void StopEventTap()
     {
         _running = false;

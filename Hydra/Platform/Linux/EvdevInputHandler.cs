@@ -37,6 +37,9 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
     public Task ShowCursor() => Task.CompletedTask;   // no-op: headless
     public void WarpCursor(int x, int y) { }          // no-op: remote-only uses deltas
 
+    // evdev is headless/remote-only — no local screen, no OS window snapping to worry about
+    public bool AnyMouseButtonHeld() => false;
+
     public KeyRepeatSettings GetKeyRepeatSettings()
     {
         // try reading repeat settings from the first keyboard device

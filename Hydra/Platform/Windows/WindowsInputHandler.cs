@@ -157,6 +157,17 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, bool d
         _hookThread?.Join(TimeSpan.FromSeconds(2));
     }
 
+    public bool AnyMouseButtonHeld()
+    {
+        // VK_LBUTTON=0x01, VK_RBUTTON=0x02, VK_MBUTTON=0x04, VK_XBUTTON1=0x05, VK_XBUTTON2=0x06
+        // high bit (0x8000) set means the key is currently down
+        return (NativeMethods.GetKeyState(0x01) & 0x8000) != 0
+            || (NativeMethods.GetKeyState(0x02) & 0x8000) != 0
+            || (NativeMethods.GetKeyState(0x04) & 0x8000) != 0
+            || (NativeMethods.GetKeyState(0x05) & 0x8000) != 0
+            || (NativeMethods.GetKeyState(0x06) & 0x8000) != 0;
+    }
+
     public void Dispose() => StopEventTap();
 
     // called on the hook thread — checks if the desktop has changed and reinstalls hooks if needed

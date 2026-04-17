@@ -53,6 +53,8 @@ public sealed class FakePlatform : IPlatformInput
         return Task.CompletedTask;
     }
 
+    public bool AnyMouseButtonHeld { get; set; }
+    bool IPlatformInput.AnyMouseButtonHeld() => AnyMouseButtonHeld;
     public KeyRepeatSettings GetKeyRepeatSettings() => new(500, 33);
     public void StopEventTap() { }
     public void WarpCursor(int x, int y) { WarpX = x; WarpY = y; }

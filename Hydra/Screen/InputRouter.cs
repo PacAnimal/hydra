@@ -713,13 +713,14 @@ public class InputRouter(
         var scale = GetRemoteScale(peerScreens, hit.Destination);
         var remoteInfo = GetRemoteScreensAndScales(st.Screens, peerScreens, hit.Destination);
 
-        // block edge crossing with button held if a transfer is already in progress
-        if (st.LeftButtonHeld && _fileTransfer.FileTransferOngoing)
-            return;
-
-        // check for an active OS drag before hiding the cursor
-        if (st.LeftButtonHeld)
-            _fileTransfer.TryBeginDrag(hit.Destination.Host, relay);
+        // block edge crossing while any button is held (prevents conflicts with OS window snapping)
+        // exception: drag&drop is enabled and there are actual files being dragged
+        if (platform.AnyMouseButtonHeld())
+        {
+            if (_fileTransfer.FileTransferOngoing) return;
+            if (!profile.DragDropEnabled || !st.LeftButtonHeld || !_fileTransfer.TryBeginDrag(hit.Destination.Host, relay))
+                return;
+        }
 
         AsyncHelper.RunSync(platform.HideCursor);
         platform.IsOnVirtualScreen = true;
@@ -784,6 +785,10 @@ public class InputRouter(
                     // remote→remote: always allowed in remote-only; locked prevents it in normal mode
                     if (profile.RemoteOnly || !st.LockedToScreen)
                     {
+                        // block if any button is held and no file drag is in progress
+                        if (platform.AnyMouseButtonHeld() && !_fileTransfer.IsDragReady)
+                            return;
+
                         var leavingScreen = st.Mouse.CurrentScreen;
                         FlushMouseDelta(st);
                         var peerScreens = AsyncHelper.RunSync(() => _peerState.GetPeerScreensSnapshot().AsTask());
@@ -935,9 +940,13 @@ public class InputRouter(
             var hit = st.Layout?.DetectEdgeExit(st.Mouse.CurrentScreen!, (int)st.Mouse.X, (int)st.Mouse.Y);
             if (hit is not null && !hit.Destination.IsLocal && relay.IsConnected)
             {
-                // block edge crossing with button held if a transfer is already in progress
-                if (st.LeftButtonHeld && _fileTransfer.FileTransferOngoing)
-                    return;
+                // block edge crossing while any button is held unless a file drag is in progress
+                if (platform.AnyMouseButtonHeld())
+                {
+                    if (_fileTransfer.FileTransferOngoing) return;
+                    if (!profile.DragDropEnabled || !st.LeftButtonHeld || !_fileTransfer.TryBeginDrag(hit.Destination.Host, relay))
+                        return;
+                }
                 FlushMouseDelta(st);
                 var peerScreens = AsyncHelper.RunSync(() => _peerState.GetPeerScreensSnapshot().AsTask());
                 var remoteInfo = GetRemoteScreensAndScales(st.Screens, peerScreens, hit.Destination);

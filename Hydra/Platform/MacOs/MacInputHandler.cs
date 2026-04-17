@@ -32,6 +32,7 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
     private static readonly nint NsEventClass = NativeMethods.objc_getClass("NSEvent");
     private static readonly nint SelKeyRepeatDelay = NativeMethods.sel_registerName("keyRepeatDelay");
     private static readonly nint SelKeyRepeatInterval = NativeMethods.sel_registerName("keyRepeatInterval");
+    private static readonly nint SelPressedMouseButtons = NativeMethods.sel_registerName("pressedMouseButtons");
     private static readonly nint SelEventWithCgEvent = NativeMethods.sel_registerName("eventWithCGEvent:");
     private static readonly nint SelSubtype = NativeMethods.sel_registerName("subtype");
     private static readonly nint SelData1 = NativeMethods.sel_registerName("data1");
@@ -133,6 +134,12 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
         var delaySeconds = NativeMethods.objc_msgSend_double(NsEventClass, SelKeyRepeatDelay);
         var rateSeconds = NativeMethods.objc_msgSend_double(NsEventClass, SelKeyRepeatInterval);
         return new KeyRepeatSettings((int)(delaySeconds * 1000), (int)(rateSeconds * 1000));
+    }
+
+    public bool AnyMouseButtonHeld()
+    {
+        if (NsEventClass == nint.Zero) return false;
+        return NativeMethods.objc_msgSend_long(NsEventClass, SelPressedMouseButtons) != 0;
     }
 
     public void StopEventTap()
