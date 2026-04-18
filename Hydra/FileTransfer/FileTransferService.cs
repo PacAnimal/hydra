@@ -140,13 +140,22 @@ public sealed class FileTransferService : IDisposable
         var msg = json.FromSaneJson<FileTransferStartMessage>();
         if (msg == null) { _log.LogWarning("Failed to deserialize FileTransferStart from {Host}", sourceHost); return; }
 
+        // resolve destination before committing the receiver slot
+        var destFolder = _dropTargetResolver.GetDirectoryUnderCursor();
+        if (string.IsNullOrEmpty(destFolder))
+        {
+            SendTo(relay, sourceHost, MessageKind.FileTransferAbort, new FileTransferAbortMessage("no folder to paste into"));
+            _dialog.ShowError("Move the cursor over a folder or the desktop before pasting");
+            _log.LogWarning("Transfer from {Host}: no valid paste destination — cursor is not over a folder or the desktop", sourceHost);
+            return;
+        }
+        _log.LogInformation("Paste destination: {Dest}", destFolder);
+
         // create (or replace) receiver — the message carries all metadata
         var newReceiver = new ReceiverTransfer(sourceHost, msg.FileNames ?? [], msg.TotalBytes, _watchdogTimeoutMs);
         ReceiverTransfer? existing;
         lock (_lock) { existing = _receiver; _receiver = newReceiver; _recvRelay = relay; }
         if (existing != null) CleanupReceiver(existing);
-
-        var destFolder = _dropTargetResolver.GetDirectoryUnderCursor() ?? FallbackFolder();
         var tempDir = TransferTempDir();
         CleanupTempDir(tempDir);
         var cts = newReceiver.Cts;
@@ -173,7 +182,7 @@ public sealed class FileTransferService : IDisposable
         }
 
         _dialog.ShowTransferring(newReceiver.ToTransferInfo());
-        _log.LogInformation("Transfer start from {Host}: {Count} file(s) → {Dest}", sourceHost, msg.FileNames?.Length ?? 0, destFolder);
+        _log.LogInformation("Transfer start from {Host}: {Count} file(s)", sourceHost, msg.FileNames?.Length ?? 0);
     }
 
     private async Task HandleFileTransferChunkAsync(string sourceHost, string json)
@@ -488,10 +497,6 @@ public sealed class FileTransferService : IDisposable
         try { if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true); }
         catch { /* best effort */ }
     }
-
-    // fallback when cursor is not over a recognisable folder view
-    private static string FallbackFolder() =>
-        Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
 
     // intentional fixed path: FileTransferOngoing prevents concurrent transfers, and reusing the
     // same directory ensures any previous temp content is cleaned up before the next transfer begins.

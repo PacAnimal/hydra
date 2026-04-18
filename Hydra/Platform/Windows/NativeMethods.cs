@@ -373,11 +373,16 @@ internal static partial class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool DeleteObject(nint ho);
 
+
     // -- foreground window (for keyboard layout detection) --
 
     [LibraryImport(User32)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     internal static partial nint GetForegroundWindow();
+
+    [LibraryImport(User32, EntryPoint = "GetClassNameW")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static unsafe partial int GetClassNameW(nint hWnd, char* lpClassName, int nMaxCount);
 
     [LibraryImport(User32)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
@@ -412,6 +417,13 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool PostMessage(nint hWnd, uint msg, nint wParam, nint lParam);
+
+    internal const uint MB_OK = 0x00000000;
+    internal const uint MB_ICONERROR = 0x00000010;
+
+    [LibraryImport(User32, EntryPoint = "MessageBoxW", StringMarshalling = StringMarshalling.Utf16)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial int MessageBoxW(nint hWnd, string lpText, string lpCaption, uint uType);
 
     // SetThreadExecutionState: prevents sleep/screensaver
     internal const uint ES_DISPLAY_REQUIRED = 0x00000002;

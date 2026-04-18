@@ -78,6 +78,11 @@ public sealed class WindowsDropTargetResolver(ILogger<WindowsDropTargetResolver>
         // walk up to the top-level window (Explorer's cabinet window)
         var rootHwnd = NativeMethods.GetAncestor(targetHwnd, NativeMethods.GA_ROOTOWNER);
 
+        // desktop window (Progman/WorkerW) → paste to Desktop folder
+        var rootClass = GetWindowClass(rootHwnd);
+        if (rootClass is "Progman" or "WorkerW")
+            return Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
+
         // hold the lock for the entire enumeration so InvalidateShell() can't release the
         // shell object while we're mid-enumeration on another thread
         lock (_lock)
@@ -130,6 +135,14 @@ public sealed class WindowsDropTargetResolver(ILogger<WindowsDropTargetResolver>
         }
 
         return null;
+    }
+
+    private static unsafe string GetWindowClass(nint hwnd)
+    {
+        const int maxLen = 128;
+        char* buf = stackalloc char[maxLen];
+        var len = NativeMethods.GetClassNameW(hwnd, buf, maxLen);
+        return len > 0 ? new string(buf, 0, len) : string.Empty;
     }
 
     // caller must hold _lock

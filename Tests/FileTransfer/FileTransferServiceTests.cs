@@ -19,9 +19,9 @@ public class FileTransferServiceTests
     {
         _dialog = new FakeFileTransferDialog();
         _relay = new FakeRelay();
-        _service = new FileTransferService(_dialog, new NullDropTargetResolver(), NullLogger<FileTransferService>.Instance);
         _tempRoot = Path.Combine(Path.GetTempPath(), "hydra-test-" + Guid.NewGuid());
         Directory.CreateDirectory(_tempRoot);
+        _service = new FileTransferService(_dialog, new FakeDropTargetResolver(_tempRoot), NullLogger<FileTransferService>.Instance);
     }
 
     [TearDown]
@@ -278,7 +278,7 @@ public class FileTransferServiceTests
     public async Task Watchdog_NoChunksAfterTimeout_AbortsReceive()
     {
         using var service = new FileTransferService(
-            _dialog, new NullDropTargetResolver(),
+            _dialog, new FakeDropTargetResolver(_tempRoot),
             NullLogger<FileTransferService>.Instance, watchdogTimeoutMs: 100);
 
         await Simulate(service, "master", MessageKind.FileTransferStart, new FileTransferStartMessage(["a.txt"], 100), _relay);

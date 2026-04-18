@@ -265,7 +265,7 @@ if (config != null)
     }
     else if (OperatingSystem.IsWindows())
     {
-        services.AddSingleton<IFileTransferDialog, WindowsTransferDialog>();
+        services.AddSingleton<IFileTransferDialog, WindowsProgressDialog>();
         services.AddSingleton<IDropTargetResolver, WindowsDropTargetResolver>();
     }
     else
