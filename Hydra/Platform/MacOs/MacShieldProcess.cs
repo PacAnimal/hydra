@@ -14,7 +14,7 @@ namespace Hydra.Platform.MacOs;
 //   2. network state detection — send CmdWifi via stdin to activate; shield reports PfxSsid/PfxWifiAuth on stdout
 //   3. file transfer progress panel — fire-and-forget stdin commands, cancel via stdout
 // always runs on macOS (both master and slave) so network detection is always available.
-internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsWifi) : IHostedService, IDisposable, IFileTransferDialog
+internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsWifi) : IHostedService, IDisposable, IFileTransferDialog, IOsdNotification
 {
     // stdin commands (C# → shield)
     private const string CmdHide = "0"; // pass-through: ignoresMouseEvents = true
@@ -99,6 +99,10 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
     public void ShowError(string message) => _ = SendFireAndForget($"transfer:error:{Base64(message)}");
 
     public void Close() => _ = SendFireAndForget("transfer:close");
+
+    // -- IOsdNotification --
+
+    public void Show(string message) => _ = SendFireAndForget($"osd:{Base64(message)}");
 
     public void Dispose()
     {

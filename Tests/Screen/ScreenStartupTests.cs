@@ -29,7 +29,7 @@ public class ScreenStartupTests
         var service = new InputRouter(
             new FakePlatform(), profile, new NullRelaySender(),
             new FakeScreenDetector(), NullLoggerFactory.Instance, logs.CreateLogger(), new NullScreenSaverSync(), new NullClipboardSync(),
-            FileTransferService.Null(), new NullFileSelectionDetector());
+            FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification());
 
         // must not throw
         await service.StartAsync(CancellationToken.None);

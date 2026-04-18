@@ -259,18 +259,21 @@ if (config != null)
     // file transfer: dialog and drop target resolver depend on platform; service is shared master/slave
     if (OperatingSystem.IsMacOS())
     {
-        // macShield implements IFileTransferDialog (already registered as singleton above)
+        // macShield implements IFileTransferDialog and IOsdNotification (already registered as singleton above)
         services.AddSingleton<IFileTransferDialog>(sp => sp.GetRequiredService<MacShieldProcess>());
+        services.AddSingleton<IOsdNotification>(sp => sp.GetRequiredService<MacShieldProcess>());
         services.AddSingleton<IDropTargetResolver, MacDropTargetResolver>();
     }
     else if (OperatingSystem.IsWindows())
     {
         services.AddSingleton<IFileTransferDialog, WindowsProgressDialog>();
+        services.AddSingleton<IOsdNotification, WindowsOsdNotification>();
         services.AddSingleton<IDropTargetResolver, WindowsDropTargetResolver>();
     }
     else
     {
         services.AddSingleton<IFileTransferDialog, NullFileTransferDialog>();
+        services.AddSingleton<IOsdNotification, NullOsdNotification>();
         services.AddSingleton<IDropTargetResolver, NullDropTargetResolver>();
     }
     services.AddSingleton<FileTransferService>();

@@ -373,6 +373,64 @@ internal static partial class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool DeleteObject(nint ho);
 
+    [LibraryImport(Gdi32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial nint CreateCompatibleDC(nint hdc);
+
+    [LibraryImport(Gdi32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial nint SelectObject(nint hdc, nint h);
+
+    [LibraryImport(Gdi32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool DeleteDC(nint hdc);
+
+    // -- OSD layered window --
+
+    internal const uint WS_EX_TRANSPARENT = 0x00000020;
+    internal const uint WM_TIMER = 0x0113;
+    internal const byte AC_SRC_OVER = 0x00;
+    internal const byte AC_SRC_ALPHA = 0x01;
+    internal const uint ULW_ALPHA = 0x00000002;
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct BLENDFUNCTION
+    {
+        internal byte BlendOp;
+        internal byte BlendFlags;
+        internal byte SourceConstantAlpha;
+        internal byte AlphaFormat;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct WINSIZE
+    {
+        internal int cx;
+        internal int cy;
+    }
+
+    [LibraryImport(User32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial nint GetDC(nint hWnd);
+
+    [LibraryImport(User32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial int ReleaseDC(nint hWnd, nint hDC);
+
+    [LibraryImport(User32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool UpdateLayeredWindow(nint hwnd, nint hdcDst, ref WINPOINT pptDst, ref WINSIZE psize, nint hdcSrc, ref WINPOINT pptSrc, uint crKey, ref BLENDFUNCTION pblend, uint dwFlags);
+
+    [LibraryImport(User32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial nuint SetTimer(nint hWnd, nuint nIDEvent, uint uElapse, nint lpTimerFunc);
+
+    [LibraryImport(User32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool KillTimer(nint hWnd, nuint uIDEvent);
 
     // -- foreground window (for keyboard layout detection) --
 

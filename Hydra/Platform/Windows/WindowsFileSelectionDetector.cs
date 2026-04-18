@@ -67,7 +67,7 @@ public sealed class WindowsFileSelectionDetector(ILogger<WindowsFileSelectionDet
                         if (hwnd != rootHwnd) continue;
 
                         // window.Document is a ShellFolderView COM object with SelectedItems()
-                        dynamic? items = null;
+                        dynamic? items;
                         try { items = window.Document?.SelectedItems(); }
                         catch { continue; }
                         if (items == null) continue;

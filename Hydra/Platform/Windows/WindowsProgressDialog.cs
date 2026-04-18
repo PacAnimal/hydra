@@ -6,29 +6,75 @@ using Microsoft.Extensions.Logging;
 namespace Hydra.Platform.Windows;
 
 // wraps IProgressDialog (shell32) — the same COM progress dialog Windows Explorer uses for file copies.
+// IProgressDialog is apartment-threaded (STA). all COM calls are dispatched to the dedicated STA thread
+// via PostThreadMessage so they're serviced by its active message pump.
 [SupportedOSPlatform("windows")]
-public sealed class WindowsProgressDialog(ILogger<WindowsProgressDialog> log) : IFileTransferDialog, IDisposable
+public sealed class WindowsProgressDialog : IFileTransferDialog, IDisposable
 {
-    private readonly ILogger<WindowsProgressDialog> _log = log;
+    private readonly ILogger<WindowsProgressDialog> _log;
     private readonly Lock _lock = new();
-    private IProgressDialog? _dlg;
+    private readonly StaMessageLoop _loop;
+    private IProgressDialog? _dlg;  // owned exclusively by the STA thread
     private long _totalBytes;
+    private long _lastProgressTick;
     private CancellationTokenSource? _pollCts;
 
-    private const uint ProgdlgAutotime = 0x00000002; // show estimated time remaining
-    private const uint ProgdlgNominimize = 0x00000008; // no minimize button
-    private const uint PdtimerReset = 1;          // reset elapsed time for AUTOTIME estimate
+    // custom thread message: lParam = GCHandle<Action>
+    private const uint WmRunAction = NativeMethods.WM_USER + 50;
+    private const uint ProgdlgAutotime = 0x00000002; // auto time-remaining estimate
+    private const uint ProgdlgNominimize = 0x00000008;
+    private const uint PdtimerReset = 1;
+    private const long ProgressThrottleMs = 100; // cap UI updates at ~10 Hz
 
     public event Action? CancelRequested;
+
+    public WindowsProgressDialog(ILogger<WindowsProgressDialog> log)
+    {
+        _log = log;
+        _loop = new StaMessageLoop(
+            "HydraProgressDlg",
+            init: () => { _ = NativeMethods.OleInitialize(nint.Zero); },
+            onThreadMessage: HandleThreadMessage,
+            onExit: () =>
+            {
+                StopOnSta();
+                NativeMethods.OleUninitialize();
+            });
+    }
+
+    private bool HandleThreadMessage(MSG msg)
+    {
+        if (msg.message != WmRunAction) return false;
+        var handle = GCHandle.FromIntPtr(msg.lParam);
+        try { ((Action?)handle.Target)?.Invoke(); }
+        catch (Exception ex) { _log.LogDebug(ex, "STA action threw"); }
+        finally { handle.Free(); }
+        return true;
+    }
+
+    private void PostToSta(Action action)
+    {
+        var handle = GCHandle.Alloc(action);
+        if (!NativeMethods.PostThreadMessage(_loop.ThreadId, WmRunAction, nint.Zero, GCHandle.ToIntPtr(handle)))
+            handle.Free();
+    }
 
     public void ShowPending(FileTransferInfo info) => ShowTransferring(info);
 
     public void ShowTransferring(FileTransferInfo info)
     {
         _totalBytes = info.TotalBytes;
-        lock (_lock)
+        _lastProgressTick = 0;
+        PostToSta(() => StartDialogOnSta(info));
+        StartCancelPoll();
+    }
+
+    private void StartDialogOnSta(FileTransferInfo info)
+    {
+        StopOnSta();
+        try
         {
-            StopLocked();
+            // ReSharper disable once SuspiciousTypeConversion.Global
             var dlg = (IProgressDialog)new ProgressDialogCom();
             var verb = info.IsSender ? "Sending" : "Receiving";
             var count = info.FileCount;
@@ -40,100 +86,116 @@ public sealed class WindowsProgressDialog(ILogger<WindowsProgressDialog> log) : 
             dlg.Timer(PdtimerReset, nint.Zero);
             _dlg = dlg;
         }
-        StartCancelPoll();
+        catch (Exception ex) { _log.LogWarning(ex, "Failed to create IProgressDialog"); }
+    }
+
+    // only called on the STA thread
+    private void StopOnSta()
+    {
+        if (_dlg == null) return;
+        var dlg = _dlg;
+        _dlg = null;
+        try { dlg.StopProgressDialog(); } catch (Exception ex) { _log.LogDebug(ex, "StopProgressDialog threw"); }
+        try { Marshal.ReleaseComObject(dlg); } catch { /* already released */ }
     }
 
     public void UpdateProgress(long bytesTransferred, double bytesPerSecond)
     {
-        IProgressDialog? dlg;
-        long total;
-        lock (_lock) { dlg = _dlg; total = _totalBytes; }
-        if (dlg == null || total <= 0) return;
-        try
+        var total = _totalBytes;
+        if (total <= 0) return;
+        // throttle to avoid flooding the STA message queue
+        var now = Environment.TickCount64;
+        if (now - _lastProgressTick < ProgressThrottleMs) return;
+        _lastProgressTick = now;
+        PostToSta(() =>
         {
-            dlg.SetProgress64((ulong)bytesTransferred, (ulong)total);
-            var speed = bytesPerSecond > 0 ? $"  ·  {FormatSpeed(bytesPerSecond)}" : "";
-            dlg.SetLine(2, $"{FormatBytes(bytesTransferred)} / {FormatBytes(total)}{speed}", false, nint.Zero);
-        }
-        catch (Exception ex) when (ex is COMException or InvalidComObjectException)
-        {
-            _log.LogDebug(ex, "UpdateProgress: dialog already released");
-        }
+            if (_dlg == null) return;
+            try
+            {
+                _dlg.SetProgress64((ulong)bytesTransferred, (ulong)total);
+                var speed = bytesPerSecond > 0 ? $"  ·  {FormatSpeed(bytesPerSecond)}" : "";
+                _dlg.SetLine(2, $"{FormatBytes(bytesTransferred)} / {FormatBytes(total)}{speed}", false, nint.Zero);
+            }
+            catch (Exception ex) when (ex is COMException or InvalidComObjectException)
+            {
+                _log.LogDebug(ex, "UpdateProgress: dialog already released");
+            }
+        });
     }
 
     public void ShowCompleted()
     {
-        IProgressDialog? dlg;
-        lock (_lock) dlg = _dlg;
-        if (dlg == null) return;
-        try
+        PostToSta(() =>
         {
-            dlg.SetProgress64((ulong)_totalBytes, (ulong)_totalBytes);
-            dlg.SetLine(2, "Transfer complete", false, nint.Zero);
-        }
-        catch { /* dialog may have closed */ }
-        // stop after a brief pause so the user sees 100%
+            if (_dlg == null) return;
+            try
+            {
+                _dlg.SetProgress64((ulong)_totalBytes, (ulong)_totalBytes);
+                _dlg.SetLine(2, "Transfer complete", false, nint.Zero);
+            }
+            catch { /* dialog may have closed */ }
+        });
         _ = Task.Delay(1_500).ContinueWith(_ => Close());
     }
 
     public void ShowError(string message)
     {
-        lock (_lock) StopLocked();
-        _log.LogDebug("Transfer error dialog: {Message}", message);
-        _ = Task.Run(() =>
-            NativeMethods.MessageBoxW(nint.Zero, message, "Hydra — Transfer Failed",
-                NativeMethods.MB_OK | NativeMethods.MB_ICONERROR));
+        PostToSta(StopOnSta);
+        _log.LogDebug("Transfer error: {Message}", message);
+        _ = Task.Run(() => NativeMethods.MessageBoxW(nint.Zero, message, "Hydra — Transfer Failed",
+            NativeMethods.MB_OK | NativeMethods.MB_ICONERROR));
     }
 
     public void Close()
     {
-        lock (_lock) StopLocked();
+        CancellationTokenSource? cts;
+        lock (_lock) { cts = _pollCts; _pollCts = null; }
+        cts?.Cancel();
+        PostToSta(StopOnSta);
     }
 
     public void Dispose()
     {
-        lock (_lock) StopLocked();
-    }
-
-    // caller must hold _lock
-    private void StopLocked()
-    {
-        _pollCts?.Cancel();
-        _pollCts = null;
-        if (_dlg == null) return;
-        var dlg = _dlg;
-        _dlg = null;
-        try { dlg.StopProgressDialog(); }
-        catch (Exception ex) { _log.LogDebug(ex, "StopProgressDialog threw"); }
-        try { Marshal.ReleaseComObject(dlg); } catch { /* already released */ }
+        CancellationTokenSource? cts;
+        lock (_lock) { cts = _pollCts; _pollCts = null; }
+        cts?.Cancel();
+        // StopOnSta runs before the loop exits (WM_QUIT is queued after it by loop.Dispose)
+        PostToSta(StopOnSta);
+        _loop.Dispose();
     }
 
     private void StartCancelPoll()
     {
-        CancellationTokenSource cts;
+        CancellationTokenSource newCts;
         lock (_lock)
         {
             _pollCts?.Cancel();
-            _pollCts = cts = new CancellationTokenSource();
+            _pollCts = newCts = new CancellationTokenSource();
         }
         _ = Task.Run(async () =>
         {
-            while (!cts.Token.IsCancellationRequested)
+            while (!newCts.Token.IsCancellationRequested)
             {
-                try { await Task.Delay(100, cts.Token); }
+                try { await Task.Delay(150, newCts.Token); }
                 catch (OperationCanceledException) { return; }
-                IProgressDialog? dlg;
-                lock (_lock) dlg = _dlg;
-                if (dlg == null) return;
-                try
+                // poll HasUserCancelled on the STA thread (it owns _dlg)
+                PostToSta(() =>
                 {
-                    if (dlg.HasUserCancelled())
+                    try
                     {
-                        try { CancelRequested?.Invoke(); } catch { /* handler errors are callers' problem */ }
-                        return;
+                        if (_dlg?.HasUserCancelled() != true) return;
+                        lock (_lock) { _pollCts?.Cancel(); _pollCts = null; }
+                        try { CancelRequested?.Invoke(); }
+                        catch
+                        {
+                            // ignored
+                        }
                     }
-                }
-                catch (Exception ex) when (ex is COMException or InvalidComObjectException) { return; }
+                    catch
+                    {
+                        // ignored
+                    }
+                });
             }
         }, CancellationToken.None);
     }

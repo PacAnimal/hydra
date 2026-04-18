@@ -431,7 +431,7 @@ public class ClipboardSyncTests
             platform, TransitionTestHelper.TestConfig, relay,
             new FakeScreenDetector(), NullLoggerFactory.Instance, NullLogger<InputRouter>.Instance,
             new NullScreenSaverSync(), clipboard,
-            FileTransferService.Null(), new NullFileSelectionDetector());
+            FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification());
         return (platform, relay, service);
     }
 

@@ -29,6 +29,7 @@ let CmdShow  = "1"
 let CmdDebug = "2"
 let CmdWifi  = "wifi"
 let CmdTransferPrefix  = "transfer:"
+let CmdOsdPrefix       = "osd:"
 
 // stdout prefixes (shield → C#)
 let PfxSsid             = "ssid:"
@@ -78,6 +79,7 @@ class ShieldDelegate: NSObject, NSApplicationDelegate, CLLocationManagerDelegate
     private var locationManager: CLLocationManager?
     private var wifiActive = false // guard against duplicate "wifi" commands
     private let transferPanel = TransferPanel()
+    private let osdPanel = OsdPanel()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard let screen = NSScreen.main else {
@@ -117,7 +119,11 @@ class ShieldDelegate: NSObject, NSApplicationDelegate, CLLocationManagerDelegate
             while let line = readLine(strippingNewline: true) {
                 DispatchQueue.main.async {
                     guard let self else { return }
-                    if line.hasPrefix(CmdTransferPrefix) {
+                    if line.hasPrefix(CmdOsdPrefix) {
+                        let b64 = String(line.dropFirst(CmdOsdPrefix.count))
+                        let msg = Data(base64Encoded: b64).flatMap { String(data: $0, encoding: .utf8) } ?? b64
+                        self.osdPanel.show(msg)
+                    } else if line.hasPrefix(CmdTransferPrefix) {
                         self.handleTransferCommand(line)
                     } else {
                         switch line {
@@ -424,6 +430,84 @@ class TransferPanel: NSObject {
         if bps >= mb { return String(format: "%.1f MB/s", bps / mb) }
         if bps >= kb { return String(format: "%.0f KB/s", bps / kb) }
         return String(format: "%.0f B/s", bps)
+    }
+}
+
+// MARK: - OSD notification
+
+class OsdPanel: NSObject {
+    private var window: NSWindow?
+    private var textField: NSTextField?
+    private var dismissTimer: Timer?
+
+    func show(_ message: String) {
+        buildWindowIfNeeded()
+        guard let w = window, let tf = textField else { return }
+
+        dismissTimer?.invalidate()
+
+        tf.attributedStringValue = makeAttributedString(message)
+        tf.sizeToFit()
+
+        let padding: CGFloat = 20
+        let tfSize = tf.intrinsicContentSize
+        let wW = tfSize.width + padding * 2
+        let wH = tfSize.height + padding * 2
+
+        let screen = NSScreen.main ?? NSScreen.screens[0]
+        let sx = screen.frame.midX - wW / 2
+        let sy = screen.frame.minY + screen.frame.height * 0.2
+
+        w.setFrame(NSRect(x: sx, y: sy, width: wW, height: wH), display: false)
+        tf.frame = NSRect(x: padding, y: padding, width: tfSize.width, height: tfSize.height)
+
+        w.alphaValue = 1.0
+        w.orderFrontRegardless()
+
+        dismissTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: false) { [weak self] _ in
+            NSAnimationContext.runAnimationGroup({ ctx in
+                ctx.duration = 0.3
+                self?.window?.animator().alphaValue = 0.0
+            }, completionHandler: {
+                self?.window?.orderOut(nil)
+            })
+        }
+    }
+
+    private func buildWindowIfNeeded() {
+        guard window == nil else { return }
+
+        let w = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 100, height: 50),
+            styleMask: .borderless,
+            backing: .buffered,
+            defer: false)
+        w.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.floatingWindow)))
+        w.backgroundColor = .clear
+        w.isOpaque = false
+        w.hasShadow = false
+        w.ignoresMouseEvents = true
+        w.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+        w.isReleasedWhenClosed = false
+
+        let tf = NSTextField(labelWithString: "")
+        tf.backgroundColor = .clear
+        tf.isBezeled = false
+        tf.isEditable = false
+        tf.drawsBackground = false
+        w.contentView?.addSubview(tf)
+        textField = tf
+        window = w
+    }
+
+    private func makeAttributedString(_ text: String) -> NSAttributedString {
+        let font = NSFont.systemFont(ofSize: 28, weight: .bold)
+        return NSAttributedString(string: text, attributes: [
+            .font: font,
+            .foregroundColor: NSColor(white: 0.96, alpha: 1.0),
+            .strokeColor: NSColor.black,
+            .strokeWidth: -3.5,
+        ])
     }
 }
 

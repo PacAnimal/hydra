@@ -25,6 +25,7 @@ public class InputRouter(
     IClipboardSync clipboardSync,
     FileTransferService fileTransfer,
     IFileSelectionDetector selectionDetector,
+    IOsdNotification osd,
     IWorldState? peerState = null)
     : IHostedService
 {
@@ -430,8 +431,11 @@ public class InputRouter(
                 }
                 break;
             case MessageKind.FileSelectionResponse:
-                _fileTransfer.HandleSelectionResponse(sourceHost, json);
-                break;
+                {
+                    var copied = _fileTransfer.HandleSelectionResponse(sourceHost, json);
+                    osd.Show(copied ? "Copied!" : "Nothing to copy...");
+                    break;
+                }
             case var _ when FileTransferService.IsFileTransferMessage(kind):
                 await _fileTransfer.OnMessageAsync(sourceHost, kind, json, relay);
                 break;
@@ -552,6 +556,7 @@ public class InputRouter(
             if (keyEvent.Character == 'l')
             {
                 st.LockedToScreen = !st.LockedToScreen;
+                osd.Show(st.LockedToScreen ? "Mouse lock: On" : "Mouse lock: Off");
                 if (profile.RemoteOnly)
                 {
                     if (st.LockedToScreen)
@@ -586,6 +591,7 @@ public class InputRouter(
                 var isNowRelative = !st.RelativeMouseScreens.GetValueOrDefault(screenName);
                 st.RelativeMouseScreens[screenName] = isNowRelative;
                 log.LogInformation("Mouse mode for '{Screen}': {Mode}", screenName, isNowRelative ? "relative" : "absolute");
+                osd.Show(isNowRelative ? "Relative mouse: On" : "Relative mouse: Off");
             }
             else if (keyEvent.Character == 'c')
             {
@@ -597,13 +603,17 @@ public class InputRouter(
                     {
                         log.LogInformation("Copy hotkey: {Count} file(s) selected locally: {Paths}", paths.Count, string.Join(", ", paths));
                         _fileTransfer.SetCopyBuffer(profile.Name, paths);
+                        osd.Show("Copied!");
                     }
                     else
+                    {
                         log.LogInformation("Copy hotkey: no files selected locally");
+                        osd.Show("Nothing to copy...");
+                    }
                 }
                 else if (st.Mouse.CurrentScreen != null && relay.IsConnected)
                 {
-                    // cursor is remote — ask slave to report its selection
+                    // cursor is remote — ask slave to report its selection; OSD fires when response arrives
                     log.LogInformation("Copy hotkey: querying file selection on {Host}", st.Mouse.CurrentScreen.Host);
                     var queryPayload = MessageSerializer.Encode(MessageKind.FileSelectionQuery, new FileSelectionQueryMessage());
                     _ = relay.Send([st.Mouse.CurrentScreen.Host], queryPayload).AsTask();
@@ -615,6 +625,7 @@ public class InputRouter(
                 if (copyBuffer == null)
                 {
                     log.LogInformation("Paste hotkey: copy buffer is empty");
+                    osd.Show("Nothing to paste");
                 }
                 else
                 {
@@ -622,11 +633,15 @@ public class InputRouter(
                         ? st.Mouse.CurrentScreen.Host
                         : profile.Name;
                     if (string.Equals(copyBuffer.SourceHost, targetHost, StringComparison.OrdinalIgnoreCase))
+                    {
                         log.LogInformation("Paste hotkey: source and target are the same host ({Host}), nothing to do", targetHost);
+                        osd.Show("Invalid paste target");
+                    }
                     else
                     {
                         log.LogInformation("Paste hotkey: {Count} file(s) from {Source} → {Target}", copyBuffer.Paths.Length, copyBuffer.SourceHost, targetHost);
                         _fileTransfer.InitiatePaste(copyBuffer, targetHost, profile.Name, relay);
+                        osd.Show("Pasted!");
                     }
                 }
             }

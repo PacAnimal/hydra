@@ -1,0 +1,193 @@
+using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Drawing.Text;
+using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
+
+namespace Hydra.Platform.Windows;
+
+// borderless per-pixel-alpha layered window that floats above everything else.
+// displays outlined text centered horizontally, 20% from the bottom of the primary screen.
+// auto-dismisses after 1.5 seconds. click-through (WS_EX_TRANSPARENT).
+[SupportedOSPlatform("windows")]
+internal sealed class WindowsOsdNotification : IOsdNotification, IDisposable
+{
+    private readonly StaMessageLoop _loop;
+    private nint _hwnd;
+    private WndProc? _wndProc;
+    private const nuint TimerId = 1;
+    private const uint DismissMs = 1500;
+    private const uint WmShowOsd = NativeMethods.WM_USER + 61;
+
+    public WindowsOsdNotification()
+    {
+        _loop = new StaMessageLoop(
+            "HydraOsd",
+            init: CreateWindow,
+            onThreadMessage: HandleThreadMessage);
+    }
+
+    public void Show(string message)
+    {
+        var handle = GCHandle.Alloc(message);
+        if (!NativeMethods.PostThreadMessage(_loop.ThreadId, WmShowOsd, nint.Zero, GCHandle.ToIntPtr(handle)))
+            handle.Free();
+    }
+
+    private bool HandleThreadMessage(MSG msg)
+    {
+        if (msg.message == WmShowOsd)
+        {
+            var handle = GCHandle.FromIntPtr(msg.lParam);
+            var text = (string?)handle.Target ?? "";
+            handle.Free();
+            ShowOnSta(text);
+            return true;
+        }
+        if (msg.hwnd == nint.Zero && msg.message == NativeMethods.WM_TIMER && (nuint)msg.wParam == TimerId)
+        {
+            HideOnSta();
+            return true;
+        }
+        return false;
+    }
+
+    private void CreateWindow()
+    {
+        _wndProc = WndProcImpl;
+        var hInstance = NativeMethods.GetModuleHandleW(nint.Zero);
+        var className = Marshal.StringToHGlobalUni("HydraOsd");
+        try
+        {
+            var wc = new NativeMethods.WNDCLASSEXW
+            {
+                cbSize = (uint)Marshal.SizeOf<NativeMethods.WNDCLASSEXW>(),
+                lpfnWndProc = Marshal.GetFunctionPointerForDelegate(_wndProc),
+                hInstance = hInstance,
+                lpszClassName = className,
+            };
+            var atom = NativeMethods.RegisterClassExW(in wc);
+            if (atom == 0) return;
+
+            var exStyle = NativeMethods.WS_EX_LAYERED
+                | NativeMethods.WS_EX_TOPMOST
+                | NativeMethods.WS_EX_TOOLWINDOW
+                | NativeMethods.WS_EX_NOACTIVATE
+                | NativeMethods.WS_EX_TRANSPARENT;
+
+            _hwnd = NativeMethods.CreateWindowExW(
+                exStyle, atom, nint.Zero,
+                NativeMethods.WS_POPUP,
+                0, 0, 1, 1,
+                nint.Zero, nint.Zero, hInstance, nint.Zero);
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(className);
+        }
+    }
+
+    private void ShowOnSta(string text)
+    {
+        if (_hwnd == nint.Zero) return;
+
+        NativeMethods.KillTimer(_hwnd, TimerId);
+
+        var sw = NativeMethods.GetSystemMetrics(NativeMethods.SM_CXSCREEN);
+        var sh = NativeMethods.GetSystemMetrics(NativeMethods.SM_CYSCREEN);
+
+        using var bmp = RenderText(text, sh, out var bmpW, out var bmpH);
+
+        var hbmp = bmp.GetHbitmap(Color.FromArgb(0)); // transparent bg
+        var screenDc = NativeMethods.GetDC(nint.Zero);  // need GetDC for UpdateLayeredWindow
+        var memDc = NativeMethods.CreateCompatibleDC(screenDc);
+        var oldBmp = NativeMethods.SelectObject(memDc, hbmp);
+
+        var x = (sw - bmpW) / 2;
+        var y = sh - bmpH - (int)(sh * 0.2);
+
+        var dstPt = new WINPOINT { x = x, y = y };
+        var srcPt = new WINPOINT { x = 0, y = 0 };
+        var size = new NativeMethods.WINSIZE { cx = bmpW, cy = bmpH };
+        var blend = new NativeMethods.BLENDFUNCTION
+        {
+            BlendOp = NativeMethods.AC_SRC_OVER,
+            SourceConstantAlpha = 255,
+            AlphaFormat = NativeMethods.AC_SRC_ALPHA,
+        };
+
+        NativeMethods.SetWindowPos(_hwnd, NativeMethods.HWND_TOPMOST, x, y, bmpW, bmpH,
+            NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_SHOWWINDOW);
+        NativeMethods.UpdateLayeredWindow(_hwnd, nint.Zero, ref dstPt, ref size, memDc, ref srcPt, 0, ref blend, NativeMethods.ULW_ALPHA);
+
+        NativeMethods.SelectObject(memDc, oldBmp);
+        NativeMethods.DeleteDC(memDc);
+        _ = NativeMethods.ReleaseDC(nint.Zero, screenDc);
+        NativeMethods.DeleteObject(hbmp);
+
+        NativeMethods.SetTimer(_hwnd, TimerId, DismissMs, nint.Zero);
+    }
+
+    private void HideOnSta()
+    {
+        if (_hwnd == nint.Zero) return;
+        NativeMethods.KillTimer(_hwnd, TimerId);
+        NativeMethods.ShowWindow(_hwnd, NativeMethods.SW_HIDE);
+    }
+
+    private static Bitmap RenderText(string text, int sh, out int width, out int height)
+    {
+        // scale font to ~3% of screen height for readability on any resolution
+        var emSize = Math.Max(18f, sh * 0.03f);
+        var padding = (int)(emSize * 0.6f);
+
+        // measure first on a throwaway bitmap
+        using var measure = new Bitmap(1, 1);
+        using var gm = Graphics.FromImage(measure);
+        var fontFamily = new FontFamily("Segoe UI");
+        using var path = new GraphicsPath();
+        path.AddString(text, fontFamily, (int)FontStyle.Bold, emSize, Point.Empty, StringFormat.GenericDefault);
+        var bounds = path.GetBounds();
+
+        width = (int)Math.Ceiling(bounds.Width) + padding * 2;
+        height = (int)Math.Ceiling(bounds.Height) + padding * 2;
+
+        var bmp = new Bitmap(width, height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+        using var g = Graphics.FromImage(bmp);
+        g.SmoothingMode = SmoothingMode.HighQuality;
+        g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+        g.Clear(Color.Transparent);
+
+        using var renderPath = new GraphicsPath();
+        var origin = new PointF(padding - bounds.X, padding - bounds.Y);
+        renderPath.AddString(text, fontFamily, (int)FontStyle.Bold, emSize, origin, StringFormat.GenericDefault);
+
+        // black outline
+        using var outlinePen = new Pen(Color.FromArgb(220, 0, 0, 0), emSize * 0.18f);
+        outlinePen.LineJoin = LineJoin.Round;
+        g.DrawPath(outlinePen, renderPath);
+
+        // near-white fill
+        using var fillBrush = new SolidBrush(Color.FromArgb(240, 242, 242, 242));
+        g.FillPath(fillBrush, renderPath);
+
+        fontFamily.Dispose();
+        return bmp;
+    }
+
+    private nint WndProcImpl(nint hWnd, uint msg, nint wParam, nint lParam)
+    {
+        if (msg == NativeMethods.WM_TIMER && (nuint)wParam == TimerId)
+        {
+            HideOnSta();
+            return nint.Zero;
+        }
+        return NativeMethods.DefWindowProcW(hWnd, msg, wParam, lParam);
+    }
+
+    public void Dispose()
+    {
+        if (_hwnd != nint.Zero) { NativeMethods.DestroyWindow(_hwnd); _hwnd = nint.Zero; }
+        _loop.Dispose();
+    }
+}

@@ -1,6 +1,5 @@
 using Hydra.FileTransfer;
 using Hydra.Relay;
-using Hydra.Screen;
 using Microsoft.Extensions.Logging.Abstractions;
 using Tests.Setup;
 
