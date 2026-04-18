@@ -21,6 +21,7 @@ public class SlaveRelayConnection : RelayConnection
     private readonly IClipboardSync _clipboardSync;
     private readonly FileTransferService _fileTransfer;
     private readonly IFileSelectionDetector _selectionDetector;
+    private readonly IOsdNotification _osd;
 
     // active key repeat timers keyed by (char?, SpecialKey?)
     private readonly Dictionary<(char?, SpecialKey?), CancellationTokenSource> _repeatTimers = [];
@@ -33,7 +34,7 @@ public class SlaveRelayConnection : RelayConnection
 
     // ReSharper disable once ConvertToPrimaryConstructor
 #pragma warning disable IDE0290
-    public SlaveRelayConnection(IHydraProfile profile, ILogger<RelayConnection> log, IPlatformOutput output, IScreenDetector screens, IWorldState peerState, SlaveCursorHider cursorHider, IScreenSaverSync screenSaverSync, IScreensaverSuppressor screensaverSuppressor, IClipboardSync clipboardSync, FileTransferService fileTransfer, IFileSelectionDetector selectionDetector)
+    public SlaveRelayConnection(IHydraProfile profile, ILogger<RelayConnection> log, IPlatformOutput output, IScreenDetector screens, IWorldState peerState, SlaveCursorHider cursorHider, IScreenSaverSync screenSaverSync, IScreensaverSuppressor screensaverSuppressor, IClipboardSync clipboardSync, FileTransferService fileTransfer, IFileSelectionDetector selectionDetector, IOsdNotification osd)
         : base(profile, log, peerState)
     {
         _output = output;
@@ -46,6 +47,7 @@ public class SlaveRelayConnection : RelayConnection
         _clipboardSync = clipboardSync;
         _fileTransfer = fileTransfer;
         _selectionDetector = selectionDetector;
+        _osd = osd;
 
         _screens.ScreensChanged += async snapshot =>
         {
@@ -184,6 +186,12 @@ public class SlaveRelayConnection : RelayConnection
                 var response = MessageSerializer.Encode(MessageKind.ClipboardPullResponse, new ClipboardPullResponseMessage(text, primary, image));
                 _ = Send([sourceHost], response).AsTask();
                 break;
+            case MessageKind.Osd:
+                {
+                    var osdMsg = json.FromSaneJson<OsdMessage>();
+                    if (osdMsg != null) _osd.Show(osdMsg.Text);
+                    break;
+                }
             case MessageKind.FileSelectionQuery:
                 {
                     var selectedPaths = _selectionDetector.GetSelectedPaths();

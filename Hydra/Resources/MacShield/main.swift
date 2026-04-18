@@ -435,31 +435,53 @@ class TransferPanel: NSObject {
 
 // MARK: - OSD notification
 
+// custom view that draws outlined text centered in its bounds
+class OsdView: NSView {
+    private var content: NSAttributedString?
+
+    func setContent(_ str: NSAttributedString) {
+        content = str
+        needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let str = content else { return }
+        let sz = str.size()
+        let x = (bounds.width - sz.width) / 2
+        let y = (bounds.height - sz.height) / 2
+        str.draw(at: NSPoint(x: x, y: y))
+    }
+}
+
 class OsdPanel: NSObject {
     private var window: NSWindow?
-    private var textField: NSTextField?
+    private var osdView: OsdView?
     private var dismissTimer: Timer?
 
     func show(_ message: String) {
         buildWindowIfNeeded()
-        guard let w = window, let tf = textField else { return }
+        guard let w = window else { return }
 
         dismissTimer?.invalidate()
+        dismissTimer = nil
 
-        tf.attributedStringValue = makeAttributedString(message)
-        tf.sizeToFit()
-
-        let padding: CGFloat = 20
-        let tfSize = tf.intrinsicContentSize
-        let wW = tfSize.width + padding * 2
-        let wH = tfSize.height + padding * 2
+        let attrStr = makeAttributedString(message)
+        // use size() for measurement — works without a layout context
+        // add extra padding for the stroke (which extends outside the glyph bounding box)
+        let textSz = attrStr.size()
+        let strokePad: CGFloat = 6
+        let padH: CGFloat = 16
+        let padV: CGFloat = 12
+        let wW = ceil(textSz.width) + padH * 2 + strokePad * 2
+        let wH = ceil(textSz.height) + padV * 2 + strokePad * 2
 
         let screen = NSScreen.main ?? NSScreen.screens[0]
         let sx = screen.frame.midX - wW / 2
         let sy = screen.frame.minY + screen.frame.height * 0.2
 
+        osdView?.setContent(attrStr)
         w.setFrame(NSRect(x: sx, y: sy, width: wW, height: wH), display: false)
-        tf.frame = NSRect(x: padding, y: padding, width: tfSize.width, height: tfSize.height)
+        // fill the content view (autoresizingMask handles it after the frame change)
 
         w.alphaValue = 1.0
         w.orderFrontRegardless()
@@ -490,13 +512,10 @@ class OsdPanel: NSObject {
         w.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
         w.isReleasedWhenClosed = false
 
-        let tf = NSTextField(labelWithString: "")
-        tf.backgroundColor = .clear
-        tf.isBezeled = false
-        tf.isEditable = false
-        tf.drawsBackground = false
-        w.contentView?.addSubview(tf)
-        textField = tf
+        let view = OsdView(frame: w.contentView?.bounds ?? NSRect(x: 0, y: 0, width: 100, height: 50))
+        view.autoresizingMask = [.width, .height]
+        w.contentView?.addSubview(view)
+        osdView = view
         window = w
     }
 

@@ -291,7 +291,7 @@ public class MasterSlaveProtocolTests
         new NullScreenSaverSync(),
         new NullScreensaverSuppressor(),
         new NullClipboardSync(),
-        FileTransferService.Null(), new NullFileSelectionDetector())
+        FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification())
     {
         // simulates a legacy master that sends no log level
         public Task SimulateMasterConfig(string host) => OnReceive(host, MessageKind.MasterConfig, "{}");
@@ -317,7 +317,7 @@ public class MasterSlaveProtocolTests
             new NullScreenSaverSync(),
             new NullScreensaverSuppressor(),
             new NullClipboardSync(),
-            FileTransferService.Null(), new NullFileSelectionDetector())
+            FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification())
         {
             _hider = hider;
         }

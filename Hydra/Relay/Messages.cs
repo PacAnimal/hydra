@@ -30,6 +30,7 @@ public enum MessageKind : byte
     FileSelectionQuery = 21,    // master → slave: what files are selected?
     FileSelectionResponse = 22, // slave → master: here are the selected files
     FileStreamRequest = 23,     // master → source slave: stream these files to target
+    Osd = 24,                   // master → slave: display an on-screen notification
 }
 
 public record MouseMoveMessage(string Screen, int X, int Y);
@@ -59,6 +60,7 @@ public record FileTransferAbortMessage(string Reason);
 public record FileSelectionQueryMessage;
 public record FileSelectionResponseMessage(string[]? Paths);
 public record FileStreamRequestMessage(string[] Paths, string TargetHost);
+public record OsdMessage(string Text);
 
 public static class MessageSerializer
 {

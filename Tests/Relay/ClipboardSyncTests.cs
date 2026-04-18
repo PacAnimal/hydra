@@ -461,7 +461,7 @@ public class ClipboardSyncTests
         new NullScreenSaverSync(),
         new NullScreensaverSuppressor(),
         clipboard,
-        FileTransferService.Null(), new NullFileSelectionDetector())
+        FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification())
     {
         public Task SimulateReceive(string host, MessageKind kind, string json) => OnReceive(host, kind, json);
     }

@@ -433,7 +433,9 @@ public class InputRouter(
             case MessageKind.FileSelectionResponse:
                 {
                     var copied = _fileTransfer.HandleSelectionResponse(sourceHost, json);
-                    osd.Show(copied ? "Copied!" : "Nothing to copy...");
+                    // send OSD to the slave that responded (it had the cursor when copy was triggered)
+                    var osdPayload = MessageSerializer.Encode(MessageKind.Osd, new OsdMessage(copied ? "Copied!" : "Nothing to copy..."));
+                    _ = relay.Send([sourceHost], osdPayload).AsTask();
                     break;
                 }
             case var _ when FileTransferService.IsFileTransferMessage(kind):
@@ -443,6 +445,18 @@ public class InputRouter(
                 log.LogDebug("Unhandled message kind {Kind} from {Host}", kind, sourceHost);
                 break;
         }
+    }
+
+    // routes OSD to slave when cursor is remote, otherwise shows locally on master
+    private void ShowOsd(LocalMasterState st, string message)
+    {
+        if (st.Mouse.IsOnVirtualScreen && st.Mouse.CurrentScreen != null)
+        {
+            var payload = MessageSerializer.Encode(MessageKind.Osd, new OsdMessage(message));
+            _ = relay.Send([st.Mouse.CurrentScreen.Host], payload).AsTask();
+        }
+        else
+            osd.Show(message);
     }
 
     private void ForwardSlaveLog(string sourceHost, SlaveLogMessage entry)
@@ -556,7 +570,7 @@ public class InputRouter(
             if (keyEvent.Character == 'l')
             {
                 st.LockedToScreen = !st.LockedToScreen;
-                osd.Show(st.LockedToScreen ? "Mouse lock: On" : "Mouse lock: Off");
+                ShowOsd(st, st.LockedToScreen ? "Mouse lock: On" : "Mouse lock: Off");
                 if (profile.RemoteOnly)
                 {
                     if (st.LockedToScreen)
@@ -591,7 +605,7 @@ public class InputRouter(
                 var isNowRelative = !st.RelativeMouseScreens.GetValueOrDefault(screenName);
                 st.RelativeMouseScreens[screenName] = isNowRelative;
                 log.LogInformation("Mouse mode for '{Screen}': {Mode}", screenName, isNowRelative ? "relative" : "absolute");
-                osd.Show(isNowRelative ? "Relative mouse: On" : "Relative mouse: Off");
+                ShowOsd(st, isNowRelative ? "Relative mouse: On" : "Relative mouse: Off");
             }
             else if (keyEvent.Character == 'c')
             {
@@ -603,12 +617,12 @@ public class InputRouter(
                     {
                         log.LogInformation("Copy hotkey: {Count} file(s) selected locally: {Paths}", paths.Count, string.Join(", ", paths));
                         _fileTransfer.SetCopyBuffer(profile.Name, paths);
-                        osd.Show("Copied!");
+                        ShowOsd(st, "Copied!");
                     }
                     else
                     {
                         log.LogInformation("Copy hotkey: no files selected locally");
-                        osd.Show("Nothing to copy...");
+                        ShowOsd(st, "Nothing to copy...");
                     }
                 }
                 else if (st.Mouse.CurrentScreen != null && relay.IsConnected)
@@ -625,7 +639,7 @@ public class InputRouter(
                 if (copyBuffer == null)
                 {
                     log.LogInformation("Paste hotkey: copy buffer is empty");
-                    osd.Show("Nothing to paste");
+                    ShowOsd(st, "Nothing to paste");
                 }
                 else
                 {
@@ -635,13 +649,13 @@ public class InputRouter(
                     if (string.Equals(copyBuffer.SourceHost, targetHost, StringComparison.OrdinalIgnoreCase))
                     {
                         log.LogInformation("Paste hotkey: source and target are the same host ({Host}), nothing to do", targetHost);
-                        osd.Show("Invalid paste target");
+                        ShowOsd(st, "Invalid paste target");
                     }
                     else
                     {
                         log.LogInformation("Paste hotkey: {Count} file(s) from {Source} → {Target}", copyBuffer.Paths.Length, copyBuffer.SourceHost, targetHost);
                         _fileTransfer.InitiatePaste(copyBuffer, targetHost, profile.Name, relay);
-                        osd.Show("Pasted!");
+                        ShowOsd(st, "Pasted!");
                     }
                 }
             }
