@@ -31,8 +31,11 @@ public sealed class MacFileSelectionDetector : IFileSelectionDetector
 
     private List<string>? RunFinderSelectionScript()
     {
-        // one POSIX path per line
+        // bail immediately if Finder is not the active app
         const string script = """
+            tell application "System Events"
+              if frontmost of process "Finder" is false then return ""
+            end tell
             tell application "Finder"
               set sel to selection
               set output to ""
