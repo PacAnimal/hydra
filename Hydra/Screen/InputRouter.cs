@@ -654,7 +654,6 @@ public class InputRouter(
                 var host = st.Mouse.CurrentScreen.Host;
                 _ = relay.Send([host], MessageSerializer.Encode(MessageKind.KeyEvent, new KeyEventMessage(KeyEventType.KeyDown, KeyModifiers.None, null, SpecialKey.MissionControl))).AsTask();
                 _ = relay.Send([host], MessageSerializer.Encode(MessageKind.KeyEvent, new KeyEventMessage(KeyEventType.KeyUp, KeyModifiers.None, null, SpecialKey.MissionControl))).AsTask();
-                ShowOsd(st, "Mission Control");
             }
             else if (keyEvent.Character == 'v')
             {
