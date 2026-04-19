@@ -432,9 +432,9 @@ public class InputRouter(
                 break;
             case MessageKind.FileSelectionResponse:
                 {
-                    var copied = _fileTransfer.HandleSelectionResponse(sourceHost, json);
                     // send OSD to the slave that responded (it had the cursor when copy was triggered)
-                    var osdPayload = MessageSerializer.Encode(MessageKind.Osd, new OsdMessage(copied ? "Copied!" : "Nothing to copy..."));
+                    var osdText = _fileTransfer.HandleSelectionResponse(sourceHost, json);
+                    var osdPayload = MessageSerializer.Encode(MessageKind.Osd, new OsdMessage(osdText));
                     _ = relay.Send([sourceHost], osdPayload).AsTask();
                     break;
                 }
@@ -611,18 +611,31 @@ public class InputRouter(
             {
                 if (!st.Mouse.IsOnVirtualScreen)
                 {
-                    // cursor is local — query local file manager
-                    var paths = _selectionDetector.GetSelectedPaths();
-                    if (paths != null)
+                    if (!_selectionDetector.IsFileTransferSupported)
                     {
-                        log.LogInformation("Copy hotkey: {Count} file(s) selected locally: {Paths}", paths.Count, string.Join(", ", paths));
-                        _fileTransfer.SetCopyBuffer(profile.Name, paths);
-                        ShowOsd(st, "Copied!");
+                        log.LogInformation("Copy hotkey: file transfer not supported on this platform");
+                        ShowOsd(st, "Action not supported");
                     }
                     else
                     {
-                        log.LogInformation("Copy hotkey: no files selected locally");
-                        ShowOsd(st, "Nothing to copy...");
+                        // cursor is local — query local file manager
+                        var result = _selectionDetector.GetSelectedPaths();
+                        if (!result.FileManagerFocused)
+                        {
+                            log.LogInformation("Copy hotkey: {Name} is not focused", _selectionDetector.FileManagerName);
+                            ShowOsd(st, $"{_selectionDetector.FileManagerName} is not focused");
+                        }
+                        else if (result.Paths != null)
+                        {
+                            log.LogInformation("Copy hotkey: {Count} file(s) selected locally: {Paths}", result.Paths.Count, string.Join(", ", result.Paths));
+                            _fileTransfer.SetCopyBuffer(profile.Name, result.Paths);
+                            ShowOsd(st, "Copied!");
+                        }
+                        else
+                        {
+                            log.LogInformation("Copy hotkey: no files selected locally");
+                            ShowOsd(st, "Nothing to copy...");
+                        }
                     }
                 }
                 else if (st.Mouse.CurrentScreen != null && relay.IsConnected)
@@ -635,13 +648,12 @@ public class InputRouter(
             }
             else if (keyEvent.Character == 'v')
             {
-                var copyBuffer = _fileTransfer.GetCopyBuffer();
-                if (copyBuffer == null)
+                if (!_selectionDetector.IsFileTransferSupported)
                 {
-                    log.LogInformation("Paste hotkey: copy buffer is empty");
-                    ShowOsd(st, "Nothing to paste");
+                    log.LogInformation("Paste hotkey: file transfer not supported on this platform");
+                    ShowOsd(st, "Action not supported");
                 }
-                else
+                else if (_fileTransfer.GetCopyBuffer() is { } copyBuffer)
                 {
                     var targetHost = st.Mouse.IsOnVirtualScreen && st.Mouse.CurrentScreen != null
                         ? st.Mouse.CurrentScreen.Host
@@ -657,6 +669,11 @@ public class InputRouter(
                         _fileTransfer.InitiatePaste(copyBuffer, targetHost, profile.Name, relay);
                         ShowOsd(st, "Pasted!");
                     }
+                }
+                else
+                {
+                    log.LogInformation("Paste hotkey: copy buffer is empty");
+                    ShowOsd(st, "Nothing to paste");
                 }
             }
         }

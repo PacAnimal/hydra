@@ -194,12 +194,22 @@ public class SlaveRelayConnection : RelayConnection
                 }
             case MessageKind.FileSelectionQuery:
                 {
-                    var selectedPaths = _selectionDetector.GetSelectedPaths();
-                    if (selectedPaths != null)
-                        _log.LogInformation("File selection query from {Host}: {Count} file(s) selected: {Paths}", sourceHost, selectedPaths.Count, string.Join(", ", selectedPaths));
+                    if (!_selectionDetector.IsFileTransferSupported)
+                    {
+                        _log.LogInformation("File selection query from {Host}: file transfer not supported on this platform", sourceHost);
+                        var unsupportedPayload = MessageSerializer.Encode(MessageKind.FileSelectionResponse, new FileSelectionResponseMessage(null, "Action not supported"));
+                        _ = Send([sourceHost], unsupportedPayload).AsTask();
+                        break;
+                    }
+                    var result = _selectionDetector.GetSelectedPaths();
+                    if (!result.FileManagerFocused)
+                        _log.LogInformation("File selection query from {Host}: {Name} is not focused", sourceHost, _selectionDetector.FileManagerName);
+                    else if (result.Paths != null)
+                        _log.LogInformation("File selection query from {Host}: {Count} file(s) selected: {Paths}", sourceHost, result.Paths.Count, string.Join(", ", result.Paths));
                     else
                         _log.LogInformation("File selection query from {Host}: no files selected", sourceHost);
-                    var selectionPayload = MessageSerializer.Encode(MessageKind.FileSelectionResponse, new FileSelectionResponseMessage(selectedPaths?.ToArray()));
+                    var notFocused = result.FileManagerFocused ? null : $"{_selectionDetector.FileManagerName} is not focused";
+                    var selectionPayload = MessageSerializer.Encode(MessageKind.FileSelectionResponse, new FileSelectionResponseMessage(result.Paths?.ToArray(), notFocused));
                     _ = Send([sourceHost], selectionPayload).AsTask();
                     break;
                 }

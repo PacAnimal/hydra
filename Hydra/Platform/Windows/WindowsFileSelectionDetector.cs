@@ -16,7 +16,10 @@ public sealed class WindowsFileSelectionDetector(ILogger<WindowsFileSelectionDet
     private Type? _shellType;
     private object? _shell;
 
-    public List<string>? GetSelectedPaths()
+    public string FileManagerName => "Explorer";
+    public bool IsFileTransferSupported => true;
+
+    public FileSelectionResult GetSelectedPaths()
     {
         try
         {
@@ -25,7 +28,7 @@ public sealed class WindowsFileSelectionDetector(ILogger<WindowsFileSelectionDet
         catch (Exception ex)
         {
             _log.LogDebug(ex, "GetSelectedPaths failed");
-            return null;
+            return new FileSelectionResult(false, null);
         }
     }
 
@@ -36,10 +39,10 @@ public sealed class WindowsFileSelectionDetector(ILogger<WindowsFileSelectionDet
         if (shell != null) TryReleaseComObject(shell);
     }
 
-    private List<string>? FindSelectedInForegroundExplorer()
+    private FileSelectionResult FindSelectedInForegroundExplorer()
     {
         var fgHwnd = NativeMethods.GetForegroundWindow();
-        if (fgHwnd == nint.Zero) return null;
+        if (fgHwnd == nint.Zero) return new FileSelectionResult(false, null);
 
         // walk to top-level window (Explorer cabinet window)
         var rootHwnd = NativeMethods.GetAncestor(fgHwnd, NativeMethods.GA_ROOTOWNER);
@@ -47,7 +50,7 @@ public sealed class WindowsFileSelectionDetector(ILogger<WindowsFileSelectionDet
         lock (_lock)
         {
             var (shellType, shell) = GetShellUnderLock();
-            if (shell == null || shellType == null) return null;
+            if (shell == null || shellType == null) return new FileSelectionResult(false, null);
 
             dynamic? windows = null;
             try
@@ -66,11 +69,11 @@ public sealed class WindowsFileSelectionDetector(ILogger<WindowsFileSelectionDet
 
                         if (hwnd != rootHwnd) continue;
 
-                        // window.Document is a ShellFolderView COM object with SelectedItems()
+                        // matched foreground HWND to an Explorer window — Explorer is focused
                         dynamic? items;
                         try { items = window.Document?.SelectedItems(); }
                         catch { continue; }
-                        if (items == null) continue;
+                        if (items == null) return new FileSelectionResult(true, null);
 
                         var paths = new List<string>();
                         try
@@ -89,7 +92,7 @@ public sealed class WindowsFileSelectionDetector(ILogger<WindowsFileSelectionDet
                         }
                         finally { TryReleaseComObject(items); }
 
-                        return paths.Count > 0 ? paths : null;
+                        return new FileSelectionResult(true, paths.Count > 0 ? paths : null);
                     }
                     finally { TryReleaseComObject(window); }
                 }
@@ -108,7 +111,8 @@ public sealed class WindowsFileSelectionDetector(ILogger<WindowsFileSelectionDet
             }
         }
 
-        return null;
+        // no Shell window matched the foreground HWND — Explorer is not focused
+        return new FileSelectionResult(false, null);
     }
 
     // caller must hold _lock

@@ -39,17 +39,19 @@ public sealed class FileTransferService : IDisposable
         _log.LogInformation("Copy buffer set: {Count} item(s) from {Host}", paths.Count, sourceHost);
     }
 
-    // called when a FileSelectionResponse arrives for a remote copy; returns true if paths were found
-    public bool HandleSelectionResponse(string sourceHost, string json)
+    // called when a FileSelectionResponse arrives for a remote copy; returns the OSD text to display
+    public string HandleSelectionResponse(string sourceHost, string json)
     {
         var msg = json.FromSaneJson<FileSelectionResponseMessage>();
+        if (msg?.NotFocusedMessage != null)
+            return msg.NotFocusedMessage;
         if (msg?.Paths is { Length: > 0 })
         {
             lock (_lock) _copyBuffer = new FileCopyState(sourceHost, msg.Paths);
             _log.LogInformation("Copy buffer set from {Host}: {Count} item(s)", sourceHost, msg.Paths.Length);
-            return true;
+            return "Copied!";
         }
-        return false;
+        return "Nothing to copy...";
     }
 
     public FileCopyState? GetCopyBuffer() { lock (_lock) return _copyBuffer; }

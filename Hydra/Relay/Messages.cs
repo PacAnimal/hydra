@@ -58,7 +58,7 @@ public record FileTransferChunkMessage(int Sequence, byte[] Data);
 public record FileTransferDoneMessage(long TotalBytesSent, byte[] Sha256);
 public record FileTransferAbortMessage(string Reason);
 public record FileSelectionQueryMessage;
-public record FileSelectionResponseMessage(string[]? Paths);
+public record FileSelectionResponseMessage(string[]? Paths, string? NotFocusedMessage = null);
 public record FileStreamRequestMessage(string[] Paths, string TargetHost);
 public record OsdMessage(string Text);
 

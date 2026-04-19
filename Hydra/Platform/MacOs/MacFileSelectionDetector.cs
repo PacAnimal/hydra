@@ -16,7 +16,10 @@ public sealed class MacFileSelectionDetector : IFileSelectionDetector
         NativeMethods.EnsureAppKitLoaded();
     }
 
-    public List<string>? GetSelectedPaths()
+    public string FileManagerName => "Finder";
+    public bool IsFileTransferSupported => true;
+
+    public FileSelectionResult GetSelectedPaths()
     {
         try
         {
@@ -25,16 +28,16 @@ public sealed class MacFileSelectionDetector : IFileSelectionDetector
         catch (Exception ex)
         {
             _log.LogWarning(ex, "Failed to get Finder selection");
-            return null;
+            return new FileSelectionResult(false, null);
         }
     }
 
-    private List<string>? RunFinderSelectionScript()
+    private FileSelectionResult RunFinderSelectionScript()
     {
-        // bail immediately if Finder is not the active app
+        // returns "NOT_FOCUSED" when Finder is not the active app; empty string when focused but nothing selected
         const string script = """
             tell application "System Events"
-              if frontmost of process "Finder" is false then return ""
+              if frontmost of process "Finder" is false then return "NOT_FOCUSED"
             end tell
             tell application "Finder"
               set sel to selection
@@ -52,7 +55,7 @@ public sealed class MacFileSelectionDetector : IFileSelectionDetector
             RedirectStandardOutput = true,
             RedirectStandardError = true,
         });
-        if (proc == null) return null;
+        if (proc == null) return new FileSelectionResult(false, null);
 
         var stdout = proc.StandardOutput.ReadToEnd();
         var stderr = proc.StandardError.ReadToEnd();
@@ -61,13 +64,16 @@ public sealed class MacFileSelectionDetector : IFileSelectionDetector
         if (proc.ExitCode != 0)
         {
             _log.LogWarning("osascript exited {Code}: {Stderr}", proc.ExitCode, stderr.Trim());
-            return null;
+            return new FileSelectionResult(false, null);
         }
+
+        if (stdout.Trim() == "NOT_FOCUSED")
+            return new FileSelectionResult(false, null);
 
         var paths = stdout
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Where(p => p.Length > 0)
             .ToList();
-        return paths.Count > 0 ? paths : null;
+        return new FileSelectionResult(true, paths.Count > 0 ? paths : null);
     }
 }
