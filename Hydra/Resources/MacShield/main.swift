@@ -447,9 +447,21 @@ class OsdView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         guard let str = content else { return }
         let sz = str.size()
-        let x = (bounds.width - sz.width) / 2
-        let y = (bounds.height - sz.height) / 2
-        str.draw(at: NSPoint(x: x, y: y))
+        let pt = NSPoint(x: (bounds.width - sz.width) / 2, y: (bounds.height - sz.height) / 2)
+
+        // shadow pass: draw twice to accumulate opacity without widening the spread
+        NSGraphicsContext.current?.saveGraphicsState()
+        let shadow = NSShadow()
+        shadow.shadowColor = NSColor(white: 0, alpha: 0.95)
+        shadow.shadowBlurRadius = 4
+        shadow.shadowOffset = .zero
+        shadow.set()
+        str.draw(at: pt)
+        str.draw(at: pt)
+        NSGraphicsContext.current?.restoreGraphicsState()
+
+        // clean pass on top: covers shadow that bled into the glyph interior
+        str.draw(at: pt)
     }
 }
 
@@ -477,7 +489,7 @@ class OsdPanel: NSObject {
 
         let screen = NSScreen.main ?? NSScreen.screens[0]
         let sx = screen.frame.midX - wW / 2
-        let sy = screen.frame.minY + screen.frame.height * 0.2
+        let sy = screen.frame.minY + screen.frame.height * 0.1
 
         osdView?.setContent(attrStr)
         w.setFrame(NSRect(x: sx, y: sy, width: wW, height: wH), display: false)
@@ -524,8 +536,6 @@ class OsdPanel: NSObject {
         return NSAttributedString(string: text, attributes: [
             .font: font,
             .foregroundColor: NSColor(white: 0.96, alpha: 1.0),
-            .strokeColor: NSColor.black,
-            .strokeWidth: -3.5,
         ])
     }
 }

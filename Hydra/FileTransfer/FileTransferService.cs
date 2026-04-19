@@ -49,7 +49,8 @@ public sealed class FileTransferService : IDisposable
         {
             lock (_lock) _copyBuffer = new FileCopyState(sourceHost, msg.Paths);
             _log.LogInformation("Copy buffer set from {Host}: {Count} item(s)", sourceHost, msg.Paths.Length);
-            return "Copied!";
+            var n = msg.Paths.Length;
+            return $"{n} {(n == 1 ? "item" : "items")} copied";
         }
         return "Nothing to copy...";
     }

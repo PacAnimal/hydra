@@ -7,7 +7,7 @@ using System.Runtime.Versioning;
 namespace Hydra.Platform.Windows;
 
 // borderless per-pixel-alpha layered window that floats above everything else.
-// displays outlined text centered horizontally, 20% from the bottom of the primary screen.
+// displays outlined text centered horizontally, 10% from the bottom of the primary screen.
 // auto-dismisses after 1.5 seconds. click-through (WS_EX_TRANSPARENT).
 [SupportedOSPlatform("windows")]
 internal sealed class WindowsOsdNotification : IOsdNotification, IDisposable
@@ -104,7 +104,7 @@ internal sealed class WindowsOsdNotification : IOsdNotification, IDisposable
         var oldBmp = NativeMethods.SelectObject(memDc, hbmp);
 
         var x = (sw - bmpW) / 2;
-        var y = sh - bmpH - (int)(sh * 0.2);
+        var y = sh - bmpH - (int)(sh * 0.1);
 
         var dstPt = new WINPOINT { x = x, y = y };
         var srcPt = new WINPOINT { x = 0, y = 0 };
@@ -162,14 +162,24 @@ internal sealed class WindowsOsdNotification : IOsdNotification, IDisposable
         var origin = new PointF(padding - bounds.X, padding - bounds.Y);
         renderPath.AddString(text, fontFamily, (int)FontStyle.Bold, emSize, origin, StringFormat.GenericDefault);
 
-        // black outline
-        using var outlinePen = new Pen(Color.FromArgb(220, 0, 0, 0), emSize * 0.18f);
-        outlinePen.LineJoin = LineJoin.Round;
-        g.DrawPath(outlinePen, renderPath);
+        // multi-pass graduated glow — approximates a blurred shadow (GDI+ has no blur)
+        // outermost pass is widest and most transparent; each inner pass narrows and darkens
+        (float widthFactor, int alpha)[] glowPasses = [(0.20f, 40), (0.13f, 80), (0.08f, 140), (0.05f, 200)];
+        foreach (var (wf, alpha) in glowPasses)
+        {
+            using var pen = new Pen(Color.FromArgb(alpha, 0, 0, 0), emSize * wf);
+            pen.LineJoin = LineJoin.Round;
+            g.DrawPath(pen, renderPath);
+        }
 
         // near-white fill
         using var fillBrush = new SolidBrush(Color.FromArgb(240, 242, 242, 242));
         g.FillPath(fillBrush, renderPath);
+
+        // hard 1px outline on top of fill
+        using var outlinePen = new Pen(Color.FromArgb(200, 0, 0, 0), 1.0f);
+        outlinePen.LineJoin = LineJoin.Round;
+        g.DrawPath(outlinePen, renderPath);
 
         fontFamily.Dispose();
         return bmp;

@@ -35,13 +35,8 @@ internal sealed class XorgKeyResolver
                 var sym2 = NativeMethods.XkbKeycodeToKeysym(display, keycode, group, 1);
                 if (sym2 != 0) keysym = sym2;
             }
-            // emit KP numeric keysyms as digit/decimal/separator chars so the slave doesn't need numlock active
-            if (keysym is >= 0xFFB0 and <= 0xFFB9)
-                keysym = (ulong)('0' + (keysym - 0xFFB0));
-            else if (keysym == XorgVirtualKey.KP_Decimal)
-                keysym = '.';
-            else if (keysym == 0xFFAC)  // XK_KP_Separator (comma on European layouts)
-                keysym = ',';
+
+            keysym = KpNumericToChar(keysym);
         }
         else
         {
@@ -255,6 +250,17 @@ internal sealed class XorgKeyResolver
         0xFF97 => '8',
         0xFF9A => '9',
         0xFF9F => '.',
+        _ => keysym,
+    };
+
+    // converts KP numeric keysyms (digits, decimal, separator) to their Unicode char equivalents,
+    // so the slave can emit them without caring about its own numlock state.
+    // covers: KP_0–KP_9 (0xFFB0–0xFFB9), KP_Decimal (.), KP_Separator/comma (0xFFAC).
+    internal static ulong KpNumericToChar(ulong keysym) => keysym switch
+    {
+        >= 0xFFB0 and <= 0xFFB9 => '0' + (keysym - 0xFFB0),
+        XorgVirtualKey.KP_Decimal => '.',
+        0xFFAC => ',',  // XK_KP_Separator — comma on European layouts
         _ => keysym,
     };
 

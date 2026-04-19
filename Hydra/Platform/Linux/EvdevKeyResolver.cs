@@ -74,15 +74,10 @@ internal sealed class EvdevKeyResolver : IDisposable
         // simple numlock-on=chars, numlock-off=navigation regardless of shift.
         if (IsModActive("Mod2"))
         {
-            // numlock on: emit digits/decimal; also handle xkbcommon XOR nav → char
-            if (keysym is >= 0xFFB0 and <= 0xFFB9)
-                keysym = (ulong)('0' + (keysym - 0xFFB0));
-            else if (keysym == XorgVirtualKey.KP_Decimal)
-                keysym = '.';
-            else if (keysym == 0xFFAC)  // XK_KP_Separator (comma on European layouts)
-                keysym = ',';
-            else if (keysym is >= 0xFF95 and <= 0xFF9F)
-                keysym = XorgKeyResolver.KpNavToChar(keysym);  // shift+numlock XOR gave nav; remap to char
+            // numlock on: numeric keysyms → chars; xkbcommon XOR may also give nav keysyms → chars
+            keysym = keysym is >= 0xFF95 and <= 0xFF9F
+                ? XorgKeyResolver.KpNavToChar(keysym)
+                : XorgKeyResolver.KpNumericToChar(keysym);
         }
         else
         {

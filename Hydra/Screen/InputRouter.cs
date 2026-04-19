@@ -629,7 +629,8 @@ public class InputRouter(
                         {
                             log.LogInformation("Copy hotkey: {Count} file(s) selected locally: {Paths}", result.Paths.Count, string.Join(", ", result.Paths));
                             _fileTransfer.SetCopyBuffer(profile.Name, result.Paths);
-                            ShowOsd(st, "Copied!");
+                            var n = result.Paths.Count;
+                            ShowOsd(st, $"{n} {(n == 1 ? "item" : "items")} copied");
                         }
                         else
                         {

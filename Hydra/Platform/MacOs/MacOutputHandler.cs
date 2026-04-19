@@ -362,6 +362,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
 
     // returns kCGEventFlagMaskSecondaryFn for vk codes that macOS hardware events carry it on.
     // fn-row keys (ForwardDelete, Home/End/PageUp/PageDown, Help, F1-F20) always have this flag set.
+    // ReSharper disable once RedundantCast
     private static ulong FnFlagForVk(ushort vk) => (ulong)vk switch
     {
         MacVirtualKey.ForwardDelete or
