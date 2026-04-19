@@ -224,7 +224,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
     {
         var eventRef = NativeMethods.CGEventCreateKeyboardEvent(EventSource, vk, isDown);
         if (eventRef == nint.Zero) return;
-        NativeMethods.CGEventSetFlags(eventRef, flags);
+        NativeMethods.CGEventSetFlags(eventRef, flags | FnFlagForVk(vk));
         NativeMethods.CGEventPost(NativeMethods.KCGHidEventTap, eventRef);
         NativeMethods.CFRelease(eventRef);
     }
@@ -245,7 +245,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
         return kr == 0;
     }
 
-    // post NX_KEYDOWN/NX_KEYUP via IOHIDPostEvent — flags=0 so system uses current HID modifier state.
+    // post NX_KEYDOWN/NX_KEYUP via IOHIDPostEvent — flags carry the Fn bit for fn-row keys.
     // mirrors deskflow's postHIDVirtualKey() for non-modifier keys.
     private bool PostHidKey(ushort vk, bool isDown)
     {
@@ -254,8 +254,9 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
 
         var eventData = new NXEventData { KeyCode = vk };
         var eventType = isDown ? NativeMethods.NxKeyDown : NativeMethods.NxKeyUp;
+        var eventFlags = (uint)FnFlagForVk(vk);
         var kr = NativeMethods.IOHIDPostEvent(conn, eventType, default, in eventData,
-            NativeMethods.KNxEventDataVersion, 0, 0);
+            NativeMethods.KNxEventDataVersion, eventFlags, 0);
         if (kr != 0)
             _log.LogWarning("IOHIDPostEvent(NX_KEY{Dir}) failed: kr={Kr} vk=0x{Vk:x2}", isDown ? "DOWN" : "UP", kr, vk);
         return kr == 0;
@@ -358,6 +359,23 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
         NativeMethods.CGEventPost(NativeMethods.KCGHidEventTap, eventRef);
         NativeMethods.CFRelease(eventRef);
     }
+
+    // returns kCGEventFlagMaskSecondaryFn for vk codes that macOS hardware events carry it on.
+    // fn-row keys (ForwardDelete, Home/End/PageUp/PageDown, Help, F1-F20) always have this flag set.
+    private static ulong FnFlagForVk(ushort vk) => (ulong)vk switch
+    {
+        MacVirtualKey.ForwardDelete or
+        MacVirtualKey.Home or MacVirtualKey.End or
+        MacVirtualKey.PageUp or MacVirtualKey.PageDown or
+        MacVirtualKey.Help or
+        MacVirtualKey.F1 or MacVirtualKey.F2 or MacVirtualKey.F3 or MacVirtualKey.F4 or
+        MacVirtualKey.F5 or MacVirtualKey.F6 or MacVirtualKey.F7 or MacVirtualKey.F8 or
+        MacVirtualKey.F9 or MacVirtualKey.F10 or MacVirtualKey.F11 or MacVirtualKey.F12 or
+        MacVirtualKey.F13 or MacVirtualKey.F14 or MacVirtualKey.F15 or MacVirtualKey.F16 or
+        MacVirtualKey.F17 or MacVirtualKey.F18 or MacVirtualKey.F19 or MacVirtualKey.F20
+            => NativeMethods.KCGEventFlagMaskSecondaryFn,
+        _ => 0,
+    };
 
     // maps a macOS virtual key code to (generic CGEventFlag mask, device-dependent NX mask).
     private static (ulong generic, uint device) VkToModifierMasks(ushort vk) => (ulong)vk switch

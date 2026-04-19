@@ -178,6 +178,7 @@ internal static partial class NativeMethods
     internal const ulong KCGEventFlagMaskAlternate = 0x00080000; // option/alt
     internal const ulong KCGEventFlagMaskCommand = 0x00100000;
     internal const ulong KCGEventFlagMaskNumericPad = 0x00200000;
+    internal const ulong KCGEventFlagMaskSecondaryFn = 0x00800000; // fn/function key flag
 
     [LibraryImport(CoreGraphics)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
