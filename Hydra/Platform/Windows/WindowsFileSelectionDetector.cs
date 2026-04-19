@@ -47,6 +47,9 @@ public sealed class WindowsFileSelectionDetector(ILogger<WindowsFileSelectionDet
         // walk to top-level window (Explorer cabinet window)
         var rootHwnd = NativeMethods.GetAncestor(fgHwnd, NativeMethods.GA_ROOTOWNER);
 
+        // on some Windows versions the desktop's foreground window is Progman/WorkerW
+        var fgIsDesktop = IsDesktopHwnd(rootHwnd);
+
         lock (_lock)
         {
             var (shellType, shell) = GetShellUnderLock();
@@ -67,10 +70,12 @@ public sealed class WindowsFileSelectionDetector(ILogger<WindowsFileSelectionDet
                         try { hwnd = (nint)window.HWND; }
                         catch { continue; }
 
-                        // for regular Explorer windows hwnd == rootHwnd directly;
-                        // for the Desktop, the shell window reports a child HWND (SHELLDLL_DefView)
-                        // whose root ancestor is Progman, so normalise both sides before comparing
-                        if (hwnd != rootHwnd && NativeMethods.GetAncestor(hwnd, NativeMethods.GA_ROOT) != rootHwnd) continue;
+                        // regular Explorer: direct HWND match
+                        // Desktop (SHELLDLL_DefView case): child HWND whose GA_ROOT is Progman
+                        // Desktop (modern Windows): some versions report HWND=0 for the desktop entry
+                        if (hwnd != rootHwnd
+                            && NativeMethods.GetAncestor(hwnd, NativeMethods.GA_ROOT) != rootHwnd
+                            && !(hwnd == 0 && fgIsDesktop)) continue;
 
                         // matched foreground HWND to an Explorer window — Explorer is focused
                         dynamic? items;
@@ -116,6 +121,15 @@ public sealed class WindowsFileSelectionDetector(ILogger<WindowsFileSelectionDet
 
         // no Shell window matched the foreground HWND — Explorer is not focused
         return new FileSelectionResult(false, null);
+    }
+
+    private static unsafe bool IsDesktopHwnd(nint hwnd)
+    {
+        const int maxLen = 64;
+        char* cls = stackalloc char[maxLen];
+        int len = NativeMethods.GetClassNameW(hwnd, cls, maxLen);
+        var name = new ReadOnlySpan<char>(cls, len);
+        return name.SequenceEqual("Progman") || name.SequenceEqual("WorkerW");
     }
 
     // caller must hold _lock
