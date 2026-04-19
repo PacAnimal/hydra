@@ -600,6 +600,13 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     internal static partial nint SendMessageW(nint hWnd, uint msg, nint wParam, nint lParam);
 
+    internal const uint SMTO_ABORTIFHUNG = 0x0002;
+
+    // returns 0 on timeout/error; result param receives the message return value
+    [LibraryImport(User32, EntryPoint = "SendMessageTimeoutW")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial nint SendMessageTimeoutW(nint hWnd, uint msg, nint wParam, nint lParam, uint fuFlags, uint uTimeout, out nuint lpdwResult);
+
     // -- window finding --
 
 #pragma warning disable SYSLIB1054

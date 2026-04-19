@@ -80,6 +80,7 @@ public sealed class WindowsFileSelectionDetector(ILogger<WindowsFileSelectionDet
                             && !(hwnd == 0 && fgIsDesktop)) continue;
 
                         // matched foreground HWND to an Explorer window — Explorer is focused
+                        _log.LogDebug("Shell.Application.Windows() match: hwnd={Hwnd} (root={Root})", hwnd, rootHwnd);
                         dynamic? items;
                         try { items = window.Document?.SelectedItems(); }
                         catch { continue; }
@@ -89,14 +90,16 @@ public sealed class WindowsFileSelectionDetector(ILogger<WindowsFileSelectionDet
                         try
                         {
                             int itemCount = items.Count;
+                            _log.LogDebug("SelectedItems() count: {Count}", itemCount);
                             for (var j = 0; j < itemCount; j++)
                             {
                                 dynamic? item = items.Item(j);
                                 if (item == null) continue;
                                 string? path;
                                 try { path = item.Path as string; }
-                                catch { path = null; }
+                                catch (Exception ex) { _log.LogDebug(ex, "item[{J}].Path threw", j); path = null; }
                                 finally { TryReleaseComObject(item); }
+                                _log.LogDebug("item[{J}]: path={Path}", j, path ?? "(null)");
                                 if (path != null) paths.Add(path);
                             }
                         }
@@ -123,7 +126,10 @@ public sealed class WindowsFileSelectionDetector(ILogger<WindowsFileSelectionDet
 
         // Shell.Application.Windows() didn't include the desktop — fall back to direct ListView query
         if (fgIsDesktop)
+        {
+            _log.LogDebug("Desktop focused but not in Shell.Application.Windows() — using ListView fallback");
             return GetDesktopSelectionFromListView();
+        }
 
         // no Shell window matched the foreground HWND — Explorer is not focused
         return new FileSelectionResult(false, null);
@@ -136,21 +142,27 @@ public sealed class WindowsFileSelectionDetector(ILogger<WindowsFileSelectionDet
         var hListView = FindDesktopListView();
         if (hListView == 0) return new FileSelectionResult(true, null);
 
-        var selCount = NativeMethods.SendMessageW(hListView, NativeMethods.LVM_GETSELECTEDCOUNT, 0, 0);
-        if (selCount == 0) return new FileSelectionResult(true, null);
+        // all LVM messages go via SendMessageTimeout — the keyboard hook thread must not block
+        // indefinitely against Explorer's message pump (classic cross-process SendMessage deadlock)
+        var countRet = NativeMethods.SendMessageTimeoutW(hListView, NativeMethods.LVM_GETSELECTEDCOUNT, 0, 0,
+            NativeMethods.SMTO_ABORTIFHUNG, 2000, out var selCountRaw);
+        if (countRet == 0 || (int)selCountRaw == 0) return new FileSelectionResult(true, null);
 
-        // collect selected indices — LVM_GETNEXTITEM returns plain ints, no cross-process memory needed
         var selectedIndices = new List<int>();
         var idx = -1;
         while (true)
         {
-            idx = (int)NativeMethods.SendMessageW(hListView, NativeMethods.LVM_GETNEXTITEM, idx, NativeMethods.LVNI_SELECTED);
-            if (idx == -1) break;
-            selectedIndices.Add(idx);
+            // return value of SendMessageTimeoutW is 0 on timeout/error, non-zero on success
+            var ret = NativeMethods.SendMessageTimeoutW(hListView, NativeMethods.LVM_GETNEXTITEM, idx,
+                NativeMethods.LVNI_SELECTED, NativeMethods.SMTO_ABORTIFHUNG, 2000, out var nextRaw);
+            if (ret == 0) break;
+            var next = (int)(nint)nextRaw; // -1 if no more selected items
+            if (next == -1) break;
+            selectedIndices.Add(next);
+            idx = next;
         }
         if (selectedIndices.Count == 0) return new FileSelectionResult(true, null);
 
-        // get item display names via cross-process memory + LVM_GETITEMTEXTW
         NativeMethods.GetWindowThreadProcessId(hListView, out var pid);
         var hProcess = NativeMethods.OpenProcess(
             NativeMethods.PROCESS_VM_READ | NativeMethods.PROCESS_VM_WRITE | NativeMethods.PROCESS_VM_OPERATION,
@@ -161,7 +173,7 @@ public sealed class WindowsFileSelectionDetector(ILogger<WindowsFileSelectionDet
         {
             const int maxChars = 260;
             var structSize = Marshal.SizeOf<LvItemText>();
-            var bufSize = structSize + maxChars * 2; // LVITEM + unicode text buffer
+            var bufSize = structSize + maxChars * 2;
             var pBuf = NativeMethods.VirtualAllocEx(hProcess, 0, (nuint)bufSize,
                 NativeMethods.MEM_COMMIT | NativeMethods.MEM_RESERVE, NativeMethods.PAGE_READWRITE);
             if (pBuf == 0) return new FileSelectionResult(true, null);
@@ -175,15 +187,12 @@ public sealed class WindowsFileSelectionDetector(ILogger<WindowsFileSelectionDet
                 foreach (var index in selectedIndices)
                 {
                     var name = ReadListViewItemText(hProcess, hListView, pBuf, structSize, index, maxChars);
+                    _log.LogDebug("ListView index {Index}: name={Name}", index, string.IsNullOrEmpty(name) ? "(empty)" : name);
                     if (string.IsNullOrEmpty(name)) continue;
 
-                    var path = Path.Combine(userDesktop, name);
-                    if (!File.Exists(path) && !Directory.Exists(path))
-                        path = Path.Combine(commonDesktop, name);
-                    if (!File.Exists(path) && !Directory.Exists(path))
-                        continue; // virtual item (Recycle Bin, This PC, etc.)
-
-                    paths.Add(path);
+                    var path = ResolveDesktopItemPath(name, userDesktop, commonDesktop);
+                    _log.LogDebug("  → resolved path: {Path}", path ?? "(not found)");
+                    if (path != null) paths.Add(path);
                 }
 
                 return new FileSelectionResult(true, paths.Count > 0 ? paths : null);
@@ -199,28 +208,50 @@ public sealed class WindowsFileSelectionDetector(ILogger<WindowsFileSelectionDet
         }
     }
 
-    // writes an LVITEM to the remote process, sends LVM_GETITEMTEXTW, reads the result back
+    // writes an LVITEM to the remote process, sends LVM_GETITEMTEXTW via timeout, reads the result back.
+    // zeros the text slot first so a timeout leaves an empty result rather than stale data.
     private static unsafe string ReadListViewItemText(nint hProcess, nint hListView, nint pBuf, int structSize, int index, int maxChars)
     {
         var lvItem = new LvItemText
         {
             iSubItem = 0,
-            pszText = pBuf + structSize, // text buffer follows the struct in remote memory
+            pszText = pBuf + structSize,
             cchTextMax = maxChars,
         };
 
-        nuint written;
-        NativeMethods.WriteProcessMemory(hProcess, pBuf, &lvItem, (nuint)structSize, out written);
+        // zero the first two bytes of the text slot (null Unicode char) to detect timeout
+        char zero = '\0';
+        NativeMethods.WriteProcessMemory(hProcess, pBuf + structSize, &zero, 2, out _);
+
+        NativeMethods.WriteProcessMemory(hProcess, pBuf, &lvItem, (nuint)structSize, out var written);
         if (written == 0) return string.Empty;
 
-        NativeMethods.SendMessageW(hListView, NativeMethods.LVM_GETITEMTEXTW, index, pBuf);
+        NativeMethods.SendMessageTimeoutW(hListView, NativeMethods.LVM_GETITEMTEXTW, index, pBuf,
+            NativeMethods.SMTO_ABORTIFHUNG, 2000, out _);
 
         var textBytes = new byte[maxChars * 2];
         nuint read;
         fixed (byte* p = textBytes)
             NativeMethods.ReadProcessMemory(hProcess, pBuf + structSize, p, (nuint)textBytes.Length, out read);
+        if (read == 0) return string.Empty;
 
         return Encoding.Unicode.GetString(textBytes).TrimEnd('\0');
+    }
+
+    // resolves a ListView display name to a real desktop path.
+    // shortcuts appear without their .lnk extension in the display name.
+    private static string? ResolveDesktopItemPath(string name, string userDesktop, string commonDesktop)
+    {
+        foreach (var root in new[] { userDesktop, commonDesktop })
+        {
+            var path = Path.Combine(root, name);
+            if (File.Exists(path) || Directory.Exists(path)) return path;
+
+            // shortcuts strip the .lnk extension in the display name
+            path = Path.Combine(root, name + ".lnk");
+            if (File.Exists(path)) return path;
+        }
+        return null; // virtual item (Recycle Bin, This PC, etc.)
     }
 
     // finds Progman → SHELLDLL_DefView → SysListView32, then tries WorkerW siblings
