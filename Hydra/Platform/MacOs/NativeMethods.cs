@@ -338,7 +338,7 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial byte LMGetKbdType();
 
-    // -- Objective-C runtime (used for NX_SYSDEFINED media key decoding) --
+    // -- Objective-C runtime (used for NX_SYSDEFINED media key decoding and injection) --
 
     private const string ObjC = "/usr/lib/libobjc.A.dylib";
 
@@ -389,6 +389,23 @@ internal static partial class NativeMethods
     [LibraryImport(ObjC, EntryPoint = "objc_msgSend")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static unsafe partial nint objc_msgSend_ptr_nuint(nint obj, nint sel, void* ptr, nuint length);
+
+    // [NSEvent otherEventWithType:location:modifierFlags:timestamp:windowNumber:context:subtype:data1:data2:]
+    // used to inject NX_SYSDEFINED media key events (volume, brightness, eject, play/next/prev).
+    // CGPoint doubles go into fp registers per arm64 AAPCS HFA rules.
+    [LibraryImport(ObjC, EntryPoint = "objc_msgSend")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint objc_msgSend_NSEvent_otherEvent(
+        nint cls, nint sel,
+        ulong type,
+        CGPoint location,
+        ulong modifierFlags,
+        double timestamp,
+        nint windowNumber,
+        nint context,
+        short subtype,
+        nint data1,
+        nint data2);
 
     [LibraryImport(CoreFoundation, EntryPoint = "CFStringGetCString")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]

@@ -146,11 +146,19 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
                 InjectCharacter(ch, isDown, flags);
             }
         }
-        else if (msg.Key is { } key2 && MacSpecialKeyMap.Instance.Reverse.TryGetValue(key2, out var vk))
+        else if (msg.Key is { } key2)
         {
-            // non-modifier special key: same IOHIDPostEvent-first approach
-            if (!PostHidKey((ushort)vk, isDown))
-                PostCgKey((ushort)vk, isDown, flags);
+            // media keys require NX_SYSDEFINED injection via NSEvent — regular NX_KEYDOWN with the VK
+            // produces wrong results (volume VKs hit wrong keys in the regular keycode space).
+            var nxType = GetNxMediaKeyType(key2);
+            if (nxType >= 0)
+                PostNsMediaKey((uint)nxType, isDown);
+            else if (MacSpecialKeyMap.Instance.Reverse.TryGetValue(key2, out var vk))
+            {
+                // non-modifier special key: IOHIDPostEvent-first, CGEvent fallback
+                if (!PostHidKey((ushort)vk, isDown))
+                    PostCgKey((ushort)vk, isDown, flags);
+            }
         }
     }
 
@@ -252,6 +260,52 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
             _log.LogWarning("IOHIDPostEvent(NX_KEY{Dir}) failed: kr={Kr} vk=0x{Vk:x2}", isDown ? "DOWN" : "UP", kr, vk);
         return kr == 0;
     }
+
+    // inject a media key via [NSEvent otherEventWithType:NSSystemDefined subtype:8 ...] → CGEventPost.
+    // mirrors barrier/deskflow's fakeNativeMediaKey(): NX_SYSDEFINED is the only reliable path for
+    // volume, brightness, eject, play/next/prev — regular NX_KEYDOWN with the VK code misroutes.
+    private static void PostNsMediaKey(uint keyType, bool isDown)
+    {
+        NativeMethods.EnsureAppKitLoaded();
+        var cls = NativeMethods.objc_getClass("NSEvent");
+        var sel = NativeMethods.sel_registerName("otherEventWithType:location:modifierFlags:timestamp:windowNumber:context:subtype:data1:data2:");
+        var selCgEvent = NativeMethods.sel_registerName("CGEvent");
+
+        // data1: high 16 bits = NX_KEYTYPE, bits 8–15 = 0x0a (down) or 0x0b (up)
+        var data1 = (nint)((keyType << 16) | (isDown ? 0x0a00u : 0x0b00u));
+
+        var nsEvent = NativeMethods.objc_msgSend_NSEvent_otherEvent(
+            cls, sel,
+            14,       // NSSystemDefined
+            default,  // NSPoint(0, 0)
+            0xa00,    // modifierFlags (empirical — matches barrier/deskflow)
+            0,        // timestamp
+            0,        // windowNumber
+            0,        // context = nil
+            8,        // subtype = NX_SUBTYPE_AUX_CONTROL_BUTTONS
+            data1,
+            -1);      // data2
+
+        if (nsEvent == nint.Zero) return;
+        var cgEventRef = NativeMethods.objc_msgSend_noarg(nsEvent, selCgEvent);
+        if (cgEventRef == nint.Zero) return;
+        NativeMethods.CGEventPost(NativeMethods.KCGHidEventTap, cgEventRef);
+    }
+
+    // maps media SpecialKeys to NX_KEYTYPE_* constants (ev_keymap.h); returns -1 for non-media keys.
+    private static int GetNxMediaKeyType(SpecialKey key) => key switch
+    {
+        SpecialKey.AudioVolumeUp => (int)NativeMethods.NXKeytypeSoundUp,
+        SpecialKey.AudioVolumeDown => (int)NativeMethods.NXKeytypeSoundDown,
+        SpecialKey.AudioMute => (int)NativeMethods.NXKeytypeMute,
+        SpecialKey.AudioPlay => (int)NativeMethods.NXKeytypePlay,
+        SpecialKey.AudioNext => (int)NativeMethods.NXKeytypeNext,
+        SpecialKey.AudioPrev => (int)NativeMethods.NXKeytypePrevious,
+        SpecialKey.BrightnessUp => (int)NativeMethods.NXKeytypeBrightnessUp,
+        SpecialKey.BrightnessDown => (int)NativeMethods.NXKeytypeBrightnessDown,
+        SpecialKey.Eject => (int)NativeMethods.NXKeytypeEject,
+        _ => -1,
+    };
 
     // lazy-init IOKit HID driver connection. mirrors deskflow's getEventDriver().
     private uint GetHidConnection()
