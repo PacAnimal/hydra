@@ -235,7 +235,9 @@ public sealed class WindowsFileSelectionDetector(ILogger<WindowsFileSelectionDet
             NativeMethods.ReadProcessMemory(hProcess, pBuf + structSize, p, (nuint)textBytes.Length, out read);
         if (read == 0) return string.Empty;
 
-        return Encoding.Unicode.GetString(textBytes).TrimEnd('\0');
+        var text = Encoding.Unicode.GetString(textBytes);
+        var terminator = text.IndexOf('\0');
+        return terminator >= 0 ? text[..terminator] : text;
     }
 
     // resolves a ListView display name to a real desktop path.

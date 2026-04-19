@@ -62,7 +62,7 @@ public sealed class WindowsDropTargetResolver(ILogger<WindowsDropTargetResolver>
         thread.SetApartmentState(ApartmentState.STA);
         thread.IsBackground = true;
         thread.Start();
-        if (!thread.Join(TimeSpan.FromMinutes(5)))
+        if (!thread.Join(TimeSpan.FromSeconds(30)))
         {
             // SHFileOperationW's STA message pump deadlocked (e.g. conflict dialog blocked by another stuck STA thread)
             log.LogWarning("SHFileOperationW timed out — falling back to managed move");

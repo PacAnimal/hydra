@@ -84,7 +84,11 @@ public static class TarGzStreamer
         var parent = Path.GetDirectoryName(dirPath) ?? dirPath;
         long bytes = 0;
 
-        // enumerate all subdirectories first so empty ones get explicit entries in the archive
+        // add the root dir entry itself so empty folders are preserved in the archive
+        var rootEntry = Path.GetRelativePath(parent, dirPath).Replace('\\', '/') + "/";
+        await tar.WriteEntryAsync(new GnuTarEntry(TarEntryType.Directory, rootEntry), cancel);
+
+        // enumerate all subdirectories so empty ones get explicit entries in the archive
         foreach (var dir in Directory.EnumerateDirectories(dirPath, "*", SearchOption.AllDirectories))
         {
             cancel.ThrowIfCancellationRequested();
