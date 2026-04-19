@@ -635,7 +635,8 @@ public class InputRouter(
                         else
                         {
                             log.LogInformation("Copy hotkey: no files selected locally");
-                            ShowOsd(st, "Nothing to copy...");
+                            _fileTransfer.ClearCopyBuffer();
+                            ShowOsd(st, "0 items selected");
                         }
                     }
                 }

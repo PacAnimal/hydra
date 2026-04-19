@@ -56,6 +56,7 @@ public sealed class FileTransferService : IDisposable
     }
 
     public FileCopyState? GetCopyBuffer() { lock (_lock) return _copyBuffer; }
+    public void ClearCopyBuffer() { lock (_lock) _copyBuffer = null; }
 
     private static double CalcSpeed(long startTick, long bytes)
     {

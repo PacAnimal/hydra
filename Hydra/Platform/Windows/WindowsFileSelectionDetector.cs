@@ -80,7 +80,6 @@ public sealed class WindowsFileSelectionDetector(ILogger<WindowsFileSelectionDet
                             && !(hwnd == 0 && fgIsDesktop)) continue;
 
                         // matched foreground HWND to an Explorer window — Explorer is focused
-                        _log.LogDebug("Shell.Application.Windows() match: hwnd={Hwnd} (root={Root})", hwnd, rootHwnd);
                         dynamic? items;
                         try { items = window.Document?.SelectedItems(); }
                         catch { continue; }
@@ -90,16 +89,14 @@ public sealed class WindowsFileSelectionDetector(ILogger<WindowsFileSelectionDet
                         try
                         {
                             int itemCount = items.Count;
-                            _log.LogDebug("SelectedItems() count: {Count}", itemCount);
                             for (var j = 0; j < itemCount; j++)
                             {
                                 dynamic? item = items.Item(j);
                                 if (item == null) continue;
                                 string? path;
                                 try { path = item.Path as string; }
-                                catch (Exception ex) { _log.LogDebug(ex, "item[{J}].Path threw", j); path = null; }
+                                catch { path = null; }
                                 finally { TryReleaseComObject(item); }
-                                _log.LogDebug("item[{J}]: path={Path}", j, path ?? "(null)");
                                 if (path != null) paths.Add(path);
                             }
                         }
@@ -126,10 +123,7 @@ public sealed class WindowsFileSelectionDetector(ILogger<WindowsFileSelectionDet
 
         // Shell.Application.Windows() didn't include the desktop — fall back to direct ListView query
         if (fgIsDesktop)
-        {
-            _log.LogDebug("Desktop focused but not in Shell.Application.Windows() — using ListView fallback");
             return GetDesktopSelectionFromListView();
-        }
 
         // no Shell window matched the foreground HWND — Explorer is not focused
         return new FileSelectionResult(false, null);
@@ -137,7 +131,7 @@ public sealed class WindowsFileSelectionDetector(ILogger<WindowsFileSelectionDet
 
     // reads selected items directly from the desktop SysListView32 via cross-process memory.
     // this covers Windows versions where the desktop is absent from Shell.Application.Windows().
-    private FileSelectionResult GetDesktopSelectionFromListView()
+    private static FileSelectionResult GetDesktopSelectionFromListView()
     {
         var hListView = FindDesktopListView();
         if (hListView == 0) return new FileSelectionResult(true, null);
@@ -187,11 +181,8 @@ public sealed class WindowsFileSelectionDetector(ILogger<WindowsFileSelectionDet
                 foreach (var index in selectedIndices)
                 {
                     var name = ReadListViewItemText(hProcess, hListView, pBuf, structSize, index, maxChars);
-                    _log.LogDebug("ListView index {Index}: name={Name}", index, string.IsNullOrEmpty(name) ? "(empty)" : name);
                     if (string.IsNullOrEmpty(name)) continue;
-
                     var path = ResolveDesktopItemPath(name, userDesktop, commonDesktop);
-                    _log.LogDebug("  → resolved path: {Path}", path ?? "(not found)");
                     if (path != null) paths.Add(path);
                 }
 
