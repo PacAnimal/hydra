@@ -35,16 +35,18 @@ internal sealed class XorgKeyResolver
                 var sym2 = NativeMethods.XkbKeycodeToKeysym(display, keycode, group, 1);
                 if (sym2 != 0) keysym = sym2;
             }
-            // emit KP numeric keysyms as digit/decimal chars so the slave doesn't need numlock active
+            // emit KP numeric keysyms as digit/decimal/separator chars so the slave doesn't need numlock active
             if (keysym is >= 0xFFB0 and <= 0xFFB9)
                 keysym = (ulong)('0' + (keysym - 0xFFB0));
             else if (keysym == XorgVirtualKey.KP_Decimal)
                 keysym = '.';
+            else if (keysym == 0xFFAC)  // XK_KP_Separator (comma on European layouts)
+                keysym = ',';
         }
         else
         {
             // numlock off: if shift gave a numeric keysym (X11 XOR), re-query at level=0 for navigation
-            if (level != 0 && (keysym is >= 0xFFB0 and <= 0xFFB9 || keysym == XorgVirtualKey.KP_Decimal))
+            if (level != 0 && (keysym is >= 0xFFB0 and <= 0xFFB9 || keysym is 0xFFAE or 0xFFAC))
             {
                 var sym2 = NativeMethods.XkbKeycodeToKeysym(display, keycode, group, 0);
                 if (sym2 is >= 0xFF95 and <= 0xFF9F) keysym = sym2;
@@ -269,7 +271,7 @@ internal sealed class XorgKeyResolver
         0xFFB7 => 0xFF95,
         0xFFB8 => 0xFF97,
         0xFFB9 => 0xFF9A,
-        XorgVirtualKey.KP_Decimal => 0xFF9F,
+        XorgVirtualKey.KP_Decimal or 0xFFAC => 0xFF9F,  // KP_Decimal / KP_Separator → KP_Delete
         _ => keysym,
     };
 

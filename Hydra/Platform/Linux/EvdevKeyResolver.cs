@@ -79,6 +79,8 @@ internal sealed class EvdevKeyResolver : IDisposable
                 keysym = (ulong)('0' + (keysym - 0xFFB0));
             else if (keysym == XorgVirtualKey.KP_Decimal)
                 keysym = '.';
+            else if (keysym == 0xFFAC)  // XK_KP_Separator (comma on European layouts)
+                keysym = ',';
             else if (keysym is >= 0xFF95 and <= 0xFF9F)
                 keysym = XorgKeyResolver.KpNavToChar(keysym);  // shift+numlock XOR gave nav; remap to char
         }

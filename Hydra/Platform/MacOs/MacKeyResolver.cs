@@ -60,7 +60,7 @@ internal sealed class MacKeyResolver
         // suppress auto-repeat: if vkCode already in _keyDownId, this is an OS repeat — drop it
         if (_keyDownId.ContainsKey(vkCode)) return null;
 
-        // keypad digits/decimal: always produce char events (mac has no traditional numlock state)
+        // keypad digits: always produce char events (mac has no traditional numlock state)
         var kpChar = (ulong)vkCode switch
         {
             MacVirtualKey.Keypad0 => (char?)'0',
@@ -73,7 +73,6 @@ internal sealed class MacKeyResolver
             MacVirtualKey.Keypad7 => '7',
             MacVirtualKey.Keypad8 => '8',
             MacVirtualKey.Keypad9 => '9',
-            MacVirtualKey.KeypadDecimal => '.',
             _ => null,
         };
         if (kpChar.HasValue)
@@ -81,6 +80,15 @@ internal sealed class MacKeyResolver
             _deadKeyState = 0;
             _keyDownId[vkCode] = new CharClassification(kpChar, null);
             return KeyEvent.Char(KeyEventType.KeyDown, kpChar.Value, mods);
+        }
+        // keypad decimal/separator: use UCKeyTranslate for locale-correct char ('.' or ',')
+        if ((ulong)vkCode == MacVirtualKey.KeypadDecimal)
+        {
+            _deadKeyState = 0;
+            var decEvent = ResolveCharacter(vkCode, cgFlags, mods);
+            if (decEvent is not null)
+                _keyDownId[vkCode] = new CharClassification(decEvent.Character, decEvent.Key);
+            return decEvent;
         }
 
         // special key (function keys, arrows, modifiers, keypad operators)?

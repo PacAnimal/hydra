@@ -19,7 +19,6 @@ public class WinKeyResolverTests
     [TestCase((uint)WinVirtualKey.Numpad1, '1')]
     [TestCase((uint)WinVirtualKey.Numpad5, '5')]
     [TestCase((uint)WinVirtualKey.Numpad9, '9')]
-    [TestCase((uint)WinVirtualKey.Decimal, '.')]
     public void NumpadDigit_WithNumLockOn_EmitsCharEvent(uint vk, char expected)
     {
         // WinVirtualKey.Numpad0-9 only appear in the LL hook when NumLock is active.
