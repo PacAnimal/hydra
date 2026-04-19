@@ -71,6 +71,18 @@ internal sealed class WinKeyResolver
         // flush deferred LCtrl — it was not followed by same-timestamp RMenu, so it's a real Ctrl press
         var flushed = FlushDeferredLCtrl();
 
+        // numpad digits/decimal: only delivered when NumLock is on (NumLock off gives navigation VKs instead).
+        // emit as char events so the slave doesn't need to have NumLock active to produce a digit.
+        if (vk is >= WinVirtualKey.Numpad0 and <= WinVirtualKey.Numpad9 || vk == WinVirtualKey.Decimal)
+        {
+            if (_keyDownId.ContainsKey(vk)) return Events(flushed, null);
+            _pendingDeadKey = '\0';
+            _pendingDeadSpacing = '\0';
+            var digit = vk == WinVirtualKey.Decimal ? '.' : (char)('0' + (vk - WinVirtualKey.Numpad0));
+            _keyDownId[vk] = new CharClassification(digit, null);
+            return Events(flushed, KeyEvent.Char(KeyEventType.KeyDown, digit, mods));
+        }
+
         if (WinSpecialKeyMap.Instance.TryGet((ulong)vk, out var specialKey))
         {
             // suppress auto-repeat — only emit on initial press, not while held.

@@ -69,6 +69,27 @@ internal sealed class EvdevKeyResolver : IDisposable
         _ = EvdevNativeMethods.xkb_state_update_key(_state, xkbKey, EvdevNativeMethods.XKB_KEY_DOWN);
         if (keysym == 0) return null;
 
+        // keypad dual-purpose keys: normalize based on numlock state.
+        // xkbcommon applies KEYPAD XOR semantics (numlock XOR shift → level), but we want
+        // simple numlock-on=chars, numlock-off=navigation regardless of shift.
+        if (IsModActive("Mod2"))
+        {
+            // numlock on: emit digits/decimal; also handle xkbcommon XOR nav → char
+            if (keysym is >= 0xFFB0 and <= 0xFFB9)
+                keysym = (ulong)('0' + (keysym - 0xFFB0));
+            else if (keysym == XorgVirtualKey.KP_Decimal)
+                keysym = '.';
+            else if (keysym is >= 0xFF95 and <= 0xFF9F)
+                keysym = XorgKeyResolver.KpNavToChar(keysym);  // shift+numlock XOR gave nav; remap to char
+        }
+        else
+        {
+            // numlock off: emit standard navigation; also handle xkbcommon XOR numeric → nav
+            if (keysym is >= 0xFFB0 and <= 0xFFB9 || keysym == XorgVirtualKey.KP_Decimal)
+                keysym = XorgKeyResolver.KpNumericToNav(keysym);  // shift+numlock-off XOR gave numeric; remap to nav
+            keysym = XorgKeyResolver.MapKpNavToStandard(keysym);
+        }
+
         var downMods = GetModifiers();
         var type = KeyEventType.KeyDown;
 

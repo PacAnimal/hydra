@@ -24,6 +24,35 @@ internal sealed class XorgKeyResolver
             keysym = NativeMethods.XkbKeycodeToKeysym(display, keycode, 0, 0);
         if (keysym == 0) return null;
 
+        // keypad dual-purpose keys: numlock determines whether to produce digits or navigation.
+        // ComputeLevel ignores numlock, so we post-correct the keysym here.
+        var numLock = (state & NativeMethods.Mod2Mask) != 0;
+        if (numLock)
+        {
+            // numlock on: if we got a navigation keysym (level=0), re-query at level=1 for numeric
+            if (keysym is >= 0xFF95 and <= 0xFF9F)
+            {
+                var sym2 = NativeMethods.XkbKeycodeToKeysym(display, keycode, group, 1);
+                if (sym2 != 0) keysym = sym2;
+            }
+            // emit KP numeric keysyms as digit/decimal chars so the slave doesn't need numlock active
+            if (keysym is >= 0xFFB0 and <= 0xFFB9)
+                keysym = (ulong)('0' + (keysym - 0xFFB0));
+            else if (keysym == XorgVirtualKey.KP_Decimal)
+                keysym = '.';
+        }
+        else
+        {
+            // numlock off: if shift gave a numeric keysym (X11 XOR), re-query at level=0 for navigation
+            if (level != 0 && (keysym is >= 0xFFB0 and <= 0xFFB9 || keysym == XorgVirtualKey.KP_Decimal))
+            {
+                var sym2 = NativeMethods.XkbKeycodeToKeysym(display, keycode, group, 0);
+                if (sym2 is >= 0xFF95 and <= 0xFF9F) keysym = sym2;
+            }
+            // map KP navigation keysyms to their standard counterparts so the slave's numlock state doesn't matter
+            keysym = MapKpNavToStandard(keysym);
+        }
+
         // X11 state lags by one: the modifier being pressed/released is not yet reflected.
         // adjust so modifiers always describe what's held after the event takes effect.
         var adjustedState = AdjustModifierState(evType, keysym, state);
@@ -189,6 +218,59 @@ internal sealed class XorgKeyResolver
         XorgVirtualKey.NumLock => NativeMethods.Mod2Mask,
         XorgVirtualKey.ISO_Level3_Shift => NativeMethods.Mod5Mask,
         _ => 0,
+    };
+
+    // maps KP navigation keysyms (0xFF95-0xFF9F, numlock-off) to their standard navigation equivalents.
+    // this decouples the slave from needing its own numlock off to produce navigation behavior.
+    // KP_Begin (0xFF9D, center 5) has no standard nav equivalent and passes through.
+    internal static ulong MapKpNavToStandard(ulong keysym) => keysym switch
+    {
+        0xFF95 => 0xFF50,  // KP_Home → Home
+        0xFF96 => 0xFF51,  // KP_Left → Left
+        0xFF97 => 0xFF52,  // KP_Up → Up
+        0xFF98 => 0xFF53,  // KP_Right → Right
+        0xFF99 => 0xFF54,  // KP_Down → Down
+        0xFF9A => 0xFF55,  // KP_Prior → PageUp
+        0xFF9B => 0xFF56,  // KP_Next → PageDown
+        0xFF9C => 0xFF57,  // KP_End → End
+        0xFF9E => 0xFF63,  // KP_Insert → Insert
+        0xFF9F => 0xFFFF,  // KP_Delete → Delete
+        _ => keysym,
+    };
+
+    // maps KP navigation keysyms to their digit/decimal chars (for numlock-on handling in evdev).
+    // the standard numpad layout: 7=Home, 8=Up, 9=PgUp, 4=Left, 5=Begin, 6=Right, 1=End, 2=Down, 3=PgDn, 0=Insert, .=Delete
+    internal static ulong KpNavToChar(ulong keysym) => keysym switch
+    {
+        0xFF9E => '0',
+        0xFF9C => '1',
+        0xFF99 => '2',
+        0xFF9B => '3',
+        0xFF96 => '4',
+        0xFF9D => '5',
+        0xFF98 => '6',
+        0xFF95 => '7',
+        0xFF97 => '8',
+        0xFF9A => '9',
+        0xFF9F => '.',
+        _ => keysym,
+    };
+
+    // maps KP numeric keysyms to their KP navigation equivalents (for numlock-off handling in evdev).
+    internal static ulong KpNumericToNav(ulong keysym) => keysym switch
+    {
+        0xFFB0 => 0xFF9E,
+        0xFFB1 => 0xFF9C,
+        0xFFB2 => 0xFF99,
+        0xFFB3 => 0xFF9B,
+        0xFFB4 => 0xFF96,
+        0xFFB5 => 0xFF9D,
+        0xFFB6 => 0xFF98,
+        0xFFB7 => 0xFF95,
+        0xFFB8 => 0xFF97,
+        0xFFB9 => 0xFF9A,
+        XorgVirtualKey.KP_Decimal => 0xFF9F,
+        _ => keysym,
     };
 
     // X11 standard modifier mask bits (from X.h).
