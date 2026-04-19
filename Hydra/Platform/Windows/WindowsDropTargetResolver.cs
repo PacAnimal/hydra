@@ -60,8 +60,15 @@ public sealed class WindowsDropTargetResolver(ILogger<WindowsDropTargetResolver>
             finally { NativeMethods.OleUninitialize(); }
         });
         thread.SetApartmentState(ApartmentState.STA);
+        thread.IsBackground = true;
         thread.Start();
-        thread.Join();
+        if (!thread.Join(TimeSpan.FromMinutes(5)))
+        {
+            // SHFileOperationW's STA message pump deadlocked (e.g. conflict dialog blocked by another stuck STA thread)
+            log.LogWarning("SHFileOperationW timed out — falling back to managed move");
+            FileUtils.MoveTo(tempDir, destDir);
+            return;
+        }
         if (moveResult != 0)
         {
             log.LogWarning("SHFileOperationW failed (0x{Result:X}), falling back to managed move", moveResult);
