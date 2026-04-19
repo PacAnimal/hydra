@@ -594,6 +594,68 @@ internal static partial class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool SetWindowTextW(nint hWnd, string lpString);
 
+    // -- send message --
+
+    [LibraryImport(User32, EntryPoint = "SendMessageW")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial nint SendMessageW(nint hWnd, uint msg, nint wParam, nint lParam);
+
+    // -- window finding --
+
+#pragma warning disable SYSLIB1054
+    [DllImport(User32, EntryPoint = "FindWindowW", CharSet = CharSet.Unicode)]
+    internal static extern nint FindWindowW(string? lpClassName, string? lpWindowName);
+
+    [DllImport(User32, EntryPoint = "FindWindowExW", CharSet = CharSet.Unicode)]
+    internal static extern nint FindWindowExW(nint hWndParent, nint hWndChildAfter, string? lpszClass, string? lpszWindow);
+#pragma warning restore SYSLIB1054
+
+    // -- listview messages --
+
+    internal const uint LVM_FIRST = 0x1000;
+    internal const uint LVM_GETNEXTITEM = LVM_FIRST + 12;
+    internal const uint LVM_GETSELECTEDCOUNT = LVM_FIRST + 50;
+    internal const uint LVM_GETITEMTEXTW = LVM_FIRST + 115;
+    internal const int LVNI_SELECTED = 0x0002;
+
+    // -- cross-process memory (for desktop ListView enumeration) --
+
+    internal const uint PROCESS_VM_READ = 0x0010;
+    internal const uint PROCESS_VM_WRITE = 0x0020;
+    internal const uint PROCESS_VM_OPERATION = 0x0008;
+    internal const uint MEM_COMMIT = 0x00001000;
+    internal const uint MEM_RESERVE = 0x00002000;
+    internal const uint MEM_RELEASE = 0x00008000;
+    internal const uint PAGE_READWRITE = 0x04;
+
+    [LibraryImport(Kernel32, SetLastError = true)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial nint OpenProcess(uint dwDesiredAccess, [MarshalAs(UnmanagedType.Bool)] bool bInheritHandle, uint dwProcessId);
+
+    [LibraryImport(Kernel32, SetLastError = true)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial nint VirtualAllocEx(nint hProcess, nint lpAddress, nuint dwSize, uint flAllocationType, uint flProtect);
+
+    [LibraryImport(Kernel32, SetLastError = true)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool VirtualFreeEx(nint hProcess, nint lpAddress, nuint dwSize, uint dwFreeType);
+
+    [LibraryImport(Kernel32, SetLastError = true)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static unsafe partial bool WriteProcessMemory(nint hProcess, nint lpBaseAddress, void* lpBuffer, nuint nSize, out nuint lpNumberOfBytesWritten);
+
+    [LibraryImport(Kernel32, SetLastError = true)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static unsafe partial bool ReadProcessMemory(nint hProcess, nint lpBaseAddress, void* lpBuffer, nuint nSize, out nuint lpNumberOfBytesRead);
+
+    [LibraryImport(Kernel32, SetLastError = true)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool CloseHandle(nint hObject);
+
     // -- common controls --
 
     private const string ComCtl32 = "comctl32.dll";

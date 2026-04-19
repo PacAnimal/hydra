@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using System.Text;
 using Hydra.FileTransfer;
 using Microsoft.CSharp.RuntimeBinder;
 using Microsoft.Extensions.Logging;
@@ -7,6 +8,7 @@ using Microsoft.Extensions.Logging;
 namespace Hydra.Platform.Windows;
 
 // detects files selected in the foreground Explorer window via Shell.Application COM.
+// falls back to reading the desktop SysListView32 directly when the desktop isn't in the COM collection.
 // the Shell.Application instance is cached and recreated on COM failure.
 [SupportedOSPlatform("windows")]
 public sealed class WindowsFileSelectionDetector(ILogger<WindowsFileSelectionDetector> log) : IFileSelectionDetector, IDisposable
@@ -119,8 +121,136 @@ public sealed class WindowsFileSelectionDetector(ILogger<WindowsFileSelectionDet
             }
         }
 
+        // Shell.Application.Windows() didn't include the desktop — fall back to direct ListView query
+        if (fgIsDesktop)
+            return GetDesktopSelectionFromListView();
+
         // no Shell window matched the foreground HWND — Explorer is not focused
         return new FileSelectionResult(false, null);
+    }
+
+    // reads selected items directly from the desktop SysListView32 via cross-process memory.
+    // this covers Windows versions where the desktop is absent from Shell.Application.Windows().
+    private FileSelectionResult GetDesktopSelectionFromListView()
+    {
+        var hListView = FindDesktopListView();
+        if (hListView == 0) return new FileSelectionResult(true, null);
+
+        var selCount = NativeMethods.SendMessageW(hListView, NativeMethods.LVM_GETSELECTEDCOUNT, 0, 0);
+        if (selCount == 0) return new FileSelectionResult(true, null);
+
+        // collect selected indices — LVM_GETNEXTITEM returns plain ints, no cross-process memory needed
+        var selectedIndices = new List<int>();
+        var idx = -1;
+        while (true)
+        {
+            idx = (int)NativeMethods.SendMessageW(hListView, NativeMethods.LVM_GETNEXTITEM, idx, NativeMethods.LVNI_SELECTED);
+            if (idx == -1) break;
+            selectedIndices.Add(idx);
+        }
+        if (selectedIndices.Count == 0) return new FileSelectionResult(true, null);
+
+        // get item display names via cross-process memory + LVM_GETITEMTEXTW
+        NativeMethods.GetWindowThreadProcessId(hListView, out var pid);
+        var hProcess = NativeMethods.OpenProcess(
+            NativeMethods.PROCESS_VM_READ | NativeMethods.PROCESS_VM_WRITE | NativeMethods.PROCESS_VM_OPERATION,
+            false, pid);
+        if (hProcess == 0) return new FileSelectionResult(true, null);
+
+        try
+        {
+            const int maxChars = 260;
+            var structSize = Marshal.SizeOf<LvItemText>();
+            var bufSize = structSize + maxChars * 2; // LVITEM + unicode text buffer
+            var pBuf = NativeMethods.VirtualAllocEx(hProcess, 0, (nuint)bufSize,
+                NativeMethods.MEM_COMMIT | NativeMethods.MEM_RESERVE, NativeMethods.PAGE_READWRITE);
+            if (pBuf == 0) return new FileSelectionResult(true, null);
+
+            try
+            {
+                var userDesktop = Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
+                var commonDesktop = Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory);
+                var paths = new List<string>();
+
+                foreach (var index in selectedIndices)
+                {
+                    var name = ReadListViewItemText(hProcess, hListView, pBuf, structSize, index, maxChars);
+                    if (string.IsNullOrEmpty(name)) continue;
+
+                    var path = Path.Combine(userDesktop, name);
+                    if (!File.Exists(path) && !Directory.Exists(path))
+                        path = Path.Combine(commonDesktop, name);
+                    if (!File.Exists(path) && !Directory.Exists(path))
+                        continue; // virtual item (Recycle Bin, This PC, etc.)
+
+                    paths.Add(path);
+                }
+
+                return new FileSelectionResult(true, paths.Count > 0 ? paths : null);
+            }
+            finally
+            {
+                NativeMethods.VirtualFreeEx(hProcess, pBuf, 0, NativeMethods.MEM_RELEASE);
+            }
+        }
+        finally
+        {
+            NativeMethods.CloseHandle(hProcess);
+        }
+    }
+
+    // writes an LVITEM to the remote process, sends LVM_GETITEMTEXTW, reads the result back
+    private static unsafe string ReadListViewItemText(nint hProcess, nint hListView, nint pBuf, int structSize, int index, int maxChars)
+    {
+        var lvItem = new LvItemText
+        {
+            iSubItem = 0,
+            pszText = pBuf + structSize, // text buffer follows the struct in remote memory
+            cchTextMax = maxChars,
+        };
+
+        nuint written;
+        NativeMethods.WriteProcessMemory(hProcess, pBuf, &lvItem, (nuint)structSize, out written);
+        if (written == 0) return string.Empty;
+
+        NativeMethods.SendMessageW(hListView, NativeMethods.LVM_GETITEMTEXTW, index, pBuf);
+
+        var textBytes = new byte[maxChars * 2];
+        nuint read;
+        fixed (byte* p = textBytes)
+            NativeMethods.ReadProcessMemory(hProcess, pBuf + structSize, p, (nuint)textBytes.Length, out read);
+
+        return Encoding.Unicode.GetString(textBytes).TrimEnd('\0');
+    }
+
+    // finds Progman → SHELLDLL_DefView → SysListView32, then tries WorkerW siblings
+    private static nint FindDesktopListView()
+    {
+        var progman = NativeMethods.FindWindowW("Progman", null);
+        if (progman != 0)
+        {
+            var defView = NativeMethods.FindWindowExW(progman, 0, "SHELLDLL_DefView", null);
+            if (defView != 0)
+            {
+                var lv = NativeMethods.FindWindowExW(defView, 0, "SysListView32", null);
+                if (lv != 0) return lv;
+            }
+        }
+
+        // on some Windows versions the icons live under a WorkerW sibling of Progman
+        var workerW = NativeMethods.FindWindowExW(0, 0, "WorkerW", null);
+        while (workerW != 0)
+        {
+            var defView = NativeMethods.FindWindowExW(workerW, 0, "SHELLDLL_DefView", null);
+            if (defView != 0)
+            {
+                var lv = NativeMethods.FindWindowExW(defView, 0, "SysListView32", null);
+                if (lv != 0) return lv;
+            }
+            workerW = NativeMethods.FindWindowExW(0, workerW, "WorkerW", null);
+        }
+
+        return 0;
     }
 
     private static unsafe bool IsDesktopHwnd(nint hwnd)
@@ -146,5 +276,19 @@ public sealed class WindowsFileSelectionDetector(ILogger<WindowsFileSelectionDet
     {
         try { Marshal.ReleaseComObject(obj); }
         catch { /* already released */ }
+    }
+
+    // LVITEM layout for LVM_GETITEMTEXTW — explicit offsets match the 64-bit Windows LVITEMW struct.
+    // only fields needed for text retrieval are defined; the struct is intentionally truncated.
+    [StructLayout(LayoutKind.Explicit)]
+    private struct LvItemText
+    {
+        [FieldOffset(0)] public uint mask;
+        [FieldOffset(4)] public int iItem;
+        [FieldOffset(8)] public int iSubItem;
+        [FieldOffset(12)] public uint state;
+        [FieldOffset(16)] public uint stateMask;
+        [FieldOffset(24)] public nint pszText;   // 8-byte aligned on 64-bit
+        [FieldOffset(32)] public int cchTextMax;
     }
 }
