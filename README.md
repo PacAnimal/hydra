@@ -13,6 +13,10 @@ Hydra runs on the machine with the physical keyboard and mouse (the **master**).
 - **Per-screen scale** — control cursor speed on each remote screen via `screenDefinitions`
 - Full keyboard forwarding, including dead keys and special characters — resolved on the master using its own keyboard layout
 - Mouse button and scroll forwarding
+- **Clipboard sync** — text and images synced automatically when switching between machines (all platforms)
+- **File transfer** — cross-machine copy/paste of files and folders via hotkey (macOS and Windows)
+- **Media key forwarding** — volume, playback, brightness keys forwarded to the active machine
+- **Screensaver sync** — activating your screensaver on the master locks all connected slaves too
 - End-to-end encrypted relay via **Styx** for machines on different networks
 - macOS, Windows, and Linux (x64 and arm64) support
 - **Remote-only mode** — use a headless Linux machine (e.g. Raspberry Pi) as a dedicated input forwarder; all input goes straight to a remote machine with no local screen involved
@@ -71,6 +75,7 @@ Neighbours are **mirrored by default** — declaring that `laptop` has `desktop`
 - `mouseScale` — fallback cursor speed multiplier for all screens on this slave (slave only)
 - `deadCorners` — pixel dead zone at screen corners where transitions are blocked (default `0`, `50` is a reasonable starting value). Scaled by the screen's mouseScale. Can also be set per-host to override.
 - `remoteOnly` — `true` to forward all input to remote machines immediately at startup, with no local screen involved (see [Remote-only mode](#remote-only-mode))
+- `syncScreensaver` — `false` to disable screensaver synchronisation (default: `true`)
 - `conditions` — optional object; if set, this profile only activates when **all** specified conditions are met (see [Network-aware config](#network-aware-config))
   - `ssid` — activates when connected to this WiFi network name (case-insensitive)
   - `screenCount` — activates when exactly this many screens are connected (integer ≥ 1)
@@ -273,13 +278,57 @@ A common setup: at home your stationary desktop controls your laptop (the laptop
 
 > **macOS note:** Location Services permission is only requested if at least one config uses `conditions`. Hydra never asks for location permission when running with a single unconditional config.
 
-### Lock hotkey
+### Hotkeys
 
-**Ctrl+Alt+Super+L** — locks the cursor to the current screen until pressed again.
+All hotkeys use **Ctrl+Alt+Super** (Super = ⌘ on macOS, Win on Windows) plus one letter.
 
-In remote-only mode the lock hotkey works differently: since there is no local screen to return to, it acts as a **remote toggle** — press once to unlock to local (pass input through to the physical machine running Hydra), press again to re-lock back to remote.
+| Hotkey | Action |
+|--------|--------|
+| `Ctrl+Alt+Super+L` | Toggle cursor lock — lock to current screen, or unlock to roam freely |
+| `Ctrl+Alt+Super+M` | Toggle relative mouse mode on the current remote screen (useful for games) |
+| `Ctrl+Alt+Super+C` | Copy selected files/folders to Hydra's cross-machine clipboard (macOS, Windows) |
+| `Ctrl+Alt+Super+V` | Paste previously copied files to the current machine |
+
+**Lock in remote-only mode:** since there is no local screen, the lock hotkey acts as a **remote toggle** — press once to temporarily pass input through to the physical machine running Hydra, press again to re-lock to remote.
+
+**Relative mouse:** relative mode sends mouse deltas instead of absolute coordinates — useful for games or 3D apps that capture the cursor. Toggled per-screen; an on-screen notification confirms the current state.
 
 ---
+
+## Clipboard sync
+
+When you move the cursor to a remote machine, Hydra pushes the local clipboard to it. When you move back, the remote clipboard is pulled to the local machine. This happens automatically — no hotkey needed.
+
+Synced content:
+- **Plain text** — all platforms
+- **Images (PNG)** — all platforms; Windows also handles DIB format for compatibility with legacy apps
+
+Linux syncs both the `CLIPBOARD` selection and the X11 `PRIMARY` (middle-click) selection.
+
+## File transfer
+
+Copy files and folders between machines using the same muscle memory as a local copy/paste.
+
+1. Select files in Finder (macOS) or Explorer (Windows) — including desktop selections
+2. Press **Ctrl+Alt+Super+C** — Hydra copies the paths into its transfer buffer and shows a confirmation
+3. Move the cursor to the target machine
+4. Press **Ctrl+Alt+Super+V** — the files are transferred and placed in the folder currently open in the file manager on the target
+
+The notification shows how many items were copied (e.g. `3 items copied`). Transfers are compressed and verified with a SHA-256 checksum. Only one transfer can be in flight at a time; a progress panel shows speed and allows cancellation. Transfers are aborted automatically if the screensaver activates or the connection drops.
+
+**Platform support:** macOS and Windows. Linux is not supported as a source or destination.
+
+All transfer topologies work: local → remote, remote → local, and remote → remote (via the relay).
+
+## Screensaver sync
+
+When the screensaver activates on the master, Hydra:
+- Returns the cursor to the local screen
+- Activates the screensaver on all connected slaves
+
+When the master wakes, it deactivates the screensaver on slaves and restores the cursor to the remote screen it was on before.
+
+Set `syncScreensaver: false` in a profile to disable this behaviour.
 
 ## Remote-only mode
 
