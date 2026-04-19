@@ -116,6 +116,7 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     internal static partial nint WindowFromPoint(WINPOINT pt);
 
+    internal const uint GA_ROOT = 2;
     internal const uint GA_ROOTOWNER = 3;
 
     [LibraryImport(User32)]

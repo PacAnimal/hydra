@@ -67,7 +67,10 @@ public sealed class WindowsFileSelectionDetector(ILogger<WindowsFileSelectionDet
                         try { hwnd = (nint)window.HWND; }
                         catch { continue; }
 
-                        if (hwnd != rootHwnd) continue;
+                        // for regular Explorer windows hwnd == rootHwnd directly;
+                        // for the Desktop, the shell window reports a child HWND (SHELLDLL_DefView)
+                        // whose root ancestor is Progman, so normalise both sides before comparing
+                        if (hwnd != rootHwnd && NativeMethods.GetAncestor(hwnd, NativeMethods.GA_ROOT) != rootHwnd) continue;
 
                         // matched foreground HWND to an Explorer window — Explorer is focused
                         dynamic? items;
