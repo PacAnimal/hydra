@@ -74,6 +74,9 @@ public enum SpecialKey : uint
     F19 = 0x01FFD0,
     F20 = 0x01FFD1,
 
+    // platform actions (no X11/OS equivalent — synthesized per platform)
+    MissionControl = 0xE100,
+
     // media
     AudioMute = 0xE0AD,
     AudioVolumeDown = 0xE0AE,

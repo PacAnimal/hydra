@@ -78,6 +78,16 @@ public sealed class XorgOutputHandler : IPlatformOutput, ICursorVisibility
             var keysym = ch <= '\xFF' ? (ulong)ch : 0x01000000u | ch;
             InjectKeysym(keysym, isDown);
         }
+        else if (msg.Key == SpecialKey.MissionControl)
+        {
+            // tap Super_L to trigger GNOME Activities / KDE Overview
+            if (!isDown) return;
+            var keycode = NativeMethods.XKeysymToKeycode(_display, XorgVirtualKey.Super_L);
+            if (keycode == 0) return;
+            _ = NativeMethods.XTestFakeKeyEvent(_display, keycode, true, 0);
+            _ = NativeMethods.XTestFakeKeyEvent(_display, keycode, false, 0);
+            _ = NativeMethods.XFlush(_display);
+        }
         else if (msg.Key is { } key)
         {
             var keysym = SpecialKeyToKeysym(key);

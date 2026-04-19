@@ -148,10 +148,13 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
         }
         else if (msg.Key is { } key2)
         {
+            if (key2 == SpecialKey.MissionControl)
+            {
+                if (isDown) System.Diagnostics.Process.Start("open", ["-a", "Mission Control"]);
+            }
             // media keys require NX_SYSDEFINED injection via NSEvent — regular NX_KEYDOWN with the VK
             // produces wrong results (volume VKs hit wrong keys in the regular keycode space).
-            var nxType = GetNxMediaKeyType(key2);
-            if (nxType >= 0)
+            else if (GetNxMediaKeyType(key2) is >= 0 and var nxType)
                 PostNsMediaKey((uint)nxType, isDown);
             else if (MacSpecialKeyMap.Instance.Reverse.TryGetValue(key2, out var vk))
             {

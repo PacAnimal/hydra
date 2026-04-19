@@ -273,6 +273,19 @@ internal sealed class DesktopInputDispatcher : IDisposable
                 return NativeMethods.SendInput(1, &input, sizeof(INPUT));
             }
         }
+        else if (msg.Key == SpecialKey.MissionControl)
+        {
+            if (!isUp)
+            {
+                // Win+Tab = Task View
+                var inputs = stackalloc INPUT[4];
+                inputs[0] = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = WinVirtualKey.LWin, dwFlags = NativeMethods.KEYEVENTF_EXTENDEDKEY } };
+                inputs[1] = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = WinVirtualKey.Tab } };
+                inputs[2] = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = WinVirtualKey.Tab, dwFlags = NativeMethods.KEYEVENTF_KEYUP } };
+                inputs[3] = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = WinVirtualKey.LWin, dwFlags = NativeMethods.KEYEVENTF_EXTENDEDKEY | NativeMethods.KEYEVENTF_KEYUP } };
+                return NativeMethods.SendInput(4, inputs, sizeof(INPUT));
+            }
+        }
         else if (msg.Key is { } key && WinSpecialKeyMap.Instance.Reverse.TryGetValue(key, out var vk))
         {
             var isWin = vk == WinVirtualKey.LWin || vk == WinVirtualKey.RWin;

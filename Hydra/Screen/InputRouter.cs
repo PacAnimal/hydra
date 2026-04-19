@@ -564,7 +564,7 @@ public class InputRouter(
             log.LogDebug("Key: {Type}{Label} mods={Modifiers}", keyEvent.Type, label, keyEvent.Modifiers);
 
         // consume both KeyDown and KeyUp for hotkeys so the slave never sees either half
-        var hotkeyConsumed = (keyEvent.Modifiers & LockHotkey) == LockHotkey && keyEvent.Character is 'l' or 'm' or 'c' or 'v';
+        var hotkeyConsumed = (keyEvent.Modifiers & LockHotkey) == LockHotkey && keyEvent.Character is 'l' or 'm' or 'c' or 'v' or 'z';
         if (hotkeyConsumed && keyEvent.Type == KeyEventType.KeyDown)
         {
             if (keyEvent.Character == 'l')
@@ -647,6 +647,14 @@ public class InputRouter(
                     var queryPayload = MessageSerializer.Encode(MessageKind.FileSelectionQuery, new FileSelectionQueryMessage());
                     _ = relay.Send([st.Mouse.CurrentScreen.Host], queryPayload).AsTask();
                 }
+            }
+            else if (keyEvent.Character == 'z' && st.Mouse.IsOnVirtualScreen && st.Mouse.CurrentScreen != null)
+            {
+                log.LogInformation("Mission Control hotkey: sending to {Host}", st.Mouse.CurrentScreen.Host);
+                var host = st.Mouse.CurrentScreen.Host;
+                _ = relay.Send([host], MessageSerializer.Encode(MessageKind.KeyEvent, new KeyEventMessage(KeyEventType.KeyDown, KeyModifiers.None, null, SpecialKey.MissionControl))).AsTask();
+                _ = relay.Send([host], MessageSerializer.Encode(MessageKind.KeyEvent, new KeyEventMessage(KeyEventType.KeyUp, KeyModifiers.None, null, SpecialKey.MissionControl))).AsTask();
+                ShowOsd(st, "Mission Control");
             }
             else if (keyEvent.Character == 'v')
             {
