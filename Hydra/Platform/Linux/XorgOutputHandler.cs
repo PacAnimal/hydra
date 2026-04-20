@@ -78,6 +78,11 @@ public sealed class XorgOutputHandler : IPlatformOutput, ICursorVisibility
             var keysym = ch <= '\xFF' ? (ulong)ch : 0x01000000u | ch;
             InjectKeysym(keysym, isDown);
         }
+        else if (msg.Key is SpecialKey.MoveToBeginningOfLine or SpecialKey.MoveToEndOfLine)
+        {
+            var keysym = msg.Key == SpecialKey.MoveToBeginningOfLine ? XorgVirtualKey.Home : XorgVirtualKey.End;
+            InjectKeysym(keysym, isDown);
+        }
         else if (msg.Key == SpecialKey.MissionControl)
         {
             // tap Super_L to trigger GNOME Activities / KDE Overview

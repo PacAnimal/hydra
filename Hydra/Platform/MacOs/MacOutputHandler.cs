@@ -156,6 +156,8 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
             // produces wrong results (volume VKs hit wrong keys in the regular keycode space).
             else if (GetNxMediaKeyType(key2) is >= 0 and var nxType)
                 PostNsMediaKey((uint)nxType, isDown);
+            else if (MacSpecialKeyMap.OutputOverrides.TryGetValue(key2, out var ovr))
+                PostCgKey(ovr.Vk, isDown, flags | ovr.ExtraFlags);
             else if (MacSpecialKeyMap.Instance.Reverse.TryGetValue(key2, out var vk))
             {
                 // non-modifier special key: IOHIDPostEvent-first, CGEvent fallback

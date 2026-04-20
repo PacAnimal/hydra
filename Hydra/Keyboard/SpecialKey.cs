@@ -76,6 +76,8 @@ public enum SpecialKey : uint
 
     // platform actions (no X11/OS equivalent — synthesized per platform)
     MissionControl = 0xE100,
+    MoveToBeginningOfLine = 0xE101,  // line start: Command+Left on Mac, Home on Win/Linux
+    MoveToEndOfLine = 0xE102,        // line end: Command+Right on Mac, End on Win/Linux
 
     // media
     AudioMute = 0xE0AD,

@@ -89,4 +89,14 @@ internal sealed class MacSpecialKeyMap : SpecialKeyMap
     };
 
     internal IReadOnlyDictionary<ulong, SpecialKey> All => Map;
+
+    // output-only overrides: keys that need a different VK (and optional extra flags) when synthesizing output.
+    // MoveToBeginningOfLine/MoveToEndOfLine are sent by Win/Linux masters in place of Home/End.
+    // on Mac, line start/end is Command+Left/Right, not the native Home/End keys (Fn+Left/Right = document nav).
+    internal static readonly IReadOnlyDictionary<SpecialKey, (ushort Vk, ulong ExtraFlags)> OutputOverrides =
+        new Dictionary<SpecialKey, (ushort Vk, ulong ExtraFlags)>
+        {
+            { SpecialKey.MoveToBeginningOfLine, ((ushort)MacVirtualKey.LeftArrow,  NativeMethods.KCGEventFlagMaskCommand) },
+            { SpecialKey.MoveToEndOfLine,       ((ushort)MacVirtualKey.RightArrow, NativeMethods.KCGEventFlagMaskCommand) },
+        };
 }

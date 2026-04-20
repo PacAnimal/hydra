@@ -273,6 +273,13 @@ internal sealed class DesktopInputDispatcher : IDisposable
                 return NativeMethods.SendInput(1, &input, sizeof(INPUT));
             }
         }
+        else if (msg.Key is SpecialKey.MoveToBeginningOfLine or SpecialKey.MoveToEndOfLine)
+        {
+            var vk = msg.Key == SpecialKey.MoveToBeginningOfLine ? WinVirtualKey.Home : WinVirtualKey.End;
+            var flags = (isUp ? NativeMethods.KEYEVENTF_KEYUP : 0u) | NativeMethods.KEYEVENTF_EXTENDEDKEY;
+            var input = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = (ushort)vk, dwFlags = flags } };
+            return NativeMethods.SendInput(1, &input, sizeof(INPUT));
+        }
         else if (msg.Key == SpecialKey.MissionControl)
         {
             if (!isUp)

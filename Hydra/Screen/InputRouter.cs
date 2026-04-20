@@ -724,7 +724,7 @@ public class InputRouter(
                 repeatDelay = _repeatDelayMs;
                 repeatRate = _repeatRateMs;
             }
-            ForwardToVirtualScreen(st, MessageKind.KeyEvent, new KeyEventMessage(keyEvent.Type, keyEvent.Modifiers, keyEvent.Character, keyEvent.Key, repeatDelay, repeatRate));
+            ForwardToVirtualScreen(st, MessageKind.KeyEvent, new KeyEventMessage(keyEvent.Type, keyEvent.Modifiers, keyEvent.Character, RemapKey(keyEvent.Key), repeatDelay, repeatRate));
         }
     }
 
@@ -791,6 +791,16 @@ public class InputRouter(
         if (isRelative && st.PendingDx == 0 && st.PendingDy == 0) return;
         SendMousePosition(st, Environment.TickCount64);
     }
+
+    // remap Home/End to platform-independent line-nav keys when master is not Mac.
+    // Mac masters expect document-start/end (Fn+Left/Right) and handle that natively.
+    // Windows/Linux masters send Home/End intending line-start/end, so we remap.
+    private static SpecialKey? RemapKey(SpecialKey? key) => key switch
+    {
+        SpecialKey.Home when !OperatingSystem.IsMacOS() => SpecialKey.MoveToBeginningOfLine,
+        SpecialKey.End when !OperatingSystem.IsMacOS() => SpecialKey.MoveToEndOfLine,
+        _ => key,
+    };
 
     private void ForwardToVirtualScreen<T>(LocalMasterState st, MessageKind kind, T message)
     {
