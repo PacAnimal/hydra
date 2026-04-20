@@ -15,9 +15,11 @@ import CoreLocation
 // emitted on activation and whenever SSID changes.
 //
 // also manages a file transfer progress panel:
-//   stdin "transfer:pending;{totalBytes};{fileCount};{isSender};{b64name1|b64name2|...}" — show pending state (names are base64-encoded utf-8)
-//   stdin "transfer:start"                                                              — show progress bar
+//   stdin "transfer:begin;{totalBytes};{fileCount};{isSender};{b64name1|b64name2|...}"  — show panel in transferring mode (names are base64-encoded utf-8)
+//   stdin "transfer:pending;{totalBytes};{fileCount};{isSender};{b64name1|b64name2|...}" — show pending state
+//   stdin "transfer:start"                                                              — switch to progress bar
 //   stdin "transfer:progress:{bytes}:{speed}"                                          — update progress
+//   stdin "transfer:file:{base64-filename}"                                            — update current file name
 //   stdin "transfer:done"                                                              — show completed, auto-close
 //   stdin "transfer:error:{message}"                                                   — show error
 //   stdin "transfer:close"                                                             — force close
@@ -205,9 +207,11 @@ class ShieldDelegate: NSObject, NSApplicationDelegate, CLLocationManagerDelegate
 
     // MARK: - Transfer panel commands
 
-    // handles "transfer:pending;{totalBytes};{fileCount};{isSender};{b64name1|b64name2|...}"
+    // handles "transfer:begin;{totalBytes};{fileCount};{isSender};{b64name1|b64name2|...}"
+    //          "transfer:pending;{totalBytes};{fileCount};{isSender};{b64name1|b64name2|...}"
     //          "transfer:start"
     //          "transfer:progress:{bytes}:{speed}"
+    //          "transfer:file:{base64-filename}"
     //          "transfer:done"
     //          "transfer:error:{message}"
     //          "transfer:close"
@@ -215,6 +219,12 @@ class ShieldDelegate: NSObject, NSApplicationDelegate, CLLocationManagerDelegate
         let payload = String(line.dropFirst(CmdTransferPrefix.count))
         if payload == "start" {
             transferPanel.showTransferring()
+            return
+        }
+        if payload.hasPrefix("file:") {
+            let b64 = String(payload.dropFirst("file:".count))
+            let name = Data(base64Encoded: b64).flatMap { String(data: $0, encoding: .utf8) } ?? b64
+            transferPanel.updateCurrentFile(name)
             return
         }
         if payload == "done" {
@@ -240,10 +250,12 @@ class ShieldDelegate: NSObject, NSApplicationDelegate, CLLocationManagerDelegate
             transferPanel.showError(msg)
             return
         }
-        if payload.hasPrefix("pending;") {
-            // format: pending;{totalBytes};{fileCount};{isSender};{b64name1|b64name2|...}
+        if payload.hasPrefix("begin;") || payload.hasPrefix("pending;") {
+            // format: begin/pending;{totalBytes};{fileCount};{isSender};{b64name1|b64name2|...}
             // names are base64-encoded utf-8 to handle special characters
-            let parts = payload.dropFirst("pending;".count).split(separator: ";", maxSplits: 3)
+            let isBegin = payload.hasPrefix("begin;")
+            let rest = payload.dropFirst(isBegin ? "begin;".count : "pending;".count)
+            let parts = rest.split(separator: ";", maxSplits: 3)
             if parts.count == 4,
                let totalBytes = Int64(parts[0]),
                let fileCount = Int(parts[1]),
@@ -252,7 +264,11 @@ class ShieldDelegate: NSObject, NSApplicationDelegate, CLLocationManagerDelegate
                     guard let data = Data(base64Encoded: String(b64)) else { return nil }
                     return String(data: data, encoding: .utf8)
                 }
-                transferPanel.showPending(names: names, totalBytes: totalBytes, fileCount: fileCount, isSender: isSender)
+                if isBegin {
+                    transferPanel.showBegin(names: names, totalBytes: totalBytes, fileCount: fileCount, isSender: isSender)
+                } else {
+                    transferPanel.showPending(names: names, totalBytes: totalBytes, fileCount: fileCount, isSender: isSender)
+                }
             }
             return
         }
@@ -296,15 +312,32 @@ class TransferPanel: NSObject {
 
     private var totalBytes: Int64 = 0
 
+    func showBegin(names: [String], totalBytes: Int64, fileCount: Int, isSender: Bool) {
+        self.totalBytes = totalBytes
+        buildPanelIfNeeded()
+        autoCloseTimer?.invalidate()
+
+        let verb = isSender ? "Sending" : "Receiving"
+        let nameStr = Self.formatNames(names)
+        titleLabel?.stringValue = "\(verb) \(fileCount) file\(fileCount == 1 ? "" : "s")"
+        subtitleLabel?.stringValue = nameStr
+        statusLabel?.stringValue = "Transferring…"
+        progressBar?.isIndeterminate = false
+        progressBar?.doubleValue = 0
+        cancelButton?.title = "Cancel"
+        cancelButton?.isHidden = false
+        panel?.orderFrontRegardless()
+    }
+
     func showPending(names: [String], totalBytes: Int64, fileCount: Int, isSender: Bool) {
         self.totalBytes = totalBytes
         buildPanelIfNeeded()
         autoCloseTimer?.invalidate()
 
         let verb = isSender ? "Sending" : "Receiving"
-        let nameList = names.prefix(3).joined(separator: ", ") + (names.count > 3 ? ", …" : "")
+        let nameStr = Self.formatNames(names)
         titleLabel?.stringValue = "\(verb) \(fileCount) file\(fileCount == 1 ? "" : "s")"
-        subtitleLabel?.stringValue = nameList
+        subtitleLabel?.stringValue = nameStr
         statusLabel?.stringValue = isSender ? "Drop to send" : "Waiting for sender…"
         progressBar?.isIndeterminate = true
         progressBar?.startAnimation(nil)
@@ -314,9 +347,15 @@ class TransferPanel: NSObject {
     }
 
     func showTransferring() {
+        buildPanelIfNeeded()
         statusLabel?.stringValue = "Transferring…"
         progressBar?.isIndeterminate = false
         progressBar?.doubleValue = 0
+        panel?.orderFrontRegardless()
+    }
+
+    func updateCurrentFile(_ name: String) {
+        subtitleLabel?.stringValue = name
     }
 
     func updateProgress(bytes: Int64, speed: Double) {
@@ -331,7 +370,7 @@ class TransferPanel: NSObject {
         progressBar?.doubleValue = 100
         statusLabel?.stringValue = "Transfer complete"
         cancelButton?.isHidden = true
-        autoCloseTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [weak self] _ in
+        autoCloseTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: false) { [weak self] _ in
             self?.close()
         }
     }
@@ -414,6 +453,11 @@ class TransferPanel: NSObject {
     @objc private func onCancel() {
         writeState(PfxTransferCancel)
         close()
+    }
+
+    private static func formatNames(_ names: [String]) -> String {
+        let joined = names.prefix(3).joined(separator: ", ")
+        return names.count > 3 ? "\(joined) +\(names.count - 3) more" : joined
     }
 
     private static func formatBytes(_ bytes: Int64) -> String {

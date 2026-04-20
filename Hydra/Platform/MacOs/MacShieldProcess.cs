@@ -89,7 +89,12 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
         _ = SendFireAndForget($"transfer:pending;{info.TotalBytes};{info.FileCount};{info.IsSender.ToString().ToLowerInvariant()};{names}");
     }
 
-    public void ShowTransferring(FileTransferInfo info) => _ = SendFireAndForget("transfer:start");
+    public void ShowTransferring(FileTransferInfo info)
+    {
+        // transfer:begin initializes the panel with file info and shows it immediately in transferring mode
+        var names = string.Join("|", info.FileNames.Select(n => Base64(n)));
+        _ = SendFireAndForget($"transfer:begin;{info.TotalBytes};{info.FileCount};{info.IsSender.ToString().ToLowerInvariant()};{names}");
+    }
 
     public void UpdateTotal(FileTransferInfo info) { }
 
