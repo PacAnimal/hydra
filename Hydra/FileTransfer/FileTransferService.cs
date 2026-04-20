@@ -45,6 +45,9 @@ public sealed class FileTransferService : IDisposable
     // true if we are currently sending to the given host (case 1)
     public bool IsSendingTo(string host) { lock (_lock) return _sendTargetHost != null && _sendTargetHost.EqualsIgnoreCase(host); }
 
+    // true if we are currently receiving from the given host (case 2: master is target)
+    public bool IsReceivingFrom(string host) { lock (_lock) return _receiver != null && _receiver.SourceHost.EqualsIgnoreCase(host); }
+
     // true if we are coordinating a slave→slave transfer that the given target host accepted/aborted (case 3)
     public bool IsCoordinatingTransferTo(string targetHost) { lock (_lock) return _coordTargetHost != null && _coordTargetHost.EqualsIgnoreCase(targetHost); }
 
@@ -68,7 +71,7 @@ public sealed class FileTransferService : IDisposable
             var n = msg.Paths.Length;
             return $"{n} {(n == 1 ? "item" : "items")} copied";
         }
-        return "Nothing to copy...";
+        return "0 items selected";
     }
 
     public FileCopyState? GetCopyBuffer() { lock (_lock) return _copyBuffer; }
@@ -123,9 +126,9 @@ public sealed class FileTransferService : IDisposable
     }
 
     public static bool IsFileTransferMessage(MessageKind kind) => kind is
-        MessageKind.FileTransferStart or MessageKind.FileTransferChunk or
-        MessageKind.FileTransferDone or MessageKind.FileTransferAbort or
-        MessageKind.FileTransferAccepted;
+        MessageKind.FileTransferRequest or MessageKind.FileTransferStart or
+        MessageKind.FileTransferChunk or MessageKind.FileTransferDone or
+        MessageKind.FileTransferAbort or MessageKind.FileTransferAccepted;
 
     internal static FileTransferService Null() =>
         new(new NullFileTransferDialog(), new NullDropTargetResolver(), Microsoft.Extensions.Logging.Abstractions.NullLogger<FileTransferService>.Instance);
@@ -170,7 +173,8 @@ public sealed class FileTransferService : IDisposable
     {
         switch (kind)
         {
-            case MessageKind.FileTransferStart: HandleFileTransferStart(sourceHost, json, relay); break;
+            case MessageKind.FileTransferRequest: HandleFileTransferRequest(sourceHost, json, relay); break;
+            case MessageKind.FileTransferStart: HandleFileTransferStart(sourceHost, json); break;
             case MessageKind.FileTransferChunk: await HandleFileTransferChunkAsync(sourceHost, json); break;
             case MessageKind.FileTransferDone: await HandleFileTransferDoneAsync(sourceHost, json, relay); break;
             case MessageKind.FileTransferAbort: HandleFileTransferAbort(sourceHost, json); break;
@@ -200,10 +204,10 @@ public sealed class FileTransferService : IDisposable
         }
     }
 
-    private void HandleFileTransferStart(string sourceHost, string json, IRelaySender relay)
+    private void HandleFileTransferRequest(string sourceHost, string json, IRelaySender relay)
     {
-        var msg = json.FromSaneJson<FileTransferStartMessage>();
-        if (msg == null) { _log.LogWarning("Failed to deserialize FileTransferStart from {Host}", sourceHost); return; }
+        var msg = json.FromSaneJson<FileTransferRequestMessage>();
+        if (msg == null) { _log.LogWarning("Failed to deserialize FileTransferRequest from {Host}", sourceHost); return; }
 
         var destFolder = _dropTargetResolver.GetPasteDirectory();
         if (string.IsNullOrEmpty(destFolder))
@@ -214,13 +218,29 @@ public sealed class FileTransferService : IDisposable
         }
         _log.LogInformation("Paste destination: {Dest}", destFolder);
 
-        // master includes SourceHost in the message when data will come from a different host
         var dataSourceHost = msg.SourceHost ?? sourceHost;
-        SetupReceiverInternal(dataSourceHost, msg.FileNames ?? [], msg.TotalBytes, destFolder, relay);
-
-        // acknowledge back to master (always the relay message sender in the new design)
+        SetupReceiverInternal(dataSourceHost, destFolder, relay);
         SendTo(relay, sourceHost, MessageKind.FileTransferAccepted, new FileTransferAcceptedMessage());
-        _log.LogInformation("Transfer start from {Host}: {Count} file(s), data expected from {DataSource}", sourceHost, msg.FileNames?.Length ?? 0, dataSourceHost);
+        _log.LogInformation("Transfer request from {Host}: data expected from {DataSource}", sourceHost, dataSourceHost);
+    }
+
+    private void HandleFileTransferStart(string sourceHost, string json)
+    {
+        var msg = json.FromSaneJson<FileTransferStartMessage>();
+        if (msg == null) { _log.LogWarning("Failed to deserialize FileTransferStart from {Host}", sourceHost); return; }
+
+        ReceiverTransfer? receiver;
+        lock (_lock) receiver = _receiver;
+        if (receiver == null || !receiver.SourceHost.EqualsIgnoreCase(sourceHost))
+        {
+            _log.LogWarning("FileTransferStart from unexpected host {Host} — no matching receiver", sourceHost);
+            return;
+        }
+
+        receiver.FileNames = msg.FileNames;
+        receiver.TotalBytes = msg.TotalBytes;
+        _dialog.ShowTransferring(receiver.ToTransferInfo());
+        _log.LogInformation("Transfer start from {Host}: {Count} file(s), {Total} bytes", sourceHost, msg.FileNames.Length, msg.TotalBytes);
     }
 
     private async Task HandleFileTransferChunkAsync(string sourceHost, string json)
@@ -339,7 +359,6 @@ public sealed class FileTransferService : IDisposable
     {
         var paths = copyBuffer.Paths;
         var sourceHost = copyBuffer.SourceHost;
-        var names = paths.Select(Path.GetFileName).Where(n => n != null).Cast<string>().ToArray();
 
         if (targetHost.EqualsIgnoreCase(localHost))
         {
@@ -350,7 +369,7 @@ public sealed class FileTransferService : IDisposable
                 _log.LogWarning("Paste: no valid paste destination on master");
                 return false;
             }
-            SetupReceiverInternal(sourceHost, names, 0, destFolder, relay);
+            SetupReceiverInternal(sourceHost, destFolder, relay);
             var req = new FileStreamRequestMessage(paths, localHost);
             SendTo(relay, sourceHost, MessageKind.FileStreamRequest, req);
             _log.LogInformation("Paste: master as receiver from {Source} — told source to stream", sourceHost);
@@ -359,7 +378,7 @@ public sealed class FileTransferService : IDisposable
 
         if (sourceHost.EqualsIgnoreCase(localHost))
         {
-            // case 1: master is source — send FileTransferStart to target (with sourceHost=master), await accepted, then stream
+            // case 1: master is source — send FileTransferRequest to target, await accepted, then stream
             StartSend([.. paths], targetHost, relay, localHost);
             return true;
         }
@@ -377,9 +396,8 @@ public sealed class FileTransferService : IDisposable
             _coordSourcePaths = paths;
             _coordRelay = relay;
         }
-        var start = new FileTransferStartMessage(names, SourceHost: sourceHost);
-        SendTo(relay, targetHost, MessageKind.FileTransferStart, start);
-        _log.LogInformation("Paste: sent FileTransferStart to {Target} (data from {Source})", targetHost, sourceHost);
+        SendTo(relay, targetHost, MessageKind.FileTransferRequest, new FileTransferRequestMessage(SourceHost: sourceHost));
+        _log.LogInformation("Paste: sent FileTransferRequest to {Target} (data from {Source})", targetHost, sourceHost);
         return true;
     }
 
@@ -416,6 +434,9 @@ public sealed class FileTransferService : IDisposable
 
         var startTick = Environment.TickCount64;
         _dialog.ShowTransferring(new FileTransferInfo(names, totalBytes, IsSender: true));
+
+        // inform target of what's coming before streaming
+        SendTo(relay, targetHost, MessageKind.FileTransferStart, new FileTransferStartMessage(names, totalBytes));
 
         // stream chunks directly — master already negotiated with target
         long totalSent = 0;
@@ -498,13 +519,18 @@ public sealed class FileTransferService : IDisposable
         try
         {
             var sourceHost = string.IsNullOrEmpty(localHost) ? null : localHost;
-            var startPayload = MessageSerializer.Encode(MessageKind.FileTransferStart, new FileTransferStartMessage(names, totalBytes, SourceHost: sourceHost));
-            await relay.Send([targetHost], startPayload);
+            // send request first — receiver validates its paste dir and sends Accepted before we stream
+            var requestPayload = MessageSerializer.Encode(MessageKind.FileTransferRequest, new FileTransferRequestMessage(SourceHost: sourceHost));
+            await relay.Send([targetHost], requestPayload);
 
             // wait for receiver to validate the paste destination before streaming
             TaskCompletionSource<bool>? acceptTcs;
             lock (_lock) acceptTcs = _sendAcceptTcs;
             if (acceptTcs != null) await acceptTcs.Task.WaitAsync(TimeSpan.FromMilliseconds(_watchdogTimeoutMs), cancel);
+
+            // inform receiver of what's coming before streaming
+            var startPayload = MessageSerializer.Encode(MessageKind.FileTransferStart, new FileTransferStartMessage(names, totalBytes));
+            await relay.Send([targetHost], startPayload);
 
             var sha = await TarGzStreamer.StreamAsync(paths, async (data, seq, uncompressedBytes) =>
             {
@@ -597,10 +623,10 @@ public sealed class FileTransferService : IDisposable
         _dialog.ShowError($"Transfer aborted: {reason}");
     }
 
-    // shared receiver setup for both HandleFileTransferStart (cases 1 & 3) and master-as-target (case 2)
-    private void SetupReceiverInternal(string sourceHost, string[] fileNames, long totalBytes, string destFolder, IRelaySender relay)
+    // shared receiver setup; dialog is shown later from HandleFileTransferStart when names/total are known
+    private void SetupReceiverInternal(string sourceHost, string destFolder, IRelaySender relay)
     {
-        var newReceiver = new ReceiverTransfer(sourceHost, fileNames, totalBytes, _watchdogTimeoutMs);
+        var newReceiver = new ReceiverTransfer(sourceHost, [], 0, _watchdogTimeoutMs);
         ReceiverTransfer? existing;
         lock (_lock) { existing = _receiver; _receiver = newReceiver; _recvRelay = relay; }
         if (existing != null) CleanupReceiver(existing);
@@ -627,7 +653,6 @@ public sealed class FileTransferService : IDisposable
                     AbortReceive(watchdogRelay, newReceiver, "transfer timed out");
             }, null, TimeSpan.FromMilliseconds(_watchdogTimeoutMs), TimeSpan.FromMilliseconds(_watchdogTimeoutMs));
         }
-        _dialog.ShowTransferring(newReceiver.ToTransferInfo());
     }
 
     private static void CleanupReceiver(ReceiverTransfer receiver, bool fromWatchdog = false)
@@ -676,8 +701,8 @@ public sealed class FileTransferService : IDisposable
         private long _lastChunkTick = Environment.TickCount64;
 
         public string SourceHost { get; } = sourceHost;
-        public string[] FileNames { get; } = fileNames;
-        public long TotalBytes { get; } = totalBytes;
+        public string[] FileNames { get; set; } = fileNames;
+        public long TotalBytes { get; set; } = totalBytes;
         public TarGzExtractor? Extractor { get; set; }
         public string? TempDir { get; set; }
         public string? DestFolder { get; set; }

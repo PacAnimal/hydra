@@ -99,10 +99,24 @@ public sealed class WindowsProgressDialog : IFileTransferDialog, IDisposable
         try { Marshal.ReleaseComObject(dlg); } catch { /* already released */ }
     }
 
+    public void UpdateTotal(FileTransferInfo info)
+    {
+        _totalBytes = info.TotalBytes;
+        _lastProgressTick = 0;
+        PostToSta(() =>
+        {
+            if (_dlg == null) return;
+            var verb = info.IsSender ? "Sending" : "Receiving";
+            var count = info.FileCount;
+            _dlg.SetLine(1, $"{verb} {count} {(count == 1 ? "file" : "files")} ({FormatBytes(info.TotalBytes)})", false, nint.Zero);
+            _dlg.SetProgress64(0, (ulong)info.TotalBytes);
+            _dlg.Timer(PdtimerReset, nint.Zero);
+        });
+    }
+
     public void UpdateProgress(long bytesTransferred, double bytesPerSecond)
     {
         var total = _totalBytes;
-        if (total <= 0) return;
         // throttle to avoid flooding the STA message queue
         var now = Environment.TickCount64;
         if (now - _lastProgressTick < ProgressThrottleMs) return;
@@ -112,9 +126,17 @@ public sealed class WindowsProgressDialog : IFileTransferDialog, IDisposable
             if (_dlg == null) return;
             try
             {
-                _dlg.SetProgress64((ulong)bytesTransferred, (ulong)total);
                 var speed = bytesPerSecond > 0 ? $"  ·  {FormatSpeed(bytesPerSecond)}" : "";
-                _dlg.SetLine(2, $"{FormatBytes(bytesTransferred)} / {FormatBytes(total)}{speed}", false, nint.Zero);
+                if (total > 0)
+                {
+                    _dlg.SetProgress64((ulong)bytesTransferred, (ulong)total);
+                    _dlg.SetLine(2, $"{FormatBytes(bytesTransferred)} / {FormatBytes(total)}{speed}", false, nint.Zero);
+                }
+                else
+                {
+                    // total unknown (receiving without prior FileTransferStart) — show bytes/speed only
+                    _dlg.SetLine(2, $"{FormatBytes(bytesTransferred)}{speed}", false, nint.Zero);
+                }
             }
             catch (Exception ex) when (ex is COMException or InvalidComObjectException)
             {

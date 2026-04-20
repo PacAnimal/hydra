@@ -82,30 +82,24 @@ public class FileTransferServiceTests
         return (chunks, sha, chunks.Sum(c => (long)c.data.Length));
     }
 
-    // drives a complete receive protocol (start → chunks → done) against a given service
+    // drives a complete receive protocol (request → start → chunks → done) against a given service
     private static async Task SimulateTransfer(
         FileTransferService svc, FakeRelay relay, string sourceHost, string fileName,
         List<(byte[] data, int seq)> chunks, long totalSent, byte[] sha)
     {
+        await Simulate(svc, sourceHost, MessageKind.FileTransferRequest, new FileTransferRequestMessage(), relay);
         await Simulate(svc, sourceHost, MessageKind.FileTransferStart, new FileTransferStartMessage([fileName], totalSent), relay);
         foreach (var (data, seq) in chunks)
             await Simulate(svc, sourceHost, MessageKind.FileTransferChunk, new FileTransferChunkMessage(seq, data), relay);
         await Simulate(svc, sourceHost, MessageKind.FileTransferDone, new FileTransferDoneMessage(totalSent, sha), relay);
     }
 
-    // -- FileTransferStart (receiver side) --
+    // -- FileTransferRequest (receiver negotiation) --
 
     [Test]
-    public async Task OnMessage_FileTransferStart_ShowsTransferringDialog()
+    public async Task OnMessage_FileTransferRequest_SendsAcceptedBackToSender()
     {
-        await Simulate(MessageKind.FileTransferStart, new FileTransferStartMessage(["a.txt"], 100));
-        Assert.That(_dialog.LastState, Is.EqualTo("transferring"));
-    }
-
-    [Test]
-    public async Task OnMessage_FileTransferStart_SendsAcceptedBackToSender()
-    {
-        await Simulate(MessageKind.FileTransferStart, new FileTransferStartMessage(["a.txt"], 100));
+        await Simulate(MessageKind.FileTransferRequest, new FileTransferRequestMessage());
 
         var accepted = _relay.Sent.FirstOrDefault(m => m.Kind == MessageKind.FileTransferAccepted);
         using (Assert.EnterMultipleScope())
@@ -116,11 +110,11 @@ public class FileTransferServiceTests
     }
 
     [Test]
-    public async Task OnMessage_FileTransferStart_NoPasteDir_SendsAbortWithReasonNoFolder()
+    public async Task OnMessage_FileTransferRequest_NoPasteDir_SendsAbortWithReasonNoFolder()
     {
         using var service = new FileTransferService(_dialog, new NullDropTargetResolver(), NullLogger<FileTransferService>.Instance);
 
-        await Simulate(service, "master", MessageKind.FileTransferStart, new FileTransferStartMessage(["a.txt"], 100), _relay);
+        await Simulate(service, "master", MessageKind.FileTransferRequest, new FileTransferRequestMessage(), _relay);
 
         var abort = _relay.Sent.FirstOrDefault(m => m.Kind == MessageKind.FileTransferAbort);
         using (Assert.EnterMultipleScope())
@@ -133,10 +127,10 @@ public class FileTransferServiceTests
 
     // when master sets SourceHost, only that host's data is accepted (relay sender is not the source)
     [Test]
-    public async Task OnMessage_FileTransferStart_SourceHostOverridesExpectedDataSender()
+    public async Task OnMessage_FileTransferRequest_SourceHostOverridesExpectedDataSender()
     {
-        // master sends FileTransferStart declaring data will come from "real-sender", not "master"
-        await Simulate(MessageKind.FileTransferStart, new FileTransferStartMessage(["a.txt"], 100, SourceHost: "real-sender"));
+        // master sends FileTransferRequest declaring data will come from "real-sender", not "master"
+        await Simulate(MessageKind.FileTransferRequest, new FileTransferRequestMessage(SourceHost: "real-sender"));
 
         // done from "master" (relay message sender) should be ignored — wrong data source
         await Simulate(MessageKind.FileTransferDone, new FileTransferDoneMessage(0, new byte[32]));
@@ -145,13 +139,23 @@ public class FileTransferServiceTests
         Assert.That(_service.FileTransferOngoing, Is.True);
     }
 
+    // -- FileTransferStart (receiver side — carries names/total from data source) --
+
+    [Test]
+    public async Task OnMessage_FileTransferStart_AfterRequest_ShowsTransferringDialog()
+    {
+        await Simulate(MessageKind.FileTransferRequest, new FileTransferRequestMessage());
+        await Simulate(MessageKind.FileTransferStart, new FileTransferStartMessage(["a.txt"], 100));
+        Assert.That(_dialog.LastState, Is.EqualTo("transferring"));
+    }
+
     // -- FileTransferChunk (receiver side) --
 
     [Test]
     public async Task OnMessage_FileTransferChunk_FromWrongHost_IsDropped()
     {
         // sets up receiver expecting chunks from "master"
-        await Simulate(MessageKind.FileTransferStart, new FileTransferStartMessage(["a.txt"], 100));
+        await Simulate(MessageKind.FileTransferRequest, new FileTransferRequestMessage());
 
         // chunk and done from a different host — both dropped
         await Simulate("wrong-host", MessageKind.FileTransferChunk, new FileTransferChunkMessage(0, [1, 2, 3]));
@@ -166,7 +170,7 @@ public class FileTransferServiceTests
     [Test]
     public async Task OnMessage_FileTransferAbort_DuringReceive_ShowsError()
     {
-        await Simulate(MessageKind.FileTransferStart, new FileTransferStartMessage(["a.txt"], 100));
+        await Simulate(MessageKind.FileTransferRequest, new FileTransferRequestMessage());
         await Simulate(MessageKind.FileTransferAbort, new FileTransferAbortMessage("disk full"));
 
         using (Assert.EnterMultipleScope())
@@ -196,7 +200,7 @@ public class FileTransferServiceTests
     [Test]
     public async Task OnMessage_FileTransferAbort_FromUnknownHost_IsIgnored()
     {
-        await Simulate(MessageKind.FileTransferStart, new FileTransferStartMessage(["a.txt"], 100));
+        await Simulate(MessageKind.FileTransferRequest, new FileTransferRequestMessage());
         var stateBefore = _dialog.LastState;
 
         await Simulate("unknown-host", MessageKind.FileTransferAbort, new FileTransferAbortMessage("whatever"));
@@ -224,7 +228,7 @@ public class FileTransferServiceTests
     [Test]
     public async Task CancelRequested_DuringReceive_SendsAbortAndClosesDialog()
     {
-        await Simulate(MessageKind.FileTransferStart, new FileTransferStartMessage(["a.txt"], 100));
+        await Simulate(MessageKind.FileTransferRequest, new FileTransferRequestMessage());
         _relay.Sent.Clear();
 
         _dialog.TriggerCancel();
@@ -258,7 +262,7 @@ public class FileTransferServiceTests
     [Test]
     public async Task Abort_DuringReceive_SendsAbortAndClosesDialog()
     {
-        await Simulate(MessageKind.FileTransferStart, new FileTransferStartMessage(["a.txt"], 100));
+        await Simulate(MessageKind.FileTransferRequest, new FileTransferRequestMessage());
         _relay.Sent.Clear();
 
         _service.Abort(_relay, "peer disconnected");
@@ -299,7 +303,7 @@ public class FileTransferServiceTests
     [Test]
     public async Task FileTransferOngoing_TrueWhileReceiving()
     {
-        await Simulate(MessageKind.FileTransferStart, new FileTransferStartMessage(["a.txt"], 100));
+        await Simulate(MessageKind.FileTransferRequest, new FileTransferRequestMessage());
         Assert.That(_service.FileTransferOngoing, Is.True);
     }
 
@@ -314,7 +318,7 @@ public class FileTransferServiceTests
     [Test]
     public async Task FileTransferOngoing_FalseAfterAbort()
     {
-        await Simulate(MessageKind.FileTransferStart, new FileTransferStartMessage(["a.txt"], 100));
+        await Simulate(MessageKind.FileTransferRequest, new FileTransferRequestMessage());
         _service.Abort(_relay, "test");
         Assert.That(_service.FileTransferOngoing, Is.False);
     }
@@ -386,14 +390,14 @@ public class FileTransferServiceTests
     }
 
     [Test]
-    public void InitiatePaste_SlaveToSlave_SendsFileTransferStartWithSourceHostToTarget()
+    public void InitiatePaste_SlaveToSlave_SendsFileTransferRequestWithSourceHostToTarget()
     {
         var copyBuffer = new FileTransferService.FileCopyState("source-slave", ["/remote/file.txt"]);
 
         _service.InitiatePaste(copyBuffer, "target-slave", "local-host", _relay);
 
-        var (targets, _, json) = _relay.Sent.FirstOrDefault(m => m.Kind == MessageKind.FileTransferStart);
-        var msg = json.FromSaneJson<FileTransferStartMessage>();
+        var (targets, _, json) = _relay.Sent.FirstOrDefault(m => m.Kind == MessageKind.FileTransferRequest);
+        var msg = json.FromSaneJson<FileTransferRequestMessage>();
         using (Assert.EnterMultipleScope())
         {
             Assert.That(targets, Contains.Item("target-slave"));
@@ -436,28 +440,35 @@ public class FileTransferServiceTests
     // -- StartSend --
 
     [Test]
-    public async Task StartSend_IncludesLocalHostAsSourceHostInStartMessage()
+    public async Task StartSend_IncludesLocalHostAsSourceHostInRequestMessage()
     {
-        // StartSend runs StreamAsync on Task.Run — poll until it produces FileTransferStart
+        // StartSend runs StreamAsync on Task.Run — poll until it produces FileTransferRequest
         _service.StartSend([CreateTempFile()], "slave", _relay, "my-machine");
-        await WaitForMessage(_relay, MessageKind.FileTransferStart);
+        await WaitForMessage(_relay, MessageKind.FileTransferRequest);
 
-        var (_, _, json) = _relay.Sent.FirstOrDefault(m => m.Kind == MessageKind.FileTransferStart);
-        var msg = json.FromSaneJson<FileTransferStartMessage>();
+        var (_, _, json) = _relay.Sent.FirstOrDefault(m => m.Kind == MessageKind.FileTransferRequest);
+        var msg = json.FromSaneJson<FileTransferRequestMessage>();
         Assert.That(msg?.SourceHost, Is.EqualTo("my-machine"));
     }
 
     // -- StreamToHost (slave-side) --
 
     [Test]
-    public async Task StreamToHost_DoesNotSendFileTransferStart()
+    public async Task StreamToHost_SendsFileTransferStartWithTotalBeforeChunks()
     {
-        // master already negotiated with target; slave just streams chunks directly
+        // slave informs target of total size before streaming so target can show accurate progress
         await _service.StreamToHost([CreateTempFile()], "target", _relay);
 
+        var startIdx = _relay.Sent.FindIndex(m => m.Kind == MessageKind.FileTransferStart);
+        var firstChunkIdx = _relay.Sent.FindIndex(m => m.Kind == MessageKind.FileTransferChunk);
+        var (_, _, json) = _relay.Sent.FirstOrDefault(m => m.Kind == MessageKind.FileTransferStart);
+        var msg = json.FromSaneJson<FileTransferStartMessage>();
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(_relay.Sent.Any(m => m.Kind == MessageKind.FileTransferStart), Is.False);
+            Assert.That(startIdx, Is.GreaterThanOrEqualTo(0), "FileTransferStart was not sent");
+            Assert.That(firstChunkIdx, Is.GreaterThan(startIdx), "FileTransferStart must arrive before first chunk");
+            Assert.That(msg?.TotalBytes, Is.GreaterThan(0), "TotalBytes must be set");
+            Assert.That(msg?.FileNames, Is.Not.Empty, "FileNames must be set");
             Assert.That(_relay.Sent.Any(m => m.Kind == MessageKind.FileTransferDone), Is.True);
         }
     }
@@ -506,6 +517,7 @@ public class FileTransferServiceTests
     public async Task Watchdog_NoChunksAfterStart_AbortsReceive()
     {
         using var service = FastTimeoutService();
+        await Simulate(service, "master", MessageKind.FileTransferRequest, new FileTransferRequestMessage(), _relay);
         await Simulate(service, "master", MessageKind.FileTransferStart, new FileTransferStartMessage(["a.txt"], 100), _relay);
 
         await WaitForDialogNotTransferring(_dialog);
@@ -596,7 +608,7 @@ public class FileTransferServiceTests
     [Test]
     public async Task Dispose_DuringReceive_CleansUp()
     {
-        await Simulate(MessageKind.FileTransferStart, new FileTransferStartMessage(["a.txt"], 100));
+        await Simulate(MessageKind.FileTransferRequest, new FileTransferRequestMessage());
         _service.Dispose();
 
         using (Assert.EnterMultipleScope())
@@ -633,6 +645,7 @@ internal sealed class FakeFileTransferDialog : IFileTransferDialog
 
     public void ShowPending(FileTransferInfo info) => LastState = "pending";
     public void ShowTransferring(FileTransferInfo info) => LastState = "transferring";
+    public void UpdateTotal(FileTransferInfo info) { }
     public void UpdateProgress(long bytesTransferred, double bytesPerSecond) { }
     public void ShowCompleted() => LastState = "completed";
     public void ShowError(string message) { LastState = "error"; LastError = message; }

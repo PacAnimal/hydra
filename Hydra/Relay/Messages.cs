@@ -23,11 +23,12 @@ public enum MessageKind : byte
     ClipboardPush = 12,         // master → slave: apply this clipboard (text/image/files)
     ClipboardPull = 13,         // master → slave: send me your clipboard
     ClipboardPullResponse = 14, // slave → master: here's my clipboard
-    FileTransferStart = 17,     // sender → receiver: transfer beginning
-    FileTransferChunk = 18,     // sender → receiver: chunk of tar.gz data
-    FileTransferDone = 19,      // sender → receiver: all data sent
+    FileTransferRequest = 17,   // master → receiver: can you receive? (SourceHost = actual data sender if different)
+    FileTransferStart = 26,     // data source → receiver: here's what's coming (FileNames + TotalBytes)
+    FileTransferChunk = 18,     // data source → receiver: chunk of tar.gz data
+    FileTransferDone = 19,      // data source → receiver: all data sent
     FileTransferAbort = 20,     // either → either: abort and clean up
-    FileTransferAccepted = 25,  // receiver → sender: destination validated, ready to receive chunks
+    FileTransferAccepted = 25,  // receiver → master: destination validated, ready to receive
     FileSelectionQuery = 21,    // master → slave: what files are selected?
     FileSelectionResponse = 22, // slave → master: here are the selected files
     FileStreamRequest = 23,     // master → source slave: stream these files to target
@@ -54,7 +55,8 @@ public record ClipboardPullMessage;
 public record ClipboardPushMessage(string Text, string? PrimaryText = null, byte[]? ImagePng = null);
 public record ClipboardPullResponseMessage(string? Text, string? PrimaryText = null, byte[]? ImagePng = null);
 
-public record FileTransferStartMessage(string[]? FileNames = null, long TotalBytes = 0, string? SourceHost = null);
+public record FileTransferRequestMessage(string? SourceHost = null);
+public record FileTransferStartMessage(string[] FileNames, long TotalBytes);
 public record FileTransferChunkMessage(int Sequence, byte[] Data);
 public record FileTransferDoneMessage(long TotalBytesSent, byte[] Sha256);
 public record FileTransferAbortMessage(string Reason);

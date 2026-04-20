@@ -13,6 +13,9 @@ public interface IFileTransferDialog
     // switch to active transfer state
     void ShowTransferring(FileTransferInfo info);
 
+    // update the total bytes once known (called when FileTransferStart arrives after ShowTransferring with totalBytes=0)
+    void UpdateTotal(FileTransferInfo info);
+
     // update progress bar and speed label
     void UpdateProgress(long bytesTransferred, double bytesPerSecond);
 
@@ -33,6 +36,7 @@ public sealed class NullFileTransferDialog : IFileTransferDialog
 {
     public void ShowPending(FileTransferInfo info) { }
     public void ShowTransferring(FileTransferInfo info) { }
+    public void UpdateTotal(FileTransferInfo info) { }
     public void UpdateProgress(long bytesTransferred, double bytesPerSecond) { }
     public void ShowCompleted() { }
     public void ShowError(string message) { }

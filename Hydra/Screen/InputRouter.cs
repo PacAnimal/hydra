@@ -442,6 +442,7 @@ public class InputRouter(
                 {
                     var wasSendingTo = _fileTransfer.IsSendingTo(sourceHost);
                     var wasCoordinating = _fileTransfer.IsCoordinatingTransferTo(sourceHost);
+                    var wasReceivingFrom = _fileTransfer.IsReceivingFrom(sourceHost);
                     // send OSD before OnMessageAsync so it arrives before chunk data starts flowing
                     if (wasSendingTo || wasCoordinating)
                     {
@@ -455,6 +456,9 @@ public class InputRouter(
                         }
                     }
                     await _fileTransfer.OnMessageAsync(sourceHost, kind, json, relay);
+                    // when master is the receiver (slave→master), show local OSD on successful completion
+                    if (wasReceivingFrom && kind == MessageKind.FileTransferDone)
+                        osd.Show("Pasted!");
                     break;
                 }
             default:
