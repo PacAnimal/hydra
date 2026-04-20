@@ -9,11 +9,9 @@ namespace Hydra.Platform.MacOs;
 // returns the front Finder window's folder, or the Desktop if Finder is active but no folder window is open.
 // returns null (→ error) if a non-Finder app is frontmost.
 [SupportedOSPlatform("macos")]
-public sealed class MacDropTargetResolver : IDropTargetResolver
+public sealed class MacDropTargetResolver(ILogger<MacDropTargetResolver> log) : IDropTargetResolver
 {
-    private readonly ILogger<MacDropTargetResolver> _log;
-
-    public MacDropTargetResolver(ILogger<MacDropTargetResolver> log) => _log = log;
+    private readonly ILogger<MacDropTargetResolver> _log = log;
 
     public string? GetPasteDirectory()
     {

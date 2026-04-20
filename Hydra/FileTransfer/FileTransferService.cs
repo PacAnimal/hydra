@@ -24,7 +24,8 @@ public sealed class FileTransferService : IDisposable
     private CancellationTokenSource? _sendCts;
     private string? _sendTargetHost;
     private IRelaySender? _sendRelay;
-    private Action<string>? _pasteOsd;  // one-shot OSD callback fired when paste outcome is known
+    private Action<string>? _pasteOsd;       // one-shot OSD callback fired when paste outcome is known
+    private TaskCompletionSource<bool>? _sendAcceptTcs;  // completed when receiver sends FileTransferAccepted
 
     // receiver side
     private ReceiverTransfer? _receiver;
@@ -85,6 +86,7 @@ public sealed class FileTransferService : IDisposable
             cts = _sendCts; _sendCts = null;
             targetHost = _sendTargetHost; _sendTargetHost = null;
             sendRelay = _sendRelay; _sendRelay = null;
+            _sendAcceptTcs = null;  // cancel token propagates to WaitAsync; clear for cleanup
         }
         if (cts == null) return false;
         cts.Cancel();
@@ -149,7 +151,14 @@ public sealed class FileTransferService : IDisposable
             case MessageKind.FileTransferChunk: await HandleFileTransferChunkAsync(sourceHost, json); break;
             case MessageKind.FileTransferDone: await HandleFileTransferDoneAsync(sourceHost, json, relay); break;
             case MessageKind.FileTransferAbort: HandleFileTransferAbort(sourceHost, json); break;
-            case MessageKind.FileTransferAccepted: FirePasteOsd("Pasted!"); break;
+            case MessageKind.FileTransferAccepted:
+                {
+                    TaskCompletionSource<bool>? tcs;
+                    lock (_lock) { tcs = _sendAcceptTcs; _sendAcceptTcs = null; }
+                    tcs?.TrySetResult(true);
+                    FirePasteOsd("Pasted!");
+                    break;
+                }
         }
     }
 
@@ -378,6 +387,7 @@ public sealed class FileTransferService : IDisposable
             _sendCts = cts;
             _sendTargetHost = targetHost;
             _sendRelay = relay;
+            _sendAcceptTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         }
 
         long totalBytes;
@@ -408,6 +418,11 @@ public sealed class FileTransferService : IDisposable
             var startPayload = MessageSerializer.Encode(MessageKind.FileTransferStart, new FileTransferStartMessage(names, totalBytes));
             await relay.Send([targetHost], startPayload);
 
+            // wait for receiver to validate the paste destination before streaming
+            TaskCompletionSource<bool>? acceptTcs;
+            lock (_lock) acceptTcs = _sendAcceptTcs;
+            if (acceptTcs != null) await acceptTcs.Task.WaitAsync(TimeSpan.FromMilliseconds(_watchdogTimeoutMs), cancel);
+
             var sha = await TarGzStreamer.StreamAsync(paths, async (data, seq, uncompressedBytes) =>
             {
                 cancel.ThrowIfCancellationRequested();
@@ -429,6 +444,12 @@ public sealed class FileTransferService : IDisposable
             _log.LogInformation("Transfer cancelled");
             _dialog.Close();
         }
+        catch (TimeoutException)
+        {
+            _log.LogWarning("Transfer timed out waiting for {Target} to respond", targetHost);
+            SendTo(relay, targetHost, MessageKind.FileTransferAbort, new FileTransferAbortMessage("transfer timed out"));
+            _dialog.ShowError("Transfer failed: destination did not respond");
+        }
         catch (Exception ex)
         {
             _log.LogWarning(ex, "Transfer failed");
@@ -443,7 +464,8 @@ public sealed class FileTransferService : IDisposable
                 _sendCts = null;
                 _sendTargetHost = null;
                 _sendRelay = null;
-                _pasteOsd = null;  // clear if not already fired (e.g. unexpected exception)
+                _pasteOsd = null;       // clear if not already fired (e.g. unexpected exception)
+                _sendAcceptTcs = null;  // clear if not already resolved/cancelled
             }
         }
     }

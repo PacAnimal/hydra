@@ -294,6 +294,32 @@ public class FileTransferServiceTests
         }
     }
 
+    // -- accept timeout --
+
+    [Test]
+    public async Task Send_NoAcceptedResponseWithinTimeout_ShowsError()
+    {
+        var file = Path.Combine(_tempRoot, "a.txt");
+        File.WriteAllText(file, "hi");
+
+        // use a non-accepting relay so FileTransferAccepted never arrives
+        using var service = new FileTransferService(
+            _dialog, new FakeDropTargetResolver(_tempRoot),
+            NullLogger<FileTransferService>.Instance, watchdogTimeoutMs: 100);
+        service.StartSend([file], "slave", _relay);
+
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (_dialog.LastState == "transferring" && DateTime.UtcNow < deadline)
+            await Task.Delay(20);
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(_dialog.LastState, Is.EqualTo("error"));
+            Assert.That(service.FileTransferOngoing, Is.False);
+            Assert.That(_relay.Sent.Any(m => m.Kind == MessageKind.FileTransferAbort), Is.True);
+        }
+    }
+
     // -- copy buffer --
 
     [Test]
