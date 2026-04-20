@@ -76,9 +76,11 @@ public sealed class FileTransferService : IDisposable
         }
     }
 
-    // swaps out _sendCts under lock, cancels and disposes it; also clears host/relay fields.
+    // swaps out _sendCts under lock, cancels and disposes it; also clears host/relay/osd fields.
+    // pasteOsd receives the pending OSD callback (if any) — caller decides whether to fire or discard.
+    // _pasteOsd is cleared BEFORE cts.Cancel() so StreamAsync's finally can't race-null it first.
     // returns true if there was an active send to cancel.
-    private bool TryCancelSend(out string? targetHost, out IRelaySender? sendRelay)
+    private bool TryCancelSend(out string? targetHost, out IRelaySender? sendRelay, out Action<string>? pasteOsd)
     {
         CancellationTokenSource? cts;
         lock (_lock)
@@ -86,7 +88,8 @@ public sealed class FileTransferService : IDisposable
             cts = _sendCts; _sendCts = null;
             targetHost = _sendTargetHost; _sendTargetHost = null;
             sendRelay = _sendRelay; _sendRelay = null;
-            _sendAcceptTcs = null;  // cancel token propagates to WaitAsync; clear for cleanup
+            _sendAcceptTcs = null;
+            pasteOsd = _pasteOsd; _pasteOsd = null;  // take ownership before Cancel() races with StreamAsync finally
         }
         if (cts == null) return false;
         cts.Cancel();
@@ -101,8 +104,6 @@ public sealed class FileTransferService : IDisposable
         lock (_lock) { osd = _pasteOsd; _pasteOsd = null; }
         osd?.Invoke(message);
     }
-
-    private void ClearPasteOsd() { lock (_lock) _pasteOsd = null; }
 
     public static bool IsFileTransferMessage(MessageKind kind) => kind is
         MessageKind.FileTransferStart or MessageKind.FileTransferChunk or
@@ -126,7 +127,7 @@ public sealed class FileTransferService : IDisposable
     public void Abort(IRelaySender? relay, string reason)
     {
         TryClearReceiver(out ReceiverTransfer? receiver, out IRelaySender? recvRelay);
-        TryCancelSend(out var sendTargetHost, out var sendRelay);
+        TryCancelSend(out var sendTargetHost, out var sendRelay, out _);
 
         var effectiveSendRelay = relay ?? sendRelay;
         if (effectiveSendRelay != null && sendTargetHost != null)
@@ -266,12 +267,10 @@ public sealed class FileTransferService : IDisposable
         }
 
         // cancel active send if we're the sender (receiver cancelled)
-        if (TryCancelSend(out _, out _))
+        if (TryCancelSend(out _, out _, out var pasteOsd))
         {
             if (msg?.Reason == "no folder to paste into")
-                FirePasteOsd("Invalid paste target");
-            else
-                ClearPasteOsd();
+                pasteOsd?.Invoke("Invalid paste target");
             _log.LogInformation("Transfer send cancelled by {Host}: {Reason}", sourceHost, msg?.Reason);
             _dialog.Close();
             return;
@@ -289,9 +288,8 @@ public sealed class FileTransferService : IDisposable
     private void HandleCancelRequested()
     {
         // try aborting an active send first
-        if (TryCancelSend(out var targetHost, out var relay))
+        if (TryCancelSend(out var targetHost, out var relay, out _))
         {
-            ClearPasteOsd();
             if (targetHost != null && relay != null)
                 SendTo(relay, targetHost, MessageKind.FileTransferAbort, new FileTransferAbortMessage("user cancelled"));
             _dialog.Close();
@@ -365,7 +363,7 @@ public sealed class FileTransferService : IDisposable
         }
         catch (Exception ex)
         {
-            TryCancelSend(out _, out _);
+            TryCancelSend(out _, out _, out _);
             SendTo(relay, targetHost, MessageKind.FileTransferAbort, new FileTransferAbortMessage(ex.Message));
             _dialog.ShowError($"Transfer failed: {ex.Message}");
             _log.LogWarning(ex, "StreamToHost pre-stream setup failed");
@@ -399,7 +397,7 @@ public sealed class FileTransferService : IDisposable
         }
         catch (Exception ex)
         {
-            TryCancelSend(out _, out _);
+            TryCancelSend(out _, out _, out _);
             _log.LogWarning(ex, "StartSend pre-stream setup failed");
             _dialog.ShowError($"Transfer failed: {ex.Message}");
             return;
