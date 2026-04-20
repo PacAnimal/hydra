@@ -450,7 +450,7 @@ public sealed class FileTransferService : IDisposable
                 totalSent += data.Length;
                 _dialog.UpdateProgress(uncompressedBytes, CalcSpeed(startTick, totalSent));
                 _log.LogDebug("Sent chunk #{Seq}: {Bytes} bytes", seq, data.Length);
-            }, cts.Token);
+            }, _dialog.SetCurrentFile, cts.Token);
 
             var donePayload = MessageSerializer.Encode(MessageKind.FileTransferDone, new FileTransferDoneMessage(totalSent, sha));
             await relay.Send([targetHost], donePayload);
@@ -541,7 +541,7 @@ public sealed class FileTransferService : IDisposable
                 var speed = CalcSpeed(startTick, totalSent);
                 _dialog.UpdateProgress(uncompressedBytes, speed);
                 _log.LogDebug("Sent chunk #{Seq}: {Bytes} bytes", seq, data.Length);
-            }, cancel);
+            }, _dialog.SetCurrentFile, cancel);
 
             var donePayload = MessageSerializer.Encode(MessageKind.FileTransferDone, new FileTransferDoneMessage(totalSent, sha));
             await relay.Send([targetHost], donePayload);
@@ -635,7 +635,7 @@ public sealed class FileTransferService : IDisposable
         var cts = newReceiver.Cts;
         cts.Token.Register(() => CleanupTempDir(tempDir));
 
-        var extractor = new TarGzExtractor(tempDir, cts.Token);
+        var extractor = new TarGzExtractor(tempDir, _dialog.SetCurrentFile, cts.Token);
         lock (_lock)
         {
             if (_receiver != newReceiver) { extractor.Dispose(); return; }

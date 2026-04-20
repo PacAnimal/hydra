@@ -9,6 +9,7 @@ namespace Tests.FileTransfer;
 [TestFixture]
 public class FileTransferServiceTests
 {
+    private static readonly Action<string> NoFileStart = _ => { };
     private FakeFileTransferDialog _dialog = null!;
     private FakeRelay _relay = null!;
     private FileTransferService _service = null!;
@@ -78,7 +79,7 @@ public class FileTransferServiceTests
         var chunks = new List<(byte[] data, int seq)>();
         var sha = await TarGzStreamer.StreamAsync([path],
             (data, seq, _) => { chunks.Add((data, seq)); return Task.CompletedTask; },
-            CancellationToken.None);
+            NoFileStart, CancellationToken.None);
         return (chunks, sha, chunks.Sum(c => (long)c.data.Length));
     }
 
@@ -646,6 +647,7 @@ internal sealed class FakeFileTransferDialog : IFileTransferDialog
     public void ShowPending(FileTransferInfo info) => LastState = "pending";
     public void ShowTransferring(FileTransferInfo info) => LastState = "transferring";
     public void UpdateTotal(FileTransferInfo info) { }
+    public void SetCurrentFile(string fileName) { }
     public void UpdateProgress(long bytesTransferred, double bytesPerSecond) { }
     public void ShowCompleted() => LastState = "completed";
     public void ShowError(string message) { LastState = "error"; LastError = message; }

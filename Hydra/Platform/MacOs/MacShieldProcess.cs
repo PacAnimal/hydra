@@ -93,6 +93,8 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
 
     public void UpdateTotal(FileTransferInfo info) { }
 
+    public void SetCurrentFile(string fileName) => _ = SendFireAndForget($"transfer:file:{Base64(fileName)}");
+
     public void UpdateProgress(long bytesTransferred, double bytesPerSecond)
         => _ = SendFireAndForget($"transfer:progress:{bytesTransferred}:{bytesPerSecond:F0}");
 

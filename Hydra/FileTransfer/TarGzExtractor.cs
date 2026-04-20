@@ -14,6 +14,7 @@ public sealed class TarGzExtractor : IDisposable
     private const int ExtractTaskDisposalWaitMs = 2000; // how long to wait for extract loop to exit before disposing _sha
 
     private readonly string _tempDir;
+    private readonly Action<string> _onFileStart;
     private readonly Pipe _pipe = new();
     private readonly Task _extractTask;
     private readonly IncrementalHash _sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
@@ -27,9 +28,10 @@ public sealed class TarGzExtractor : IDisposable
     // uncompressed bytes written to disk — use this for progress display
     public long BytesExtracted => Interlocked.Read(ref _bytesExtracted);
 
-    public TarGzExtractor(string tempDir, CancellationToken cancel)
+    public TarGzExtractor(string tempDir, Action<string> onFileStart, CancellationToken cancel)
     {
         _tempDir = tempDir;
+        _onFileStart = onFileStart;
         Directory.CreateDirectory(tempDir);
         _extractTask = ExtractLoopAsync(cancel);
     }
@@ -86,6 +88,7 @@ public sealed class TarGzExtractor : IDisposable
                     case TarEntryType.RegularFile:
                     case TarEntryType.V7RegularFile:
                         Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
+                        _onFileStart(Path.GetFileName(destPath));
                         await ExtractFileEntryAsync(destPath, entry.DataStream, buf, cancel);
                         break;
                     case TarEntryType.SymbolicLink:

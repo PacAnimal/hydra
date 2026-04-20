@@ -16,6 +16,9 @@ public interface IFileTransferDialog
     // update the total bytes once known (called when FileTransferStart arrives after ShowTransferring with totalBytes=0)
     void UpdateTotal(FileTransferInfo info);
 
+    // update the name of the file currently being compressed or extracted
+    void SetCurrentFile(string fileName);
+
     // update progress bar and speed label
     void UpdateProgress(long bytesTransferred, double bytesPerSecond);
 
@@ -37,6 +40,7 @@ public sealed class NullFileTransferDialog : IFileTransferDialog
     public void ShowPending(FileTransferInfo info) { }
     public void ShowTransferring(FileTransferInfo info) { }
     public void UpdateTotal(FileTransferInfo info) { }
+    public void SetCurrentFile(string fileName) { }
     public void UpdateProgress(long bytesTransferred, double bytesPerSecond) { }
     public void ShowCompleted() { }
     public void ShowError(string message) { }

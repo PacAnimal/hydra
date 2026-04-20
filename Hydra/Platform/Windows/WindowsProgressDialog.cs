@@ -76,12 +76,10 @@ public sealed class WindowsProgressDialog : IFileTransferDialog, IDisposable
         {
             // ReSharper disable once SuspiciousTypeConversion.Global
             var dlg = (IProgressDialog)new ProgressDialogCom();
-            var verb = info.IsSender ? "Sending" : "Receiving";
-            var count = info.FileCount;
             dlg.StartProgressDialog(nint.Zero, null, ProgdlgAutotime | ProgdlgNominimize, nint.Zero);
             dlg.SetTitle("Hydra File Transfer");
-            dlg.SetLine(1, $"{verb} {count} {(count == 1 ? "file" : "files")} ({FormatBytes(info.TotalBytes)})", false, nint.Zero);
-            dlg.SetLine(2, BuildFileNames(info.FileNames), false, nint.Zero);
+            dlg.SetLine(1, BuildFileNames(info.FileNames), false, nint.Zero);
+            dlg.SetLine(2, "", false, nint.Zero);
             dlg.SetProgress64(0, (ulong)info.TotalBytes);
             dlg.Timer(PdtimerReset, nint.Zero);
             _dlg = dlg;
@@ -106,11 +104,18 @@ public sealed class WindowsProgressDialog : IFileTransferDialog, IDisposable
         PostToSta(() =>
         {
             if (_dlg == null) return;
-            var verb = info.IsSender ? "Sending" : "Receiving";
-            var count = info.FileCount;
-            _dlg.SetLine(1, $"{verb} {count} {(count == 1 ? "file" : "files")} ({FormatBytes(info.TotalBytes)})", false, nint.Zero);
+            _dlg.SetLine(1, BuildFileNames(info.FileNames), false, nint.Zero);
             _dlg.SetProgress64(0, (ulong)info.TotalBytes);
             _dlg.Timer(PdtimerReset, nint.Zero);
+        });
+    }
+
+    public void SetCurrentFile(string fileName)
+    {
+        PostToSta(() =>
+        {
+            if (_dlg == null) return;
+            _dlg.SetLine(1, fileName, false, nint.Zero);
         });
     }
 
