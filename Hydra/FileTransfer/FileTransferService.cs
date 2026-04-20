@@ -24,6 +24,7 @@ public sealed class FileTransferService : IDisposable
     private CancellationTokenSource? _sendCts;
     private string? _sendTargetHost;
     private IRelaySender? _sendRelay;
+    private Action<string>? _pasteOsd;  // one-shot OSD callback fired when paste outcome is known
 
     // receiver side
     private ReceiverTransfer? _receiver;
@@ -90,6 +91,16 @@ public sealed class FileTransferService : IDisposable
         cts.Dispose();
         return true;
     }
+
+    // fires _pasteOsd with message (if set) then clears it — safe to call from any thread
+    private void FirePasteOsd(string message)
+    {
+        Action<string>? osd;
+        lock (_lock) { osd = _pasteOsd; _pasteOsd = null; }
+        osd?.Invoke(message);
+    }
+
+    private void ClearPasteOsd() { lock (_lock) _pasteOsd = null; }
 
     public static bool IsFileTransferMessage(MessageKind kind) => kind is
         MessageKind.FileTransferStart or MessageKind.FileTransferChunk or
@@ -244,6 +255,10 @@ public sealed class FileTransferService : IDisposable
         // cancel active send if we're the sender (receiver cancelled)
         if (TryCancelSend(out _, out _))
         {
+            if (msg?.Reason == "no folder to paste into")
+                FirePasteOsd("Invalid paste target");
+            else
+                ClearPasteOsd();
             _log.LogInformation("Transfer send cancelled by {Host}: {Reason}", sourceHost, msg?.Reason);
             _dialog.Close();
             return;
@@ -263,6 +278,7 @@ public sealed class FileTransferService : IDisposable
         // try aborting an active send first
         if (TryCancelSend(out var targetHost, out var relay))
         {
+            ClearPasteOsd();
             if (targetHost != null && relay != null)
                 SendTo(relay, targetHost, MessageKind.FileTransferAbort, new FileTransferAbortMessage("user cancelled"));
             _dialog.Close();
@@ -290,17 +306,22 @@ public sealed class FileTransferService : IDisposable
 
     // orchestrates a paste: source→target file transfer, handling all three host-topology cases.
     // localHost is the name of the local (master) machine.
-    public void InitiatePaste(FileCopyState copyBuffer, string targetHost, string localHost, IRelaySender relay)
+    // osd, if provided, is called exactly once with "Pasted!" on success or "Invalid paste target" on rejection.
+    public void InitiatePaste(FileCopyState copyBuffer, string targetHost, string localHost, IRelaySender relay, Action<string>? osd = null)
     {
+        lock (_lock) _pasteOsd = osd;
+
         var paths = copyBuffer.Paths.ToList();
         if (string.Equals(copyBuffer.SourceHost, localHost, StringComparison.OrdinalIgnoreCase))
         {
-            // case 1: source is local master → stream directly to target
+            // case 1: source is local master → stream directly to target; OSD fired on first chunk or abort
             StartSend(paths, targetHost, relay);
         }
         else
         {
-            // cases 2 & 3: source is a remote slave → tell it to stream to targetHost
+            // cases 2 & 3: source is a remote slave → tell it to stream to targetHost.
+            // no feedback path to master on target rejection, so fire "Pasted!" optimistically now.
+            FirePasteOsd("Pasted!");
             var req = new FileStreamRequestMessage(copyBuffer.Paths, targetHost);
             SendTo(relay, copyBuffer.SourceHost, MessageKind.FileStreamRequest, req);
             _log.LogInformation("Paste: requested {SourceHost} to stream {Count} file(s) → {TargetHost}",
@@ -386,6 +407,7 @@ public sealed class FileTransferService : IDisposable
             var sha = await TarGzStreamer.StreamAsync(paths, async (data, seq, uncompressedBytes) =>
             {
                 cancel.ThrowIfCancellationRequested();
+                if (seq == 0) FirePasteOsd("Pasted!");  // slave accepted — abort would have cancelled us by now
                 var chunkPayload = MessageSerializer.Encode(MessageKind.FileTransferChunk, new FileTransferChunkMessage(seq, data));
                 await relay.Send([targetHost], chunkPayload);
                 totalSent += data.Length;
@@ -418,6 +440,7 @@ public sealed class FileTransferService : IDisposable
                 _sendCts = null;
                 _sendTargetHost = null;
                 _sendRelay = null;
+                _pasteOsd = null;  // clear if not already fired (e.g. unexpected exception)
             }
         }
     }

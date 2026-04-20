@@ -675,8 +675,8 @@ public class InputRouter(
                     else
                     {
                         log.LogInformation("Paste hotkey: {Count} file(s) from {Source} → {Target}", copyBuffer.Paths.Length, copyBuffer.SourceHost, targetHost);
-                        _fileTransfer.InitiatePaste(copyBuffer, targetHost, profile.Name, relay);
-                        ShowOsd(st, "Pasted!");
+                        var capturedSt = st;
+                        _fileTransfer.InitiatePaste(copyBuffer, targetHost, profile.Name, relay, msg => ShowOsd(capturedSt, msg));
                     }
                 }
                 else

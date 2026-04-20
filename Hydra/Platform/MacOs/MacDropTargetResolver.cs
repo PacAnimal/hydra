@@ -1,32 +1,25 @@
+using System.Diagnostics;
+using System.Runtime.Versioning;
 using Hydra.FileTransfer;
 using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform.MacOs;
 
-// resolves the paste destination by querying the frontmost application's focused Finder window
-// via the Accessibility API — not the element under the cursor.
-// requires Hydra to have Accessibility permission (already needed for input capture).
+// resolves the paste destination by querying Finder via osascript — same approach as MacFileSelectionDetector.
+// returns the front Finder window's folder, or the Desktop if Finder is active but no folder window is open.
+// returns null (→ error) if a non-Finder app is frontmost.
+[SupportedOSPlatform("macos")]
 public sealed class MacDropTargetResolver : IDropTargetResolver
 {
     private readonly ILogger<MacDropTargetResolver> _log;
 
-    // cached CFStrings for frequently-queried AX attributes
-    private static readonly nint CfAxFocusedWindow = NativeMethods.MakeNsString("AXFocusedWindow");
-    private static readonly nint CfAxDocument = NativeMethods.MakeNsString("AXDocument");
-
-    public MacDropTargetResolver(ILogger<MacDropTargetResolver> log)
-    {
-        _log = log;
-        NativeMethods.EnsureAppKitLoaded();
-        NativeMethods.EnsureApplicationServicesLoaded();
-    }
+    public MacDropTargetResolver(ILogger<MacDropTargetResolver> log) => _log = log;
 
     public string? GetPasteDirectory()
     {
-        using var pool = new ObjcAutoreleasePool();
         try
         {
-            return GetFolderForFrontmostApp();
+            return RunScript();
         }
         catch (Exception ex)
         {
@@ -37,53 +30,43 @@ public sealed class MacDropTargetResolver : IDropTargetResolver
 
     public void MoveToDestination(string tempDir, string destDir) => FileUtils.MoveTo(tempDir, destDir);
 
-    private static string? GetFolderForFrontmostApp()
+    private string? RunScript()
     {
-        var pid = GetFrontmostPid(out var isFinder);
-        if (pid <= 0) return null;
+        // returns NOT_FINDER if Finder is not frontmost; a POSIX path otherwise
+        const string script = """
+            tell application "System Events"
+              if frontmost of process "Finder" is false then return "NOT_FINDER"
+            end tell
+            tell application "Finder"
+              if (count of Finder windows) is 0 then return POSIX path of (desktop as alias)
+              try
+                return POSIX path of (target of front Finder window as alias)
+              on error
+                return POSIX path of (desktop as alias)
+              end try
+            end tell
+            """;
 
-        var axApp = NativeMethods.AXUIElementCreateApplication(pid);
-        if (axApp == nint.Zero) return null;
-        try
+        using var proc = Process.Start(new ProcessStartInfo("osascript", ["-e", script])
         {
-            var axErr = NativeMethods.AXUIElementCopyAttributeValue(axApp, CfAxFocusedWindow, out var window);
-            if (axErr != 0 || window == nint.Zero)
-                return isFinder ? Environment.GetFolderPath(Environment.SpecialFolder.Desktop) : null;
-            try
-            {
-                var doc = GetWindowDocumentPath(window);
-                if (doc != null) return doc;
-                // finder window with no AXDocument → desktop is active
-                return isFinder ? Environment.GetFolderPath(Environment.SpecialFolder.Desktop) : null;
-            }
-            finally { NativeMethods.CFRelease(window); }
-        }
-        finally { NativeMethods.CFRelease(axApp); }
-    }
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        });
+        if (proc == null) return null;
 
-    // returns pid of the frontmost app; sets isFinder=true if it's com.apple.finder
-    private static int GetFrontmostPid(out bool isFinder)
-    {
-        isFinder = false;
-        var wsClass = NativeMethods.objc_getClass("NSWorkspace");
-        var ws = NativeMethods.objc_msgSend_noarg(wsClass, NativeMethods.sel_registerName("sharedWorkspace"));
-        if (ws == nint.Zero) return 0;
-        var app = NativeMethods.objc_msgSend_noarg(ws, NativeMethods.sel_registerName("frontmostApplication"));
-        if (app == nint.Zero) return 0;
-        var bundleIdStr = NativeMethods.objc_msgSend_noarg(app, NativeMethods.sel_registerName("bundleIdentifier"));
-        isFinder = NativeMethods.CfStringToManaged(bundleIdStr) == "com.apple.finder";
-        return (int)NativeMethods.objc_msgSend_long(app, NativeMethods.sel_registerName("processIdentifier"));
-    }
+        var stdout = proc.StandardOutput.ReadToEnd().Trim();
+        var stderr = proc.StandardError.ReadToEnd();
+        proc.WaitForExit();
 
-    private static string? GetWindowDocumentPath(nint windowElement)
-    {
-        // AXDocument gives the URL of the folder displayed in the window
-        var axResult = NativeMethods.AXUIElementCopyAttributeValue(windowElement, CfAxDocument, out var urlValue);
-        if (axResult != 0 || urlValue == nint.Zero) return null;
-        try
+        if (proc.ExitCode != 0)
         {
-            return FileUtils.FileUrlToLocalPath(NativeMethods.CfStringToManaged(urlValue));
+            _log.LogDebug("osascript exited {Code}: {Stderr}", proc.ExitCode, stderr.Trim());
+            return null;
         }
-        finally { NativeMethods.CFRelease(urlValue); }
+
+        _log.LogDebug("Finder paste target: {Path}", stdout);
+        if (stdout == "NOT_FINDER" || stdout.Length == 0) return null;
+        return stdout;
     }
 }
