@@ -104,7 +104,8 @@ public sealed class FileTransferService : IDisposable
 
     public static bool IsFileTransferMessage(MessageKind kind) => kind is
         MessageKind.FileTransferStart or MessageKind.FileTransferChunk or
-        MessageKind.FileTransferDone or MessageKind.FileTransferAbort;
+        MessageKind.FileTransferDone or MessageKind.FileTransferAbort or
+        MessageKind.FileTransferAccepted;
 
     internal static FileTransferService Null() =>
         new(new NullFileTransferDialog(), new NullDropTargetResolver(), Microsoft.Extensions.Logging.Abstractions.NullLogger<FileTransferService>.Instance);
@@ -148,6 +149,7 @@ public sealed class FileTransferService : IDisposable
             case MessageKind.FileTransferChunk: await HandleFileTransferChunkAsync(sourceHost, json); break;
             case MessageKind.FileTransferDone: await HandleFileTransferDoneAsync(sourceHost, json, relay); break;
             case MessageKind.FileTransferAbort: HandleFileTransferAbort(sourceHost, json); break;
+            case MessageKind.FileTransferAccepted: FirePasteOsd("Pasted!"); break;
         }
     }
 
@@ -197,6 +199,8 @@ public sealed class FileTransferService : IDisposable
             }, null, TimeSpan.FromMilliseconds(_watchdogTimeoutMs), TimeSpan.FromMilliseconds(_watchdogTimeoutMs));
         }
 
+        // ack to sender: destination is valid, ready for chunks
+        SendTo(relay, sourceHost, MessageKind.FileTransferAccepted, new FileTransferAcceptedMessage());
         _dialog.ShowTransferring(newReceiver.ToTransferInfo());
         _log.LogInformation("Transfer start from {Host}: {Count} file(s)", sourceHost, msg.FileNames?.Length ?? 0);
     }
@@ -407,7 +411,6 @@ public sealed class FileTransferService : IDisposable
             var sha = await TarGzStreamer.StreamAsync(paths, async (data, seq, uncompressedBytes) =>
             {
                 cancel.ThrowIfCancellationRequested();
-                if (seq == 0) FirePasteOsd("Pasted!");  // slave accepted — abort would have cancelled us by now
                 var chunkPayload = MessageSerializer.Encode(MessageKind.FileTransferChunk, new FileTransferChunkMessage(seq, data));
                 await relay.Send([targetHost], chunkPayload);
                 totalSent += data.Length;

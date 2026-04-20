@@ -27,6 +27,7 @@ public enum MessageKind : byte
     FileTransferChunk = 18,     // sender → receiver: chunk of tar.gz data
     FileTransferDone = 19,      // sender → receiver: all data sent
     FileTransferAbort = 20,     // either → either: abort and clean up
+    FileTransferAccepted = 25,  // receiver → sender: destination validated, ready to receive chunks
     FileSelectionQuery = 21,    // master → slave: what files are selected?
     FileSelectionResponse = 22, // slave → master: here are the selected files
     FileStreamRequest = 23,     // master → source slave: stream these files to target
@@ -57,6 +58,7 @@ public record FileTransferStartMessage(string[]? FileNames = null, long TotalByt
 public record FileTransferChunkMessage(int Sequence, byte[] Data);
 public record FileTransferDoneMessage(long TotalBytesSent, byte[] Sha256);
 public record FileTransferAbortMessage(string Reason);
+public record FileTransferAcceptedMessage;
 public record FileSelectionQueryMessage;
 public record FileSelectionResponseMessage(string[]? Paths, string? NotFocusedMessage = null);
 public record FileStreamRequestMessage(string[] Paths, string TargetHost);
