@@ -3,15 +3,15 @@ using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform.MacOs;
 
-// resolves the folder under the cursor by using the Accessibility API to find the
-// window (Finder or any file-manager) directly under the physical cursor position.
+// resolves the paste destination by querying the frontmost application's focused Finder window
+// via the Accessibility API — not the element under the cursor.
 // requires Hydra to have Accessibility permission (already needed for input capture).
 public sealed class MacDropTargetResolver : IDropTargetResolver
 {
     private readonly ILogger<MacDropTargetResolver> _log;
 
     // cached CFStrings for frequently-queried AX attributes
-    private static readonly nint CfAxWindow = NativeMethods.MakeNsString("AXWindow");
+    private static readonly nint CfAxFocusedWindow = NativeMethods.MakeNsString("AXFocusedWindow");
     private static readonly nint CfAxDocument = NativeMethods.MakeNsString("AXDocument");
 
     public MacDropTargetResolver(ILogger<MacDropTargetResolver> log)
@@ -21,56 +21,58 @@ public sealed class MacDropTargetResolver : IDropTargetResolver
         NativeMethods.EnsureApplicationServicesLoaded();
     }
 
-    public string? GetDirectoryUnderCursor()
+    public string? GetPasteDirectory()
     {
         using var pool = new ObjcAutoreleasePool();
         try
         {
-            return GetFolderUnderCursor();
+            return GetFolderForFrontmostApp();
         }
         catch (Exception ex)
         {
-            _log.LogDebug(ex, "GetDirectoryUnderCursor failed");
+            _log.LogDebug(ex, "GetPasteDirectory failed");
             return null;
         }
     }
 
     public void MoveToDestination(string tempDir, string destDir) => FileUtils.MoveTo(tempDir, destDir);
 
-    private static string? GetFolderUnderCursor()
+    private static string? GetFolderForFrontmostApp()
     {
-        // get cursor position in CG screen coordinates
-        var cgEvent = NativeMethods.CGEventCreate(nint.Zero);
-        if (cgEvent == nint.Zero) return null;
-        var pos = NativeMethods.CGEventGetLocation(cgEvent);
-        NativeMethods.CFRelease(cgEvent);
+        var pid = GetFrontmostPid(out var isFinder);
+        if (pid <= 0) return null;
 
-        // find the AX element under the cursor across all applications
-        var sysWide = NativeMethods.AXUIElementCreateSystemWide();
-        if (sysWide == nint.Zero) return null;
+        var axApp = NativeMethods.AXUIElementCreateApplication(pid);
+        if (axApp == nint.Zero) return null;
         try
         {
-            var axErr = NativeMethods.AXUIElementCopyElementAtPosition(sysWide, (float)pos.X, (float)pos.Y, out var element);
-            if (axErr != 0 || element == nint.Zero) return null;
+            var axErr = NativeMethods.AXUIElementCopyAttributeValue(axApp, CfAxFocusedWindow, out var window);
+            if (axErr != 0 || window == nint.Zero)
+                return isFinder ? Environment.GetFolderPath(Environment.SpecialFolder.Desktop) : null;
             try
             {
-                return GetElementDocumentPath(element);
+                var doc = GetWindowDocumentPath(window);
+                if (doc != null) return doc;
+                // finder window with no AXDocument → desktop is active
+                return isFinder ? Environment.GetFolderPath(Environment.SpecialFolder.Desktop) : null;
             }
-            finally { NativeMethods.CFRelease(element); }
+            finally { NativeMethods.CFRelease(window); }
         }
-        finally { NativeMethods.CFRelease(sysWide); }
+        finally { NativeMethods.CFRelease(axApp); }
     }
 
-    private static string? GetElementDocumentPath(nint element)
+    // returns pid of the frontmost app; sets isFinder=true if it's com.apple.finder
+    private static int GetFrontmostPid(out bool isFinder)
     {
-        // walk up to the containing AXWindow
-        var axErr = NativeMethods.AXUIElementCopyAttributeValue(element, CfAxWindow, out var window);
-        if (axErr != 0 || window == nint.Zero) return null;
-        try
-        {
-            return GetWindowDocumentPath(window);
-        }
-        finally { NativeMethods.CFRelease(window); }
+        isFinder = false;
+        var wsClass = NativeMethods.objc_getClass("NSWorkspace");
+        var ws = NativeMethods.objc_msgSend_noarg(wsClass, NativeMethods.sel_registerName("sharedWorkspace"));
+        if (ws == nint.Zero) return 0;
+        var app = NativeMethods.objc_msgSend_noarg(ws, NativeMethods.sel_registerName("frontmostApplication"));
+        if (app == nint.Zero) return 0;
+        var bundleIdStr = NativeMethods.objc_msgSend_noarg(app, NativeMethods.sel_registerName("bundleIdentifier"));
+        isFinder = NativeMethods.CfStringToManaged(bundleIdStr) == "com.apple.finder";
+        return (int)NativeMethods.objc_msgSend_long(app, NativeMethods.sel_registerName("processIdentifier"));
     }
 
     private static string? GetWindowDocumentPath(nint windowElement)

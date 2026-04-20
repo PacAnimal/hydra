@@ -146,12 +146,12 @@ public sealed class FileTransferService : IDisposable
         if (msg == null) { _log.LogWarning("Failed to deserialize FileTransferStart from {Host}", sourceHost); return; }
 
         // resolve destination before committing the receiver slot
-        var destFolder = _dropTargetResolver.GetDirectoryUnderCursor();
+        var destFolder = _dropTargetResolver.GetPasteDirectory();
         if (string.IsNullOrEmpty(destFolder))
         {
             SendTo(relay, sourceHost, MessageKind.FileTransferAbort, new FileTransferAbortMessage("no folder to paste into"));
-            _dialog.ShowError("Move the cursor over a folder or the desktop before pasting");
-            _log.LogWarning("Transfer from {Host}: no valid paste destination — cursor is not over a folder or the desktop", sourceHost);
+            _dialog.ShowError("No paste destination — open a Finder/Explorer folder window first");
+            _log.LogWarning("Transfer from {Host}: no valid paste destination — no file manager window is active", sourceHost);
             return;
         }
         _log.LogInformation("Paste destination: {Dest}", destFolder);

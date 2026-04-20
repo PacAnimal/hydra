@@ -421,7 +421,7 @@ internal sealed class FakeFileTransferDialog : IFileTransferDialog
 
 internal sealed class FakeDropTargetResolver(string directory) : IDropTargetResolver
 {
-    public string GetDirectoryUnderCursor() => directory;
+    public string GetPasteDirectory() => directory;
     public void MoveToDestination(string tempDir, string destDir) => FileUtils.MoveTo(tempDir, destDir);
 }
 

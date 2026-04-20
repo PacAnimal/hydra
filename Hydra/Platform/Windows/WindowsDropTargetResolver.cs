@@ -6,8 +6,8 @@ using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform.Windows;
 
-// resolves the folder under the cursor by enumerating open Explorer windows via Shell.Application COM.
-// the Shell.Application instance is cached and recreated on COM failure.
+// resolves the paste destination by finding which Explorer window is in the foreground,
+// via Shell.Application COM. the Shell.Application instance is cached and recreated on COM failure.
 [SupportedOSPlatform("windows")]
 public sealed class WindowsDropTargetResolver(ILogger<WindowsDropTargetResolver> log) : IDropTargetResolver, IDisposable
 {
@@ -15,15 +15,15 @@ public sealed class WindowsDropTargetResolver(ILogger<WindowsDropTargetResolver>
     private Type? _shellType;
     private object? _shell;
 
-    public string? GetDirectoryUnderCursor()
+    public string? GetPasteDirectory()
     {
         try
         {
-            return FindExplorerFolderUnderCursor();
+            return FindExplorerFolderForForegroundWindow();
         }
         catch (Exception ex)
         {
-            log.LogDebug(ex, "GetDirectoryUnderCursor failed");
+            log.LogDebug(ex, "GetPasteDirectory failed");
             return null;
         }
     }
@@ -76,14 +76,13 @@ public sealed class WindowsDropTargetResolver(ILogger<WindowsDropTargetResolver>
         }
     }
 
-    private string? FindExplorerFolderUnderCursor()
+    private string? FindExplorerFolderForForegroundWindow()
     {
-        NativeMethods.GetCursorPos(out var cursor);
-        var targetHwnd = NativeMethods.WindowFromPoint(cursor);
-        if (targetHwnd == nint.Zero) return null;
+        var foreground = NativeMethods.GetForegroundWindow();
+        if (foreground == nint.Zero) return null;
 
         // walk up to the top-level window (Explorer's cabinet window)
-        var rootHwnd = NativeMethods.GetAncestor(targetHwnd, NativeMethods.GA_ROOTOWNER);
+        var rootHwnd = NativeMethods.GetAncestor(foreground, NativeMethods.GA_ROOTOWNER);
 
         // desktop window (Progman/WorkerW) → paste to Desktop folder
         var rootClass = GetWindowClass(rootHwnd);
