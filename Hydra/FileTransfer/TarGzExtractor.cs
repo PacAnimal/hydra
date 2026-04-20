@@ -68,6 +68,7 @@ public sealed class TarGzExtractor : IDisposable
         {
             await using var gzip = new GZipStream(_pipe.Reader.AsStream(), CompressionMode.Decompress);
             using var tar = new TarReader(gzip, leaveOpen: false);
+            var buf = new byte[TarGzStreamer.ProgressBufferSize];
 
             TarEntry? entry;
             while ((entry = await tar.GetNextEntryAsync(copyData: false, cancel)) != null)
@@ -85,8 +86,7 @@ public sealed class TarGzExtractor : IDisposable
                     case TarEntryType.RegularFile:
                     case TarEntryType.V7RegularFile:
                         Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
-                        await entry.ExtractToFileAsync(destPath, overwrite: true, cancel);
-                        Interlocked.Add(ref _bytesExtracted, entry.Length);
+                        await ExtractFileEntryAsync(destPath, entry.DataStream, buf, cancel);
                         break;
                     case TarEntryType.SymbolicLink:
                     case TarEntryType.HardLink:
@@ -98,6 +98,19 @@ public sealed class TarGzExtractor : IDisposable
         finally
         {
             await _pipe.Reader.CompleteAsync();
+        }
+    }
+
+    // streams a tar entry's data to disk, incrementing _bytesExtracted per read so progress is smooth
+    private async Task ExtractFileEntryAsync(string destPath, Stream? dataStream, byte[] buf, CancellationToken cancel)
+    {
+        await using var dst = File.Open(destPath, FileMode.Create, FileAccess.Write, FileShare.None);
+        if (dataStream == null) return;
+        int read;
+        while ((read = await dataStream.ReadAsync(buf, cancel)) > 0)
+        {
+            await dst.WriteAsync(buf.AsMemory(0, read), cancel);
+            Interlocked.Add(ref _bytesExtracted, read);
         }
     }
 

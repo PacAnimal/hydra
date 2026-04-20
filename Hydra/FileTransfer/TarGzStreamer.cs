@@ -8,6 +8,7 @@ namespace Hydra.FileTransfer;
 public static class TarGzStreamer
 {
     public static readonly int ChunkSize = (int)ByteSize.FromMebiBytes(16).Bytes;
+    public const int ProgressBufferSize = 256 * 1024; // shared by sender (ByteCountingStream) and receiver (ExtractFileEntryAsync)
 
     // estimates total uncompressed bytes across all files and directories
     public static long ComputeTotalBytes(List<string> paths)
@@ -55,14 +56,17 @@ public static class TarGzStreamer
 
             await using (var gzip = new GZipStream(chunker, CompressionLevel.Optimal, leaveOpen: true))
             {
-                await using var tar = new TarWriter(gzip, TarEntryFormat.Gnu, leaveOpen: true);
+                // ByteCountingStream sits between TarWriter and GZipStream; pre-increments the counter
+                // before each write so onChunk (which fires inside gzip.WriteAsync) reads current bytes.
+                await using var counter = new ByteCountingStream(gzip, n => uncompressedWritten = n);
+                await using var tar = new TarWriter(counter, TarEntryFormat.Gnu, leaveOpen: true);
                 foreach (var path in paths)
                 {
                     cancel.ThrowIfCancellationRequested();
                     if (Directory.Exists(path))
-                        uncompressedWritten += await AddDirectoryAsync(tar, path, cancel);
+                        await AddDirectoryAsync(tar, path, cancel);
                     else if (File.Exists(path))
-                        uncompressedWritten += await AddFileAsync(tar, path, Path.GetFileName(path), cancel);
+                        await AddFileAsync(tar, path, Path.GetFileName(path), cancel);
                 }
                 // dispose tar first to flush trailing blocks into gzip
             }
@@ -79,10 +83,9 @@ public static class TarGzStreamer
         }
     }
 
-    private static async Task<long> AddDirectoryAsync(TarWriter tar, string dirPath, CancellationToken cancel)
+    private static async Task AddDirectoryAsync(TarWriter tar, string dirPath, CancellationToken cancel)
     {
         var parent = Path.GetDirectoryName(dirPath) ?? dirPath;
-        long bytes = 0;
 
         // add the root dir entry itself so empty folders are preserved in the archive
         var rootEntry = Path.GetRelativePath(parent, dirPath).Replace('\\', '/') + "/";
@@ -100,21 +103,87 @@ public static class TarGzStreamer
         {
             cancel.ThrowIfCancellationRequested();
             var entryName = Path.GetRelativePath(parent, file).Replace('\\', '/');
-            bytes += await AddFileAsync(tar, file, entryName, cancel);
+            await AddFileAsync(tar, file, entryName, cancel);
         }
-        return bytes;
     }
 
-    private static async Task<long> AddFileAsync(TarWriter tar, string filePath, string entryName, CancellationToken cancel)
+    private static async Task AddFileAsync(TarWriter tar, string filePath, string entryName, CancellationToken cancel)
     {
-        try
+        try { await tar.WriteEntryAsync(filePath, entryName, cancel); }
+        catch (IOException) { /* skip inaccessible */ }
+        catch (UnauthorizedAccessException) { /* skip inaccessible */ }
+    }
+
+    // write-only stream that buffers incoming bytes into ProgressBufferSize chunks and reports the
+    // running total via onCount before flushing each chunk to inner. pre-reporting ensures the count
+    // is current if gzip triggers onChunk inside the inner WriteAsync call.
+    internal sealed class ByteCountingStream(Stream inner, Action<long> onCount) : Stream
+    {
+        private long _total;
+        private readonly byte[] _buf = new byte[ProgressBufferSize];
+        private int _pos;
+
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count)
         {
-            var size = new FileInfo(filePath).Length;
-            await tar.WriteEntryAsync(filePath, entryName, cancel);
-            return size;
+            var src = buffer.AsSpan(offset, count);
+            while (src.Length > 0)
+            {
+                var toCopy = Math.Min(_buf.Length - _pos, src.Length);
+                src[..toCopy].CopyTo(_buf.AsSpan(_pos));
+                _pos += toCopy;
+                src = src[toCopy..];
+                if (_pos == _buf.Length) FlushBuffer();
+            }
         }
-        catch (IOException) { return 0; /* skip inaccessible */ }
-        catch (UnauthorizedAccessException) { return 0; /* skip inaccessible */ }
+
+        public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+            => WriteAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+
+        public override async ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            var src = buffer;
+            while (src.Length > 0)
+            {
+                var toCopy = Math.Min(_buf.Length - _pos, src.Length);
+                src[..toCopy].CopyTo(_buf.AsMemory(_pos));
+                _pos += toCopy;
+                src = src[toCopy..];
+                if (_pos == _buf.Length) await FlushBufferAsync(cancellationToken);
+            }
+        }
+
+        private void FlushBuffer()
+        {
+            if (_pos == 0) return;
+            _total += _pos;
+            onCount(_total);
+            inner.Write(_buf, 0, _pos);
+            _pos = 0;
+        }
+
+        private async ValueTask FlushBufferAsync(CancellationToken cancel)
+        {
+            if (_pos == 0) return;
+            _total += _pos;
+            onCount(_total);
+            await inner.WriteAsync(_buf.AsMemory(0, _pos), cancel);
+            _pos = 0;
+        }
+
+        public override void Flush() { FlushBuffer(); inner.Flush(); }
+        public override async Task FlushAsync(CancellationToken cancellationToken) { await FlushBufferAsync(cancellationToken); await inner.FlushAsync(cancellationToken); }
+
+        protected override void Dispose(bool disposing) { if (disposing) { FlushBuffer(); inner.Dispose(); } base.Dispose(disposing); }
+        public override async ValueTask DisposeAsync() { await FlushBufferAsync(CancellationToken.None); await inner.DisposeAsync(); await base.DisposeAsync(); }
     }
 
     // write-only stream that accumulates bytes and fires a callback for each full chunk
