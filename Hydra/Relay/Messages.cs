@@ -54,7 +54,7 @@ public record ClipboardPullMessage;
 public record ClipboardPushMessage(string Text, string? PrimaryText = null, byte[]? ImagePng = null);
 public record ClipboardPullResponseMessage(string? Text, string? PrimaryText = null, byte[]? ImagePng = null);
 
-public record FileTransferStartMessage(string[]? FileNames = null, long TotalBytes = 0);
+public record FileTransferStartMessage(string[]? FileNames = null, long TotalBytes = 0, string? SourceHost = null);
 public record FileTransferChunkMessage(int Sequence, byte[] Data);
 public record FileTransferDoneMessage(long TotalBytesSent, byte[] Sha256);
 public record FileTransferAbortMessage(string Reason);

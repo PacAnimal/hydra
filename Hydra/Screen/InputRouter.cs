@@ -439,8 +439,24 @@ public class InputRouter(
                     break;
                 }
             case var _ when FileTransferService.IsFileTransferMessage(kind):
-                await _fileTransfer.OnMessageAsync(sourceHost, kind, json, relay);
-                break;
+                {
+                    var wasSendingTo = _fileTransfer.IsSendingTo(sourceHost);
+                    var wasCoordinating = _fileTransfer.IsCoordinatingTransferTo(sourceHost);
+                    // send OSD before OnMessageAsync so it arrives before chunk data starts flowing
+                    if (wasSendingTo || wasCoordinating)
+                    {
+                        if (kind == MessageKind.FileTransferAccepted)
+                            SendOsd(sourceHost, "Pasted!");
+                        else if (kind == MessageKind.FileTransferAbort)
+                        {
+                            var abort = json.FromSaneJson<FileTransferAbortMessage>();
+                            if (abort?.Reason == FileTransferService.ReasonNoFolder)
+                                SendOsd(sourceHost, "Invalid paste target");
+                        }
+                    }
+                    await _fileTransfer.OnMessageAsync(sourceHost, kind, json, relay);
+                    break;
+                }
             default:
                 log.LogDebug("Unhandled message kind {Kind} from {Host}", kind, sourceHost);
                 break;
@@ -457,6 +473,18 @@ public class InputRouter(
         }
         else
             osd.Show(message);
+    }
+
+    // sends OSD to a specific known host (file transfer outcomes, etc.)
+    private void SendOsd(string targetHost, string message)
+    {
+        if (targetHost.EqualsIgnoreCase(profile.Name))
+            osd.Show(message);
+        else
+        {
+            var payload = MessageSerializer.Encode(MessageKind.Osd, new OsdMessage(message));
+            _ = relay.Send([targetHost], payload).AsTask();
+        }
     }
 
     private void ForwardSlaveLog(string sourceHost, SlaveLogMessage entry)
@@ -675,8 +703,8 @@ public class InputRouter(
                     else
                     {
                         log.LogInformation("Paste hotkey: {Count} file(s) from {Source} → {Target}", copyBuffer.Paths.Length, copyBuffer.SourceHost, targetHost);
-                        var capturedSt = st;
-                        _fileTransfer.InitiatePaste(copyBuffer, targetHost, profile.Name, relay, msg => ShowOsd(capturedSt, msg));
+                        if (!_fileTransfer.InitiatePaste(copyBuffer, targetHost, profile.Name, relay))
+                            SendOsd(targetHost, "Invalid paste target");
                     }
                 }
                 else
