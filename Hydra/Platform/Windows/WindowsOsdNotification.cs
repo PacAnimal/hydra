@@ -8,15 +8,23 @@ namespace Hydra.Platform.Windows;
 
 // borderless per-pixel-alpha layered window that floats above everything else.
 // displays outlined text centered horizontally, 10% from the bottom of the primary screen.
-// auto-dismisses after 1.5 seconds. click-through (WS_EX_TRANSPARENT).
+// shows for 1.5s then fades out over 0.3s. click-through (WS_EX_TRANSPARENT).
 [SupportedOSPlatform("windows")]
 internal sealed class WindowsOsdNotification : IOsdNotification, IDisposable
 {
     private readonly StaMessageLoop _loop;
     private nint _hwnd;
     private WndProc? _wndProc;
+
+    private nint _hbmp;
+    private int _bmpW, _bmpH, _posX, _posY;
+    private int _fadeAlpha;
+
     private const nuint TimerId = 1;
-    private const uint DismissMs = 1500;
+    private const nuint FadeTimerId = 2;
+    private const uint ShowDurationMs = 1500; // solid display before fade (matches Mac)
+    private const uint FadeTickMs = 16;       // ~60fps
+    private const int FadeStep = 14;          // 255/14 ≈ 18 ticks ≈ 0.29s fade (matches Mac 0.3s)
     private const uint WmShowOsd = NativeMethods.WM_USER + 61;
 
     public WindowsOsdNotification()
@@ -44,10 +52,10 @@ internal sealed class WindowsOsdNotification : IOsdNotification, IDisposable
             ShowOnSta(text);
             return true;
         }
-        if (msg.hwnd == nint.Zero && msg.message == NativeMethods.WM_TIMER && (nuint)msg.wParam == TimerId)
+        if (msg.hwnd == nint.Zero && msg.message == NativeMethods.WM_TIMER)
         {
-            HideOnSta();
-            return true;
+            if ((nuint)msg.wParam == TimerId) { StartFadeOnSta(); return true; }
+            if ((nuint)msg.wParam == FadeTimerId) { FadeTickOnSta(); return true; }
         }
         return false;
     }
@@ -92,47 +100,76 @@ internal sealed class WindowsOsdNotification : IOsdNotification, IDisposable
         if (_hwnd == nint.Zero) return;
 
         NativeMethods.KillTimer(_hwnd, TimerId);
+        NativeMethods.KillTimer(_hwnd, FadeTimerId);
+        FreeHbmp();
 
         var sw = NativeMethods.GetSystemMetrics(NativeMethods.SM_CXSCREEN);
         var sh = NativeMethods.GetSystemMetrics(NativeMethods.SM_CYSCREEN);
 
         using var bmp = RenderText(text, sh, out var bmpW, out var bmpH);
+        _hbmp = bmp.GetHbitmap(Color.FromArgb(0));
+        _bmpW = bmpW;
+        _bmpH = bmpH;
+        _posX = (sw - bmpW) / 2;
+        _posY = sh - bmpH - (int)(sh * 0.1);
 
-        var hbmp = bmp.GetHbitmap(Color.FromArgb(0)); // transparent bg
-        var screenDc = NativeMethods.GetDC(nint.Zero);  // need GetDC for UpdateLayeredWindow
-        var memDc = NativeMethods.CreateCompatibleDC(screenDc);
-        var oldBmp = NativeMethods.SelectObject(memDc, hbmp);
+        NativeMethods.SetWindowPos(_hwnd, NativeMethods.HWND_TOPMOST, _posX, _posY, _bmpW, _bmpH,
+            NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_SHOWWINDOW);
+        DrawAlpha(255);
 
-        var x = (sw - bmpW) / 2;
-        var y = sh - bmpH - (int)(sh * 0.1);
+        NativeMethods.SetTimer(_hwnd, TimerId, ShowDurationMs, nint.Zero);
+    }
 
-        var dstPt = new WINPOINT { x = x, y = y };
+    private void StartFadeOnSta()
+    {
+        NativeMethods.KillTimer(_hwnd, TimerId);
+        _fadeAlpha = 255;
+        NativeMethods.SetTimer(_hwnd, FadeTimerId, FadeTickMs, nint.Zero);
+    }
+
+    private void FadeTickOnSta()
+    {
+        _fadeAlpha -= FadeStep;
+        if (_fadeAlpha <= 0) { HideOnSta(); return; }
+        DrawAlpha((byte)_fadeAlpha);
+    }
+
+    // re-apply UpdateLayeredWindow with a new SourceConstantAlpha to animate the fade
+    private void DrawAlpha(byte alpha)
+    {
+        if (_hbmp == nint.Zero) return;
+        var dstPt = new WINPOINT { x = _posX, y = _posY };
         var srcPt = new WINPOINT { x = 0, y = 0 };
-        var size = new NativeMethods.WINSIZE { cx = bmpW, cy = bmpH };
+        var size = new NativeMethods.WINSIZE { cx = _bmpW, cy = _bmpH };
         var blend = new NativeMethods.BLENDFUNCTION
         {
             BlendOp = NativeMethods.AC_SRC_OVER,
-            SourceConstantAlpha = 255,
+            SourceConstantAlpha = alpha,
             AlphaFormat = NativeMethods.AC_SRC_ALPHA,
         };
-
-        NativeMethods.SetWindowPos(_hwnd, NativeMethods.HWND_TOPMOST, x, y, bmpW, bmpH,
-            NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_SHOWWINDOW);
+        var screenDc = NativeMethods.GetDC(nint.Zero);
+        var memDc = NativeMethods.CreateCompatibleDC(screenDc);
+        var oldBmp = NativeMethods.SelectObject(memDc, _hbmp);
         NativeMethods.UpdateLayeredWindow(_hwnd, nint.Zero, ref dstPt, ref size, memDc, ref srcPt, 0, ref blend, NativeMethods.ULW_ALPHA);
-
         NativeMethods.SelectObject(memDc, oldBmp);
         NativeMethods.DeleteDC(memDc);
         _ = NativeMethods.ReleaseDC(nint.Zero, screenDc);
-        NativeMethods.DeleteObject(hbmp);
-
-        NativeMethods.SetTimer(_hwnd, TimerId, DismissMs, nint.Zero);
     }
 
     private void HideOnSta()
     {
         if (_hwnd == nint.Zero) return;
         NativeMethods.KillTimer(_hwnd, TimerId);
+        NativeMethods.KillTimer(_hwnd, FadeTimerId);
         NativeMethods.ShowWindow(_hwnd, NativeMethods.SW_HIDE);
+        FreeHbmp();
+    }
+
+    private void FreeHbmp()
+    {
+        if (_hbmp == nint.Zero) return;
+        NativeMethods.DeleteObject(_hbmp);
+        _hbmp = nint.Zero;
     }
 
     private static Bitmap RenderText(string text, int sh, out int width, out int height)
@@ -187,9 +224,10 @@ internal sealed class WindowsOsdNotification : IOsdNotification, IDisposable
 
     private nint WndProcImpl(nint hWnd, uint msg, nint wParam, nint lParam)
     {
-        if (msg == NativeMethods.WM_TIMER && (nuint)wParam == TimerId)
+        if (msg == NativeMethods.WM_TIMER)
         {
-            HideOnSta();
+            if ((nuint)wParam == TimerId) StartFadeOnSta();
+            else if ((nuint)wParam == FadeTimerId) FadeTickOnSta();
             return nint.Zero;
         }
         return NativeMethods.DefWindowProcW(hWnd, msg, wParam, lParam);
@@ -198,6 +236,7 @@ internal sealed class WindowsOsdNotification : IOsdNotification, IDisposable
     public void Dispose()
     {
         if (_hwnd != nint.Zero) { NativeMethods.DestroyWindow(_hwnd); _hwnd = nint.Zero; }
+        FreeHbmp();
         _loop.Dispose();
     }
 }
