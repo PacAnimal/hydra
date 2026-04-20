@@ -377,7 +377,7 @@ public sealed class FileTransferService : IDisposable
             _coordSourcePaths = paths;
             _coordRelay = relay;
         }
-        var start = new FileTransferStartMessage(names, 0, SourceHost: sourceHost);
+        var start = new FileTransferStartMessage(names, SourceHost: sourceHost);
         SendTo(relay, targetHost, MessageKind.FileTransferStart, start);
         _log.LogInformation("Paste: sent FileTransferStart to {Target} (data from {Source})", targetHost, sourceHost);
         return true;

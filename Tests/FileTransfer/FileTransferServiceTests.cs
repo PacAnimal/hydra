@@ -361,11 +361,11 @@ public class FileTransferServiceTests
 
         var result = _service.InitiatePaste(copyBuffer, "local-host", "local-host", _relay);
 
-        var (Targets, Kind, Json) = _relay.Sent.FirstOrDefault(m => m.Kind == MessageKind.FileStreamRequest);
+        var (targets, _, _) = _relay.Sent.FirstOrDefault(m => m.Kind == MessageKind.FileStreamRequest);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result, Is.True);
-            Assert.That(Targets, Contains.Item("source-slave"));
+            Assert.That(targets, Contains.Item("source-slave"));
             Assert.That(_service.FileTransferOngoing, Is.True);
         }
     }
@@ -392,11 +392,11 @@ public class FileTransferServiceTests
 
         _service.InitiatePaste(copyBuffer, "target-slave", "local-host", _relay);
 
-        var (Targets, Kind, Json) = _relay.Sent.FirstOrDefault(m => m.Kind == MessageKind.FileTransferStart);
-        var msg = Json.FromSaneJson<FileTransferStartMessage>();
+        var (targets, _, json) = _relay.Sent.FirstOrDefault(m => m.Kind == MessageKind.FileTransferStart);
+        var msg = json.FromSaneJson<FileTransferStartMessage>();
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(Targets, Contains.Item("target-slave"));
+            Assert.That(targets, Contains.Item("target-slave"));
             Assert.That(msg?.SourceHost, Is.EqualTo("source-slave"));
         }
     }
@@ -409,10 +409,10 @@ public class FileTransferServiceTests
 
         await Simulate("target-slave", MessageKind.FileTransferAccepted, new FileTransferAcceptedMessage());
 
-        var (Targets, Kind, Json) = _relay.Sent.FirstOrDefault(m => m.Kind == MessageKind.FileStreamRequest);
+        var (targets, _, _) = _relay.Sent.FirstOrDefault(m => m.Kind == MessageKind.FileStreamRequest);
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(Targets, Contains.Item("source-slave"));
+            Assert.That(targets, Contains.Item("source-slave"));
             Assert.That(_service.FileTransferOngoing, Is.False);
             Assert.That(_service.IsCoordinatingTransferTo("target-slave"), Is.False);
         }
@@ -442,8 +442,8 @@ public class FileTransferServiceTests
         _service.StartSend([CreateTempFile()], "slave", _relay, "my-machine");
         await WaitForMessage(_relay, MessageKind.FileTransferStart);
 
-        var (Targets, Kind, Json) = _relay.Sent.FirstOrDefault(m => m.Kind == MessageKind.FileTransferStart);
-        var msg = Json.FromSaneJson<FileTransferStartMessage>();
+        var (_, _, json) = _relay.Sent.FirstOrDefault(m => m.Kind == MessageKind.FileTransferStart);
+        var msg = json.FromSaneJson<FileTransferStartMessage>();
         Assert.That(msg?.SourceHost, Is.EqualTo("my-machine"));
     }
 
