@@ -537,11 +537,17 @@ internal struct XSetWindowAttributes
     [FieldOffset(88)] internal int OverrideRedirect;
 }
 
-// minimal XIRawEvent layout — covers only the detail field (button number / key detail).
-// full struct: int type, ulong serial, int send_event, Display* display, int extension, int evtype,
-// ulong time, int deviceid, int sourceid, int detail → offset 56 on 64-bit LP64.
+// XIRawEvent layout on 64-bit LP64:
+// int type [0], ulong serial [8], int send_event [16], Display* display [24],
+// int extension [32], int evtype [36], ulong time [40], int deviceid [48],
+// int sourceid [52], int detail [56], int flags [60],
+// XIValuatorState: int mask_len [64], (pad [68]), uchar* mask [72], double* values [80],
+// double* raw_values [88]
 [StructLayout(LayoutKind.Explicit)]
 internal struct XIRawEvent
 {
     [FieldOffset(56)] internal int Detail;
+    [FieldOffset(64)] internal int ValuatorsMaskLen;
+    [FieldOffset(72)] internal nint ValuatorsMask;   // unsigned char*
+    [FieldOffset(88)] internal nint RawValues;        // double*
 }

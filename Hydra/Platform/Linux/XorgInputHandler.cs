@@ -18,6 +18,7 @@ public sealed class XorgInputHandler : IPlatformInput
     private Thread? _eventThread;
     private volatile bool _running;
     private Action<double, double>? _onMouseMove;
+    private Action<double, double>? _onMouseDelta;
     private Action<KeyEvent>? _onKeyEvent;
     private Action<MouseButtonEvent>? _onMouseButton;
     private Action<MouseScrollEvent>? _onMouseScroll;
@@ -159,6 +160,7 @@ public sealed class XorgInputHandler : IPlatformInput
         Action<MouseScrollEvent> onMouseScroll)
     {
         _onMouseMove = onMouseMove;
+        _onMouseDelta = onMouseDelta;
         _onKeyEvent = onKeyEvent;
         _onMouseButton = onMouseButton;
         _onMouseScroll = onMouseScroll;
@@ -251,10 +253,18 @@ public sealed class XorgInputHandler : IPlatformInput
         {
             if (ev.XCookieEvType == NativeMethods.XI_RawMotion)
             {
-                // use XQueryPointer for absolute position (matches deskflow approach)
-                _ = NativeMethods.XQueryPointer(_display, _rootWindow,
-                    out _, out _, out var rootX, out var rootY, out _, out _, out _);
-                _onMouseMove?.Invoke(rootX, rootY);
+                if (_isOnVirtualScreen && _onMouseDelta != null)
+                {
+                    // use raw hardware deltas — immune to XQueryPointer/XWarpPointer race
+                    var (rdx, rdy) = ExtractRawDeltas(ev.XCookieData);
+                    if (rdx != 0 || rdy != 0) _onMouseDelta(rdx, rdy);
+                }
+                else
+                {
+                    _ = NativeMethods.XQueryPointer(_display, _rootWindow,
+                        out _, out _, out var rootX, out var rootY, out _, out _, out _);
+                    _onMouseMove?.Invoke(rootX, rootY);
+                }
             }
             else if (ev.XCookieEvType is NativeMethods.XI_RawButtonPress or NativeMethods.XI_RawButtonRelease)
             {
@@ -362,5 +372,24 @@ public sealed class XorgInputHandler : IPlatformInput
         if (!NativeMethods.XQueryExtension(_display, "XInputExtension", out var opcode, out _, out _))
             throw new InvalidOperationException("XInput2 extension not available — Xorg with XInput2 is required");
         return opcode;
+    }
+
+    // reads raw hardware deltas from XIRawEvent valuators — immune to XWarpPointer races.
+    // valuators.mask bit 0 = X axis, bit 1 = Y axis; raw_values packed consecutively.
+    private static (double dx, double dy) ExtractRawDeltas(nint cookieData)
+    {
+        var ev = Marshal.PtrToStructure<XIRawEvent>(cookieData);
+        if (ev.ValuatorsMaskLen < 1 || ev.ValuatorsMask == nint.Zero || ev.RawValues == nint.Zero)
+            return (0, 0);
+        var maskByte = Marshal.ReadByte(ev.ValuatorsMask);
+        var xPresent = (maskByte & 0x01) != 0;
+        var yPresent = (maskByte & 0x02) != 0;
+        int idx = 0;
+        double dx = 0, dy = 0;
+        if (xPresent)
+            dx = BitConverter.Int64BitsToDouble(Marshal.ReadInt64(ev.RawValues, idx++ * 8));
+        if (yPresent)
+            dy = BitConverter.Int64BitsToDouble(Marshal.ReadInt64(ev.RawValues, idx * 8));
+        return (dx, dy);
     }
 }

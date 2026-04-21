@@ -1137,7 +1137,7 @@ public class InputRouter(
         PushClipboardToHost(target.Host);
     }
 
-    // handles raw mouse deltas from evdev (remote-only/console mode).
+    // handles raw mouse deltas — used by evdev (remote-only) and Xorg (local master, virtual screen).
     // feeds directly into VirtualMouseState — no warp-point math needed.
     private void OnMouseDelta(double dx, double dy)
     {
@@ -1150,15 +1150,41 @@ public class InputRouter(
             if (prevScreen != null)
             {
                 HandleIntraHostTransition(st);
+                if (st.ActiveLocalScreen != null) platform.WarpCursor(st.WarpX, st.WarpY);
                 return;
             }
 
-            // check for cross-host edge exit
             var hit = st.Layout?.DetectEdgeExit(st.Mouse.CurrentScreen!, (int)st.Mouse.X, (int)st.Mouse.Y);
-            if (hit is not null && !hit.Destination.IsLocal && relay.IsConnected && !platform.AnyMouseButtonHeld())
+            if (hit is not null)
             {
-                await HandleEvdevCrossHostTransitionAsync(st, leavingScreen, hit);
-                return;
+                if (!hit.Destination.IsLocal)
+                {
+                    if (relay.IsConnected && !platform.AnyMouseButtonHeld())
+                    {
+                        await HandleEvdevCrossHostTransitionAsync(st, leavingScreen, hit);
+                        return;
+                    }
+                }
+                else if (!st.LockedToScreen && !profile.RemoteOnly && !platform.AnyMouseButtonHeld())
+                {
+                    var targetScreen = hit.Destination;
+                    FlushMouseDelta(st);
+                    var globalX = targetScreen.X + hit.EntryX;
+                    var globalY = targetScreen.Y + hit.EntryY;
+                    st.Mouse.LeaveScreen();
+                    ReturnToLocalScreen(globalX, globalY);
+                    await platform.ShowCursor();
+                    st.ActiveLocalScreen = targetScreen;
+                    UpdateWarpPoint(st, targetScreen);
+                    log.LogInformation("Returned to local screen ← ({X}, {Y})", globalX, globalY);
+                    if (relay.IsConnected)
+                    {
+                        var payload = MessageSerializer.Encode(MessageKind.LeaveScreen, new LeaveScreenMessage());
+                        _ = relay.Send([leavingScreen.Host], payload).AsTask();
+                        PullClipboardFromHost(leavingScreen.Host);
+                    }
+                    return;
+                }
             }
 
             var isRelative = st.RelativeMouseScreens.GetValueOrDefault(st.Mouse.CurrentScreen!.Name);
@@ -1169,6 +1195,9 @@ public class InputRouter(
             var now = Environment.TickCount64;
             if (now - st.LastMouseSendTick >= MinMouseIntervalMs)
                 SendMousePosition(st, now);
+
+            // warp to keep cursor near center — prevents it hitting local screen edges while on virtual
+            if (st.ActiveLocalScreen != null) platform.WarpCursor(st.WarpX, st.WarpY);
         });
     }
 
