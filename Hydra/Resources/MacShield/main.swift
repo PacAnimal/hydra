@@ -385,6 +385,7 @@ class TransferPanel: NSObject {
         autoCloseTimer?.invalidate()
         autoCloseTimer = nil
         panel?.orderOut(nil)
+        progressBar?.doubleValue = 0  // reset while hidden so next open starts clean
     }
 
     private func buildPanelIfNeeded() {
