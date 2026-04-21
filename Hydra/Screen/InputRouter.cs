@@ -527,7 +527,7 @@ public class InputRouter(
             case MessageKind.FileTransferBusy:
                 {
                     _fileTransfer.HandleBusy(sourceHost);
-                    osd.Show($"Transfer in progress on {sourceHost}");
+                    _commands.Writer.TryWrite(st => { ShowOsd(st, "Transfer in progress"); return ValueTask.CompletedTask; });
                     break;
                 }
             case var _ when FileTransferService.IsFileTransferMessage(kind):
