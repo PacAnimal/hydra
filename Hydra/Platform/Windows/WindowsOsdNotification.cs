@@ -103,15 +103,21 @@ internal sealed class WindowsOsdNotification : IOsdNotification, IDisposable
         NativeMethods.KillTimer(_hwnd, FadeTimerId);
         FreeHbmp();
 
-        var sw = NativeMethods.GetSystemMetrics(NativeMethods.SM_CXSCREEN);
-        var sh = NativeMethods.GetSystemMetrics(NativeMethods.SM_CYSCREEN);
+        NativeMethods.GetCursorPos(out var cursor);
+        var hMonitor = NativeMethods.MonitorFromPoint(cursor, NativeMethods.MONITOR_DEFAULTTONEAREST);
+        var mi = new MONITORINFOEX { Size = (uint)Marshal.SizeOf<MONITORINFOEX>() };
+        NativeMethods.GetMonitorInfoW(hMonitor, ref mi);
+        var mx = mi.Monitor.Left;
+        var my = mi.Monitor.Top;
+        var sw = mi.Monitor.Right - mi.Monitor.Left;
+        var sh = mi.Monitor.Bottom - mi.Monitor.Top;
 
         using var bmp = RenderText(text, sh, out var bmpW, out var bmpH);
         _hbmp = bmp.GetHbitmap(Color.FromArgb(0));
         _bmpW = bmpW;
         _bmpH = bmpH;
-        _posX = (sw - bmpW) / 2;
-        _posY = sh - bmpH - (int)(sh * 0.1);
+        _posX = mx + (sw - bmpW) / 2;
+        _posY = my + sh - bmpH - (int)(sh * 0.1);
 
         NativeMethods.SetWindowPos(_hwnd, NativeMethods.HWND_TOPMOST, _posX, _posY, _bmpW, _bmpH,
             NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_SHOWWINDOW);

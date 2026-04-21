@@ -209,6 +209,11 @@ internal static partial class NativeMethods
     internal static extern bool GetMonitorInfoW(nint hMonitor, ref MONITORINFOEX lpmi);
 #pragma warning restore SYSLIB1054
 
+    [LibraryImport(User32)]
+    internal static partial nint MonitorFromPoint(WINPOINT pt, uint dwFlags);
+
+    internal const uint MONITOR_DEFAULTTONEAREST = 2;
+
     // -- input injection --
 
     internal const uint INPUT_MOUSE = 0;

@@ -532,7 +532,8 @@ class OsdPanel: NSObject {
         let wW = ceil(textSz.width) + padH * 2 + strokePad * 2
         let wH = ceil(textSz.height) + padV * 2 + strokePad * 2
 
-        let screen = NSScreen.main ?? NSScreen.screens[0]
+        let mouse = NSEvent.mouseLocation
+        let screen = NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main ?? NSScreen.screens[0]
         let sx = screen.frame.midX - wW / 2
         let sy = screen.frame.minY + screen.frame.height * 0.1
 
