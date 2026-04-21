@@ -102,7 +102,7 @@ public abstract class ScreenDetector : SimpleHostedService, IScreenDetector
                 PlatformId = d.PlatformId,
             };
             screens.Add(new ScreenRect(name, _profile.Name, d.X, d.Y, d.Width, d.Height, IsLocal: true, Identity: identity));
-            entries.Add(new ScreenInfoEntry(name, d.X - minX, d.Y - minY, d.Width, d.Height, scale));
+            entries.Add(new ScreenInfoEntry(name, d.X - minX, d.Y - minY, d.Width, d.Height, scale, ResolveRelativeScale(d)));
         }
 
         return new LocalScreenSnapshot(screens, entries);
@@ -116,6 +116,16 @@ public abstract class ScreenDetector : SimpleHostedService, IScreenDetector
                 return def.MouseScale ?? _profile.MouseScale ?? 1.0m;
         }
         return _profile.MouseScale ?? 1.0m;
+    }
+
+    private decimal? ResolveRelativeScale(DetectedScreen d)
+    {
+        foreach (var def in _profile.ScreenDefinitions)
+        {
+            if (Matches(d, def))
+                return def.RelativeMouseScale ?? _profile.RelativeMouseScale;
+        }
+        return _profile.RelativeMouseScale;
     }
 
     private static bool Matches(DetectedScreen d, ScreenDefinition def) =>

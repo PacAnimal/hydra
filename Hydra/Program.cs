@@ -204,16 +204,29 @@ if (config != null)
     }
     else if (profile.Mode == Mode.Slave)
     {
+        // register concrete handler under its own type so ICursorVisibility can resolve to it directly
         if (OperatingSystem.IsMacOS())
-            services.AddSingleton<IPlatformOutput, MacOutputHandler>();
+        {
+            services.AddSingleton<MacOutputHandler>();
+            services.AddSingleton<IPlatformOutput>(sp => new CoalescingOutputWrapper(sp.GetRequiredService<MacOutputHandler>()));
+            services.AddSingleton<ICursorVisibility>(sp => sp.GetRequiredService<MacOutputHandler>());
+        }
         else if (OperatingSystem.IsWindows())
-            services.AddSingleton<IPlatformOutput, WindowsOutputHandler>();
+        {
+            services.AddSingleton<WindowsOutputHandler>();
+#pragma warning disable CA1416
+            services.AddSingleton<IPlatformOutput>(sp => new CoalescingOutputWrapper(sp.GetRequiredService<WindowsOutputHandler>()));
+            services.AddSingleton<ICursorVisibility>(sp => sp.GetRequiredService<WindowsOutputHandler>());
+#pragma warning restore CA1416
+        }
         else if (OperatingSystem.IsLinux())
-            services.AddSingleton<IPlatformOutput, XorgOutputHandler>();
+        {
+            services.AddSingleton<XorgOutputHandler>();
+            services.AddSingleton<IPlatformOutput>(sp => new CoalescingOutputWrapper(sp.GetRequiredService<XorgOutputHandler>()));
+            services.AddSingleton<ICursorVisibility>(sp => sp.GetRequiredService<XorgOutputHandler>());
+        }
         else
             throw new PlatformNotSupportedException($"Unsupported OS: {Environment.OSVersion}");
-
-        services.AddSingleton<ICursorVisibility>(sp => (ICursorVisibility)sp.GetRequiredService<IPlatformOutput>());
         services.AddSingleton<SlaveCursorHider>();
 
         // forwarder buffers log entries; SlaveLogSender drains them to masters

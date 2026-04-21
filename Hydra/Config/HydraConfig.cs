@@ -30,7 +30,8 @@ public class ScreenDefinition
     public string? DisplayName { get; init; }  // matches DetectedScreen.DisplayName (e.g. "DELL U2720Q")
     public string? OutputName { get; init; }   // matches DetectedScreen.OutputName (e.g. "HDMI-1")
     public string? PlatformId { get; init; }   // matches DetectedScreen.PlatformId
-    public decimal? MouseScale { get; init; }  // cursor speed multiplier for this screen; overrides root mouseScale
+    public decimal? MouseScale { get; init; }          // cursor speed multiplier for this screen; overrides root mouseScale
+    public decimal? RelativeMouseScale { get; init; }  // relative-mode speed multiplier; overrides root relativeMouseScale
 }
 
 public class HydraConfig
@@ -41,7 +42,8 @@ public class HydraConfig
     public List<HostConfig> Hosts { get; init; } = [];
     // slave only — scale config is reported to master via ScreenInfoEntry, master applies it when routing to slave screens
     public List<ScreenDefinition> ScreenDefinitions { get; init; } = [];
-    public decimal? MouseScale { get; init; }  // slave only — fallback cursor speed multiplier; overridden by per-screen mouseScale
+    public decimal? MouseScale { get; init; }          // slave only — fallback cursor speed multiplier; overridden by per-screen mouseScale
+    public decimal? RelativeMouseScale { get; init; }  // slave only — fallback relative-mode cursor speed; overridden by per-screen relativeMouseScale
 
     public string? NetworkConfig { get; init; }
 

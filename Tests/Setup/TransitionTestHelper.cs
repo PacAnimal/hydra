@@ -41,6 +41,7 @@ public static class TransitionTestHelper
         var screens = new FakeScreenDetector();
         var service = new InputRouter(platform, TestConfig, relay, screens, NullLoggerFactory.Instance, NullLogger<InputRouter>.Instance, new NullScreenSaverSync(), new NullClipboardSync(),
             FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification());
+        platform.AfterFireCallback = service.FlushAsync;
         return new TestServiceBundle(platform, relay, service);
     }
 
@@ -66,6 +67,7 @@ public static class TransitionTestHelper
         var screens = new FakeScreenDetector();
         var service = new InputRouter(platform, config ?? RemoteOnlyConfig, relay, screens, NullLoggerFactory.Instance, NullLogger<InputRouter>.Instance, new NullScreenSaverSync(), new NullClipboardSync(),
             FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification());
+        platform.AfterFireCallback = service.FlushAsync;
         return new TestServiceBundle(platform, relay, service);
     }
 

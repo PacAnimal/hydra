@@ -432,6 +432,7 @@ public class ClipboardSyncTests
             new FakeScreenDetector(), NullLoggerFactory.Instance, NullLogger<InputRouter>.Instance,
             new NullScreenSaverSync(), clipboard,
             FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification());
+        platform.AfterFireCallback = service.FlushAsync;
         return (platform, relay, service);
     }
 

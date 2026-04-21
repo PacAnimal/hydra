@@ -81,22 +81,9 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
 
     public void MoveMouseRelative(int dx, int dy)
     {
-        // read actual cursor position before moving — avoids unbounded drift of our own tracking,
-        // and keeps _mouseX/_mouseY accurate for InjectMouseButton (matches barrier/deskflow approach)
-        var posQuery = NativeMethods.CGEventCreate(nint.Zero);
-        if (posQuery != nint.Zero)
-        {
-            var cur = NativeMethods.CGEventGetLocation(posQuery);
-            _mouseX = cur.X + dx;
-            _mouseY = cur.Y + dy;
-            NativeMethods.CFRelease(posQuery);
-        }
-        else
-        {
-            _mouseX += dx;
-            _mouseY += dy;
-        }
-
+        _mouseX += dx;
+        _mouseY += dy;
+        _mousePositionInitialized = true;
         var pos = new CGPoint { X = _mouseX, Y = _mouseY };
 
         var move = GetMoveEventType();

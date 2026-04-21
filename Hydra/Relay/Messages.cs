@@ -37,7 +37,7 @@ public enum MessageKind : byte
 
 public record MouseMoveMessage(string Screen, int X, int Y);
 public record MouseMoveDeltaMessage(int Dx, int Dy);
-public record ScreenInfoEntry(string Name, int X, int Y, int Width, int Height, decimal MouseScale);
+public record ScreenInfoEntry(string Name, int X, int Y, int Width, int Height, decimal MouseScale, decimal? RelativeMouseScale = null);
 
 // ReSharper disable once InconsistentNaming
 public enum PeerPlatform : byte { Unknown = 0, Linux = 1, MacOS = 2, Windows = 3 }

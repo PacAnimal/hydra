@@ -82,8 +82,8 @@ public class RelayDisconnectTests
 
         _platform.ShowCursorCalled = false;
 
-        // nudge left far enough to reach x=0 on the remote (NudgeDistance=2 means entry is at x=2, need dx>=-2)
-        _platform.FireMouseMove(2555, 720);
+        // after warp-on-entry to WarpX (1280), nudge left by ≥ NudgeDistance (2) to exit FLIPSIDE
+        _platform.FireMouseMove(1276, 720);
 
         using (Assert.EnterMultipleScope())
         {

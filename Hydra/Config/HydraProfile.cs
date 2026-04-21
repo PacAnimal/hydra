@@ -17,6 +17,7 @@ public interface IHydraProfile
     List<HostConfig> Hosts { get; }
     List<ScreenDefinition> ScreenDefinitions { get; }
     decimal? MouseScale { get; }
+    decimal? RelativeMouseScale { get; }
     string? NetworkConfig { get; }
     bool RemoteOnly { get; }
     bool SyncScreensaver { get; }
@@ -41,6 +42,7 @@ public class HydraProfile(HydraConfigFile configFile, HydraConfig? activeProfile
     public List<HostConfig> Hosts => _activeProfile?.Hosts ?? [];
     public List<ScreenDefinition> ScreenDefinitions => _activeProfile?.ScreenDefinitions ?? [];
     public decimal? MouseScale => _activeProfile?.MouseScale;
+    public decimal? RelativeMouseScale => _activeProfile?.RelativeMouseScale;
     public string? NetworkConfig => _activeProfile?.NetworkConfig;
     public bool RemoteOnly => _activeProfile?.RemoteOnly ?? false;
     public bool SyncScreensaver => _activeProfile?.SyncScreensaver ?? true;

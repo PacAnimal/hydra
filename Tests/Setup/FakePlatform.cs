@@ -18,11 +18,16 @@ public sealed class FakePlatform : IPlatformInput
     public int WarpX { get; private set; }
     public int WarpY { get; private set; }
 
-    public void FireMouseMove(double x, double y) => _onMouseMove?.Invoke(x, y);
-    public void FireMouseDelta(double dx, double dy) => _onMouseDelta?.Invoke(dx, dy);
-    public void FireKeyEvent(KeyEvent e) => _onKeyEvent?.Invoke(e);
-    public void FireMouseButton(MouseButtonEvent e) => _onMouseButton?.Invoke(e);
-    public void FireMouseScroll(MouseScrollEvent e) => _onMouseScroll?.Invoke(e);
+    // set to InputRouter.FlushAsync to synchronize channel consumer after each Fire call
+    public Func<Task>? AfterFireCallback { get; set; }
+
+    private void Flush() => AfterFireCallback?.Invoke().GetAwaiter().GetResult();
+
+    public void FireMouseMove(double x, double y) { _onMouseMove?.Invoke(x, y); Flush(); }
+    public void FireMouseDelta(double dx, double dy) { _onMouseDelta?.Invoke(dx, dy); Flush(); }
+    public void FireKeyEvent(KeyEvent e) { _onKeyEvent?.Invoke(e); Flush(); }
+    public void FireMouseButton(MouseButtonEvent e) { _onMouseButton?.Invoke(e); Flush(); }
+    public void FireMouseScroll(MouseScrollEvent e) { _onMouseScroll?.Invoke(e); Flush(); }
 
     public void Reset()
     {
