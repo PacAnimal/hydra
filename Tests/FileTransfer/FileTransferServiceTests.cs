@@ -591,6 +591,78 @@ public class FileTransferServiceTests
         Assert.That(_service.GetCopyBuffer()?.SourceHost, Is.EqualTo("original-host"));
     }
 
+    // -- HandleBusy --
+
+    [Test]
+    public void HandleBusy_DuringSend_CancelsAndClosesDialog()
+    {
+        _service.StartSend([CreateTempFile()], "slave", _relay);
+
+        _service.HandleBusy("slave");
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(_service.FileTransferOngoing, Is.False);
+            Assert.That(_dialog.LastState, Is.EqualTo("closed"));
+        }
+    }
+
+    [Test]
+    public async Task HandleBusy_DuringReceive_ClearsReceiverAndClosesDialog()
+    {
+        await Simulate("source", MessageKind.FileTransferRequest, new FileTransferRequestMessage());
+
+        _service.HandleBusy("source");
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(_service.FileTransferOngoing, Is.False);
+            Assert.That(_dialog.LastState, Is.EqualTo("closed"));
+        }
+    }
+
+    [Test]
+    public void HandleBusy_DuringCoordinating_ClearsState()
+    {
+        var copyBuffer = new FileTransferService.FileCopyState("source-slave", ["/remote/file.txt"]);
+        _service.InitiatePaste(copyBuffer, "target-slave", "local-host", _relay);
+
+        _service.HandleBusy("target-slave");
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(_service.FileTransferOngoing, Is.False);
+            Assert.That(_service.IsCoordinatingTransferTo("target-slave"), Is.False);
+        }
+    }
+
+    [Test]
+    public void HandleBusy_FromUnrelatedHost_IsIgnored()
+    {
+        _service.StartSend([CreateTempFile()], "slave", _relay);
+
+        _service.HandleBusy("other-host");
+
+        Assert.That(_service.FileTransferOngoing, Is.True);
+    }
+
+    [Test]
+    public async Task HandleFileTransferRequest_WhenBusy_SendsBusyInsteadOfAccepted()
+    {
+        // put service into sending state (FileTransferOngoing = true)
+        _service.StartSend([CreateTempFile()], "slave", _relay);
+        _relay.Sent.Clear();
+
+        // another host now tries to transfer to us
+        await Simulate("other-master", MessageKind.FileTransferRequest, new FileTransferRequestMessage());
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(_relay.Sent.Any(m => m.Kind == MessageKind.FileTransferBusy && m.Targets.Contains("other-master")), Is.True);
+            Assert.That(_relay.Sent.Any(m => m.Kind == MessageKind.FileTransferAccepted), Is.False);
+        }
+    }
+
     // -- dispose --
 
     [Test]

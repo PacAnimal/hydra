@@ -130,6 +130,44 @@ public sealed class FileTransferService : IDisposable
         MessageKind.FileTransferChunk or MessageKind.FileTransferDone or
         MessageKind.FileTransferAbort or MessageKind.FileTransferAccepted;
 
+    // called when a slave responds FileTransferBusy to a request we sent; cleans up local state
+    public void HandleBusy(string busyHost)
+    {
+        bool matchesSend, matchesReceive, matchesCoord;
+        lock (_lock)
+        {
+            matchesSend = _sendTargetHost != null && _sendTargetHost.EqualsIgnoreCase(busyHost);
+            matchesReceive = _receiver != null && _receiver.SourceHost.EqualsIgnoreCase(busyHost);
+            matchesCoord = _coordTargetHost != null && _coordTargetHost.EqualsIgnoreCase(busyHost);
+        }
+
+        if (matchesSend && TryCancelSend(out _, out _))
+        {
+            _dialog.Close();
+            _log.LogInformation("Transfer to {Host} refused: host is busy", busyHost);
+            return;
+        }
+
+        if (matchesCoord)
+        {
+            TryClearCoordinator();
+            _log.LogInformation("Coordination refused by target {Host}: busy", busyHost);
+            return;
+        }
+
+        if (matchesReceive)
+        {
+            TryClearReceiver(out var receiver, out _);
+            if (receiver != null) CleanupReceiver(receiver);
+            _dialog.Close();
+            _log.LogInformation("Source {Host} refused to stream: busy", busyHost);
+            return;
+        }
+
+        // case 3 after accept: coordinator state already cleared; target will watchdog
+        _log.LogInformation("Host {Host} is busy (no matching transfer state)", busyHost);
+    }
+
     internal static FileTransferService Null() =>
         new(new NullFileTransferDialog(), new NullDropTargetResolver(), Microsoft.Extensions.Logging.Abstractions.NullLogger<FileTransferService>.Instance);
 
@@ -208,6 +246,13 @@ public sealed class FileTransferService : IDisposable
     {
         var msg = json.FromSaneJson<FileTransferRequestMessage>();
         if (msg == null) { _log.LogWarning("Failed to deserialize FileTransferRequest from {Host}", sourceHost); return; }
+
+        if (FileTransferOngoing)
+        {
+            SendTo(relay, sourceHost, MessageKind.FileTransferBusy, new FileTransferBusyMessage());
+            _log.LogInformation("Transfer request from {Host} refused: transfer already in progress", sourceHost);
+            return;
+        }
 
         var destFolder = _dropTargetResolver.GetPasteDirectory();
         if (string.IsNullOrEmpty(destFolder))

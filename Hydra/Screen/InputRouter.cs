@@ -524,6 +524,12 @@ public class InputRouter(
                     _ = relay.Send([sourceHost], osdPayload).AsTask();
                     break;
                 }
+            case MessageKind.FileTransferBusy:
+                {
+                    _fileTransfer.HandleBusy(sourceHost);
+                    osd.Show($"Transfer in progress on {sourceHost}");
+                    break;
+                }
             case var _ when FileTransferService.IsFileTransferMessage(kind):
                 {
                     var wasSendingTo = _fileTransfer.IsSendingTo(sourceHost);
@@ -734,7 +740,11 @@ public class InputRouter(
                 }
                 else if (keyEvent.Character == 'c')
                 {
-                    if (!st.Mouse.IsOnVirtualScreen)
+                    if (_fileTransfer.FileTransferOngoing)
+                    {
+                        ShowOsd(st, "Transfer in progress");
+                    }
+                    else if (!st.Mouse.IsOnVirtualScreen)
                     {
                         if (!_selectionDetector.IsFileTransferSupported)
                         {
@@ -780,7 +790,11 @@ public class InputRouter(
                 }
                 else if (keyEvent.Character == 'v')
                 {
-                    if (!_selectionDetector.IsFileTransferSupported)
+                    if (_fileTransfer.FileTransferOngoing)
+                    {
+                        ShowOsd(st, "Transfer in progress");
+                    }
+                    else if (!_selectionDetector.IsFileTransferSupported)
                     {
                         log.LogInformation("Paste hotkey: file transfer not supported on this platform");
                         ShowOsd(st, "Action not supported");

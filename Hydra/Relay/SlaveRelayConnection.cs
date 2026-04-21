@@ -194,6 +194,12 @@ public class SlaveRelayConnection : RelayConnection
                 }
             case MessageKind.FileSelectionQuery:
                 {
+                    if (_fileTransfer.FileTransferOngoing)
+                    {
+                        _log.LogInformation("File selection query from {Host} refused: transfer already in progress", sourceHost);
+                        _ = Send([sourceHost], MessageSerializer.Encode(MessageKind.FileTransferBusy, new FileTransferBusyMessage())).AsTask();
+                        break;
+                    }
                     if (!_selectionDetector.IsFileTransferSupported)
                     {
                         _log.LogInformation("File selection query from {Host}: file transfer not supported on this platform", sourceHost);
@@ -215,6 +221,12 @@ public class SlaveRelayConnection : RelayConnection
                 }
             case MessageKind.FileStreamRequest:
                 {
+                    if (_fileTransfer.FileTransferOngoing)
+                    {
+                        _log.LogInformation("Stream request from {Host} refused: transfer already in progress", sourceHost);
+                        _ = Send([sourceHost], MessageSerializer.Encode(MessageKind.FileTransferBusy, new FileTransferBusyMessage())).AsTask();
+                        break;
+                    }
                     var req = json.FromSaneJson<FileStreamRequestMessage>();
                     if (req != null)
                         _ = _fileTransfer.StreamToHost(req.Paths, req.TargetHost, this);
