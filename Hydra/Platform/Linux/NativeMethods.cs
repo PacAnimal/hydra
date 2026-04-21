@@ -543,11 +543,15 @@ internal struct XSetWindowAttributes
 // int sourceid [52], int detail [56], int flags [60],
 // XIValuatorState: int mask_len [64], (pad [68]), uchar* mask [72], double* values [80],
 // double* raw_values [88]
+//
+// values = accelerated deltas (after libinput / Xorg pointer acceleration)
+// raw_values = unprocessed hardware deltas (ignores acceleration)
 [StructLayout(LayoutKind.Explicit)]
 internal struct XIRawEvent
 {
     [FieldOffset(56)] internal int Detail;
     [FieldOffset(64)] internal int ValuatorsMaskLen;
-    [FieldOffset(72)] internal nint ValuatorsMask;   // unsigned char*
-    [FieldOffset(88)] internal nint RawValues;        // double*
+    [FieldOffset(72)] internal nint ValuatorsMask;    // unsigned char*
+    [FieldOffset(80)] internal nint ValuatorValues;   // double* — post-acceleration deltas
+    [FieldOffset(88)] internal nint RawValues;        // double* — pre-acceleration deltas
 }

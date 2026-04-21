@@ -15,6 +15,7 @@ public sealed class XorgInputHandler : IPlatformInput
     private readonly int _lockKeycode;
     private readonly XorgKeyResolver _keyResolver = new();
 
+    private readonly ILogger<XorgInputHandler> _log;
     private Thread? _eventThread;
     private volatile bool _running;
     private Action<double, double>? _onMouseMove;
@@ -43,6 +44,7 @@ public sealed class XorgInputHandler : IPlatformInput
 
     public XorgInputHandler(ILogger<XorgInputHandler> log)
     {
+        _log = log;
         // must be first X11 call in the process
         _ = NativeMethods.XInitThreads();
 
@@ -255,9 +257,11 @@ public sealed class XorgInputHandler : IPlatformInput
             {
                 if (_isOnVirtualScreen && _onMouseDelta != null)
                 {
-                    // use raw hardware deltas — immune to XQueryPointer/XWarpPointer race
-                    var (rdx, rdy) = ExtractRawDeltas(ev.XCookieData);
-                    if (rdx != 0 || rdy != 0) _onMouseDelta(rdx, rdy);
+                    // use accelerated valuator deltas — immune to XQueryPointer/XWarpPointer race
+                    ExtractValuatorDeltas(ev.XCookieData, out var adx, out var ady, out var rdx, out var rdy);
+                    if (_log.IsEnabled(LogLevel.Trace))
+                        _log.LogTrace("XI2 motion: accel=({Ax:F2}, {Ay:F2}) raw=({Rx:F2}, {Ry:F2})", adx, ady, rdx, rdy);
+                    if (adx != 0 || ady != 0) _onMouseDelta(adx, ady);
                 }
                 else
                 {
@@ -374,22 +378,27 @@ public sealed class XorgInputHandler : IPlatformInput
         return opcode;
     }
 
-    // reads raw hardware deltas from XIRawEvent valuators — immune to XWarpPointer races.
-    // valuators.mask bit 0 = X axis, bit 1 = Y axis; raw_values packed consecutively.
-    private static (double dx, double dy) ExtractRawDeltas(nint cookieData)
+    // reads both accelerated (valuators.values) and raw (raw_values) deltas from XIRawEvent.
+    // mask bit 0 = X axis, bit 1 = Y axis; each array packed consecutively for set bits.
+    private static void ExtractValuatorDeltas(nint cookieData, out double accelDx, out double accelDy, out double rawDx, out double rawDy)
     {
+        accelDx = accelDy = rawDx = rawDy = 0;
         var ev = Marshal.PtrToStructure<XIRawEvent>(cookieData);
-        if (ev.ValuatorsMaskLen < 1 || ev.ValuatorsMask == nint.Zero || ev.RawValues == nint.Zero)
-            return (0, 0);
+        if (ev.ValuatorsMaskLen < 1 || ev.ValuatorsMask == nint.Zero) return;
         var maskByte = Marshal.ReadByte(ev.ValuatorsMask);
         var xPresent = (maskByte & 0x01) != 0;
         var yPresent = (maskByte & 0x02) != 0;
         int idx = 0;
-        double dx = 0, dy = 0;
         if (xPresent)
-            dx = BitConverter.Int64BitsToDouble(Marshal.ReadInt64(ev.RawValues, idx++ * 8));
+        {
+            if (ev.ValuatorValues != nint.Zero) accelDx = BitConverter.Int64BitsToDouble(Marshal.ReadInt64(ev.ValuatorValues, idx * 8));
+            if (ev.RawValues != nint.Zero) rawDx = BitConverter.Int64BitsToDouble(Marshal.ReadInt64(ev.RawValues, idx * 8));
+            idx++;
+        }
         if (yPresent)
-            dy = BitConverter.Int64BitsToDouble(Marshal.ReadInt64(ev.RawValues, idx * 8));
-        return (dx, dy);
+        {
+            if (ev.ValuatorValues != nint.Zero) accelDy = BitConverter.Int64BitsToDouble(Marshal.ReadInt64(ev.ValuatorValues, idx * 8));
+            if (ev.RawValues != nint.Zero) rawDy = BitConverter.Int64BitsToDouble(Marshal.ReadInt64(ev.RawValues, idx * 8));
+        }
     }
 }
