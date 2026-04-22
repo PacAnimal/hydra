@@ -47,7 +47,8 @@ public abstract class ScreenDetector : SimpleHostedService, IScreenDetector
 
     public async Task<LocalScreenSnapshot> Get(CancellationToken ct = default)
     {
-        await _ready.Task.WaitAsync(ct);
+        if (!_ready.Task.IsCompleted)
+            await _ready.Task.WaitAsync(ct);
         return _current!;
     }
 

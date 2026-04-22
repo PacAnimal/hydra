@@ -35,7 +35,7 @@ public class WorldState : IWorldState
 {
     private readonly SemaphoreSlimValue<MasterState> _master = new(new MasterState(), disposeValue: false);
     private readonly SemaphoreSlimValue<SlaveState> _slave = new(new SlaveState(), disposeValue: false);
-    private readonly SemaphoreSlimValue<SharedState> _shared = new(new SharedState(), disposeValue: false);
+    private readonly ConcurrentDictionary<string, SimpleAesKey> _remoteKeys = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, ILogger> _loggers = new(StringComparer.OrdinalIgnoreCase);
 
     public async ValueTask<PeerDelta> UpdatePeers(HashSet<string> currentPeers, HashSet<string> configuredSlaves)
@@ -65,9 +65,8 @@ public class WorldState : IWorldState
         // prune encryption keys and slave masters for departed hosts
         if (departed.Count > 0)
         {
-            using (var sh = await _shared.WaitForDisposable())
-                foreach (var host in departed)
-                    sh.Value.RemoteKeys.Remove(host);
+            foreach (var host in departed)
+                _remoteKeys.TryRemove(host, out _);
 
             using var sl = await _slave.WaitForDisposable();
             foreach (var key in departed.Where(sl.Value.Masters.ContainsKey).ToList())
@@ -139,17 +138,14 @@ public class WorldState : IWorldState
         return m.Value.PeerPlatforms.TryGetValue(host, out var p) ? p : PeerPlatform.Unknown;
     }
 
-    public async ValueTask SetRemoteKey(string host, SimpleAesKey key)
+    public ValueTask SetRemoteKey(string host, SimpleAesKey key)
     {
-        using var s = await _shared.WaitForDisposable();
-        s.Value.RemoteKeys[host] = key;
+        _remoteKeys[host] = key;
+        return ValueTask.CompletedTask;
     }
 
-    public async ValueTask<SimpleAesKey?> GetRemoteKey(string host)
-    {
-        using var s = await _shared.WaitForDisposable();
-        return s.Value.RemoteKeys.TryGetValue(host, out var key) ? key : null;
-    }
+    public ValueTask<SimpleAesKey?> GetRemoteKey(string host) =>
+        new(_remoteKeys.TryGetValue(host, out var key) ? key : (SimpleAesKey?)null);
 
     private class MasterState
     {
@@ -163,10 +159,6 @@ public class WorldState : IWorldState
         public Dictionary<string, MasterConfigMessage> Masters = new(StringComparer.OrdinalIgnoreCase);
     }
 
-    private class SharedState
-    {
-        public Dictionary<string, SimpleAesKey> RemoteKeys = new(StringComparer.OrdinalIgnoreCase);
-    }
 }
 
 public record PeerDelta(
