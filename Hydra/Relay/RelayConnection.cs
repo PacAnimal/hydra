@@ -175,11 +175,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
 
         await using var con = new HubConnectionBuilder()
             .WithUrl($"{netConfig.StyxServer}/relay", ConfigureHubUrl)
-            .AddJsonProtocol(hubOptions =>
-            {
-                SaneJson.Configure(hubOptions.PayloadSerializerOptions);
-                hubOptions.PayloadSerializerOptions.WriteIndented = false;
-            })
+            .AddMessagePackProtocol()
             .Build();
 
         // ReSharper disable once AccessToDisposedClosure

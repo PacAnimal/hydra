@@ -34,11 +34,7 @@ services.AddSignalR(options =>
     options.EnableDetailedErrors = true;
     options.MaximumReceiveMessageSize = (long)ByteSize.FromMebiBytes(Constants.MaxMessageMebiBytes).Bytes;
     options.MaximumParallelInvocationsPerClient = Constants.MaxParallelInvocations;
-}).AddJsonProtocol(hubOptions =>
-{
-    SaneJson.Configure(hubOptions.PayloadSerializerOptions);
-    hubOptions.PayloadSerializerOptions.WriteIndented = false;
-});
+}).AddMessagePackProtocol();
 
 services.AddSingleton<IClientRegistry, ClientRegistry>();
 services.AddHostedService<IPeerBroadcaster, PeerBroadcastService>();

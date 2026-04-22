@@ -42,11 +42,7 @@ public sealed class TestStyxClient : IStyxClient, IAsyncDisposable
         _hub = new HubConnectionBuilder()
             .WithUrl($"{factory.Server.BaseAddress}relay",
                 options => options.HttpMessageHandlerFactory = _ => factory.Server.CreateHandler())
-            .AddJsonProtocol(options =>
-            {
-                SaneJson.Configure(options.PayloadSerializerOptions);
-                options.PayloadSerializerOptions.WriteIndented = false;
-            })
+            .AddMessagePackProtocol()
             .Build();
 
         await _hub.StartAsync();
