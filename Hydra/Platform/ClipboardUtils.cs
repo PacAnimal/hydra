@@ -23,6 +23,10 @@ public static class ClipboardUtils
         return new ClipboardSnapshot(validText, validPrimary, validImage);
     }
 
+    // reads from sync, falling back to snapshot fields when Get* returns null (echo suppression)
+    public static ClipboardSnapshot ReadWithFallback(IClipboardSync sync, ClipboardSnapshot? fallback, ILogger log, string context)
+        => TrimToFit(sync.GetText() ?? fallback?.Text, sync.GetPrimaryText() ?? fallback?.PrimaryText, sync.GetImagePng() ?? fallback?.ImagePng, log, context);
+
     // drop fields in priority order (image, primary, text) until combined size fits
     public static ClipboardSnapshot TrimToFit(string? text, string? primaryText, byte[]? image, ILogger log, string context)
     {

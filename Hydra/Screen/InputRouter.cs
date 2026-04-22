@@ -297,96 +297,70 @@ public class InputRouter(
 
     private void OnScreensaverActivated()
     {
-        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        if (!_commands.Writer.TryWrite(async st =>
+        _commands.Writer.TryWrite(async st =>
         {
-            try
-            {
-                if (st.ScreensaverActive) return;
-                st.ScreensaverActive = true;
+            if (st.ScreensaverActive) return;
+            st.ScreensaverActive = true;
 
-                if (st.Mouse.IsOnVirtualScreen && st.Mouse.CurrentScreen != null)
-                {
-                    st.SavedScreenName = st.Mouse.CurrentScreen.Name;
-                    st.SavedCursorX = (int)st.Mouse.X;
-                    st.SavedCursorY = (int)st.Mouse.Y;
-                    FlushMouseDelta(st);
-                    var disconnectedHost = LeaveVirtualScreen(st, out var warpX, out var warpY);
-                    if (disconnectedHost != null)
-                    {
-                        _fileTransfer.Abort(relay, "screensaver activated");
-                        relay.Send([disconnectedHost], MessageSerializer.Encode(MessageKind.LeaveScreen, new LeaveScreenMessage()));
-                        ReturnToLocalScreen(warpX, warpY);
-                        await platform.ShowCursor();
-                    }
-                }
-            }
-            finally
+            if (st.Mouse.IsOnVirtualScreen && st.Mouse.CurrentScreen != null)
             {
-                tcs.TrySetResult();
+                st.SavedScreenName = st.Mouse.CurrentScreen.Name;
+                st.SavedCursorX = (int)st.Mouse.X;
+                st.SavedCursorY = (int)st.Mouse.Y;
+                FlushMouseDelta(st);
+                var disconnectedHost = LeaveVirtualScreen(st, out var warpX, out var warpY);
+                if (disconnectedHost != null)
+                {
+                    _fileTransfer.Abort(relay, "screensaver activated");
+                    relay.Send([disconnectedHost], MessageSerializer.Encode(MessageKind.LeaveScreen, new LeaveScreenMessage()));
+                    ReturnToLocalScreen(warpX, warpY);
+                    await platform.ShowCursor();
+                }
             }
 
             await BroadcastScreensaverSync(true);
             log.LogInformation("Screensaver activated — synced to slaves");
-        }))
-        {
-            return;
-        }
-
-        tcs.Task.GetAwaiter().GetResult();
+        });
     }
 
     private void OnScreensaverDeactivated()
     {
-        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        if (!_commands.Writer.TryWrite(async st =>
+        _commands.Writer.TryWrite(async st =>
         {
-            try
+            if (!st.ScreensaverActive) return;
+            st.ScreensaverActive = false;
+            var savedScreen = st.SavedScreenName;
+            var savedX = st.SavedCursorX;
+            var savedY = st.SavedCursorY;
+            st.SavedScreenName = null;
+
+            await BroadcastScreensaverSync(false);
+            log.LogInformation("Screensaver deactivated — synced to slaves");
+
+            // best-effort cursor restore: re-enter saved remote screen if still connected and accessible
+            if (savedScreen != null && relay.IsConnected)
             {
-                if (!st.ScreensaverActive) return;
-                st.ScreensaverActive = false;
-                var savedScreen = st.SavedScreenName;
-                var savedX = st.SavedCursorX;
-                var savedY = st.SavedCursorY;
-                st.SavedScreenName = null;
-
-                await BroadcastScreensaverSync(false);
-                log.LogInformation("Screensaver deactivated — synced to slaves");
-
-                // best-effort cursor restore: re-enter saved remote screen if still connected and accessible
-                if (savedScreen != null && relay.IsConnected)
+                var dest = st.Screens.FirstOrDefault(sc => !sc.IsLocal && sc.Name.EqualsIgnoreCase(savedScreen));
+                if (dest != null && dest.Width > 0)
                 {
-                    var dest = st.Screens.FirstOrDefault(sc => !sc.IsLocal && sc.Name.EqualsIgnoreCase(savedScreen));
-                    if (dest != null && dest.Width > 0)
-                    {
-                        var peerScreens = await _peerState.GetPeerScreensSnapshot();
-                        var remoteInfo = GetRemoteScreensAndScales(st.Screens, peerScreens, dest);
-                        var scale = remoteInfo.ScaleMap.GetValueOrDefault(dest.Name, 1.0m);
-                        await platform.HideCursor();
-                        platform.IsOnVirtualScreen = true;
-                        st.Mouse.EnterScreen(dest, remoteInfo.Screens, savedX, savedY, scale, remoteInfo.ScaleMap, remoteInfo.RelativeScaleMap);
-                        st.PendingDx = 0;
-                        st.PendingDy = 0;
-                        st.LastWarpX = st.WarpX;
-                        st.LastWarpY = st.WarpY;
-                        var enterPayload = MessageSerializer.Encode(MessageKind.EnterScreen,
-                            new EnterScreenMessage(dest.Name, savedX, savedY, dest.Width, dest.Height));
-                        relay.Send([dest.Host], enterPayload);
-                        PushClipboardToHost(dest.Host);
-                        log.LogInformation("Restored cursor to '{Screen}' after screensaver", savedScreen);
-                    }
+                    var peerScreens = await _peerState.GetPeerScreensSnapshot();
+                    var remoteInfo = GetRemoteScreensAndScales(st.Screens, peerScreens, dest);
+                    var scale = remoteInfo.ScaleMap.GetValueOrDefault(dest.Name, 1.0m);
+                    await platform.HideCursor();
+                    platform.IsOnVirtualScreen = true;
+                    st.Mouse.EnterScreen(dest, remoteInfo.Screens, savedX, savedY, scale, remoteInfo.ScaleMap, remoteInfo.RelativeScaleMap);
+                    st.PendingDx = 0;
+                    st.PendingDy = 0;
+                    st.LastWarpX = st.WarpX;
+                    st.LastWarpY = st.WarpY;
+                    var enterPayload = MessageSerializer.Encode(MessageKind.EnterScreen,
+                        new EnterScreenMessage(dest.Name, savedX, savedY, dest.Width, dest.Height));
+                    relay.Send([dest.Host], enterPayload);
+                    PushClipboardToHost(dest.Host);
+                    log.LogInformation("Restored cursor to '{Screen}' after screensaver", savedScreen);
                 }
             }
-            finally
-            {
-                tcs.TrySetResult();
-            }
-        }))
-        {
-            return;
-        }
-
-        tcs.Task.GetAwaiter().GetResult();
+        });
     }
 
     private async ValueTask BroadcastScreensaverSync(bool active)
@@ -412,10 +386,7 @@ public class InputRouter(
 
     private void PushClipboardToHostInner(string host)
     {
-        var raw = (_clipboardSync.GetText() ?? _lastReceived?.Text,
-                   _clipboardSync.GetPrimaryText() ?? _lastReceived?.PrimaryText,
-                   _clipboardSync.GetImagePng() ?? _lastReceived?.ImagePng);
-        var clip = ClipboardUtils.TrimToFit(raw.Item1, raw.Item2, raw.Item3, log, "push");
+        var clip = ClipboardUtils.ReadWithFallback(_clipboardSync, _lastReceived, log, "push");
 
         if (!string.IsNullOrEmpty(clip.Text) || !string.IsNullOrEmpty(clip.PrimaryText) || clip.ImagePng != null)
         {

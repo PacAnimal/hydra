@@ -75,7 +75,7 @@ public class SlaveRelayConnection : RelayConnection
                 await HandleMasterConfig(sourceHost, json);
                 break;
             case MessageKind.MouseMove:
-                var move = json.FromSaneJson<MouseMoveMessage>();
+                var move = Parse<MouseMoveMessage>(json, kind);
                 if (move != null)
                 {
                     _cursorHider.OnMasterActivity(sourceHost);
@@ -83,7 +83,7 @@ public class SlaveRelayConnection : RelayConnection
                 }
                 break;
             case MessageKind.KeyEvent:
-                var key = json.FromSaneJson<KeyEventMessage>();
+                var key = Parse<KeyEventMessage>(json, kind);
                 if (key != null)
                 {
                     _cursorHider.OnMasterActivity(sourceHost);
@@ -91,7 +91,7 @@ public class SlaveRelayConnection : RelayConnection
                 }
                 break;
             case MessageKind.MouseMoveDelta:
-                var delta = json.FromSaneJson<MouseMoveDeltaMessage>();
+                var delta = Parse<MouseMoveDeltaMessage>(json, kind);
                 if (delta != null)
                 {
                     _cursorHider.OnMasterActivity(sourceHost);
@@ -99,7 +99,7 @@ public class SlaveRelayConnection : RelayConnection
                 }
                 break;
             case MessageKind.MouseButton:
-                var btn = json.FromSaneJson<MouseButtonMessage>();
+                var btn = Parse<MouseButtonMessage>(json, kind);
                 if (btn != null)
                 {
                     _cursorHider.OnMasterActivity(sourceHost);
@@ -107,7 +107,7 @@ public class SlaveRelayConnection : RelayConnection
                 }
                 break;
             case MessageKind.MouseScroll:
-                var scroll = json.FromSaneJson<MouseScrollMessage>();
+                var scroll = Parse<MouseScrollMessage>(json, kind);
                 if (scroll != null)
                 {
                     _cursorHider.OnMasterActivity(sourceHost);
@@ -115,7 +115,7 @@ public class SlaveRelayConnection : RelayConnection
                 }
                 break;
             case MessageKind.EnterScreen:
-                var enter = json.FromSaneJson<EnterScreenMessage>();
+                var enter = Parse<EnterScreenMessage>(json, kind);
                 if (enter != null)
                 {
                     await MoveToScreen(enter.Screen, enter.X, enter.Y);
@@ -128,7 +128,7 @@ public class SlaveRelayConnection : RelayConnection
                 _cursorHider.OnLeaveScreen(sourceHost);
                 break;
             case MessageKind.ScreensaverSync:
-                var ss = json.FromSaneJson<ScreensaverSyncMessage>();
+                var ss = Parse<ScreensaverSyncMessage>(json, kind);
                 if (ss != null)
                 {
                     _log.LogInformation("Screensaver sync from {Host}: active={Active}", sourceHost, ss.Active);
@@ -137,7 +137,7 @@ public class SlaveRelayConnection : RelayConnection
                 }
                 break;
             case MessageKind.ClipboardPush:
-                var push = json.FromSaneJson<ClipboardPushMessage>();
+                var push = Parse<ClipboardPushMessage>(json, kind);
                 if (push != null)
                 {
                     _log.LogDebug("Clipboard push from {Host}: text={TextLen}, primary={PrimaryLen}, image={ImageLen}",
@@ -149,18 +149,14 @@ public class SlaveRelayConnection : RelayConnection
                 break;
             case MessageKind.ClipboardPull:
                 _log.LogDebug("Clipboard pull from {Host}", sourceHost);
-                var pullClip = ClipboardUtils.TrimToFit(
-                    _clipboardSync.GetText() ?? _lastPushed?.Text,
-                    _clipboardSync.GetPrimaryText() ?? _lastPushed?.PrimaryText,
-                    _clipboardSync.GetImagePng() ?? _lastPushed?.ImagePng,
-                    _log, "pull response");
+                var pullClip = ClipboardUtils.ReadWithFallback(_clipboardSync, _lastPushed, _log, "pull response");
                 _log.LogDebug("Pull response: text={TextLen}, primary={PrimaryLen}, image={ImageLen}", pullClip.Text?.Length, pullClip.PrimaryText?.Length, pullClip.ImagePng?.Length);
                 var response = MessageSerializer.Encode(MessageKind.ClipboardPullResponse, new ClipboardPullResponseMessage(pullClip.Text, pullClip.PrimaryText, pullClip.ImagePng));
                 Send([sourceHost], response);
                 break;
             case MessageKind.Osd:
                 {
-                    var osdMsg = json.FromSaneJson<OsdMessage>();
+                    var osdMsg = Parse<OsdMessage>(json, kind);
                     if (osdMsg != null) _osd.Show(osdMsg.Text);
                     break;
                 }
@@ -199,7 +195,7 @@ public class SlaveRelayConnection : RelayConnection
                         Send([sourceHost], MessageSerializer.Encode(MessageKind.FileTransferBusy, new FileTransferBusyMessage()));
                         break;
                     }
-                    var req = json.FromSaneJson<FileStreamRequestMessage>();
+                    var req = Parse<FileStreamRequestMessage>(json, kind);
                     if (req != null)
                         _ = _fileTransfer.StreamToHost(req.Paths, req.TargetHost, this);
                     break;
@@ -292,7 +288,15 @@ public class SlaveRelayConnection : RelayConnection
                 }
             }
             catch (OperationCanceledException) { }
+            catch (Exception ex) { _log.LogWarning(ex, "Key repeat timer error for {Key}", repeatKey); }
         }, ct);
+    }
+
+    private T? Parse<T>(string json, MessageKind kind) where T : class
+    {
+        var result = json.FromSaneJson<T>();
+        if (result == null) _log.LogWarning("Failed to deserialize {Kind} message — dropping", kind);
+        return result;
     }
 
     private void ReleaseAllKeys()

@@ -242,10 +242,17 @@ public sealed class FileTransferService : IDisposable
         }
     }
 
+    private T? Deserialize<T>(string json, string sourceHost) where T : class
+    {
+        var msg = json.FromSaneJson<T>();
+        if (msg == null) _log.LogWarning("Failed to deserialize {Type} from {Host}", typeof(T).Name, sourceHost);
+        return msg;
+    }
+
     private void HandleFileTransferRequest(string sourceHost, string json, IRelaySender relay)
     {
-        var msg = json.FromSaneJson<FileTransferRequestMessage>();
-        if (msg == null) { _log.LogWarning("Failed to deserialize FileTransferRequest from {Host}", sourceHost); return; }
+        var msg = Deserialize<FileTransferRequestMessage>(json, sourceHost);
+        if (msg == null) return;
 
         if (FileTransferOngoing)
         {
@@ -271,8 +278,8 @@ public sealed class FileTransferService : IDisposable
 
     private void HandleFileTransferStart(string sourceHost, string json)
     {
-        var msg = json.FromSaneJson<FileTransferStartMessage>();
-        if (msg == null) { _log.LogWarning("Failed to deserialize FileTransferStart from {Host}", sourceHost); return; }
+        var msg = Deserialize<FileTransferStartMessage>(json, sourceHost);
+        if (msg == null) return;
 
         ReceiverTransfer? receiver;
         lock (_lock) receiver = _receiver;
@@ -290,8 +297,8 @@ public sealed class FileTransferService : IDisposable
 
     private async Task HandleFileTransferChunkAsync(string sourceHost, string json)
     {
-        var chunk = json.FromSaneJson<FileTransferChunkMessage>();
-        if (chunk == null) { _log.LogWarning("Failed to deserialize FileTransferChunk from {Host}", sourceHost); return; }
+        var chunk = Deserialize<FileTransferChunkMessage>(json, sourceHost);
+        if (chunk == null) return;
         var (sequence, data) = (chunk.Sequence, chunk.Data);
         ReceiverTransfer? receiver;
         lock (_lock) receiver = _receiver;
@@ -313,7 +320,8 @@ public sealed class FileTransferService : IDisposable
 
     private async Task HandleFileTransferDoneAsync(string sourceHost, string json, IRelaySender relay)
     {
-        var msg = json.FromSaneJson<FileTransferDoneMessage>();
+        var msg = Deserialize<FileTransferDoneMessage>(json, sourceHost);
+
         ReceiverTransfer? receiver;
         lock (_lock)
         {
@@ -321,16 +329,19 @@ public sealed class FileTransferService : IDisposable
             if (_receiver != null && _receiver.SourceHost.EqualsIgnoreCase(sourceHost)) { _receiver = null; _recvRelay = null; }
             else receiver = null;
         }
-        if (msg == null) { _log.LogWarning("Failed to deserialize FileTransferDone from {Host}", sourceHost); return; }
-        if (receiver?.Extractor == null) return;
+
+        if (msg == null || receiver?.Extractor == null)
+        {
+            if (receiver != null) CleanupReceiver(receiver);
+            return;
+        }
 
         await FinalizeReceivingAsync(receiver, msg, relay);
     }
 
     private void HandleFileTransferAbort(string sourceHost, string json)
     {
-        var msg = json.FromSaneJson<FileTransferAbortMessage>();
-        if (msg == null) _log.LogWarning("Failed to deserialize FileTransferAbort from {Host}", sourceHost);
+        var msg = Deserialize<FileTransferAbortMessage>(json, sourceHost);
 
         bool relevant;
         lock (_lock)
