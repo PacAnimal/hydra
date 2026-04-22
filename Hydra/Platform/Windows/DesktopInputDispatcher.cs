@@ -138,6 +138,18 @@ internal sealed class DesktopInputDispatcher : IDisposable
                 }
             case MoveMouseCommand m:
                 {
+                    // drain any queued-up absolute moves — only the latest position matters.
+                    // on lag recovery the relay may have buffered many moves; replaying every
+                    // intermediate position causes a visible "zip around" effect.
+                    while (_queue.TryTake(out var next))
+                    {
+                        if (next is MoveMouseCommand later) { m = later; continue; }
+                        // hit a non-move command: flush our latest move first, then handle it
+                        if (ExecuteMoveMouse(m.Dx, m.Dy) == 0)
+                            _log.LogWarning("SendInput(mouse move) failed (error {Error})", Marshal.GetLastWin32Error());
+                        Execute(next);
+                        return;
+                    }
                     if (ExecuteMoveMouse(m.Dx, m.Dy) == 0)
                         _log.LogWarning("SendInput(mouse move) failed (error {Error})", Marshal.GetLastWin32Error());
                     break;
