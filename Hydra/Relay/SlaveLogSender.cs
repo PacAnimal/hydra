@@ -31,7 +31,7 @@ public sealed class SlaveLogSender(IRelaySender relay, SlaveLogForwarder logForw
 
             var msg = new SlaveLogMessage((int)entry.Level, entry.Category, entry.OriginalMessage, entry.Exception?.ToString());
             var payload = MessageSerializer.Encode(MessageKind.SlaveLog, msg);
-            await relay.Send(targets, payload);
+            relay.Send(targets, payload);
         }
     }
 }

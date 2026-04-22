@@ -480,25 +480,26 @@ public sealed class FileTransferService : IDisposable
         var startTick = Environment.TickCount64;
         _dialog.ShowTransferring(new FileTransferInfo(names, totalBytes, IsSender: true));
 
-        // inform target of what's coming before streaming
-        SendTo(relay, targetHost, MessageKind.FileTransferStart, new FileTransferStartMessage(names, totalBytes));
-
         // stream chunks directly — master already negotiated with target
         long totalSent = 0;
         try
         {
+            // inform target of what's coming before streaming
+            SendTo(relay, targetHost, MessageKind.FileTransferStart, new FileTransferStartMessage(names, totalBytes));
+
             var sha = await TarGzStreamer.StreamAsync(pathList, async (data, seq, uncompressedBytes) =>
             {
                 cts.Token.ThrowIfCancellationRequested();
                 var chunkPayload = MessageSerializer.Encode(MessageKind.FileTransferChunk, new FileTransferChunkMessage(seq, data));
-                await relay.Send([targetHost], chunkPayload);
+                relay.Send([targetHost], chunkPayload);
                 totalSent += data.Length;
                 _dialog.UpdateProgress(uncompressedBytes, CalcSpeed(startTick, totalSent));
                 _log.LogDebug("Sent chunk #{Seq}: {Bytes} bytes", seq, data.Length);
+                await ValueTask.CompletedTask;
             }, _dialog.SetCurrentFile, cts.Token);
 
             var donePayload = MessageSerializer.Encode(MessageKind.FileTransferDone, new FileTransferDoneMessage(totalSent, sha));
-            await relay.Send([targetHost], donePayload);
+            relay.Send([targetHost], donePayload);
             _dialog.ShowCompleted();
             _log.LogInformation("Transfer complete: {Bytes} compressed bytes sent", ByteSize.FromBytes(totalSent));
         }
@@ -566,7 +567,7 @@ public sealed class FileTransferService : IDisposable
             var sourceHost = string.IsNullOrEmpty(localHost) ? null : localHost;
             // send request first — receiver validates its paste dir and sends Accepted before we stream
             var requestPayload = MessageSerializer.Encode(MessageKind.FileTransferRequest, new FileTransferRequestMessage(SourceHost: sourceHost));
-            await relay.Send([targetHost], requestPayload);
+            relay.Send([targetHost], requestPayload);
 
             // wait for receiver to validate the paste destination before streaming
             TaskCompletionSource<bool>? acceptTcs;
@@ -575,21 +576,22 @@ public sealed class FileTransferService : IDisposable
 
             // inform receiver of what's coming before streaming
             var startPayload = MessageSerializer.Encode(MessageKind.FileTransferStart, new FileTransferStartMessage(names, totalBytes));
-            await relay.Send([targetHost], startPayload);
+            relay.Send([targetHost], startPayload);
 
             var sha = await TarGzStreamer.StreamAsync(paths, async (data, seq, uncompressedBytes) =>
             {
                 cancel.ThrowIfCancellationRequested();
                 var chunkPayload = MessageSerializer.Encode(MessageKind.FileTransferChunk, new FileTransferChunkMessage(seq, data));
-                await relay.Send([targetHost], chunkPayload);
+                relay.Send([targetHost], chunkPayload);
                 totalSent += data.Length;
                 var speed = CalcSpeed(startTick, totalSent);
                 _dialog.UpdateProgress(uncompressedBytes, speed);
                 _log.LogDebug("Sent chunk #{Seq}: {Bytes} bytes", seq, data.Length);
+                await ValueTask.CompletedTask;
             }, _dialog.SetCurrentFile, cancel);
 
             var donePayload = MessageSerializer.Encode(MessageKind.FileTransferDone, new FileTransferDoneMessage(totalSent, sha));
-            await relay.Send([targetHost], donePayload);
+            relay.Send([targetHost], donePayload);
             _dialog.ShowCompleted();
             _log.LogInformation("Transfer complete: {Bytes} compressed bytes sent", ByteSize.FromBytes(totalSent));
         }
@@ -721,8 +723,8 @@ public sealed class FileTransferService : IDisposable
     private void SendTo(IRelaySender relay, string host, MessageKind kind, object msg)
     {
         var payload = MessageSerializer.Encode(kind, msg);
-        relay.Send([host], payload).AsTask()
-            .ContinueWith(t => _log.LogWarning(t.Exception, "Relay send failed"), TaskContinuationOptions.OnlyOnFaulted);
+        try { relay.Send([host], payload); }
+        catch (Exception ex) { _log.LogWarning(ex, "SendTo failed"); }
     }
 
     private static void CleanupTempDir(string tempDir)

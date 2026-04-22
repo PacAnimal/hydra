@@ -742,5 +742,5 @@ internal sealed class ThrowingRelay : IRelaySender
     public event Func<string, MessageKind, string, Task>? MessageReceived;
     public event Func<Task>? Disconnected;
 #pragma warning restore CS0067
-    public ValueTask Send(string[] targetHosts, byte[] payload) => ValueTask.FromException(new InvalidOperationException("relay unavailable"));
+    public void Send(string[] targetHosts, byte[] payload) => throw new InvalidOperationException("relay unavailable");
 }

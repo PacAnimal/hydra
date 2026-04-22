@@ -1,4 +1,3 @@
-using System.Text;
 using Cathedral.Extensions;
 using Hydra.Config;
 using Hydra.FileTransfer;
@@ -143,48 +142,21 @@ public class SlaveRelayConnection : RelayConnection
                 {
                     _log.LogDebug("Clipboard push from {Host}: text={TextLen}, primary={PrimaryLen}, image={ImageLen}",
                         sourceHost, push.Text.Length, push.PrimaryText?.Length, push.ImagePng?.Length);
-                    var pushText = !string.IsNullOrEmpty(push.Text) && Encoding.UTF8.GetByteCount(push.Text) <= ClipboardUtils.MaxClipboardBytes ? push.Text : null;
-                    var pushPrimary = !string.IsNullOrEmpty(push.PrimaryText) && Encoding.UTF8.GetByteCount(push.PrimaryText) <= ClipboardUtils.MaxClipboardBytes ? push.PrimaryText : null;
-                    var pushImage = push.ImagePng?.Length <= ClipboardUtils.MaxClipboardBytes ? push.ImagePng : null;
-                    if (pushText == null && !string.IsNullOrEmpty(push.Text))
-                        _log.LogWarning("Clipboard push from {Host}: text exceeds {Max} bytes, dropping", sourceHost, ClipboardUtils.MaxClipboardBytes);
-                    if (pushPrimary == null && !string.IsNullOrEmpty(push.PrimaryText))
-                        _log.LogWarning("Clipboard push from {Host}: primary text exceeds {Max} bytes, dropping", sourceHost, ClipboardUtils.MaxClipboardBytes);
-                    if (pushImage == null && push.ImagePng != null)
-                        _log.LogWarning("Clipboard push from {Host}: image exceeds {Max} bytes, dropping", sourceHost, ClipboardUtils.MaxClipboardBytes);
-                    _lastPushed = new ClipboardSnapshot(pushText, pushPrimary, pushImage);
-                    _clipboardSync.SetClipboard(pushText, pushPrimary, pushImage);
+                    var validated = ClipboardUtils.ValidateFields(push.Text, push.PrimaryText, push.ImagePng, _log, "push", sourceHost);
+                    _lastPushed = validated;
+                    _clipboardSync.SetClipboard(validated.Text, validated.PrimaryText, validated.ImagePng);
                 }
                 break;
             case MessageKind.ClipboardPull:
                 _log.LogDebug("Clipboard pull from {Host}", sourceHost);
-                var text = _clipboardSync.GetText() ?? _lastPushed?.Text;
-                var primary = _clipboardSync.GetPrimaryText() ?? _lastPushed?.PrimaryText;
-                var image = _clipboardSync.GetImagePng() ?? _lastPushed?.ImagePng;
-
-                // drop fields in priority order until combined size fits
-                long textBytes = text != null ? Encoding.UTF8.GetByteCount(text) : 0;
-                long primaryBytes = primary != null ? Encoding.UTF8.GetByteCount(primary) : 0;
-                long imageBytes = image?.Length ?? 0;
-                if (textBytes + primaryBytes + imageBytes > ClipboardUtils.MaxClipboardBytes)
-                {
-                    _log.LogWarning("Clipboard pull response too large ({Total} bytes), dropping image", textBytes + primaryBytes + imageBytes);
-                    image = null; imageBytes = 0;
-                }
-                if (textBytes + primaryBytes + imageBytes > ClipboardUtils.MaxClipboardBytes)
-                {
-                    _log.LogWarning("Clipboard pull response still too large ({Total} bytes), dropping primary text", textBytes + primaryBytes);
-                    primary = null; primaryBytes = 0;
-                }
-                if (textBytes + primaryBytes + imageBytes > ClipboardUtils.MaxClipboardBytes)
-                {
-                    _log.LogWarning("Clipboard pull response still too large ({Total} bytes), dropping text", textBytes);
-                    text = null;
-                }
-
-                _log.LogDebug("Pull response: text={TextLen}, primary={PrimaryLen}, image={ImageLen}", text?.Length, primary?.Length, image?.Length);
-                var response = MessageSerializer.Encode(MessageKind.ClipboardPullResponse, new ClipboardPullResponseMessage(text, primary, image));
-                _ = Send([sourceHost], response).AsTask();
+                var pullClip = ClipboardUtils.TrimToFit(
+                    _clipboardSync.GetText() ?? _lastPushed?.Text,
+                    _clipboardSync.GetPrimaryText() ?? _lastPushed?.PrimaryText,
+                    _clipboardSync.GetImagePng() ?? _lastPushed?.ImagePng,
+                    _log, "pull response");
+                _log.LogDebug("Pull response: text={TextLen}, primary={PrimaryLen}, image={ImageLen}", pullClip.Text?.Length, pullClip.PrimaryText?.Length, pullClip.ImagePng?.Length);
+                var response = MessageSerializer.Encode(MessageKind.ClipboardPullResponse, new ClipboardPullResponseMessage(pullClip.Text, pullClip.PrimaryText, pullClip.ImagePng));
+                Send([sourceHost], response);
                 break;
             case MessageKind.Osd:
                 {
@@ -197,14 +169,14 @@ public class SlaveRelayConnection : RelayConnection
                     if (_fileTransfer.FileTransferOngoing)
                     {
                         _log.LogInformation("File selection query from {Host} refused: transfer already in progress", sourceHost);
-                        _ = Send([sourceHost], MessageSerializer.Encode(MessageKind.FileTransferBusy, new FileTransferBusyMessage())).AsTask();
+                        Send([sourceHost], MessageSerializer.Encode(MessageKind.FileTransferBusy, new FileTransferBusyMessage()));
                         break;
                     }
                     if (!_selectionDetector.IsFileTransferSupported)
                     {
                         _log.LogInformation("File selection query from {Host}: file transfer not supported on this platform", sourceHost);
                         var unsupportedPayload = MessageSerializer.Encode(MessageKind.FileSelectionResponse, new FileSelectionResponseMessage(null, "Action not supported"));
-                        _ = Send([sourceHost], unsupportedPayload).AsTask();
+                        Send([sourceHost], unsupportedPayload);
                         break;
                     }
                     var result = _selectionDetector.GetSelectedPaths();
@@ -216,7 +188,7 @@ public class SlaveRelayConnection : RelayConnection
                         _log.LogInformation("File selection query from {Host}: no files selected", sourceHost);
                     var notFocused = result.FileManagerFocused ? null : $"{_selectionDetector.FileManagerName} is not focused";
                     var selectionPayload = MessageSerializer.Encode(MessageKind.FileSelectionResponse, new FileSelectionResponseMessage(result.Paths?.ToArray(), notFocused));
-                    _ = Send([sourceHost], selectionPayload).AsTask();
+                    Send([sourceHost], selectionPayload);
                     break;
                 }
             case MessageKind.FileStreamRequest:
@@ -224,7 +196,7 @@ public class SlaveRelayConnection : RelayConnection
                     if (_fileTransfer.FileTransferOngoing)
                     {
                         _log.LogInformation("Stream request from {Host} refused: transfer already in progress", sourceHost);
-                        _ = Send([sourceHost], MessageSerializer.Encode(MessageKind.FileTransferBusy, new FileTransferBusyMessage())).AsTask();
+                        Send([sourceHost], MessageSerializer.Encode(MessageKind.FileTransferBusy, new FileTransferBusyMessage()));
                         break;
                     }
                     var req = json.FromSaneJson<FileStreamRequestMessage>();
@@ -368,7 +340,7 @@ public class SlaveRelayConnection : RelayConnection
         _log.LogInformation("Sending screen info to {Master}: {Count} screen(s)", masterHost, entries.Count);
         var platform = DetectLocalPlatform();
         var payload = MessageSerializer.Encode(MessageKind.ScreenInfo, new ScreenInfoMessage(entries, platform));
-        _ = Send([masterHost], payload).AsTask();
+        Send([masterHost], payload);
     }
 
     private static PeerPlatform DetectLocalPlatform() =>

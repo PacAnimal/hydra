@@ -12,7 +12,7 @@ using System.Net;
 
 var config = Env.Config;
 
-if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("RELAY_PASSWORD")))
+if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable(Constants.RelayPasswordEnvVar)))
 {
     Console.Error.WriteLine("RELAY_PASSWORD environment variable is not set — refusing to start");
     return 1;
@@ -29,11 +29,11 @@ services.AddDataProtection().PersistKeysToNowhere();
 
 services.AddSignalR(options =>
 {
-    options.KeepAliveInterval = TimeSpan.FromSeconds(15);
-    options.ClientTimeoutInterval = TimeSpan.FromSeconds(60);
+    options.KeepAliveInterval = TimeSpan.FromSeconds(Constants.KeepAliveSeconds);
+    options.ClientTimeoutInterval = TimeSpan.FromSeconds(Constants.ClientTimeoutSeconds);
     options.EnableDetailedErrors = true;
-    options.MaximumReceiveMessageSize = (long)ByteSize.FromMebiBytes(32).Bytes;
-    options.MaximumParallelInvocationsPerClient = 4;
+    options.MaximumReceiveMessageSize = (long)ByteSize.FromMebiBytes(Constants.MaxMessageMebiBytes).Bytes;
+    options.MaximumParallelInvocationsPerClient = Constants.MaxParallelInvocations;
 }).AddJsonProtocol(hubOptions =>
 {
     SaneJson.Configure(hubOptions.PayloadSerializerOptions);
@@ -68,11 +68,11 @@ app.UseStaticFiles();
 
 app.MapHub<StyxHub>("/relay");
 
-app.MapPost("/api/network-config", async (NetworkConfigRequest request) =>
+app.MapPost("/api/network-config", async (NetworkConfigRequest request, CancellationToken ct) =>
 {
-    var throttle = Task.Delay(TimeSpan.FromSeconds(5));
+    var throttle = Task.Delay(TimeSpan.FromSeconds(Constants.NetworkConfigThrottleSeconds), ct);
 
-    var password = Environment.GetEnvironmentVariable("RELAY_PASSWORD");
+    var password = Environment.GetEnvironmentVariable(Constants.RelayPasswordEnvVar);
     if (string.IsNullOrEmpty(password) || request.Password != password)
     {
         await throttle;

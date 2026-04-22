@@ -1,10 +1,51 @@
+using System.Text;
 using ByteSizeLib;
+using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform;
 
 public static class ClipboardUtils
 {
     public static readonly long MaxClipboardBytes = (long)ByteSize.FromMebiBytes(16).Bytes;
+
+    // null-out any field that individually exceeds the limit
+    public static ClipboardSnapshot ValidateFields(string? text, string? primaryText, byte[]? image, ILogger log, string context, string host)
+    {
+        var validText = !string.IsNullOrEmpty(text) && Encoding.UTF8.GetByteCount(text) <= MaxClipboardBytes ? text : null;
+        var validPrimary = !string.IsNullOrEmpty(primaryText) && Encoding.UTF8.GetByteCount(primaryText) <= MaxClipboardBytes ? primaryText : null;
+        var validImage = image?.Length <= MaxClipboardBytes ? image : null;
+        if (validText == null && !string.IsNullOrEmpty(text))
+            log.LogWarning("Clipboard {Context} from {Host}: text exceeds {Max} bytes, dropping", context, host, MaxClipboardBytes);
+        if (validPrimary == null && !string.IsNullOrEmpty(primaryText))
+            log.LogWarning("Clipboard {Context} from {Host}: primary text exceeds {Max} bytes, dropping", context, host, MaxClipboardBytes);
+        if (validImage == null && image != null)
+            log.LogWarning("Clipboard {Context} from {Host}: image exceeds {Max} bytes, dropping", context, host, MaxClipboardBytes);
+        return new ClipboardSnapshot(validText, validPrimary, validImage);
+    }
+
+    // drop fields in priority order (image, primary, text) until combined size fits
+    public static ClipboardSnapshot TrimToFit(string? text, string? primaryText, byte[]? image, ILogger log, string context)
+    {
+        long textBytes = text != null ? Encoding.UTF8.GetByteCount(text) : 0;
+        long primaryBytes = primaryText != null ? Encoding.UTF8.GetByteCount(primaryText) : 0;
+        long imageBytes = image?.Length ?? 0;
+        if (textBytes + primaryBytes + imageBytes > MaxClipboardBytes)
+        {
+            log.LogWarning("Clipboard {Context} too large ({Total} bytes), dropping image", context, textBytes + primaryBytes + imageBytes);
+            image = null; imageBytes = 0;
+        }
+        if (textBytes + primaryBytes + imageBytes > MaxClipboardBytes)
+        {
+            log.LogWarning("Clipboard {Context} still too large ({Total} bytes), dropping primary text", context, textBytes + primaryBytes);
+            primaryText = null; primaryBytes = 0;
+        }
+        if (textBytes + primaryBytes + imageBytes > MaxClipboardBytes)
+        {
+            log.LogWarning("Clipboard {Context} still too large ({Total} bytes), dropping text", context, textBytes);
+            text = null;
+        }
+        return new ClipboardSnapshot(text, primaryText, image);
+    }
 
     public static ulong QuickHash(byte[] data)
     {

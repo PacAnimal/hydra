@@ -1,6 +1,7 @@
 using Hydra.Platform;
 using Hydra.Relay;
 using Microsoft.Extensions.Logging.Abstractions;
+using Tests.Setup;
 
 namespace Tests.Relay;
 
@@ -345,14 +346,3 @@ public class SlaveCursorHiderTests
     }
 }
 
-internal sealed class FakeCursorVisibility : ICursorVisibility
-{
-    public bool IsHidden { get; private set; }
-    public int HideCount { get; private set; }
-    public int ShowCount { get; private set; }
-    public CursorPosition Position { get; set; } = new(100, 100);
-
-    public void HideCursor() { IsHidden = true; HideCount++; }
-    public void ShowCursor() { IsHidden = false; ShowCount++; }
-    public CursorPosition GetCursorPosition() => Position;
-}

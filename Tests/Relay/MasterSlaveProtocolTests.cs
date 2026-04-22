@@ -159,7 +159,7 @@ public class MasterSlaveProtocolTests
     {
         var cursor = new FakeCursorVisibility();
         var hider = new SlaveCursorHider(cursor, NullLogger<SlaveCursorHider>.Instance);
-        var slave = new TestableSlaveRelay(hider);
+        var slave = new TestableSlaveRelay(hider: hider);
 
         await slave.SimulateMasterConfig("master-pc");
         Assert.That(hider.State, Is.EqualTo(SlaveCursorState.Hidden), "pre-condition: cursor hidden when master connected");
@@ -180,7 +180,7 @@ public class MasterSlaveProtocolTests
     {
         var cursor = new FakeCursorVisibility();
         var hider = new SlaveCursorHider(cursor, NullLogger<SlaveCursorHider>.Instance);
-        var slave = new TestableSlaveRelay(hider);
+        var slave = new TestableSlaveRelay(hider: hider);
 
         await slave.SimulateMasterConfig("master-pc");
         await slave.SimulateDisconnected();
@@ -203,7 +203,7 @@ public class MasterSlaveProtocolTests
     public async Task MasterConfig_WithLogLevel_StoredInWorldState()
     {
         var state = new WorldState();
-        using var slave = new TestableSlaveRelayWithState(state);
+        using var slave = new TestableSlaveRelay(worldState: state);
 
         var msg = new MasterConfigMessage(LogLevel.Debug);
         await slave.SimulateMasterConfig("master-pc", JsonSerializer.Serialize(msg, SaneJson.Options));
@@ -216,7 +216,7 @@ public class MasterSlaveProtocolTests
     public async Task MasterConfig_WithoutLogLevel_StoredWithNullLogLevel()
     {
         var state = new WorldState();
-        using var slave = new TestableSlaveRelayWithState(state);
+        using var slave = new TestableSlaveRelay(worldState: state);
 
         await slave.SimulateMasterConfig("master-pc", "{}");
 
@@ -280,51 +280,6 @@ public class MasterSlaveProtocolTests
 
     private static List<string> MasterConfigTargets(FakeRelay relay) =>
         [.. relay.Sent.Where(s => s.Kind == MessageKind.MasterConfig).SelectMany(s => s.Targets)];
-
-    private sealed class TestableSlaveRelay(SlaveCursorHider hider) : SlaveRelayConnection(
-        TransitionTestHelper.Profile("slave", new HydraConfig { Mode = Mode.Slave }),
-        NullLogger<RelayConnection>.Instance,
-        new NullPlatformOutput(),
-        new FakeScreenDetector(),
-        new WorldState(),
-        hider,
-        new NullScreenSaverSync(),
-        new NullScreensaverSuppressor(),
-        new NullClipboardSync(),
-        FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification())
-    {
-        // simulates a legacy master that sends no log level
-        public Task SimulateMasterConfig(string host) => OnReceive(host, MessageKind.MasterConfig, "{}");
-        public Task SimulateDisconnected() => OnDisconnected();
-    }
-
-    // variant that exposes its WorldState for log-level assertions
-    private sealed class TestableSlaveRelayWithState : SlaveRelayConnection
-    {
-        private readonly SlaveCursorHider _hider;
-
-        public TestableSlaveRelayWithState(WorldState state) : this(
-            state, new SlaveCursorHider(new FakeCursorVisibility(), NullLogger<SlaveCursorHider>.Instance))
-        { }
-
-        private TestableSlaveRelayWithState(WorldState state, SlaveCursorHider hider) : base(
-            TransitionTestHelper.Profile("slave", new HydraConfig { Mode = Mode.Slave }),
-            NullLogger<RelayConnection>.Instance,
-            new NullPlatformOutput(),
-            new FakeScreenDetector(),
-            state,
-            hider,
-            new NullScreenSaverSync(),
-            new NullScreensaverSuppressor(),
-            new NullClipboardSync(),
-            FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification())
-        {
-            _hider = hider;
-        }
-
-        public Task SimulateMasterConfig(string host, string json) => OnReceive(host, MessageKind.MasterConfig, json);
-        public override void Dispose() { _hider.Dispose(); base.Dispose(); }
-    }
 
     private sealed class TestableMasterRelay : MasterRelayConnection
     {

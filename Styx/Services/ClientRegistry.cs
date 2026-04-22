@@ -19,28 +19,28 @@ public record ClientIdentity(Guid NetworkId, string HostName);
 
 public class ClientRegistry(ILogger<ClientRegistry> log) : IClientRegistry
 {
-    private readonly SemaphoreSlimValue<Dictionary<string, ClientData>> _clients = new([]);
+    private readonly SemaphoreSlimValue<Dictionary<string, ClientIdentity>> _clients = new([]);
 
     public async ValueTask Register(string connectionId, Guid networkId, string hostName)
     {
         using var clients = await _clients.WaitForDisposable();
-        clients.Value[connectionId] = new ClientData(networkId, hostName);
+        clients.Value[connectionId] = new ClientIdentity(networkId, hostName);
         log.LogInformation("Registered {HostName} ({NetworkId}) on {ConnectionId}", hostName, networkId, connectionId);
     }
 
     public async ValueTask Unregister(string connectionId)
     {
         using var clients = await _clients.WaitForDisposable();
-        if (clients.Value.Remove(connectionId, out var data))
-            log.LogInformation("Unregistered {HostName} on {ConnectionId}", data.HostName, connectionId);
+        if (clients.Value.Remove(connectionId, out var identity))
+            log.LogInformation("Unregistered {HostName} on {ConnectionId}", identity.HostName, connectionId);
     }
 
     public async ValueTask<string?> GetConnectionId(Guid networkId, string hostName)
     {
         using var clients = await _clients.WaitForDisposable();
-        foreach (var (connectionId, data) in clients.Value)
+        foreach (var (connectionId, identity) in clients.Value)
         {
-            if (data.NetworkId == networkId && data.HostName.EqualsIgnoreCase(hostName))
+            if (identity.NetworkId == networkId && identity.HostName.EqualsIgnoreCase(hostName))
                 return connectionId;
         }
         return null;
@@ -49,9 +49,7 @@ public class ClientRegistry(ILogger<ClientRegistry> log) : IClientRegistry
     public async ValueTask<ClientIdentity?> GetIdentity(string connectionId)
     {
         using var clients = await _clients.WaitForDisposable();
-        return clients.Value.TryGetValue(connectionId, out var data)
-            ? new ClientIdentity(data.NetworkId, data.HostName)
-            : null;
+        return clients.Value.TryGetValue(connectionId, out var identity) ? identity : null;
     }
 
     // finds any existing connection with the same network+hostname, removes it, returns its connectionId
@@ -59,10 +57,10 @@ public class ClientRegistry(ILogger<ClientRegistry> log) : IClientRegistry
     {
         using var clients = await _clients.WaitForDisposable();
         string? found = null;
-        foreach (var (connectionId, data) in clients.Value)
+        foreach (var (connectionId, identity) in clients.Value)
         {
-            if (data.NetworkId == networkId
-                && data.HostName.EqualsIgnoreCase(hostName)
+            if (identity.NetworkId == networkId
+                && identity.HostName.EqualsIgnoreCase(hostName)
                 && connectionId != newConnectionId)
             {
                 found = connectionId;
@@ -79,13 +77,12 @@ public class ClientRegistry(ILogger<ClientRegistry> log) : IClientRegistry
     {
         using var clients = await _clients.WaitForDisposable();
         var result = new List<(string, string)>();
-        foreach (var (connectionId, data) in clients.Value)
+        foreach (var (connectionId, identity) in clients.Value)
         {
-            if (data.NetworkId == networkId && connectionId != excludeConnectionId)
-                result.Add((connectionId, data.HostName));
+            if (identity.NetworkId == networkId && connectionId != excludeConnectionId)
+                result.Add((connectionId, identity.HostName));
         }
         return result;
     }
 
-    private record ClientData(Guid NetworkId, string HostName);
 }

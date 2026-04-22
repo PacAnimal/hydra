@@ -9,6 +9,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using System.Net.Sockets;
+using System.Threading.Channels;
 using TypedSignalR.Client;
 
 namespace Hydra.Relay;
@@ -19,28 +20,21 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     private IStyxServer? _server;
     private RelayEncryption? _encryption;
 
+    // outbound send queue — written synchronously, drained by the Connect loop
+    private readonly Channel<(string[] Targets, byte[] Payload)> _sendQueue =
+        Channel.CreateUnbounded<(string[], byte[])>(
+            new UnboundedChannelOptions { SingleReader = true });
+
     // IRelaySender
     public bool IsConnected => _server != null;
     public event Func<string[], Task>? PeersChanged;
     public event Func<string, MessageKind, string, Task>? MessageReceived;
     public event Func<Task>? Disconnected;
 
-    public async ValueTask Send(string[] targetHosts, byte[] payload)
+    public void Send(string[] targetHosts, byte[] payload)
     {
         if (_server == null || _encryption == null) return;
-        try
-        {
-            var encrypted = await _encryption.Encrypt(payload);
-            await _server.Send(targetHosts, encrypted);
-        }
-        catch (HttpRequestException ex)
-        {
-            log.LogWarning("Failed to send relay message to [{TargetHosts}]: {Message}", string.Join(", ", targetHosts), ex.InnerException?.Message ?? ex.Message);
-        }
-        catch (Exception ex)
-        {
-            log.LogWarning(ex, "Failed to send relay message to [{TargetHosts}]", string.Join(", ", targetHosts));
-        }
+        _sendQueue.Writer.TryWrite((targetHosts, payload));
     }
 
     // IStyxClient
@@ -147,21 +141,22 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
             }
             catch (OperationCanceledException)
             {
-                log.LogWarning("Relay connection lost — retrying in 15s");
+                log.LogWarning("Relay connection lost — retrying in {ReconnectDelay}s", Constants.ReconnectDelaySeconds);
             }
             catch (HttpRequestException ex)
             {
-                log.LogWarning("Relay connection failed — retrying in 15s: {Message}", ex.InnerException?.Message ?? ex.Message);
+                log.LogWarning("Relay connection failed — retrying in {ReconnectDelay}s: {Message}", Constants.ReconnectDelaySeconds, ex.InnerException?.Message ?? ex.Message);
             }
             catch (Exception ex)
             {
-                log.LogError(ex, "Relay connection failed — retrying in 15s");
+                log.LogError(ex, "Relay connection failed — retrying in {ReconnectDelay}s", Constants.ReconnectDelaySeconds);
             }
             finally
             {
                 var wasConnected = _server != null;
                 _server = null;
                 _encryption = null;
+                while (_sendQueue.Reader.TryRead(out _)) { } // discard stale outbound messages
                 if (wasConnected)
                 {
                     await OnDisconnected();
@@ -170,7 +165,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
             }
 
             if (!stoppingToken.IsCancellationRequested)
-                await Task.Delay(TimeSpan.FromSeconds(15), stoppingToken).ConfigureAwait(false);
+                await Task.Delay(TimeSpan.FromSeconds(Constants.ReconnectDelaySeconds), stoppingToken).ConfigureAwait(false);
         }
     }
 
@@ -223,7 +218,23 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         log.LogInformation("Authenticated on relay as {HostName}", hostName);
         await OnAuthenticated();
 
-        // wait until the connection is closed
-        await Task.Delay(Timeout.InfiniteTimeSpan, disco.Token).ConfigureAwait(false);
+        // drain outbound queue until the connection drops
+        await foreach (var (targets, payload) in _sendQueue.Reader.ReadAllAsync(disco.Token))
+        {
+            try
+            {
+                var encrypted = await _encryption.Encrypt(payload, stoppingToken);
+                await _server.Send(targets, encrypted);
+            }
+            catch (OperationCanceledException) { break; }
+            catch (HttpRequestException ex)
+            {
+                log.LogWarning("Failed to send relay message to [{TargetHosts}]: {Message}", string.Join(", ", targets), ex.InnerException?.Message ?? ex.Message);
+            }
+            catch (Exception ex)
+            {
+                log.LogWarning(ex, "Failed to send relay message to [{TargetHosts}]", string.Join(", ", targets));
+            }
+        }
     }
 }

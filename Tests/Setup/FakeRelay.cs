@@ -10,11 +10,10 @@ public sealed class FakeRelay : IRelaySender
     public event Func<string, MessageKind, string, Task>? MessageReceived;
     public event Func<Task>? Disconnected;
 
-    public ValueTask Send(string[] targetHosts, byte[] payload)
+    public void Send(string[] targetHosts, byte[] payload)
     {
         var decoded = MessageSerializer.Decode(payload);
         Sent.Add((targetHosts, decoded.Kind, decoded.Json));
-        return ValueTask.CompletedTask;
     }
 
     public async Task FirePeersChanged(params string[] hosts)

@@ -13,9 +13,9 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, ILogger<S
     public async Task<RelayLoginResponse> Authenticate(RelayLogin login)
     {
         // throttle — minimum response time regardless of outcome
-        var throttle = Task.Delay(TimeSpan.FromSeconds(1), Context.ConnectionAborted);
+        var throttle = Task.Delay(TimeSpan.FromSeconds(Constants.AuthThrottleSeconds), Context.ConnectionAborted);
 
-        var password = Environment.GetEnvironmentVariable("RELAY_PASSWORD");
+        var password = Environment.GetEnvironmentVariable(Constants.RelayPasswordEnvVar);
         if (string.IsNullOrEmpty(password))
         {
             log.LogError("RELAY_PASSWORD is not set");

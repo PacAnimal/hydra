@@ -1,6 +1,5 @@
 using System.Text.Json;
 using Cathedral.Config;
-using Hydra.Config;
 using Hydra.FileTransfer;
 using Hydra.Platform;
 using Hydra.Relay;
@@ -13,6 +12,21 @@ namespace Tests.Relay;
 [TestFixture]
 public class ClipboardSyncTests
 {
+    private FakePlatform? _platform;
+    private InputRouter? _service;
+
+    [TearDown]
+    public async Task TearDown()
+    {
+        if (_service != null)
+        {
+            await _service.StopAsync(CancellationToken.None);
+            _service = null;
+        }
+        _platform?.Dispose();
+        _platform = null;
+    }
+
     // -- master pushes clipboard on screen enter --
 
     [Test]
@@ -32,8 +46,6 @@ public class ClipboardSyncTests
         var msg = JsonSerializer.Deserialize<ClipboardPushMessage>(push[0].Json, SaneJson.Options);
         Assert.That(msg?.Text, Is.EqualTo("hello from master"));
 
-        await service.StopAsync(CancellationToken.None);
-        platform.Dispose();
     }
 
     [Test]
@@ -49,8 +61,6 @@ public class ClipboardSyncTests
 
         Assert.That(relay.Sent.Where(s => s.Kind == MessageKind.ClipboardPush), Is.Empty);
 
-        await service.StopAsync(CancellationToken.None);
-        platform.Dispose();
     }
 
     [Test]
@@ -67,8 +77,6 @@ public class ClipboardSyncTests
 
         Assert.That(relay.Sent.Where(s => s.Kind == MessageKind.ClipboardPush), Is.Empty);
 
-        await service.StopAsync(CancellationToken.None);
-        platform.Dispose();
     }
 
     // -- master pulls clipboard on screen leave (return to local) --
@@ -92,8 +100,6 @@ public class ClipboardSyncTests
 
         Assert.That(relay.Sent.Any(s => s.Kind == MessageKind.ClipboardPull), Is.True);
 
-        await service.StopAsync(CancellationToken.None);
-        platform.Dispose();
     }
 
     // -- master handles pull response --
@@ -102,7 +108,7 @@ public class ClipboardSyncTests
     public async Task OnClipboardPullResponse_SetsLocalClipboard()
     {
         var clipboard = new FakeClipboardSync();
-        var (platform, relay, service) = CreateMasterService(clipboard);
+        var (_, relay, service) = CreateMasterService(clipboard);
         await service.StartAsync(CancellationToken.None);
         await TransitionTestHelper.BringRemoteOnline(relay);
 
@@ -112,8 +118,6 @@ public class ClipboardSyncTests
 
         Assert.That(clipboard.Text, Is.EqualTo("from slave"));
 
-        await service.StopAsync(CancellationToken.None);
-        platform.Dispose();
     }
 
     [Test]
@@ -139,8 +143,6 @@ public class ClipboardSyncTests
         var msg = JsonSerializer.Deserialize<ClipboardPushMessage>(push[0].Json, SaneJson.Options);
         Assert.That(msg?.Text, Is.EqualTo("slave had this"));
 
-        await service.StopAsync(CancellationToken.None);
-        platform.Dispose();
     }
 
     // -- PRIMARY selection: master push to Linux vs non-Linux peers --
@@ -163,8 +165,6 @@ public class ClipboardSyncTests
         var msg = JsonSerializer.Deserialize<ClipboardPushMessage>(push[0].Json, SaneJson.Options);
         Assert.That(msg?.PrimaryText, Is.EqualTo("primary text"));
 
-        await service.StopAsync(CancellationToken.None);
-        platform.Dispose();
     }
 
     [Test]
@@ -185,15 +185,13 @@ public class ClipboardSyncTests
         var msg = JsonSerializer.Deserialize<ClipboardPushMessage>(push[0].Json, SaneJson.Options);
         Assert.That(msg?.PrimaryText, Is.EqualTo("primary text"));
 
-        await service.StopAsync(CancellationToken.None);
-        platform.Dispose();
     }
 
     [Test]
     public async Task OnClipboardPullResponse_SetsPrimaryText()
     {
         var clipboard = new FakeClipboardSync();
-        var (platform, relay, service) = CreateMasterService(clipboard);
+        var (_, relay, service) = CreateMasterService(clipboard);
         await service.StartAsync(CancellationToken.None);
         await BringRemoteOnlineWithPlatform(relay, PeerPlatform.Linux);
 
@@ -203,8 +201,6 @@ public class ClipboardSyncTests
 
         Assert.That(clipboard.PrimaryText, Is.EqualTo("primary from slave"));
 
-        await service.StopAsync(CancellationToken.None);
-        platform.Dispose();
     }
 
     [Test]
@@ -233,8 +229,6 @@ public class ClipboardSyncTests
         var msg = JsonSerializer.Deserialize<ClipboardPushMessage>(push[0].Json, SaneJson.Options);
         Assert.That(msg?.PrimaryText, Is.EqualTo("highlighted text"));
 
-        await service.StopAsync(CancellationToken.None);
-        platform.Dispose();
     }
 
     // -- slave receives push --
@@ -313,8 +307,6 @@ public class ClipboardSyncTests
         var msg = JsonSerializer.Deserialize<ClipboardPushMessage>(push[0].Json, SaneJson.Options);
         Assert.That(msg?.ImagePng, Is.EqualTo(png));
 
-        await service.StopAsync(CancellationToken.None);
-        platform.Dispose();
     }
 
     [Test]
@@ -331,8 +323,6 @@ public class ClipboardSyncTests
 
         Assert.That(relay.Sent.Where(s => s.Kind == MessageKind.ClipboardPush), Is.Empty);
 
-        await service.StopAsync(CancellationToken.None);
-        platform.Dispose();
     }
 
     [Test]
@@ -358,8 +348,6 @@ public class ClipboardSyncTests
             Assert.That(msg?.ImagePng, Is.EqualTo(png));
         }
 
-        await service.StopAsync(CancellationToken.None);
-        platform.Dispose();
     }
 
     [Test]
@@ -367,7 +355,7 @@ public class ClipboardSyncTests
     {
         var png = MakeFakePng();
         var clipboard = new FakeClipboardSync();
-        var (platform, relay, service) = CreateMasterService(clipboard);
+        var (_, relay, service) = CreateMasterService(clipboard);
         await service.StartAsync(CancellationToken.None);
         await TransitionTestHelper.BringRemoteOnline(relay);
 
@@ -377,8 +365,6 @@ public class ClipboardSyncTests
 
         Assert.That(clipboard.ImagePng, Is.EqualTo(png));
 
-        await service.StopAsync(CancellationToken.None);
-        platform.Dispose();
     }
 
     [Test]
@@ -423,17 +409,17 @@ public class ClipboardSyncTests
 
     // -- helpers --
 
-    private static (FakePlatform Platform, FakeRelay Relay, InputRouter Service) CreateMasterService(IClipboardSync clipboard)
+    private (FakePlatform Platform, FakeRelay Relay, InputRouter Service) CreateMasterService(IClipboardSync clipboard)
     {
-        var platform = new FakePlatform();
+        _platform = new FakePlatform();
         var relay = new FakeRelay();
-        var service = new InputRouter(
-            platform, TransitionTestHelper.TestConfig, relay,
+        _service = new InputRouter(
+            _platform, TransitionTestHelper.TestConfig, relay,
             new FakeScreenDetector(), NullLoggerFactory.Instance, NullLogger<InputRouter>.Instance,
             new NullScreenSaverSync(), clipboard,
             FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification());
-        platform.AfterFireCallback = service.FlushAsync;
-        return (platform, relay, service);
+        _platform.AfterFireCallback = _service.FlushAsync;
+        return (_platform, relay, _service);
     }
 
     // brings "remote" online and records its platform so the master knows what to push
@@ -446,25 +432,7 @@ public class ClipboardSyncTests
         await relay.FireMessageReceived("remote", MessageKind.ScreenInfo, info);
     }
 
-    private static TestableSlaveWithClipboard MakeTestableSlaveRelay(IClipboardSync clipboard)
-    {
-        var hider = new SlaveCursorHider(new FakeCursorVisibility(), NullLogger<SlaveCursorHider>.Instance);
-        return new TestableSlaveWithClipboard(hider, clipboard);
-    }
-
-    private sealed class TestableSlaveWithClipboard(SlaveCursorHider hider, IClipboardSync clipboard) : SlaveRelayConnection(
-        TransitionTestHelper.Profile("slave", new HydraConfig { Mode = Mode.Slave }),
-        NullLogger<RelayConnection>.Instance,
-        new NullPlatformOutput(),
-        new FakeScreenDetector(),
-        new WorldState(),
-        hider,
-        new NullScreenSaverSync(),
-        new NullScreensaverSuppressor(),
-        clipboard,
-        FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification())
-    {
-        public Task SimulateReceive(string host, MessageKind kind, string json) => OnReceive(host, kind, json);
-    }
+    private static TestableSlaveRelay MakeTestableSlaveRelay(IClipboardSync clipboard) =>
+        new(clipboard: clipboard);
 
 }
