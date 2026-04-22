@@ -31,6 +31,9 @@ public class SlaveRelayConnection : RelayConnection
     // fallback clipboard when Get* returns null because we own the selection (echo suppression)
     private ClipboardSnapshot? _lastPushed;
 
+    // cached screen layout for synchronous mouse move handling (avoids async overhead on the relay hot path)
+    private volatile LocalScreenSnapshot? _cachedScreens;
+
     // ReSharper disable once ConvertToPrimaryConstructor
 #pragma warning disable IDE0290
     public SlaveRelayConnection(IHydraProfile profile, ILogger<RelayConnection> log, IPlatformOutput output, IScreenDetector screens, IWorldState peerState, SlaveCursorHider cursorHider, IScreenSaverSync screenSaverSync, IScreensaverSuppressor screensaverSuppressor, IClipboardSync clipboardSync, FileTransferService fileTransfer, IFileSelectionDetector selectionDetector, IOsdNotification osd)
@@ -50,6 +53,7 @@ public class SlaveRelayConnection : RelayConnection
 
         _screens.ScreensChanged += async snapshot =>
         {
+            _cachedScreens = snapshot;
             var masters = await _peerState.GetMasters();
             if (masters.Length > 0)
             {
@@ -64,6 +68,7 @@ public class SlaveRelayConnection : RelayConnection
     protected override async Task OnAuthenticated()
     {
         var snapshot = await _screens.Get();
+        _cachedScreens = snapshot;
         _log.LogInformation("Local screens: {Count}", snapshot.Screens.Count);
     }
 
@@ -79,7 +84,7 @@ public class SlaveRelayConnection : RelayConnection
                 if (move != null)
                 {
                     _cursorHider.OnMasterActivity(sourceHost);
-                    await MoveToScreen(move.Screen, move.X, move.Y);
+                    MoveToCachedScreen(move.Screen, move.X, move.Y);
                 }
                 break;
             case MessageKind.KeyEvent:
@@ -118,7 +123,7 @@ public class SlaveRelayConnection : RelayConnection
                 var enter = Parse<EnterScreenMessage>(json, kind);
                 if (enter != null)
                 {
-                    await MoveToScreen(enter.Screen, enter.X, enter.Y);
+                    MoveToCachedScreen(enter.Screen, enter.X, enter.Y);
                     _cursorHider.OnEnterScreen(sourceHost);
                 }
                 break;
@@ -329,10 +334,10 @@ public class SlaveRelayConnection : RelayConnection
         SendScreenInfo(masterHost, snapshot.Entries);
     }
 
-    private async Task MoveToScreen(string screenName, int x, int y)
+    private void MoveToCachedScreen(string screenName, int x, int y)
     {
-        var snapshot = await _screens.Get();
-        var screen = snapshot.Screens.FirstOrDefault(s => s.Name.EqualsIgnoreCase(screenName));
+        var snapshot = _cachedScreens;
+        var screen = snapshot?.Screens.FirstOrDefault(s => s.Name.EqualsIgnoreCase(screenName));
         if (screen != null)
             _output.MoveMouse(screen.X + x, screen.Y + y);
         else
