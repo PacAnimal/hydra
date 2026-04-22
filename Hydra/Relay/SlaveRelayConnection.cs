@@ -80,44 +80,21 @@ public class SlaveRelayConnection : RelayConnection
                 await HandleMasterConfig(sourceHost, body);
                 break;
             case MessageKind.MouseMove:
-                var move = Parse<MouseMoveMessage>(body, kind);
-                if (move != null)
-                {
-                    _cursorHider.OnMasterActivity(sourceHost);
-                    MoveToCachedScreen(move.Screen, move.X, move.Y);
-                }
+                HandleInputMessage<MouseMoveMessage>(body, kind, sourceHost,
+                    move => MoveToCachedScreen(move.Screen, move.X, move.Y));
                 break;
             case MessageKind.KeyEvent:
-                var key = Parse<KeyEventMessage>(body, kind);
-                if (key != null)
-                {
-                    _cursorHider.OnMasterActivity(sourceHost);
-                    HandleKeyEvent(key);
-                }
+                HandleInputMessage<KeyEventMessage>(body, kind, sourceHost, HandleKeyEvent);
                 break;
             case MessageKind.MouseMoveDelta:
-                var delta = Parse<MouseMoveDeltaMessage>(body, kind);
-                if (delta != null)
-                {
-                    _cursorHider.OnMasterActivity(sourceHost);
-                    _output.MoveMouseRelative(delta.Dx, delta.Dy);
-                }
+                HandleInputMessage<MouseMoveDeltaMessage>(body, kind, sourceHost,
+                    delta => _output.MoveMouseRelative(delta.Dx, delta.Dy));
                 break;
             case MessageKind.MouseButton:
-                var btn = Parse<MouseButtonMessage>(body, kind);
-                if (btn != null)
-                {
-                    _cursorHider.OnMasterActivity(sourceHost);
-                    _output.InjectMouseButton(btn);
-                }
+                HandleInputMessage<MouseButtonMessage>(body, kind, sourceHost, _output.InjectMouseButton);
                 break;
             case MessageKind.MouseScroll:
-                var scroll = Parse<MouseScrollMessage>(body, kind);
-                if (scroll != null)
-                {
-                    _cursorHider.OnMasterActivity(sourceHost);
-                    _output.InjectMouseScroll(scroll);
-                }
+                HandleInputMessage<MouseScrollMessage>(body, kind, sourceHost, _output.InjectMouseScroll);
                 break;
             case MessageKind.EnterScreen:
                 var enter = Parse<EnterScreenMessage>(body, kind);
@@ -166,45 +143,11 @@ public class SlaveRelayConnection : RelayConnection
                     break;
                 }
             case MessageKind.FileSelectionQuery:
-                {
-                    if (_fileTransfer.FileTransferOngoing)
-                    {
-                        _log.LogInformation("File selection query from {Host} refused: transfer already in progress", sourceHost);
-                        Send([sourceHost], MessageSerializer.Encode(MessageKind.FileTransferBusy, new FileTransferBusyMessage()));
-                        break;
-                    }
-                    if (!_selectionDetector.IsFileTransferSupported)
-                    {
-                        _log.LogInformation("File selection query from {Host}: file transfer not supported on this platform", sourceHost);
-                        var unsupportedPayload = MessageSerializer.Encode(MessageKind.FileSelectionResponse, new FileSelectionResponseMessage(null, "Action not supported"));
-                        Send([sourceHost], unsupportedPayload);
-                        break;
-                    }
-                    var result = _selectionDetector.GetSelectedPaths();
-                    if (!result.FileManagerFocused)
-                        _log.LogInformation("File selection query from {Host}: {Name} is not focused", sourceHost, _selectionDetector.FileManagerName);
-                    else if (result.Paths != null)
-                        _log.LogInformation("File selection query from {Host}: {Count} file(s) selected: {Paths}", sourceHost, result.Paths.Count, string.Join(", ", result.Paths));
-                    else
-                        _log.LogInformation("File selection query from {Host}: no files selected", sourceHost);
-                    var notFocused = result.FileManagerFocused ? null : $"{_selectionDetector.FileManagerName} is not focused";
-                    var selectionPayload = MessageSerializer.Encode(MessageKind.FileSelectionResponse, new FileSelectionResponseMessage(result.Paths?.ToArray(), notFocused));
-                    Send([sourceHost], selectionPayload);
-                    break;
-                }
+                HandleFileSelectionQuery(sourceHost);
+                break;
             case MessageKind.FileStreamRequest:
-                {
-                    if (_fileTransfer.FileTransferOngoing)
-                    {
-                        _log.LogInformation("Stream request from {Host} refused: transfer already in progress", sourceHost);
-                        Send([sourceHost], MessageSerializer.Encode(MessageKind.FileTransferBusy, new FileTransferBusyMessage()));
-                        break;
-                    }
-                    var req = Parse<FileStreamRequestMessage>(body, kind);
-                    if (req != null)
-                        _ = _fileTransfer.StreamToHost(req.Paths, req.TargetHost, this);
-                    break;
-                }
+                await HandleFileStreamRequest(sourceHost, body);
+                break;
             case var _ when FileTransferService.IsFileTransferMessage(kind):
                 await _fileTransfer.OnMessageAsync(sourceHost, kind, body, this);
                 break;
@@ -245,6 +188,15 @@ public class SlaveRelayConnection : RelayConnection
         if (anyMasterLeft && after.Length == 0)
             _screensaverSuppressor.Restore();
         await base.OnPeers(hostNames);
+    }
+
+    // parses and dispatches an input event, calling _cursorHider.OnMasterActivity first
+    private void HandleInputMessage<T>(ReadOnlyMemory<byte> body, MessageKind kind, string sourceHost, Action<T> handler) where T : class
+    {
+        var msg = Parse<T>(body, kind);
+        if (msg == null) return;
+        _cursorHider.OnMasterActivity(sourceHost);
+        handler(msg);
     }
 
     private void HandleKeyEvent(KeyEventMessage msg)
@@ -295,6 +247,47 @@ public class SlaveRelayConnection : RelayConnection
             catch (OperationCanceledException) { }
             catch (Exception ex) { _log.LogWarning(ex, "Key repeat timer error for {Key}", repeatKey); }
         }, ct);
+    }
+
+    private void HandleFileSelectionQuery(string sourceHost)
+    {
+        if (_fileTransfer.FileTransferOngoing)
+        {
+            _log.LogInformation("File selection query from {Host} refused: transfer already in progress", sourceHost);
+            Send([sourceHost], MessageSerializer.Encode(MessageKind.FileTransferBusy, new FileTransferBusyMessage()));
+            return;
+        }
+        if (!_selectionDetector.IsFileTransferSupported)
+        {
+            _log.LogInformation("File selection query from {Host}: file transfer not supported on this platform", sourceHost);
+            var unsupportedPayload = MessageSerializer.Encode(MessageKind.FileSelectionResponse, new FileSelectionResponseMessage(null, "Action not supported"));
+            Send([sourceHost], unsupportedPayload);
+            return;
+        }
+        var result = _selectionDetector.GetSelectedPaths();
+        if (!result.FileManagerFocused)
+            _log.LogInformation("File selection query from {Host}: {Name} is not focused", sourceHost, _selectionDetector.FileManagerName);
+        else if (result.Paths != null)
+            _log.LogInformation("File selection query from {Host}: {Count} file(s) selected: {Paths}", sourceHost, result.Paths.Count, string.Join(", ", result.Paths));
+        else
+            _log.LogInformation("File selection query from {Host}: no files selected", sourceHost);
+        var notFocused = result.FileManagerFocused ? null : $"{_selectionDetector.FileManagerName} is not focused";
+        var selectionPayload = MessageSerializer.Encode(MessageKind.FileSelectionResponse, new FileSelectionResponseMessage(result.Paths?.ToArray(), notFocused));
+        Send([sourceHost], selectionPayload);
+    }
+
+    private Task HandleFileStreamRequest(string sourceHost, ReadOnlyMemory<byte> body)
+    {
+        if (_fileTransfer.FileTransferOngoing)
+        {
+            _log.LogInformation("Stream request from {Host} refused: transfer already in progress", sourceHost);
+            Send([sourceHost], MessageSerializer.Encode(MessageKind.FileTransferBusy, new FileTransferBusyMessage()));
+            return Task.CompletedTask;
+        }
+        var req = Parse<FileStreamRequestMessage>(body, MessageKind.FileStreamRequest);
+        if (req != null)
+            _ = _fileTransfer.StreamToHost(req.Paths, req.TargetHost, this);
+        return Task.CompletedTask;
     }
 
     private T? Parse<T>(ReadOnlyMemory<byte> body, MessageKind kind) where T : class

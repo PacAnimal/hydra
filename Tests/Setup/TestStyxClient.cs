@@ -1,4 +1,3 @@
-using Cathedral.Config;
 using Common.DTO;
 using Common.Interfaces;
 using Microsoft.AspNetCore.Mvc.Testing;

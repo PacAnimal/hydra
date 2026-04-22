@@ -391,8 +391,8 @@ public sealed class XorgInputHandler : IPlatformInput
         int idx = 0;
         if (xPresent)
         {
-            if (ev.ValuatorValues != nint.Zero) accelDx = BitConverter.Int64BitsToDouble(Marshal.ReadInt64(ev.ValuatorValues, idx * 8));
-            if (ev.RawValues != nint.Zero) rawDx = BitConverter.Int64BitsToDouble(Marshal.ReadInt64(ev.RawValues, idx * 8));
+            if (ev.ValuatorValues != nint.Zero) accelDx = BitConverter.Int64BitsToDouble(Marshal.ReadInt64(ev.ValuatorValues, 0));
+            if (ev.RawValues != nint.Zero) rawDx = BitConverter.Int64BitsToDouble(Marshal.ReadInt64(ev.RawValues, 0));
             idx++;
         }
         if (yPresent)

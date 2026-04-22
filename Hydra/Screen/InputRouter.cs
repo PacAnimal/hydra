@@ -1,7 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Channels;
-using Cathedral.Config;
 using Cathedral.Extensions;
 using Hydra.Config;
 using Hydra.FileTransfer;

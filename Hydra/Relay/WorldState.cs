@@ -145,7 +145,7 @@ public class WorldState : IWorldState
     }
 
     public ValueTask<SimpleAesKey?> GetRemoteKey(string host) =>
-        new(_remoteKeys.TryGetValue(host, out var key) ? key : (SimpleAesKey?)null);
+        new(_remoteKeys.TryGetValue(host, out var key) ? key : null);
 
     private class MasterState
     {

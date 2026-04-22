@@ -1,4 +1,3 @@
-using Cathedral.Config;
 using Common;
 using Common.DTO;
 using Common.Interfaces;

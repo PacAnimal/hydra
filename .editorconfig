@@ -12,3 +12,6 @@ dotnet_diagnostic.CA1873.severity = none
 
 # Suppress SYSLIB1045: Use GeneratedRegex attribute
 dotnet_diagnostic.SYSLIB1045.severity = none
+
+# Remove unnecessary using directives
+dotnet_diagnostic.IDE0005.severity = warning

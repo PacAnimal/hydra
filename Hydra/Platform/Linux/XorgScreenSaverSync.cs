@@ -1,14 +1,12 @@
 namespace Hydra.Platform.Linux;
 
-public sealed class XorgScreenSaverSync : IScreenSaverSync, IDisposable
+public sealed class XorgScreenSaverSync : PollingScreenSaverSync, IDisposable
 {
     private readonly nint _display;
     private readonly nint _rootWindow;
     private readonly bool _hasSs;    // XScreenSaver extension available
     private readonly bool _hasDpms;  // DPMS extension available
     private readonly nint _ssInfo;   // heap-allocated XScreenSaverInfo*
-
-    private CancellationTokenSource? _watchCts;
 
     public XorgScreenSaverSync()
     {
@@ -24,22 +22,13 @@ public sealed class XorgScreenSaverSync : IScreenSaverSync, IDisposable
             _ssInfo = NativeMethods.XScreenSaverAllocInfo();
     }
 
-    public void StartWatching(Action onActivated, Action onDeactivated)
+    public override void StartWatching(Action onActivated, Action onDeactivated)
     {
         if (_display == nint.Zero) return;
-        _watchCts = new CancellationTokenSource();
-        var ct = _watchCts.Token;
-        _ = Task.Run(async () => await PollAsync(onActivated, onDeactivated, ct), ct);
+        base.StartWatching(onActivated, onDeactivated);
     }
 
-    public void StopWatching()
-    {
-        _watchCts?.Cancel();
-        _watchCts?.Dispose();
-        _watchCts = null;
-    }
-
-    public void Activate()
+    public override void Activate()
     {
         if (_display == nint.Zero) return;
         _ = NativeMethods.XForceScreenSaver(_display, NativeMethods.ScreenSaverActive);
@@ -47,7 +36,7 @@ public sealed class XorgScreenSaverSync : IScreenSaverSync, IDisposable
         _ = NativeMethods.XFlush(_display);
     }
 
-    public void Deactivate()
+    public override void Deactivate()
     {
         if (_display == nint.Zero) return;
         _ = NativeMethods.XForceScreenSaver(_display, NativeMethods.ScreenSaverReset);
@@ -55,24 +44,7 @@ public sealed class XorgScreenSaverSync : IScreenSaverSync, IDisposable
         _ = NativeMethods.XFlush(_display);
     }
 
-    private async Task PollAsync(Action onActivated, Action onDeactivated, CancellationToken ct)
-    {
-        var wasOn = false;
-        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
-        try
-        {
-            while (await timer.WaitForNextTickAsync(ct))
-            {
-                var isOn = IsScreensaverOn();
-                if (isOn && !wasOn) onActivated();
-                else if (!isOn && wasOn) onDeactivated();
-                wasOn = isOn;
-            }
-        }
-        catch (OperationCanceledException) { }
-    }
-
-    public void Suppress()
+    public override void Suppress()
     {
         if (_display == nint.Zero) return;
         _ = NativeMethods.XResetScreenSaver(_display);
@@ -80,9 +52,9 @@ public sealed class XorgScreenSaverSync : IScreenSaverSync, IDisposable
         _ = NativeMethods.XFlush(_display);
     }
 
-    public void Restore() { }
+    public override void Restore() { }
 
-    private bool IsScreensaverOn()
+    protected override bool IsScreensaverOn()
     {
         if (_hasSs && _ssInfo != nint.Zero)
         {

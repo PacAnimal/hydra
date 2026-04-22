@@ -199,12 +199,16 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
     {
         var reader = _process?.StandardError;
         if (reader == null) return;
-        while (true)
+        try
         {
-            var line = await reader.ReadLineAsync();
-            if (line == null) break;
-            Log?.LogWarning("shield: {Error}", line);
+            while (true)
+            {
+                var line = await reader.ReadLineAsync();
+                if (line == null) break;
+                Log?.LogWarning("shield: {Error}", line);
+            }
         }
+        catch (Exception ex) { Log?.LogDebug(ex, "Shield stderr reader exited"); }
     }
 
     // parses stdout lines from the shield and updates MacNetworkState
@@ -212,62 +216,66 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
     {
         var reader = _process?.StandardOutput;
         if (reader == null) return;
-        while (true)
+        try
         {
-            var line = await reader.ReadLineAsync();
-            if (line == null)
+            while (true)
             {
-                // EOF — process exited; unblock any pending SendWithReply
-                _pendingReply?.TrySetResult("");
-                break;
-            }
-
-            // any successful output means the process is healthy — reset restart backoff
-            _restartDelay = TimeSpan.FromMilliseconds(500);
-
-            if (line is CmdHide or CmdShow or CmdDebug)
-            {
-                // echo from shield confirming show/hide state was applied
-                _pendingReply?.TrySetResult(line);
-            }
-            else if (line.StartsWith(PfxSsid, StringComparison.Ordinal))
-            {
-                var ssid = line[PfxSsid.Length..];
-                var newSsid = string.IsNullOrEmpty(ssid) ? null : ssid;
-                var changed = newSsid != networkState.Ssid;
-                networkState.Ssid = newSsid;
-                _initialStateTcs?.TrySetResult();
-                if (changed && (_initialStateTcs?.Task.IsCompleted ?? true)) OnNetworkStateChanged?.Invoke();
-            }
-            else if (line.StartsWith(PfxWifiAuth, StringComparison.Ordinal) && int.TryParse(line[PfxWifiAuth.Length..], out var authStatus))
-            {
-                networkState.WifiAuthStatus = authStatus;
-                Log?.LogDebug("Location services auth: {Status}", authStatus switch
+                var line = await reader.ReadLineAsync();
+                if (line == null)
                 {
-                    0 => "notDetermined",
-                    1 => "restricted",
-                    2 => "denied",
-                    3 or 4 => "authorized",
-                    _ => authStatus.ToString()
-                });
-            }
-            else if (line == PfxTransferCancel)
-            {
-                CancelRequested?.Invoke();
-            }
-        }
+                    // EOF — process exited; unblock any pending SendWithReply
+                    _pendingReply?.TrySetResult("");
+                    break;
+                }
 
-        if (!_stopping)
-        {
-            // unexpected exit — restart with exponential backoff to avoid rapid crash-loops
-            Log?.LogWarning("Shield process exited unexpectedly — restarting in {Delay}ms", (long)_restartDelay.TotalMilliseconds);
-            await Task.Delay(_restartDelay);
-            _restartDelay = TimeSpan.FromTicks(Math.Min(_restartDelay.Ticks * 2, TimeSpan.FromMilliseconds(RestartMaxDelayMs).Ticks)); // cap
-            var stateToRestore = _lastState; // save before StartProcess calls Hide() which resets _lastState
-            StartProcess();
-            if (stateToRestore != CmdHide)
-                _ = SendWithReply(stateToRestore);
+                // any successful output means the process is healthy — reset restart backoff
+                _restartDelay = TimeSpan.FromMilliseconds(500);
+
+                if (line is CmdHide or CmdShow or CmdDebug)
+                {
+                    // echo from shield confirming show/hide state was applied
+                    _pendingReply?.TrySetResult(line);
+                }
+                else if (line.StartsWith(PfxSsid, StringComparison.Ordinal))
+                {
+                    var ssid = line[PfxSsid.Length..];
+                    var newSsid = string.IsNullOrEmpty(ssid) ? null : ssid;
+                    var changed = newSsid != networkState.Ssid;
+                    networkState.Ssid = newSsid;
+                    _initialStateTcs?.TrySetResult();
+                    if (changed && (_initialStateTcs?.Task.IsCompleted ?? true)) OnNetworkStateChanged?.Invoke();
+                }
+                else if (line.StartsWith(PfxWifiAuth, StringComparison.Ordinal) && int.TryParse(line[PfxWifiAuth.Length..], out var authStatus))
+                {
+                    networkState.WifiAuthStatus = authStatus;
+                    Log?.LogDebug("Location services auth: {Status}", authStatus switch
+                    {
+                        0 => "notDetermined",
+                        1 => "restricted",
+                        2 => "denied",
+                        3 or 4 => "authorized",
+                        _ => authStatus.ToString()
+                    });
+                }
+                else if (line == PfxTransferCancel)
+                {
+                    CancelRequested?.Invoke();
+                }
+            }
+
+            if (!_stopping)
+            {
+                // unexpected exit — restart with exponential backoff to avoid rapid crash-loops
+                Log?.LogWarning("Shield process exited unexpectedly — restarting in {Delay}ms", (long)_restartDelay.TotalMilliseconds);
+                await Task.Delay(_restartDelay);
+                _restartDelay = TimeSpan.FromTicks(Math.Min(_restartDelay.Ticks * 2, TimeSpan.FromMilliseconds(RestartMaxDelayMs).Ticks)); // cap
+                var stateToRestore = _lastState; // save before StartProcess calls Hide() which resets _lastState
+                StartProcess();
+                if (stateToRestore != CmdHide)
+                    _ = SendWithReply(stateToRestore);
+            }
         }
+        catch (Exception ex) { Log?.LogDebug(ex, "Shield stdout reader exited"); }
     }
 
     private static string Base64(string s) => Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(s));
