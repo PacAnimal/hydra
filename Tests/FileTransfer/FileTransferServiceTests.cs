@@ -70,7 +70,7 @@ public class FileTransferServiceTests
     private static async Task Simulate(FileTransferService svc, string host, MessageKind kind, object msg, FakeRelay relay)
     {
         var decoded = MessageSerializer.Decode(MessageSerializer.Encode(kind, msg));
-        await svc.OnMessageAsync(host, decoded.Kind, decoded.Json, relay);
+        await svc.OnMessageAsync(host, decoded.Kind, decoded.Bytes, relay);
     }
 
     // computes chunks + sha for a file without sending them anywhere
@@ -570,8 +570,8 @@ public class FileTransferServiceTests
     [Test]
     public void HandleSelectionResponse_WithPaths_UpdatesBuffer()
     {
-        var json = MessageSerializer.Decode(MessageSerializer.Encode(MessageKind.FileSelectionResponse, new FileSelectionResponseMessage(["a.txt", "b.txt"]))).Json;
-        _service.HandleSelectionResponse("remote-host", json);
+        var msg = MessageSerializer.Decode(MessageSerializer.Encode(MessageKind.FileSelectionResponse, new FileSelectionResponseMessage(["a.txt", "b.txt"])));
+        _service.HandleSelectionResponse("remote-host", msg.Bytes);
 
         var buf = _service.GetCopyBuffer();
         using (Assert.EnterMultipleScope())
@@ -585,8 +585,8 @@ public class FileTransferServiceTests
     public void HandleSelectionResponse_NullPaths_DoesNotUpdateBuffer()
     {
         _service.SetCopyBuffer("original-host", ["existing.txt"]);
-        var json = MessageSerializer.Decode(MessageSerializer.Encode(MessageKind.FileSelectionResponse, new FileSelectionResponseMessage(null))).Json;
-        _service.HandleSelectionResponse("other-host", json);
+        var msg = MessageSerializer.Decode(MessageSerializer.Encode(MessageKind.FileSelectionResponse, new FileSelectionResponseMessage(null)));
+        _service.HandleSelectionResponse("other-host", msg.Bytes);
 
         Assert.That(_service.GetCopyBuffer()?.SourceHost, Is.EqualTo("original-host"));
     }
@@ -739,7 +739,7 @@ internal sealed class ThrowingRelay : IRelaySender
     public bool IsConnected => true;
 #pragma warning disable CS0067
     public event Func<string[], Task>? PeersChanged;
-    public event Func<string, MessageKind, string, Task>? MessageReceived;
+    public event Func<string, MessageKind, ReadOnlyMemory<byte>, Task>? MessageReceived;
     public event Func<Task>? Disconnected;
 #pragma warning restore CS0067
     public void Send(string[] targetHosts, byte[] payload) => throw new InvalidOperationException("relay unavailable");

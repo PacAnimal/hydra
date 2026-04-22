@@ -9,10 +9,10 @@ public class RelayEncryption(string key, IWorldState? peerState = null)
     private readonly SimpleAesKey _localKey = SimpleAes.GenerateKey(key);
     private readonly IWorldState _peerState = peerState ?? new WorldState();
 
-    public async Task<byte[]> Encrypt(byte[] payload, CancellationToken cancel = default) =>
+    public async ValueTask<byte[]> Encrypt(byte[] payload, CancellationToken cancel = default) =>
         await _aes.Encrypt(payload, _localKey, cancel);
 
-    public async Task<byte[]> Decrypt(string sourceHost, byte[] payload, ILogger log, CancellationToken cancel = default)
+    public async ValueTask<byte[]> Decrypt(string sourceHost, byte[] payload, ILogger log, CancellationToken cancel = default)
     {
         var cached = await _peerState.GetRemoteKey(sourceHost);
         var remoteKey = cached ?? SimpleAes.ExtractKey(key, payload);

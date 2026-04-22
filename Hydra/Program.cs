@@ -215,7 +215,12 @@ if (config != null)
         {
             services.AddSingleton<WindowsOutputHandler>();
 #pragma warning disable CA1416
-            services.AddSingleton<IPlatformOutput>(sp => new CoalescingOutputWrapper(sp.GetRequiredService<WindowsOutputHandler>()));
+            services.AddSingleton<IPlatformOutput>(sp =>
+            {
+                var handler = sp.GetRequiredService<WindowsOutputHandler>();
+                handler.Initialize();
+                return new CoalescingOutputWrapper(handler);
+            });
             services.AddSingleton<ICursorVisibility>(sp => sp.GetRequiredService<WindowsOutputHandler>());
 #pragma warning restore CA1416
         }

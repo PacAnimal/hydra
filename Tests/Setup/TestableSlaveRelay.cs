@@ -1,3 +1,4 @@
+using System.Text;
 using Hydra.Config;
 using Hydra.FileTransfer;
 using Hydra.Platform;
@@ -43,9 +44,9 @@ public sealed class TestableSlaveRelay : SlaveRelayConnection
         _ownsHider = ownsHider;
     }
 
-    public Task SimulateMasterConfig(string host) => OnReceive(host, MessageKind.MasterConfig, "{}");
-    public Task SimulateMasterConfig(string host, string json) => OnReceive(host, MessageKind.MasterConfig, json);
-    public Task SimulateReceive(string host, MessageKind kind, string json) => OnReceive(host, kind, json);
+    public Task SimulateMasterConfig(string host) => OnReceive(host, MessageKind.MasterConfig, "{}"u8.ToArray());
+    public Task SimulateMasterConfig(string host, string json) => OnReceive(host, MessageKind.MasterConfig, Encoding.UTF8.GetBytes(json));
+    public Task SimulateReceive(string host, MessageKind kind, string json) => OnReceive(host, kind, Encoding.UTF8.GetBytes(json));
     public Task SimulateDisconnected() => OnDisconnected();
 
     public override void Dispose()

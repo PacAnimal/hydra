@@ -59,9 +59,9 @@ public sealed class FileTransferService : IDisposable
     }
 
     // called when a FileSelectionResponse arrives for a remote copy; returns the OSD text to display
-    public string HandleSelectionResponse(string sourceHost, string json)
+    public string HandleSelectionResponse(string sourceHost, ReadOnlyMemory<byte> body)
     {
-        var msg = json.FromSaneJson<FileSelectionResponseMessage>();
+        var msg = body.FromSaneJson<FileSelectionResponseMessage>();
         if (msg?.NotFocusedMessage != null)
             return msg.NotFocusedMessage;
         if (msg?.Paths is { Length: > 0 })
@@ -207,15 +207,15 @@ public sealed class FileTransferService : IDisposable
         _dialog.Close();
     }
 
-    public async Task OnMessageAsync(string sourceHost, MessageKind kind, string json, IRelaySender relay)
+    public async Task OnMessageAsync(string sourceHost, MessageKind kind, ReadOnlyMemory<byte> body, IRelaySender relay)
     {
         switch (kind)
         {
-            case MessageKind.FileTransferRequest: HandleFileTransferRequest(sourceHost, json, relay); break;
-            case MessageKind.FileTransferStart: HandleFileTransferStart(sourceHost, json); break;
-            case MessageKind.FileTransferChunk: await HandleFileTransferChunkAsync(sourceHost, json); break;
-            case MessageKind.FileTransferDone: await HandleFileTransferDoneAsync(sourceHost, json, relay); break;
-            case MessageKind.FileTransferAbort: HandleFileTransferAbort(sourceHost, json); break;
+            case MessageKind.FileTransferRequest: HandleFileTransferRequest(sourceHost, body, relay); break;
+            case MessageKind.FileTransferStart: HandleFileTransferStart(sourceHost, body); break;
+            case MessageKind.FileTransferChunk: await HandleFileTransferChunkAsync(sourceHost, body); break;
+            case MessageKind.FileTransferDone: await HandleFileTransferDoneAsync(sourceHost, body, relay); break;
+            case MessageKind.FileTransferAbort: HandleFileTransferAbort(sourceHost, body); break;
             case MessageKind.FileTransferAccepted:
                 {
                     // case 1: master was sending — unblock StreamAsync to start chunk flow
@@ -242,16 +242,16 @@ public sealed class FileTransferService : IDisposable
         }
     }
 
-    private T? Deserialize<T>(string json, string sourceHost) where T : class
+    private T? Deserialize<T>(ReadOnlyMemory<byte> body, string sourceHost) where T : class
     {
-        var msg = json.FromSaneJson<T>();
+        var msg = body.FromSaneJson<T>();
         if (msg == null) _log.LogWarning("Failed to deserialize {Type} from {Host}", typeof(T).Name, sourceHost);
         return msg;
     }
 
-    private void HandleFileTransferRequest(string sourceHost, string json, IRelaySender relay)
+    private void HandleFileTransferRequest(string sourceHost, ReadOnlyMemory<byte> body, IRelaySender relay)
     {
-        var msg = Deserialize<FileTransferRequestMessage>(json, sourceHost);
+        var msg = Deserialize<FileTransferRequestMessage>(body, sourceHost);
         if (msg == null) return;
 
         if (FileTransferOngoing)
@@ -276,9 +276,9 @@ public sealed class FileTransferService : IDisposable
         _log.LogInformation("Transfer request from {Host}: data expected from {DataSource}", sourceHost, dataSourceHost);
     }
 
-    private void HandleFileTransferStart(string sourceHost, string json)
+    private void HandleFileTransferStart(string sourceHost, ReadOnlyMemory<byte> body)
     {
-        var msg = Deserialize<FileTransferStartMessage>(json, sourceHost);
+        var msg = Deserialize<FileTransferStartMessage>(body, sourceHost);
         if (msg == null) return;
 
         ReceiverTransfer? receiver;
@@ -295,9 +295,9 @@ public sealed class FileTransferService : IDisposable
         _log.LogInformation("Transfer start from {Host}: {Count} file(s), {Total} bytes", sourceHost, msg.FileNames.Length, msg.TotalBytes);
     }
 
-    private async Task HandleFileTransferChunkAsync(string sourceHost, string json)
+    private async Task HandleFileTransferChunkAsync(string sourceHost, ReadOnlyMemory<byte> body)
     {
-        var chunk = Deserialize<FileTransferChunkMessage>(json, sourceHost);
+        var chunk = Deserialize<FileTransferChunkMessage>(body, sourceHost);
         if (chunk == null) return;
         var (sequence, data) = (chunk.Sequence, chunk.Data);
         ReceiverTransfer? receiver;
@@ -318,9 +318,9 @@ public sealed class FileTransferService : IDisposable
         _log.LogDebug("Chunk #{Seq} from {Host}: {Bytes} bytes", sequence, sourceHost, data.Length);
     }
 
-    private async Task HandleFileTransferDoneAsync(string sourceHost, string json, IRelaySender relay)
+    private async Task HandleFileTransferDoneAsync(string sourceHost, ReadOnlyMemory<byte> body, IRelaySender relay)
     {
-        var msg = Deserialize<FileTransferDoneMessage>(json, sourceHost);
+        var msg = Deserialize<FileTransferDoneMessage>(body, sourceHost);
 
         ReceiverTransfer? receiver;
         lock (_lock)
@@ -339,9 +339,9 @@ public sealed class FileTransferService : IDisposable
         await FinalizeReceivingAsync(receiver, msg, relay);
     }
 
-    private void HandleFileTransferAbort(string sourceHost, string json)
+    private void HandleFileTransferAbort(string sourceHost, ReadOnlyMemory<byte> body)
     {
-        var msg = Deserialize<FileTransferAbortMessage>(json, sourceHost);
+        var msg = Deserialize<FileTransferAbortMessage>(body, sourceHost);
 
         bool relevant;
         lock (_lock)

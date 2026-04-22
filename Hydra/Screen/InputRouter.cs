@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Channels;
+using Cathedral.Config;
 using Cathedral.Extensions;
 using Hydra.Config;
 using Hydra.FileTransfer;
@@ -402,12 +403,12 @@ public class InputRouter(
         relay.Send([host], payload);
     }
 
-    private async Task OnMessageReceived(string sourceHost, MessageKind kind, string json)
+    private async Task OnMessageReceived(string sourceHost, MessageKind kind, ReadOnlyMemory<byte> body)
     {
         switch (kind)
         {
             case MessageKind.ScreenInfo:
-                var info = json.FromSaneJson<ScreenInfoMessage>();
+                var info = body.FromSaneJson<ScreenInfoMessage>();
                 if (info != null && info.Screens.Count > 0)
                 {
                     await _peerState.SetPeerScreens(sourceHost, info.Screens);
@@ -431,13 +432,13 @@ public class InputRouter(
                 }
                 break;
             case MessageKind.SlaveLog:
-                var entry = json.FromSaneJson<SlaveLogMessage>();
+                var entry = body.FromSaneJson<SlaveLogMessage>();
                 if (entry != null) ForwardSlaveLog(sourceHost, entry);
                 break;
             case MessageKind.ScreensaverSync:
                 break; // master never acts on screensaver sync messages
             case MessageKind.ClipboardPullResponse:
-                var clip = json.FromSaneJson<ClipboardPullResponseMessage>();
+                var clip = body.FromSaneJson<ClipboardPullResponseMessage>();
                 if (clip != null)
                 {
                     log.LogDebug("Clipboard pull response from {Host}: text={TextLen}, primary={PrimaryLen}, image={ImageLen}",
@@ -461,7 +462,7 @@ public class InputRouter(
                 break;
             case MessageKind.FileSelectionResponse:
                 {
-                    var osdText = _fileTransfer.HandleSelectionResponse(sourceHost, json);
+                    var osdText = _fileTransfer.HandleSelectionResponse(sourceHost, body);
                     var osdPayload = MessageSerializer.Encode(MessageKind.Osd, new OsdMessage(osdText));
                     relay.Send([sourceHost], osdPayload);
                     break;
@@ -483,12 +484,12 @@ public class InputRouter(
                             SendOsd(sourceHost, "Pasted!");
                         else if (kind == MessageKind.FileTransferAbort)
                         {
-                            var abort = json.FromSaneJson<FileTransferAbortMessage>();
+                            var abort = body.FromSaneJson<FileTransferAbortMessage>();
                             if (abort?.Reason == FileTransferService.ReasonNoFolder)
                                 SendOsd(sourceHost, "Invalid paste target");
                         }
                     }
-                    await _fileTransfer.OnMessageAsync(sourceHost, kind, json, relay);
+                    await _fileTransfer.OnMessageAsync(sourceHost, kind, body, relay);
                     if (wasReceivingFrom && kind == MessageKind.FileTransferDone)
                         osd.Show("Pasted!");
                     break;

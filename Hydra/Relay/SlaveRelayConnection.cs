@@ -72,15 +72,15 @@ public class SlaveRelayConnection : RelayConnection
         _log.LogInformation("Local screens: {Count}", snapshot.Screens.Count);
     }
 
-    protected override async Task OnReceive(string sourceHost, MessageKind kind, string json)
+    protected override async Task OnReceive(string sourceHost, MessageKind kind, ReadOnlyMemory<byte> body)
     {
         switch (kind)
         {
             case MessageKind.MasterConfig:
-                await HandleMasterConfig(sourceHost, json);
+                await HandleMasterConfig(sourceHost, body);
                 break;
             case MessageKind.MouseMove:
-                var move = Parse<MouseMoveMessage>(json, kind);
+                var move = Parse<MouseMoveMessage>(body, kind);
                 if (move != null)
                 {
                     _cursorHider.OnMasterActivity(sourceHost);
@@ -88,7 +88,7 @@ public class SlaveRelayConnection : RelayConnection
                 }
                 break;
             case MessageKind.KeyEvent:
-                var key = Parse<KeyEventMessage>(json, kind);
+                var key = Parse<KeyEventMessage>(body, kind);
                 if (key != null)
                 {
                     _cursorHider.OnMasterActivity(sourceHost);
@@ -96,7 +96,7 @@ public class SlaveRelayConnection : RelayConnection
                 }
                 break;
             case MessageKind.MouseMoveDelta:
-                var delta = Parse<MouseMoveDeltaMessage>(json, kind);
+                var delta = Parse<MouseMoveDeltaMessage>(body, kind);
                 if (delta != null)
                 {
                     _cursorHider.OnMasterActivity(sourceHost);
@@ -104,7 +104,7 @@ public class SlaveRelayConnection : RelayConnection
                 }
                 break;
             case MessageKind.MouseButton:
-                var btn = Parse<MouseButtonMessage>(json, kind);
+                var btn = Parse<MouseButtonMessage>(body, kind);
                 if (btn != null)
                 {
                     _cursorHider.OnMasterActivity(sourceHost);
@@ -112,7 +112,7 @@ public class SlaveRelayConnection : RelayConnection
                 }
                 break;
             case MessageKind.MouseScroll:
-                var scroll = Parse<MouseScrollMessage>(json, kind);
+                var scroll = Parse<MouseScrollMessage>(body, kind);
                 if (scroll != null)
                 {
                     _cursorHider.OnMasterActivity(sourceHost);
@@ -120,7 +120,7 @@ public class SlaveRelayConnection : RelayConnection
                 }
                 break;
             case MessageKind.EnterScreen:
-                var enter = Parse<EnterScreenMessage>(json, kind);
+                var enter = Parse<EnterScreenMessage>(body, kind);
                 if (enter != null)
                 {
                     MoveToCachedScreen(enter.Screen, enter.X, enter.Y);
@@ -133,7 +133,7 @@ public class SlaveRelayConnection : RelayConnection
                 _cursorHider.OnLeaveScreen(sourceHost);
                 break;
             case MessageKind.ScreensaverSync:
-                var ss = Parse<ScreensaverSyncMessage>(json, kind);
+                var ss = Parse<ScreensaverSyncMessage>(body, kind);
                 if (ss != null)
                 {
                     _log.LogInformation("Screensaver sync from {Host}: active={Active}", sourceHost, ss.Active);
@@ -142,7 +142,7 @@ public class SlaveRelayConnection : RelayConnection
                 }
                 break;
             case MessageKind.ClipboardPush:
-                var push = Parse<ClipboardPushMessage>(json, kind);
+                var push = Parse<ClipboardPushMessage>(body, kind);
                 if (push != null)
                 {
                     _log.LogDebug("Clipboard push from {Host}: text={TextLen}, primary={PrimaryLen}, image={ImageLen}",
@@ -161,7 +161,7 @@ public class SlaveRelayConnection : RelayConnection
                 break;
             case MessageKind.Osd:
                 {
-                    var osdMsg = Parse<OsdMessage>(json, kind);
+                    var osdMsg = Parse<OsdMessage>(body, kind);
                     if (osdMsg != null) _osd.Show(osdMsg.Text);
                     break;
                 }
@@ -200,13 +200,13 @@ public class SlaveRelayConnection : RelayConnection
                         Send([sourceHost], MessageSerializer.Encode(MessageKind.FileTransferBusy, new FileTransferBusyMessage()));
                         break;
                     }
-                    var req = Parse<FileStreamRequestMessage>(json, kind);
+                    var req = Parse<FileStreamRequestMessage>(body, kind);
                     if (req != null)
                         _ = _fileTransfer.StreamToHost(req.Paths, req.TargetHost, this);
                     break;
                 }
             case var _ when FileTransferService.IsFileTransferMessage(kind):
-                await _fileTransfer.OnMessageAsync(sourceHost, kind, json, this);
+                await _fileTransfer.OnMessageAsync(sourceHost, kind, body, this);
                 break;
             default:
                 _log.LogDebug("Unhandled message kind {Kind} from {Host}", kind, sourceHost);
@@ -297,9 +297,9 @@ public class SlaveRelayConnection : RelayConnection
         }, ct);
     }
 
-    private T? Parse<T>(string json, MessageKind kind) where T : class
+    private T? Parse<T>(ReadOnlyMemory<byte> body, MessageKind kind) where T : class
     {
-        var result = json.FromSaneJson<T>();
+        var result = body.FromSaneJson<T>();
         if (result == null) _log.LogWarning("Failed to deserialize {Kind} message — dropping", kind);
         return result;
     }
@@ -318,9 +318,9 @@ public class SlaveRelayConnection : RelayConnection
         _repeatTimers.Clear();
     }
 
-    private async Task HandleMasterConfig(string masterHost, string json)
+    private async Task HandleMasterConfig(string masterHost, ReadOnlyMemory<byte> body)
     {
-        var config = json.FromSaneJson<MasterConfigMessage>() ?? new MasterConfigMessage(null);
+        var config = body.FromSaneJson<MasterConfigMessage>() ?? new MasterConfigMessage(null);
         var before = await _peerState.GetMasters();
         await _peerState.AddMaster(masterHost, config);
         var after = await _peerState.GetMasters();

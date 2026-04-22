@@ -28,7 +28,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     // IRelaySender
     public bool IsConnected => _server != null;
     public event Func<string[], Task>? PeersChanged;
-    public event Func<string, MessageKind, string, Task>? MessageReceived;
+    public event Func<string, MessageKind, ReadOnlyMemory<byte>, Task>? MessageReceived;
     public event Func<Task>? Disconnected;
 
     public void Send(string[] targetHosts, byte[] payload)
@@ -58,7 +58,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
             var decoded = MessageSerializer.Decode(decrypted);
             if (log.IsEnabled(LogLevel.Trace))
                 log.LogTrace("Received {Kind} from {SourceHost} ({Bytes} bytes)", decoded.Kind, sourceHost, payload.Length);
-            await OnReceive(sourceHost, decoded.Kind, decoded.Json);
+            await OnReceive(sourceHost, decoded.Kind, decoded.Bytes);
         }
         catch (Exception ex)
         {
@@ -79,9 +79,9 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     }
 
     // override in subclasses (e.g. tests, slave mode)
-    protected virtual async Task OnReceive(string sourceHost, MessageKind kind, string json)
+    protected virtual async Task OnReceive(string sourceHost, MessageKind kind, ReadOnlyMemory<byte> body)
     {
-        if (MessageReceived != null) await MessageReceived(sourceHost, kind, json);
+        if (MessageReceived != null) await MessageReceived(sourceHost, kind, body);
         else await ValueTask.CompletedTask;
     }
 

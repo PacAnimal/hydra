@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using Cathedral.Config;
 using Cathedral.Logging;
@@ -289,7 +290,7 @@ public class MasterSlaveProtocolTests
             new WorldState())
         { }
 
-        public Task SimulateReceive(string host, MessageKind kind, string json) => OnReceive(host, kind, json);
+        public Task SimulateReceive(string host, MessageKind kind, string json) => OnReceive(host, kind, Encoding.UTF8.GetBytes(json));
     }
 
     private sealed class LogCapture : ILoggerFactory

@@ -1,27 +1,39 @@
 using System.Runtime.Versioning;
 using Hydra.Relay;
+using Hydra.Screen;
 using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform.Windows;
 
 [SupportedOSPlatform("windows")]
-public sealed class WindowsOutputHandler(ILogger<WindowsOutputHandler> log) : IPlatformOutput, ICursorVisibility
+public sealed class WindowsOutputHandler(ILogger<WindowsOutputHandler> log, IScreenDetector screens) : IPlatformOutput, ICursorVisibility
 {
     private readonly WindowsCursorSnapshot _cursor = new();
     private readonly DesktopInputDispatcher _dispatcher = new(log);
+    private int _vLeft, _vTop, _vWidth, _vHeight;
+
+    // refresh cached virtual screen metrics on screen config change
+    public void Initialize()
+    {
+        RefreshMetrics();
+        screens.ScreensChanged += _ => { RefreshMetrics(); return Task.CompletedTask; };
+    }
+
+    private void RefreshMetrics()
+    {
+        _vLeft = NativeMethods.GetSystemMetrics(NativeMethods.SM_XVIRTUALSCREEN);
+        _vTop = NativeMethods.GetSystemMetrics(NativeMethods.SM_YVIRTUALSCREEN);
+        _vWidth = NativeMethods.GetSystemMetrics(NativeMethods.SM_CXVIRTUALSCREEN);
+        _vHeight = NativeMethods.GetSystemMetrics(NativeMethods.SM_CYVIRTUALSCREEN);
+        if (_vWidth == 0) _vWidth = 1;
+        if (_vHeight == 0) _vHeight = 1;
+    }
 
     public void MoveMouse(int x, int y)
     {
-        var vLeft = NativeMethods.GetSystemMetrics(NativeMethods.SM_XVIRTUALSCREEN);
-        var vTop = NativeMethods.GetSystemMetrics(NativeMethods.SM_YVIRTUALSCREEN);
-        var vWidth = NativeMethods.GetSystemMetrics(NativeMethods.SM_CXVIRTUALSCREEN);
-        var vHeight = NativeMethods.GetSystemMetrics(NativeMethods.SM_CYVIRTUALSCREEN);
-        if (vWidth == 0) vWidth = 1;
-        if (vHeight == 0) vHeight = 1;
-
         // normalize to 0-65535 across entire virtual desktop (all monitors)
-        var dx = ((x - vLeft) * 65536 + vWidth / 2) / vWidth;
-        var dy = ((y - vTop) * 65536 + vHeight / 2) / vHeight;
+        var dx = ((x - _vLeft) * 65536 + _vWidth / 2) / _vWidth;
+        var dy = ((y - _vTop) * 65536 + _vHeight / 2) / _vHeight;
 
         _dispatcher.Dispatch(new MoveMouseCommand(dx, dy));
     }

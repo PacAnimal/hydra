@@ -1,6 +1,6 @@
 using System.Text;
-using System.Text.Json;
 using Cathedral.Config;
+using Cathedral.Extensions;
 using Hydra.Keyboard;
 using Hydra.Mouse;
 using Microsoft.Extensions.Logging;
@@ -73,19 +73,24 @@ public static class MessageSerializer
     // wire format: [1 byte kind][utf-8 json]
     public static byte[] Encode<T>(MessageKind kind, T message)
     {
-        var json = JsonSerializer.SerializeToUtf8Bytes(message, SaneJson.Options);
-        var bytes = new byte[1 + json.Length];
-        bytes[0] = (byte)kind;
-        json.CopyTo(bytes, 1);
-        return bytes;
+        var json = message.ToSaneJsonBytes(SaneJson.CompactOptions);
+        var result = new byte[1 + json.Length];
+        result[0] = (byte)kind;
+        json.CopyTo(result, 1);
+        return result;
     }
 
     public static DecodedMessage Decode(byte[] payload)
     {
         if (payload.Length == 0) throw new ArgumentException("Empty payload", nameof(payload));
         var kind = (MessageKind)payload[0];
-        return new DecodedMessage(kind, Encoding.UTF8.GetString(payload, 1, payload.Length - 1));
+        return new DecodedMessage(kind, payload.AsMemory(1));
     }
 }
 
-public record DecodedMessage(MessageKind Kind, string Json);
+public record DecodedMessage(MessageKind Kind, ReadOnlyMemory<byte> Bytes)
+{
+    // lazy string conversion — only used in tests and low-frequency paths
+    public string Json => Encoding.UTF8.GetString(Bytes.Span);
+    public T Deserialize<T>() => Bytes.FromSaneJson<T>()!;
+}

@@ -1,3 +1,4 @@
+using System.Text;
 using Hydra.Config;
 using Hydra.Relay;
 using Microsoft.AspNetCore.Http.Connections.Client;
@@ -35,9 +36,9 @@ public sealed class HydraTestClient(WebApplicationFactory<global::Styx.Program> 
         options.HttpMessageHandlerFactory = _ => _factory.Server.CreateHandler();
     }
 
-    protected override Task OnReceive(string sourceHost, MessageKind kind, string json)
+    protected override Task OnReceive(string sourceHost, MessageKind kind, ReadOnlyMemory<byte> body)
     {
-        _lastMessage = (sourceHost, kind, json);
+        _lastMessage = (sourceHost, kind, Encoding.UTF8.GetString(body.Span));
         _receiveSignal.Release();
         return Task.CompletedTask;
     }
