@@ -31,15 +31,30 @@ describe('deriveHostsFromLayout', () => {
     expect(desktop.neighbours![0].name).toBe('laptop')
   })
 
-  it('creates a left neighbour from the other side', () => {
+  it('does not create a left neighbour on the far side — mirror covers the reverse', () => {
     const items = [
       item('a', 'desktop', 0, 0),
       item('b', 'laptop', DEFAULT_W, 0),
     ]
+    // desktop is BFS root (first item, no isMaster set)
     const hosts = deriveHostsFromLayout(items)
     const laptop = hosts.find(h => h.name === 'laptop')!
-    expect(laptop.neighbours![0].direction).toBe('Left')
-    expect(laptop.neighbours![0].name).toBe('desktop')
+    expect(laptop.neighbours).toBeUndefined()
+  })
+
+  it('creates a left neighbour when master is to the right of a slave', () => {
+    const items: LayoutItem[] = [
+      { ...item('a', 'slave', 0, 0), isMaster: false },
+      { ...item('b', 'master', DEFAULT_W, 0), isMaster: true },
+    ]
+    const hosts = deriveHostsFromLayout(items)
+    const master = hosts.find(h => h.name === 'master')!
+    expect(master.neighbours).toHaveLength(1)
+    expect(master.neighbours![0].direction).toBe('Left')
+    expect(master.neighbours![0].name).toBe('slave')
+    // slave has no reverse entry — mirror covers it
+    const slave = hosts.find(h => h.name === 'slave')!
+    expect(slave.neighbours).toBeUndefined()
   })
 
   it('does not create neighbours for same-host adjacent blocks', () => {
@@ -74,7 +89,7 @@ describe('deriveHostsFromLayout', () => {
     expect(desktop.neighbours![0].destScreen).toBeUndefined()
   })
 
-  it('creates down/up neighbours for vertical adjacency', () => {
+  it('creates a down neighbour for vertically adjacent blocks (not Up — mirror handles it)', () => {
     const items = [
       item('a', 'desktop', 0, 0),
       item('b', 'laptop', 0, DEFAULT_H),
@@ -82,6 +97,8 @@ describe('deriveHostsFromLayout', () => {
     const hosts = deriveHostsFromLayout(items)
     const desktop = hosts.find(h => h.name === 'desktop')!
     expect(desktop.neighbours![0].direction).toBe('Down')
+    const laptop = hosts.find(h => h.name === 'laptop')!
+    expect(laptop.neighbours).toBeUndefined()
   })
 
   it('preserves deadCorners per host', () => {
@@ -101,14 +118,17 @@ describe('deriveHostsFromLayout', () => {
     const mac = hosts.find(h => h.name === 'mac')!
     const monitor = hosts.find(h => h.name === 'monitor')!
 
+    // only Right neighbours — mirror handles the Left reverse
     expect(pc.neighbours).toHaveLength(1)
     expect(pc.neighbours![0].name).toBe('mac')
+    expect(pc.neighbours![0].direction).toBe('Right')
 
-    expect(mac.neighbours).toHaveLength(2)
-    expect(mac.neighbours!.map(n => n.name).sort()).toEqual(['monitor', 'pc'])
+    expect(mac.neighbours).toHaveLength(1)
+    expect(mac.neighbours![0].name).toBe('monitor')
+    expect(mac.neighbours![0].direction).toBe('Right')
 
-    expect(monitor.neighbours).toHaveLength(1)
-    expect(monitor.neighbours![0].name).toBe('mac')
+    // monitor has nothing to its right
+    expect(monitor.neighbours).toBeUndefined()
   })
 
   it('computes sourceStart when right neighbour is vertically offset', () => {

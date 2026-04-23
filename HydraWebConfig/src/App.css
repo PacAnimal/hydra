@@ -711,6 +711,18 @@ button:disabled { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
 .layout-block:hover .layout-block-remove { opacity: 1; }
 .layout-block-remove:hover { color: #e05050; }
 
+.layout-block-master-badge {
+  position: absolute;
+  top: 4px;
+  left: 6px;
+  font-size: 0.62rem;
+  font-weight: 700;
+  color: #f59e0b;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  pointer-events: none;
+}
+
 .layout-block-size {
   font-size: 0.65rem;
   color: #666;

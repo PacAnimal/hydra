@@ -45,7 +45,8 @@ function computeEdgeRanges(
 }
 
 // derives HostConfig[] from a free-form visual layout
-// two blocks are neighbours when their edges are within ADJACENCY_THRESHOLD px and their ranges overlap
+// uses BFS from the master block (or first block) to build a spanning tree — connections flow
+// outward from master so each pair produces exactly one directed edge (mirror=true covers the reverse)
 export function deriveHostsFromLayout(items: LayoutItem[]): HostConfig[] {
   if (!items.length) return []
 
@@ -61,38 +62,64 @@ export function deriveHostsFromLayout(items: LayoutItem[]): HostConfig[] {
   const hostNames = new Set(items.map(i => i.hostName))
   for (const name of hostNames) hostNeighbours.set(name, [])
 
+  // build cross-host adjacency for every item in all four directions
+  const adjacency = new Map<string, Array<{ adj: LayoutItem; dir: Direction }>>()
   for (const item of items) {
+    const edges: Array<{ adj: LayoutItem; dir: Direction }> = []
     for (const adj of items) {
       if (adj.id === item.id || adj.hostName === item.hostName) continue
-
       const vOverlap = Math.min(item.y + item.h, adj.y + adj.h) - Math.max(item.y, adj.y)
       const hOverlap = Math.min(item.x + item.w, adj.x + adj.w) - Math.max(item.x, adj.x)
-
       let dir: Direction | null = null
       if (Math.abs(adj.x - (item.x + item.w)) < ADJACENCY_THRESHOLD && vOverlap > 0) dir = 'Right'
       else if (Math.abs(item.x - (adj.x + adj.w)) < ADJACENCY_THRESHOLD && vOverlap > 0) dir = 'Left'
       else if (Math.abs(adj.y - (item.y + item.h)) < ADJACENCY_THRESHOLD && hOverlap > 0) dir = 'Down'
       else if (Math.abs(item.y - (adj.y + adj.h)) < ADJACENCY_THRESHOLD && hOverlap > 0) dir = 'Up'
-
-      if (!dir) continue
-
-      const n: NeighbourConfig = { direction: dir, name: adj.hostName }
-      if (item.screenId) n.sourceScreen = item.screenId
-      if (adj.screenId) n.destScreen = adj.screenId
-
-      const ranges = (dir === 'Left' || dir === 'Right')
-        ? computeEdgeRanges(item.y, item.h, adj.y, adj.h)
-        : computeEdgeRanges(item.x, item.w, adj.x, adj.w)
-
-      if (ranges) {
-        if (ranges.srcStart !== undefined) n.sourceStart = ranges.srcStart
-        if (ranges.srcEnd !== undefined) n.sourceEnd = ranges.srcEnd
-        if (ranges.dstStart !== undefined) n.destStart = ranges.dstStart
-        if (ranges.dstEnd !== undefined) n.destEnd = ranges.dstEnd
-      }
-
-      hostNeighbours.get(item.hostName)!.push(n)
+      if (dir) edges.push({ adj, dir })
     }
+    adjacency.set(item.id, edges)
+  }
+
+  // BFS from root — creates one directed edge per pair, going outward from root
+  const visited = new Set<string>()
+
+  function bfsFrom(root: LayoutItem) {
+    visited.add(root.id)
+    const queue = [root]
+    while (queue.length > 0) {
+      const current = queue.shift()!
+      for (const { adj, dir } of adjacency.get(current.id) ?? []) {
+        if (visited.has(adj.id)) continue
+        visited.add(adj.id)
+
+        const n: NeighbourConfig = { direction: dir, name: adj.hostName }
+        if (current.screenId) n.sourceScreen = current.screenId
+        if (adj.screenId) n.destScreen = adj.screenId
+
+        const ranges = (dir === 'Left' || dir === 'Right')
+          ? computeEdgeRanges(current.y, current.h, adj.y, adj.h)
+          : computeEdgeRanges(current.x, current.w, adj.x, adj.w)
+
+        if (ranges) {
+          if (ranges.srcStart !== undefined) n.sourceStart = ranges.srcStart
+          if (ranges.srcEnd !== undefined) n.sourceEnd = ranges.srcEnd
+          if (ranges.dstStart !== undefined) n.destStart = ranges.dstStart
+          if (ranges.dstEnd !== undefined) n.destEnd = ranges.dstEnd
+        }
+
+        hostNeighbours.get(current.hostName)!.push(n)
+        queue.push(adj)
+      }
+    }
+  }
+
+  // start BFS from master block (fall back to first item)
+  const master = items.find(i => i.isMaster) ?? items[0]
+  bfsFrom(master)
+
+  // handle disconnected components — each unvisited item roots its own sub-tree
+  for (const item of items) {
+    if (!visited.has(item.id)) bfsFrom(item)
   }
 
   return Array.from(hostNames).map(name => {

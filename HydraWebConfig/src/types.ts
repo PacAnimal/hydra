@@ -56,6 +56,7 @@ export interface LayoutItem {
   y: number          // top edge in logical pixels
   w: number          // width in logical pixels (default 1920)
   h: number          // height in logical pixels (default 1080)
+  isMaster?: boolean // marks which host in the layout is the local master machine
   deadCorners?: number
 }
 

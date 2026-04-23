@@ -26,7 +26,7 @@ export function GlobalSettings({ config, onChange }: Props) {
               type="number"
               min="0"
               value={config.deadCorners ?? ''}
-              placeholder="0"
+              placeholder="50"
               onChange={e => onChange({ deadCorners: e.target.value ? Number(e.target.value) : undefined })}
             />
           </div>

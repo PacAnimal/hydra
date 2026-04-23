@@ -17,7 +17,7 @@ export function newLayoutItem(hostName: string, screenId?: string, x = 0, y = 0,
 }
 
 export function newProfile(): HydraProfile {
-  return { profileName: '', mode: 'Master', visualMode: true, layoutItems: [] }
+  return { profileName: '', mode: 'Master', visualMode: true, layoutItems: [], deadCorners: 50 }
 }
 
 export function newFormState(): FormState {

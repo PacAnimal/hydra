@@ -61,7 +61,7 @@ export function NetworkConfig({ config, onChange }: Props) {
             <input
               type="text"
               value={config.embeddedStyx?.server ?? ''}
-              placeholder="e.g. styx.example.com or 192.168.1.10"
+              placeholder="e.g. styx.example.com:8080 or 192.168.1.10"
               onChange={e => patchStyx({ server: e.target.value })}
             />
           </div>

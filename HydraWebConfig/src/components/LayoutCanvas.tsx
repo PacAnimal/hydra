@@ -19,7 +19,6 @@ const ASPECT_PRESETS = [
   { label: '16:10', w: 1920, h: 1200 },
   { label: '21:9', w: 2560, h: 1080 },
   { label: '4:3', w: 1600, h: 1200 },
-  { label: '9:16', w: 1080, h: 1920 },
   { label: '4K', w: 3840, h: 2160 },
 ]
 
@@ -29,9 +28,9 @@ type DragType = 'move' | `resize-${ResizeCorner}`
 interface DragState {
   id: string
   type: DragType
-  startPointerX: number  // pointer canvas px at drag start
+  startPointerX: number
   startPointerY: number
-  startX: number         // item logical coords at drag start
+  startX: number
   startY: number
   startW: number
   startH: number
@@ -46,9 +45,9 @@ interface SelectedItem {
   id: string
   hostName: string
   screenId: string
-  deadCorners: string
   w: string
   h: string
+  isMaster: boolean
 }
 
 interface AddForm {
@@ -71,7 +70,6 @@ function rectsOverlap(
   a: { x: number; y: number; w: number; h: number },
   b: { x: number; y: number; w: number; h: number },
 ): boolean {
-  // strict overlap — touching edges are allowed (needed for adjacency)
   return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y
 }
 
@@ -83,14 +81,11 @@ function applyEdgeSnap(
 
   for (const o of others) {
     if (o.id === dragId) continue
-
-    // horizontal: align left edges, right edges, or right-to-left
     if (Math.abs(x - o.x) < SNAP_EDGE) snapX = o.x
     else if (Math.abs((x + w) - (o.x + o.w)) < SNAP_EDGE) snapX = o.x + o.w - w
     else if (Math.abs((x + w) - o.x) < SNAP_EDGE) snapX = o.x - w
     else if (Math.abs(x - (o.x + o.w)) < SNAP_EDGE) snapX = o.x + o.w
 
-    // vertical: align top edges, bottom edges, or bottom-to-top
     if (Math.abs(y - o.y) < SNAP_EDGE) snapY = o.y
     else if (Math.abs((y + h) - (o.y + o.h)) < SNAP_EDGE) snapY = o.y + o.h - h
     else if (Math.abs((y + h) - o.y) < SNAP_EDGE) snapY = o.y - h
@@ -110,10 +105,7 @@ function makeColorMap(items: LayoutItem[]): Map<string, string> {
 }
 
 function canvasSize(items: LayoutItem[], ghost?: Ghost | null): { w: number; h: number } {
-  const rects = [
-    ...items,
-    ...(ghost ? [{ x: ghost.x, y: ghost.y, w: ghost.w, h: ghost.h }] : []),
-  ]
+  const rects = [...items, ...(ghost ? [ghost] : [])]
   const maxX = rects.length ? Math.max(...rects.map(r => r.x + r.w)) : DEFAULT_W * 3
   const maxY = rects.length ? Math.max(...rects.map(r => r.y + r.h)) : DEFAULT_H * 2
   return {
@@ -142,25 +134,13 @@ function buildConnections(items: LayoutItem[], colorMap: Map<string, string>): C
       const vOverlap = Math.min(item.y + item.h, adj.y + adj.h) - Math.max(item.y, adj.y)
       const hOverlap = Math.min(item.x + item.w, adj.x + adj.w) - Math.max(item.x, adj.x)
 
-      // right adjacency
       if (Math.abs(adj.x - (item.x + item.w)) < ADJACENCY_THRESHOLD && vOverlap > 0) {
         const midY = (Math.max(item.y, adj.y) + Math.min(item.y + item.h, adj.y + adj.h)) / 2
-        conns.push({
-          fromId: item.id, toId: adj.id,
-          x1: blockLeft(item.x + item.w), y1: blockTop(midY),
-          x2: blockLeft(adj.x),           y2: blockTop(midY),
-          color: colorMap.get(item.hostName) ?? '#888',
-        })
+        conns.push({ fromId: item.id, toId: adj.id, x1: blockLeft(item.x + item.w), y1: blockTop(midY), x2: blockLeft(adj.x), y2: blockTop(midY), color: colorMap.get(item.hostName) ?? '#888' })
         seen.add(pairKey)
       } else if (Math.abs(adj.y - (item.y + item.h)) < ADJACENCY_THRESHOLD && hOverlap > 0) {
-        // down adjacency
         const midX = (Math.max(item.x, adj.x) + Math.min(item.x + item.w, adj.x + adj.w)) / 2
-        conns.push({
-          fromId: item.id, toId: adj.id,
-          x1: blockLeft(midX), y1: blockTop(item.y + item.h),
-          x2: blockLeft(midX), y2: blockTop(adj.y),
-          color: colorMap.get(item.hostName) ?? '#888',
-        })
+        conns.push({ fromId: item.id, toId: adj.id, x1: blockLeft(midX), y1: blockTop(item.y + item.h), x2: blockLeft(midX), y2: blockTop(adj.y), color: colorMap.get(item.hostName) ?? '#888' })
         seen.add(pairKey)
       }
     }
@@ -171,8 +151,8 @@ function buildConnections(items: LayoutItem[], colorMap: Map<string, string>): C
 
 interface EdgeIndicator {
   side: 'left' | 'right' | 'top' | 'bottom'
-  startPct: number  // % along the block edge where indicator starts
-  endPct: number    // % along the block edge where indicator ends
+  startPct: number
+  endPct: number
   color: string
 }
 
@@ -187,17 +167,17 @@ function getEdgeIndicators(item: LayoutItem, items: LayoutItem[], colorMap: Map<
     const adjColor = colorMap.get(adj.hostName) ?? '#888'
 
     if (Math.abs(adj.x - (item.x + item.w)) < ADJACENCY_THRESHOLD && vOverlap > 0) {
-      const low = Math.max(item.y, adj.y), high = Math.min(item.y + item.h, adj.y + adj.h)
-      indicators.push({ side: 'right', startPct: (low - item.y) / item.h * 100, endPct: (high - item.y) / item.h * 100, color: adjColor })
+      const lo = Math.max(item.y, adj.y), hi = Math.min(item.y + item.h, adj.y + adj.h)
+      indicators.push({ side: 'right', startPct: (lo - item.y) / item.h * 100, endPct: (hi - item.y) / item.h * 100, color: adjColor })
     } else if (Math.abs(item.x - (adj.x + adj.w)) < ADJACENCY_THRESHOLD && vOverlap > 0) {
-      const low = Math.max(item.y, adj.y), high = Math.min(item.y + item.h, adj.y + adj.h)
-      indicators.push({ side: 'left', startPct: (low - item.y) / item.h * 100, endPct: (high - item.y) / item.h * 100, color: adjColor })
+      const lo = Math.max(item.y, adj.y), hi = Math.min(item.y + item.h, adj.y + adj.h)
+      indicators.push({ side: 'left', startPct: (lo - item.y) / item.h * 100, endPct: (hi - item.y) / item.h * 100, color: adjColor })
     } else if (Math.abs(adj.y - (item.y + item.h)) < ADJACENCY_THRESHOLD && hOverlap > 0) {
-      const low = Math.max(item.x, adj.x), high = Math.min(item.x + item.w, adj.x + adj.w)
-      indicators.push({ side: 'bottom', startPct: (low - item.x) / item.w * 100, endPct: (high - item.x) / item.w * 100, color: adjColor })
+      const lo = Math.max(item.x, adj.x), hi = Math.min(item.x + item.w, adj.x + adj.w)
+      indicators.push({ side: 'bottom', startPct: (lo - item.x) / item.w * 100, endPct: (hi - item.x) / item.w * 100, color: adjColor })
     } else if (Math.abs(item.y - (adj.y + adj.h)) < ADJACENCY_THRESHOLD && hOverlap > 0) {
-      const low = Math.max(item.x, adj.x), high = Math.min(item.x + item.w, adj.x + adj.w)
-      indicators.push({ side: 'top', startPct: (low - item.x) / item.w * 100, endPct: (high - item.x) / item.w * 100, color: adjColor })
+      const lo = Math.max(item.x, adj.x), hi = Math.min(item.x + item.w, adj.x + adj.w)
+      indicators.push({ side: 'top', startPct: (lo - item.x) / item.w * 100, endPct: (hi - item.x) / item.w * 100, color: adjColor })
     }
   }
 
@@ -225,7 +205,6 @@ export function LayoutCanvas({ items, onChange }: Props) {
   const derivedHosts = deriveHostsFromLayout(items)
   const connectionCount = derivedHosts.reduce((s, h) => s + (h.neighbours?.length ?? 0), 0)
 
-  // reads pointer canvas-relative coordinates
   function pointerCanvasXY(e: React.PointerEvent): { px: number; py: number } {
     const rect = canvasRef.current!.getBoundingClientRect()
     return {
@@ -241,7 +220,7 @@ export function LayoutCanvas({ items, onChange }: Props) {
     const { px, py } = pointerCanvasXY(e)
     ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
     setDrag({ id, type, startPointerX: px, startPointerY: py, startX: item.x, startY: item.y, startW: item.w, startH: item.h })
-    setSelected({ id, hostName: item.hostName, screenId: item.screenId ?? '', deadCorners: item.deadCorners?.toString() ?? '', w: String(item.w), h: String(item.h) })
+    setSelected({ id, hostName: item.hostName, screenId: item.screenId ?? '', w: String(item.w), h: String(item.h), isMaster: item.isMaster ?? false })
     setGhost(null)
   }, [items])
 
@@ -268,32 +247,26 @@ export function LayoutCanvas({ items, onChange }: Props) {
         break
       case 'resize-sw': {
         const delta = Math.min(drag.startW - MIN_SIZE, snapTo(-dxLog))
-        nw = drag.startW - delta
-        nx = drag.startX + delta
+        nw = drag.startW - delta; nx = drag.startX + delta
         nh = Math.max(MIN_SIZE, snapTo(drag.startH + dyLog))
         break
       }
       case 'resize-ne': {
         nw = Math.max(MIN_SIZE, snapTo(drag.startW + dxLog))
         const delta = Math.min(drag.startH - MIN_SIZE, snapTo(-dyLog))
-        nh = drag.startH - delta
-        ny = drag.startY + delta
+        nh = drag.startH - delta; ny = drag.startY + delta
         break
       }
       case 'resize-nw': {
         const deltaW = Math.min(drag.startW - MIN_SIZE, snapTo(-dxLog))
-        nw = drag.startW - deltaW
-        nx = drag.startX + deltaW
+        nw = drag.startW - deltaW; nx = drag.startX + deltaW
         const deltaH = Math.min(drag.startH - MIN_SIZE, snapTo(-dyLog))
-        nh = drag.startH - deltaH
-        ny = drag.startY + deltaH
+        nh = drag.startH - deltaH; ny = drag.startY + deltaH
         break
       }
     }
 
-    nx = Math.max(0, nx)
-    ny = Math.max(0, ny)
-
+    nx = Math.max(0, nx); ny = Math.max(0, ny)
     const proposed = { x: nx, y: ny, w: nw, h: nh }
     const overlapping = items.some(i => i.id !== drag.id && rectsOverlap(proposed, i))
     setGhost({ ...proposed, overlapping })
@@ -301,25 +274,21 @@ export function LayoutCanvas({ items, onChange }: Props) {
 
   const onPointerUp = useCallback(() => {
     if (!drag || !ghost) { setDrag(null); setGhost(null); return }
-
     if (!ghost.overlapping) {
       const { x, y, w, h } = ghost
       onChange(items.map(i => i.id === drag.id ? { ...i, x, y, w, h } : i))
-      // keep selected in sync with updated dimensions
       setSelected(s => s?.id === drag.id ? { ...s, w: String(w), h: String(h) } : s)
     }
-    setDrag(null)
-    setGhost(null)
+    setDrag(null); setGhost(null)
   }, [drag, ghost, items, onChange])
 
   const addItem = useCallback(() => {
     const hostName = addForm.hostName.trim()
     if (!hostName) return
-
-    // place to the right of rightmost block (or at origin)
     const x = items.length > 0 ? Math.max(...items.map(i => i.x + i.w)) + 100 : DEFAULT_W
     const y = DEFAULT_H
-    const newItem = newLayoutItem(hostName, addForm.screenId.trim() || undefined, x, y)
+    const isMaster = items.length === 0  // first item is master by default
+    const newItem: LayoutItem = { ...newLayoutItem(hostName, addForm.screenId.trim() || undefined, x, y), isMaster }
     onChange([...items, newItem])
     setAddForm({ hostName: '', screenId: '' })
     setShowAdd(false)
@@ -334,20 +303,45 @@ export function LayoutCanvas({ items, onChange }: Props) {
     if (!selected) return
     const hostName = selected.hostName.trim()
     if (!hostName) return
-    const dc = selected.deadCorners.trim() ? Number(selected.deadCorners) : undefined
     const w = Math.max(MIN_SIZE, Number(selected.w) || DEFAULT_W)
     const h = Math.max(MIN_SIZE, Number(selected.h) || DEFAULT_H)
     onChange(items.map(i => i.id === selected.id
-      ? { ...i, hostName, screenId: selected.screenId.trim() || undefined, deadCorners: dc, w, h }
+      ? { ...i, hostName, screenId: selected.screenId.trim() || undefined, w, h }
       : i
     ))
   }, [selected, items, onChange])
 
   const applyPreset = useCallback((w: number, h: number) => {
     if (!selected) return
-    setSelected(s => s ? { ...s, w: String(w), h: String(h) } : null)
-    onChange(items.map(i => i.id === selected.id ? { ...i, w, h } : i))
+    // preserve current orientation when applying a preset
+    const item = items.find(i => i.id === selected.id)
+    const vertical = item && item.h > item.w
+    const fw = vertical ? Math.min(w, h) : Math.max(w, h)
+    const fh = vertical ? Math.max(w, h) : Math.min(w, h)
+    setSelected(s => s ? { ...s, w: String(fw), h: String(fh) } : null)
+    onChange(items.map(i => i.id === selected.id ? { ...i, w: fw, h: fh } : i))
   }, [selected, items, onChange])
+
+  const setOrientation = useCallback((orientation: 'horizontal' | 'vertical') => {
+    if (!selected) return
+    const item = items.find(i => i.id === selected.id)
+    if (!item) return
+    const isVertical = item.h > item.w
+    const wantVertical = orientation === 'vertical'
+    if (isVertical === wantVertical) return  // already correct
+    const [nw, nh] = [item.h, item.w]  // swap
+    setSelected(s => s ? { ...s, w: String(nw), h: String(nh) } : null)
+    onChange(items.map(i => i.id === selected.id ? { ...i, w: nw, h: nh } : i))
+  }, [selected, items, onChange])
+
+  const setMaster = useCallback((id: string, master: boolean) => {
+    const updated = items.map(i => ({
+      ...i,
+      isMaster: master ? i.id === id : (i.id === id ? false : i.isMaster),
+    }))
+    onChange(updated)
+    setSelected(s => s?.id === id ? { ...s, isMaster: master } : s)
+  }, [items, onChange])
 
   return (
     <div className="layout-section">
@@ -374,7 +368,6 @@ export function LayoutCanvas({ items, onChange }: Props) {
           onPointerUp={onPointerUp}
           onClick={() => setSelected(null)}
         >
-          {/* connection lines */}
           <svg className="layout-svg" width={cw} height={ch}>
             <defs>
               {[...colorMap.values()].filter((v, i, a) => a.indexOf(v) === i).map(color => (
@@ -387,15 +380,12 @@ export function LayoutCanvas({ items, onChange }: Props) {
               <line
                 key={`${c.fromId}-${c.toId}`}
                 x1={c.x1} y1={c.y1} x2={c.x2} y2={c.y2}
-                stroke={c.color}
-                strokeWidth={2}
-                strokeOpacity={0.6}
+                stroke={c.color} strokeWidth={2} strokeOpacity={0.6}
                 markerEnd={`url(#arrow-${c.color.replace('#', '')})`}
               />
             ))}
           </svg>
 
-          {/* ghost drop target */}
           {drag && ghost && (
             <div
               className={`layout-block-ghost${ghost.overlapping ? ' overlap' : ''}`}
@@ -403,7 +393,6 @@ export function LayoutCanvas({ items, onChange }: Props) {
             />
           )}
 
-          {/* screen blocks */}
           {items.map(item => {
             const color = colorMap.get(item.hostName) ?? '#888'
             const isDragging = drag?.id === item.id
@@ -426,9 +415,10 @@ export function LayoutCanvas({ items, onChange }: Props) {
                 onPointerDown={e => startDrag(e, item.id, 'move')}
                 onClick={e => {
                   e.stopPropagation()
-                  setSelected({ id: item.id, hostName: item.hostName, screenId: item.screenId ?? '', deadCorners: item.deadCorners?.toString() ?? '', w: String(item.w), h: String(item.h) })
+                  setSelected({ id: item.id, hostName: item.hostName, screenId: item.screenId ?? '', w: String(item.w), h: String(item.h), isMaster: item.isMaster ?? false })
                 }}
               >
+                {item.isMaster && <div className="layout-block-master-badge">M</div>}
                 <div className="layout-block-host" style={{ color }}>{item.hostName}</div>
                 {item.screenId && <div className="layout-block-screen">{item.screenId}</div>}
                 <div className="layout-block-size">{item.w} × {item.h}</div>
@@ -439,22 +429,15 @@ export function LayoutCanvas({ items, onChange }: Props) {
                   aria-label="remove"
                 >✕</button>
 
-                {/* edge connection indicators — proportional to overlap zone */}
                 {edgeIndicators.map((ind, idx) => {
                   const style: React.CSSProperties = { background: ind.color, opacity: 0.8, position: 'absolute', pointerEvents: 'none', borderRadius: 2 }
-                  if (ind.side === 'right') {
-                    Object.assign(style, { right: -3, width: 6, top: `${ind.startPct}%`, height: `${ind.endPct - ind.startPct}%` })
-                  } else if (ind.side === 'left') {
-                    Object.assign(style, { left: -3, width: 6, top: `${ind.startPct}%`, height: `${ind.endPct - ind.startPct}%` })
-                  } else if (ind.side === 'bottom') {
-                    Object.assign(style, { bottom: -3, height: 6, left: `${ind.startPct}%`, width: `${ind.endPct - ind.startPct}%` })
-                  } else {
-                    Object.assign(style, { top: -3, height: 6, left: `${ind.startPct}%`, width: `${ind.endPct - ind.startPct}%` })
-                  }
-                  return <div key={idx} style={style} title={`connected`} />
+                  if (ind.side === 'right') Object.assign(style, { right: -3, width: 6, top: `${ind.startPct}%`, height: `${ind.endPct - ind.startPct}%` })
+                  else if (ind.side === 'left') Object.assign(style, { left: -3, width: 6, top: `${ind.startPct}%`, height: `${ind.endPct - ind.startPct}%` })
+                  else if (ind.side === 'bottom') Object.assign(style, { bottom: -3, height: 6, left: `${ind.startPct}%`, width: `${ind.endPct - ind.startPct}%` })
+                  else Object.assign(style, { top: -3, height: 6, left: `${ind.startPct}%`, width: `${ind.endPct - ind.startPct}%` })
+                  return <div key={idx} style={style} />
                 })}
 
-                {/* corner resize handles */}
                 {isSelected && (['nw', 'ne', 'sw', 'se'] as ResizeCorner[]).map(corner => (
                   <div
                     key={corner}
@@ -468,7 +451,6 @@ export function LayoutCanvas({ items, onChange }: Props) {
         </div>
       </div>
 
-      {/* selected block settings */}
       {selected && (
         <div className="layout-selected-panel">
           <div className="layout-selected-title">Block Settings</div>
@@ -495,17 +477,15 @@ export function LayoutCanvas({ items, onChange }: Props) {
                 onBlur={applySelected}
               />
             </div>
-            <div className="field">
-              <label htmlFor={`${formIdPrefix}-sel-dc`}>Dead Corners</label>
-              <input
-                id={`${formIdPrefix}-sel-dc`}
-                type="number"
-                min="0"
-                value={selected.deadCorners}
-                placeholder="inherit"
-                onChange={e => setSelected(s => s ? { ...s, deadCorners: e.target.value } : null)}
-                onBlur={applySelected}
-              />
+            <div className="field" style={{ justifyContent: 'flex-end' }}>
+              <label className="checkbox-label" style={{ marginBottom: 4 }}>
+                <input
+                  type="checkbox"
+                  checked={selected.isMaster}
+                  onChange={e => setMaster(selected.id, e.target.checked)}
+                />
+                Master
+              </label>
             </div>
             <button
               className="btn-remove-block"
@@ -540,23 +520,40 @@ export function LayoutCanvas({ items, onChange }: Props) {
                 onBlur={applySelected}
               />
             </div>
+            <div className="field">
+              <label htmlFor={`${formIdPrefix}-sel-orient`}>Orientation</label>
+              <select
+                id={`${formIdPrefix}-sel-orient`}
+                value={Number(selected.h) > Number(selected.w) ? 'vertical' : 'horizontal'}
+                onChange={e => setOrientation(e.target.value as 'horizontal' | 'vertical')}
+              >
+                <option value="horizontal">Horizontal</option>
+                <option value="vertical">Vertical</option>
+              </select>
+            </div>
           </div>
           <div className="layout-aspect-row">
-            <span className="layout-aspect-label">Aspect:</span>
-            {ASPECT_PRESETS.map(p => (
-              <button
-                key={p.label}
-                className={`layout-aspect-btn${selected.w === String(p.w) && selected.h === String(p.h) ? ' active' : ''}`}
-                onClick={() => applyPreset(p.w, p.h)}
-              >
-                {p.label}
-              </button>
-            ))}
+            <span className="layout-aspect-label">Preset:</span>
+            {ASPECT_PRESETS.map(p => {
+              const item = items.find(i => i.id === selected.id)
+              const vertical = item && item.h > item.w
+              const fw = vertical ? Math.min(p.w, p.h) : Math.max(p.w, p.h)
+              const fh = vertical ? Math.max(p.w, p.h) : Math.min(p.w, p.h)
+              const active = selected.w === String(fw) && selected.h === String(fh)
+              return (
+                <button
+                  key={p.label}
+                  className={`layout-aspect-btn${active ? ' active' : ''}`}
+                  onClick={() => applyPreset(p.w, p.h)}
+                >
+                  {p.label}
+                </button>
+              )
+            })}
           </div>
         </div>
       )}
 
-      {/* add form */}
       <datalist id={hostListId}>
         {allHostNames.map(h => <option key={h} value={h} />)}
       </datalist>
@@ -598,7 +595,7 @@ export function LayoutCanvas({ items, onChange }: Props) {
 
       {items.length > 0 && (
         <p className="hint" style={{ marginTop: 8 }}>
-          Drag screens to arrange. Select a screen to resize it or set its aspect ratio. Adjacent screens automatically become neighbours.
+          Drag screens to arrange. Select a screen to resize or set aspect ratio. Adjacent screens from different hosts automatically become neighbours.
         </p>
       )}
     </div>
