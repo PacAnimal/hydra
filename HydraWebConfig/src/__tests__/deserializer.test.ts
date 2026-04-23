@@ -100,6 +100,73 @@ describe('deserialize', () => {
     expect(state.profiles[0].hosts).toBeUndefined()
   })
 
+  it('parses embeddedStyx', () => {
+    const json = asFile(JSON.stringify([{
+      mode: 'Master',
+      embeddedStyx: { server: 'styx.example.com', password: 'secret' },
+    }]))
+    const state = deserialize(json)
+    expect(state.profiles[0].embeddedStyx?.server).toBe('styx.example.com')
+    expect(state.profiles[0].embeddedStyx?.password).toBe('secret')
+    expect(state.profiles[0].networkType).toBe('embeddedStyx')
+  })
+
+  it('parses embeddedStyxServer', () => {
+    const json = asFile(JSON.stringify([{
+      mode: 'Master',
+      embeddedStyxServer: { port: 5000, password: 'pass' },
+    }]))
+    const state = deserialize(json)
+    expect(state.profiles[0].embeddedStyxServer?.port).toBe(5000)
+    expect(state.profiles[0].networkType).toBe('embeddedStyxServer')
+  })
+
+  it('parses networkConfig and sets networkType to config', () => {
+    const json = asFile(JSON.stringify([{ mode: 'Master', networkConfig: 'base64data' }]))
+    const state = deserialize(json)
+    expect(state.profiles[0].networkConfig).toBe('base64data')
+    expect(state.profiles[0].networkType).toBe('config')
+  })
+
+  it('parses relativeMouseScale on profile', () => {
+    const json = asFile(JSON.stringify([{ mode: 'Slave', relativeMouseScale: 1.5 }]))
+    const state = deserialize(json)
+    expect(state.profiles[0].relativeMouseScale).toBe(1.5)
+  })
+
+  it('parses per-screen relativeMouseScale', () => {
+    const json = asFile(JSON.stringify([{
+      mode: 'Slave',
+      screenDefinitions: [{ displayName: 'DELL', relativeMouseScale: 2.0 }],
+    }]))
+    const state = deserialize(json)
+    expect(state.profiles[0].screenDefinitions![0].relativeMouseScale).toBe(2)
+  })
+
+  it('parses root logFile and sessionLogFile', () => {
+    const json = asFile('[{"mode":"Master"}]', '"logFile":"/var/log/h.log","sessionLogFile":"/tmp/s.log"')
+    const state = deserialize(json)
+    expect(state.logFile).toBe('/var/log/h.log')
+    expect(state.sessionLogFile).toBe('/tmp/s.log')
+  })
+
+  it('infers layoutItems from hosts on import', () => {
+    const json = asFile(JSON.stringify([{
+      mode: 'Master',
+      networkConfig: 'abc',
+      hosts: [
+        { name: 'desktop', neighbours: [{ direction: 'Right', name: 'laptop' }] },
+        { name: 'laptop', neighbours: [] },
+      ],
+    }]))
+    const state = deserialize(json)
+    const items = state.profiles[0].layoutItems ?? []
+    expect(items.length).toBeGreaterThanOrEqual(2)
+    const hostNames = items.map(i => i.hostName)
+    expect(hostNames).toContain('desktop')
+    expect(hostNames).toContain('laptop')
+  })
+
   it('round-trips the master example', () => {
     const example = asFile(JSON.stringify([{
       networkConfig: 'abc123',

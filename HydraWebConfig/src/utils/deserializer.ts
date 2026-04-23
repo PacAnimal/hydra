@@ -1,4 +1,8 @@
-import type { HydraProfile, HostConfig, NeighbourConfig, ScreenDefinition, ConfigConditions, Direction, Mode, LogLevel, FormState } from '../types'
+import type {
+  HydraProfile, HostConfig, NeighbourConfig, ScreenDefinition, ConfigConditions,
+  Direction, Mode, LogLevel, FormState, EmbeddedStyxConfig, EmbeddedStyxServerConfig, NetworkType,
+} from '../types'
+import { inferLayoutFromHosts } from './layout'
 
 const VALID_MODES: Mode[] = ['Master', 'Slave']
 const VALID_DIRECTIONS: Direction[] = ['Left', 'Right', 'Up', 'Down']
@@ -40,67 +44,103 @@ function coerceLogLevel(v: unknown): LogLevel | undefined {
   return undefined
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function parseNeighbour(obj: any): NeighbourConfig {
+function optNum(v: unknown): number | undefined {
+  return v !== undefined ? Number(v) : undefined
+}
+function optBool(v: unknown): boolean | undefined {
+  return v !== undefined ? Boolean(v) : undefined
+}
+function optStr(v: unknown): string | undefined {
+  return typeof v === 'string' ? v : undefined
+}
+
+function parseNeighbour(obj: Record<string, unknown>): NeighbourConfig {
   return {
     direction: coerceDirection(obj.direction),
     name: String(obj.name ?? ''),
-    sourceScreen: obj.sourceScreen ?? undefined,
-    destScreen: obj.destScreen ?? undefined,
-    sourceStart: obj.sourceStart !== undefined ? Number(obj.sourceStart) : undefined,
-    sourceEnd: obj.sourceEnd !== undefined ? Number(obj.sourceEnd) : undefined,
-    destStart: obj.destStart !== undefined ? Number(obj.destStart) : undefined,
-    destEnd: obj.destEnd !== undefined ? Number(obj.destEnd) : undefined,
-    mirror: obj.mirror !== undefined ? Boolean(obj.mirror) : undefined,
+    sourceScreen: optStr(obj.sourceScreen),
+    destScreen: optStr(obj.destScreen),
+    sourceStart: optNum(obj.sourceStart),
+    sourceEnd: optNum(obj.sourceEnd),
+    destStart: optNum(obj.destStart),
+    destEnd: optNum(obj.destEnd),
+    mirror: optBool(obj.mirror),
   }
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function parseHost(obj: any): HostConfig {
+function parseHost(obj: Record<string, unknown>): HostConfig {
   return {
     name: String(obj.name ?? ''),
     neighbours: Array.isArray(obj.neighbours) ? obj.neighbours.map(parseNeighbour) : [],
-    deadCorners: obj.deadCorners !== undefined ? Number(obj.deadCorners) : undefined,
+    deadCorners: optNum(obj.deadCorners),
   }
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function parseScreenDefinition(obj: any): ScreenDefinition {
+function parseScreenDefinition(obj: Record<string, unknown>): ScreenDefinition {
   return {
-    displayName: obj.displayName ?? undefined,
-    outputName: obj.outputName ?? undefined,
-    platformId: obj.platformId ?? undefined,
-    mouseScale: obj.mouseScale !== undefined ? Number(obj.mouseScale) : undefined,
+    displayName: optStr(obj.displayName),
+    outputName: optStr(obj.outputName),
+    platformId: optStr(obj.platformId),
+    mouseScale: optNum(obj.mouseScale),
+    relativeMouseScale: optNum(obj.relativeMouseScale),
   }
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function parseConditions(obj: any): ConfigConditions {
+function parseConditions(obj: Record<string, unknown>): ConfigConditions {
   return {
-    ssid: obj.ssid ?? undefined,
-    screenCount: obj.screenCount !== undefined ? Number(obj.screenCount) : undefined,
+    ssid: optStr(obj.ssid),
+    screenCount: optNum(obj.screenCount),
   }
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function parseProfile(obj: any): HydraProfile {
+function parseEmbeddedStyx(obj: Record<string, unknown>): EmbeddedStyxConfig {
+  return {
+    server: String(obj.server ?? ''),
+    password: String(obj.password ?? ''),
+  }
+}
+
+function parseEmbeddedStyxServer(obj: Record<string, unknown>): EmbeddedStyxServerConfig {
+  return {
+    port: Number(obj.port ?? 0),
+    password: String(obj.password ?? ''),
+  }
+}
+
+function parseProfile(obj: Record<string, unknown>): HydraProfile {
   if (typeof obj !== 'object' || obj === null || Array.isArray(obj)) {
     throw new Error('profile must be a JSON object')
   }
+
+  const hosts = Array.isArray(obj.hosts) ? obj.hosts.map(parseHost) : undefined
+
+  // determine network type from which field is present
+  let networkType: NetworkType | undefined
+  if (obj.embeddedStyxServer) networkType = 'embeddedStyxServer'
+  else if (obj.embeddedStyx) networkType = 'embeddedStyx'
+  else if (obj.networkConfig) networkType = 'config'
+
   return {
     profileName: typeof obj.profileName === 'string' ? obj.profileName : '',
     mode: coerceMode(obj.mode),
-    hosts: Array.isArray(obj.hosts) ? obj.hosts.map(parseHost) : undefined,
+    hosts,
+    // infer visual layout from hosts on import
+    layoutItems: hosts ? inferLayoutFromHosts(hosts) : [],
+    visualMode: true,
     screenDefinitions: Array.isArray(obj.screenDefinitions)
       ? obj.screenDefinitions.map(parseScreenDefinition)
       : undefined,
-    mouseScale: obj.mouseScale !== undefined ? Number(obj.mouseScale) : undefined,
-    networkConfig: obj.networkConfig ?? undefined,
-    remoteOnly: obj.remoteOnly !== undefined ? Boolean(obj.remoteOnly) : undefined,
-    syncScreensaver: obj.syncScreensaver !== undefined ? Boolean(obj.syncScreensaver) : undefined,
-    debugShield: obj.debugShield !== undefined ? Boolean(obj.debugShield) : undefined,
-    deadCorners: obj.deadCorners !== undefined ? Number(obj.deadCorners) : undefined,
-    conditions: obj.conditions ? parseConditions(obj.conditions) : undefined,
+    mouseScale: optNum(obj.mouseScale),
+    relativeMouseScale: optNum(obj.relativeMouseScale),
+    networkType,
+    networkConfig: optStr(obj.networkConfig),
+    embeddedStyx: obj.embeddedStyx ? parseEmbeddedStyx(obj.embeddedStyx as Record<string, unknown>) : undefined,
+    embeddedStyxServer: obj.embeddedStyxServer ? parseEmbeddedStyxServer(obj.embeddedStyxServer as Record<string, unknown>) : undefined,
+    remoteOnly: optBool(obj.remoteOnly),
+    syncScreensaver: optBool(obj.syncScreensaver),
+    debugShield: optBool(obj.debugShield),
+    deadCorners: optNum(obj.deadCorners),
+    conditions: obj.conditions ? parseConditions(obj.conditions as Record<string, unknown>) : undefined,
   }
 }
 
@@ -116,17 +156,18 @@ export function deserialize(json: string): FormState {
     throw new Error('config must be a JSON object with a "profiles" array')
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const root = parsed as any
+  const root = parsed as Record<string, unknown>
   if (!Array.isArray(root.profiles) || root.profiles.length === 0) {
     throw new Error('config must have a non-empty "profiles" array')
   }
 
   return {
-    name: root.name ?? undefined,
-    autoUpdate: root.autoUpdate !== undefined ? Boolean(root.autoUpdate) : undefined,
+    name: optStr(root.name),
+    autoUpdate: optBool(root.autoUpdate),
     logLevel: coerceLogLevel(root.logLevel),
-    lockFile: root.lockFile ?? undefined,
+    lockFile: optStr(root.lockFile),
+    logFile: optStr(root.logFile),
+    sessionLogFile: optStr(root.sessionLogFile),
     profiles: root.profiles.map(parseProfile),
     activeIndex: 0,
   }

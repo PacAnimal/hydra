@@ -7,6 +7,7 @@ import { ModeSelect } from './components/ModeSelect'
 import { RootSettings } from './components/RootSettings'
 import { GlobalSettings } from './components/GlobalSettings'
 import { HostsEditor } from './components/HostsEditor'
+import { LayoutCanvas } from './components/LayoutCanvas'
 import { ScreenDefinitions } from './components/ScreenDefinitions'
 import { ConditionsEditor } from './components/ConditionsEditor'
 import { ConfigFileSection } from './components/ConfigFileSection'
@@ -16,6 +17,8 @@ export default function App() {
     state, current,
     updateRoot,
     updateCurrent,
+    toggleVisualMode,
+    updateLayoutItems,
     addHost, removeHost, updateHost,
     addNeighbour, removeNeighbour, updateNeighbour,
     addScreen, removeScreen, updateScreen,
@@ -28,12 +31,9 @@ export default function App() {
 
   const { profiles, activeIndex } = state
   const isMaster = current.mode === 'Master'
+  const isVisual = current.visualMode !== false
   const errors = validate(profiles)
   const isValid = errors.length === 0
-
-  const scrollToErrors = () => {
-    errorsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  }
 
   return (
     <div className="app">
@@ -41,7 +41,7 @@ export default function App() {
         <div className="header-inner">
           <div className="header-title">
             <h1>Hydra</h1>
-            <span className="subtitle">Visual configuration editor</span>
+            <span className="subtitle">Configuration editor</span>
           </div>
           <div className="header-actions">
             <DropZone onImport={importJson} />
@@ -52,7 +52,11 @@ export default function App() {
 
       <div className="app-body">
         <aside className="config-panel">
-          <ConfigFileSection state={state} isValid={isValid} onScrollToErrors={scrollToErrors} />
+          <ConfigFileSection
+            state={state}
+            isValid={isValid}
+            onScrollToErrors={() => errorsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+          />
         </aside>
 
         <main className="app-main">
@@ -84,35 +88,74 @@ export default function App() {
             </div>
 
             <div className="tab-panel">
+              {/* profile identity */}
               <div className="section">
-                <div className="field">
-                  <label htmlFor="profileName" className="required">Profile Name</label>
-                  <input
-                    id="profileName"
-                    type="text"
-                    value={current.profileName}
-                    placeholder="e.g. Home, Work, Office"
-                    onChange={e => updateCurrent({ profileName: e.target.value })}
-                  />
+                <div className="profile-identity-row">
+                  <div className="field flex-grow">
+                    <label htmlFor="profileName" className="required">Profile Name</label>
+                    <input
+                      id="profileName"
+                      type="text"
+                      value={current.profileName}
+                      placeholder="e.g. Home, Work, Office"
+                      onChange={e => updateCurrent({ profileName: e.target.value })}
+                    />
+                  </div>
+                  <div className="profile-mode-field">
+                    <div className="field-label-sm">Mode</div>
+                    <ModeSelect value={current.mode} onChange={mode => updateCurrent({ mode })} />
+                  </div>
                 </div>
+                <p className="hint" style={{ marginTop: 8, marginBottom: 0 }}>
+                  {isMaster
+                    ? 'This machine controls keyboard and mouse, routing input to all connected hosts.'
+                    : 'This machine receives keyboard and mouse input from the master.'}
+                </p>
               </div>
-
-              <ModeSelect value={current.mode} onChange={mode => updateCurrent({ mode })} />
 
               <GlobalSettings config={current} onChange={updateCurrent} />
 
+              {/* master: screen layout editor */}
               {isMaster && (
-                <HostsEditor
-                  hosts={current.hosts ?? []}
-                  onAdd={addHost}
-                  onRemove={removeHost}
-                  onUpdate={updateHost}
-                  onAddNeighbour={addNeighbour}
-                  onRemoveNeighbour={removeNeighbour}
-                  onUpdateNeighbour={updateNeighbour}
-                />
+                <div className="section">
+                  <div className="section-header-row">
+                    <h2>Screen Layout</h2>
+                    <div className="view-toggle">
+                      <button
+                        className={`view-toggle-btn${isVisual ? ' active' : ''}`}
+                        onClick={() => !isVisual && toggleVisualMode()}
+                      >
+                        Visual
+                      </button>
+                      <button
+                        className={`view-toggle-btn${!isVisual ? ' active' : ''}`}
+                        onClick={() => isVisual && toggleVisualMode()}
+                      >
+                        Manual
+                      </button>
+                    </div>
+                  </div>
+
+                  {isVisual ? (
+                    <LayoutCanvas
+                      items={current.layoutItems ?? []}
+                      onChange={updateLayoutItems}
+                    />
+                  ) : (
+                    <HostsEditor
+                      hosts={current.hosts ?? []}
+                      onAdd={addHost}
+                      onRemove={removeHost}
+                      onUpdate={updateHost}
+                      onAddNeighbour={addNeighbour}
+                      onRemoveNeighbour={removeNeighbour}
+                      onUpdateNeighbour={updateNeighbour}
+                    />
+                  )}
+                </div>
               )}
 
+              {/* slave: screen definitions */}
               {!isMaster && (
                 <ScreenDefinitions
                   screens={current.screenDefinitions ?? []}
@@ -124,7 +167,7 @@ export default function App() {
 
               <div className="section">
                 <h2>Conditions</h2>
-                <p className="hint">When should this profile be active?</p>
+                <p className="hint">Activate this profile only when all conditions match — leave blank for always-active.</p>
                 <ConditionsEditor
                   conditions={current.conditions ?? {}}
                   onChange={updateConditions}

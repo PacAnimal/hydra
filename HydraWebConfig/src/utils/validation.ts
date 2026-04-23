@@ -1,4 +1,5 @@
-import type { HydraProfile } from '../types'
+import type { HydraProfile, HostConfig } from '../types'
+import { deriveHostsFromLayout } from './layout'
 
 export interface ValidationError {
   path: string
@@ -9,6 +10,14 @@ function isUnconditional(p: HydraProfile): boolean {
   if (!p.conditions) return true
   const { ssid, screenCount } = p.conditions
   return !ssid && screenCount === undefined
+}
+
+// returns the effective hosts for a profile (from layout or explicit)
+function effectiveHosts(p: HydraProfile): HostConfig[] {
+  if (p.layoutItems && p.layoutItems.length > 0) {
+    return deriveHostsFromLayout(p.layoutItems)
+  }
+  return p.hosts ?? []
 }
 
 export function validate(profiles: HydraProfile[]): ValidationError[] {
@@ -54,7 +63,8 @@ export function validate(profiles: HydraProfile[]): ValidationError[] {
       errors.push({ path: `profiles[${i}].remoteOnly`, message: 'remoteOnly requires Master mode' })
     }
 
-    if (p.remoteOnly && (p.hosts ?? []).filter(h => h.name.trim()).length === 0) {
+    const hosts = effectiveHosts(p)
+    if (p.remoteOnly && hosts.filter(h => h.name.trim()).length === 0) {
       errors.push({ path: `profiles[${i}].remoteOnly`, message: 'remoteOnly requires at least one remote host' })
     }
 

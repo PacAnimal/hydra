@@ -18,6 +18,7 @@ export function DropZone({ onImport }: Props) {
         setError(err)
       }
     }
+    reader.onerror = () => setError('failed to read file')
     reader.readAsText(file)
   }, [onImport])
 

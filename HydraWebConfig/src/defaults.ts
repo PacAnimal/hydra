@@ -1,19 +1,23 @@
-import type { HydraProfile, HostConfig, NeighbourConfig, ScreenDefinition, FormState } from './types'
+import type { HydraProfile, HostConfig, NeighbourConfig, ScreenDefinition, FormState, LayoutItem } from './types'
 
 export function newNeighbour(): NeighbourConfig {
-  return { direction: 'Right', name: '' }
+  return { id: `n-${Date.now()}-${Math.random().toString(36).slice(2)}`, direction: 'Right', name: '' }
 }
 
 export function newHost(): HostConfig {
-  return { name: '', neighbours: [] }
+  return { id: `h-${Date.now()}-${Math.random().toString(36).slice(2)}`, name: '', neighbours: [] }
 }
 
 export function newScreenDefinition(): ScreenDefinition {
-  return {}
+  return { id: `s-${Date.now()}-${Math.random().toString(36).slice(2)}` }
+}
+
+export function newLayoutItem(hostName: string, screenId?: string, col = 0, row = 0): LayoutItem {
+  return { id: `layout-${Date.now()}-${Math.random().toString(36).slice(2)}`, hostName, screenId, col, row }
 }
 
 export function newProfile(): HydraProfile {
-  return { profileName: '', mode: 'Master' }
+  return { profileName: '', mode: 'Master', visualMode: true, layoutItems: [] }
 }
 
 export function newFormState(): FormState {

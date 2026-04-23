@@ -10,8 +10,9 @@ export function ConditionsEditor({ conditions, onChange }: Props) {
     <div className="conditions-editor">
       <div className="field-row">
         <div className="field flex-grow">
-          <label>WiFi SSID</label>
+          <label htmlFor="ce-ssid">WiFi SSID</label>
           <input
+            id="ce-ssid"
             type="text"
             value={conditions.ssid ?? ''}
             placeholder="network name (case-insensitive)"
@@ -19,8 +20,9 @@ export function ConditionsEditor({ conditions, onChange }: Props) {
           />
         </div>
         <div className="field">
-          <label>Screen Count</label>
+          <label htmlFor="ce-screencount">Screen Count</label>
           <input
+            id="ce-screencount"
             type="number"
             min="1"
             value={conditions.screenCount ?? ''}

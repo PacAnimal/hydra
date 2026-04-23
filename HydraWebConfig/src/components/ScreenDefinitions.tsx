@@ -33,8 +33,6 @@ function ScreenDefinitionCard({ screen, index, onChange, onRemove }: CardProps) 
             onChange={e => onChange({ outputName: e.target.value || undefined })}
           />
         </div>
-      </div>
-      <div className="field-row">
         <div className="field flex-grow">
           <label>Platform ID</label>
           <input
@@ -44,6 +42,8 @@ function ScreenDefinitionCard({ screen, index, onChange, onRemove }: CardProps) 
             onChange={e => onChange({ platformId: e.target.value || undefined })}
           />
         </div>
+      </div>
+      <div className="field-row">
         <div className="field">
           <label>Mouse Scale</label>
           <input
@@ -53,6 +53,17 @@ function ScreenDefinitionCard({ screen, index, onChange, onRemove }: CardProps) 
             value={screen.mouseScale ?? ''}
             placeholder="1.0"
             onChange={e => onChange({ mouseScale: e.target.value ? Number(e.target.value) : undefined })}
+          />
+        </div>
+        <div className="field">
+          <label>Relative Mouse Scale</label>
+          <input
+            type="number"
+            step="0.1"
+            min="0.1"
+            value={screen.relativeMouseScale ?? ''}
+            placeholder="1.0"
+            onChange={e => onChange({ relativeMouseScale: e.target.value ? Number(e.target.value) : undefined })}
           />
         </div>
       </div>
@@ -71,10 +82,10 @@ export function ScreenDefinitions({ screens, onAdd, onRemove, onUpdate }: Props)
   return (
     <div className="section">
       <h2>Screen Definitions</h2>
-      <p className="hint">At least one of Display Name, Output Name, or Platform ID is required per screen.</p>
+      <p className="hint">Match physical screens for per-screen mouse scale overrides. At least one of Display Name, Output Name, or Platform ID is required per entry.</p>
       {screens.map((s, si) => (
         <ScreenDefinitionCard
-          key={si}
+          key={s.id ?? si}
           screen={s}
           index={si}
           onChange={patch => onUpdate(si, patch)}

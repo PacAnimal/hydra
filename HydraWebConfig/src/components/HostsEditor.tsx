@@ -13,11 +13,10 @@ interface Props {
 
 export function HostsEditor({ hosts, onAdd, onRemove, onUpdate, onAddNeighbour, onRemoveNeighbour, onUpdateNeighbour }: Props) {
   return (
-    <div className="section">
-      <h2>Hosts</h2>
+    <>
       {hosts.map((h, hi) => (
         <HostCard
-          key={hi}
+          key={h.id ?? hi}
           host={h}
           index={hi}
           onChange={patch => onUpdate(hi, patch)}
@@ -28,6 +27,6 @@ export function HostsEditor({ hosts, onAdd, onRemove, onUpdate, onAddNeighbour, 
         />
       ))}
       <button className="btn-add" onClick={onAdd}>+ Add Host</button>
-    </div>
+    </>
   )
 }

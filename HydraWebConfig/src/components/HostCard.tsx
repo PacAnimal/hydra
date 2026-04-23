@@ -30,7 +30,7 @@ export function HostCard({ host, index, onChange, onRemove, onAddNeighbour, onRe
           />
         </div>
         <div className="field">
-          <label>Dead Corners (px)</label>
+          <label title="Pixels from screen corners where cursor switching is suppressed — overrides the global setting for this host">Dead Corners (px)</label>
           <input
             type="number"
             min="0"
@@ -44,7 +44,7 @@ export function HostCard({ host, index, onChange, onRemove, onAddNeighbour, onRe
       <div className="neighbours-section">
         {(host.neighbours ?? []).map((n, ni) => (
           <NeighbourEditor
-            key={ni}
+            key={n.id ?? ni}
             neighbour={n}
             onChange={patch => onUpdateNeighbour(ni, patch)}
             onRemove={() => onRemoveNeighbour(ni)}
