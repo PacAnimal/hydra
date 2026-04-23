@@ -51,10 +51,12 @@ export interface EmbeddedStyxServerConfig {
 export interface LayoutItem {
   id: string
   hostName: string
-  screenId?: string   // optional: identifies which screen on this host (matches sourceScreen/destScreen)
-  col: number
-  row: number
-  deadCorners?: number  // per-host dead corner override
+  screenId?: string  // optional: identifies which screen on this host (matches sourceScreen/destScreen)
+  x: number          // left edge in logical pixels
+  y: number          // top edge in logical pixels
+  w: number          // width in logical pixels (default 1920)
+  h: number          // height in logical pixels (default 1080)
+  deadCorners?: number
 }
 
 export interface HydraProfile {

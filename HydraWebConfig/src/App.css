@@ -636,11 +636,10 @@ button:disabled { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
   border-radius: 8px;
   background: #0f0f0f;
   margin-bottom: 10px;
-  /* grid dot background */
-  background-image:
-    radial-gradient(circle, #1e1e1e 1px, transparent 1px);
-  background-size: 176px 104px;
-  background-position: 20px 20px;
+  /* fine dot grid aligned to ~10 logical px = ~0.83 canvas px; use a larger period for visibility */
+  background-image: radial-gradient(circle, #1e1e1e 1px, transparent 1px);
+  background-size: 16px 16px;
+  background-position: 24px 24px;
 }
 
 .layout-canvas {
@@ -658,8 +657,6 @@ button:disabled { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
 
 .layout-block {
   position: absolute;
-  width: 160px;
-  height: 88px;
   border: 2px solid;
   border-radius: 8px;
   display: flex;
@@ -670,6 +667,7 @@ button:disabled { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
   user-select: none;
   transition: box-shadow 0.1s;
   touch-action: none;
+  overflow: visible;
 }
 
 .layout-block:active { cursor: grabbing; }
@@ -713,46 +711,74 @@ button:disabled { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
 .layout-block:hover .layout-block-remove { opacity: 1; }
 .layout-block-remove:hover { color: #e05050; }
 
+.layout-block-size {
+  font-size: 0.65rem;
+  color: #666;
+  margin-top: 2px;
+}
+
 .layout-block-ghost {
   position: absolute;
-  width: 160px;
-  height: 88px;
   border: 2px dashed #2563eb55;
   border-radius: 8px;
   background: #2563eb0a;
   pointer-events: none;
 }
 
-/* edge connection indicators */
-.layout-edge {
+.layout-block-ghost.overlap {
+  border-color: #e0505088;
+  background: #e0505011;
+}
+
+/* corner resize handles — visible only when block is selected */
+.layout-resize-handle {
   position: absolute;
-  border-radius: 2px;
-  pointer-events: none;
+  width: 10px;
+  height: 10px;
+  background: #1a1a1a;
+  border: 2px solid #555;
+  border-radius: 50%;
+  z-index: 20;
+  transition: border-color 0.12s, background 0.12s;
 }
 
-.layout-edge-right {
-  right: -2px; top: 50%; transform: translateY(-50%);
-  width: 6px; height: 24px;
-  border-radius: 0 3px 3px 0;
+.layout-resize-handle:hover { border-color: #60a5fa; background: #1d4ed8; }
+
+.layout-resize-nw { top: -5px; left: -5px; cursor: nw-resize; }
+.layout-resize-ne { top: -5px; right: -5px; cursor: ne-resize; }
+.layout-resize-sw { bottom: -5px; left: -5px; cursor: sw-resize; }
+.layout-resize-se { bottom: -5px; right: -5px; cursor: se-resize; }
+
+/* aspect ratio preset row in selected panel */
+.layout-aspect-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
-.layout-edge-left {
-  left: -2px; top: 50%; transform: translateY(-50%);
-  width: 6px; height: 24px;
-  border-radius: 3px 0 0 3px;
+.layout-aspect-label {
+  font-size: 0.72rem;
+  color: #555;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
 }
 
-.layout-edge-down {
-  bottom: -2px; left: 50%; transform: translateX(-50%);
-  width: 24px; height: 6px;
-  border-radius: 0 0 3px 3px;
+.layout-aspect-btn {
+  background: #111;
+  border: 1px solid #2a2a2a;
+  border-radius: 4px;
+  color: #666;
+  font-size: 0.75rem;
+  padding: 4px 8px;
+  transition: border-color 0.12s, color 0.12s, background 0.12s;
+  white-space: nowrap;
 }
 
-.layout-edge-up {
-  top: -2px; left: 50%; transform: translateX(-50%);
-  width: 24px; height: 6px;
-  border-radius: 3px 3px 0 0;
-}
+.layout-aspect-btn:hover { border-color: #444; color: #aaa; background: #1a1a1a; }
+.layout-aspect-btn.active { border-color: #2563eb88; color: #60a5fa; background: #2563eb22; }
+
 
 .layout-selected-panel {
   background: #141414;

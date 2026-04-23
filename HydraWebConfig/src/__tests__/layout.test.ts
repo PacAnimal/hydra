@@ -1,10 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { deriveHostsFromLayout, inferLayoutFromHosts } from '../utils/layout'
+import { deriveHostsFromLayout, inferLayoutFromHosts, DEFAULT_W, DEFAULT_H } from '../utils/layout'
 import type { LayoutItem, HostConfig } from '../types'
 
 // helpers
-function item(id: string, hostName: string, col: number, row: number, screenId?: string): LayoutItem {
-  return { id, hostName, col, row, screenId }
+function item(id: string, hostName: string, x: number, y: number, w = DEFAULT_W, h = DEFAULT_H, screenId?: string): LayoutItem {
+  return { id, hostName, x, y, w, h, screenId }
 }
 
 describe('deriveHostsFromLayout', () => {
@@ -19,10 +19,10 @@ describe('deriveHostsFromLayout', () => {
     expect(hosts[0].neighbours).toBeUndefined()
   })
 
-  it('creates a right neighbour for adjacent different-host blocks', () => {
+  it('creates a right neighbour for horizontally adjacent blocks', () => {
     const items = [
       item('a', 'desktop', 0, 0),
-      item('b', 'laptop', 1, 0),
+      item('b', 'laptop', DEFAULT_W, 0),
     ]
     const hosts = deriveHostsFromLayout(items)
     const desktop = hosts.find(h => h.name === 'desktop')!
@@ -34,7 +34,7 @@ describe('deriveHostsFromLayout', () => {
   it('creates a left neighbour from the other side', () => {
     const items = [
       item('a', 'desktop', 0, 0),
-      item('b', 'laptop', 1, 0),
+      item('b', 'laptop', DEFAULT_W, 0),
     ]
     const hosts = deriveHostsFromLayout(items)
     const laptop = hosts.find(h => h.name === 'laptop')!
@@ -45,7 +45,7 @@ describe('deriveHostsFromLayout', () => {
   it('does not create neighbours for same-host adjacent blocks', () => {
     const items = [
       item('a', 'desktop', 0, 0),
-      item('b', 'desktop', 1, 0),
+      item('b', 'desktop', DEFAULT_W, 0),
     ]
     const hosts = deriveHostsFromLayout(items)
     expect(hosts).toHaveLength(1)
@@ -54,8 +54,8 @@ describe('deriveHostsFromLayout', () => {
 
   it('sets sourceScreen and destScreen when screenIds are present', () => {
     const items = [
-      item('a', 'desktop', 0, 0, 'HDMI-1'),
-      item('b', 'laptop', 1, 0, 'eDP-1'),
+      item('a', 'desktop', 0, 0, DEFAULT_W, DEFAULT_H, 'HDMI-1'),
+      item('b', 'laptop', DEFAULT_W, 0, DEFAULT_W, DEFAULT_H, 'eDP-1'),
     ]
     const hosts = deriveHostsFromLayout(items)
     const desktop = hosts.find(h => h.name === 'desktop')!
@@ -66,7 +66,7 @@ describe('deriveHostsFromLayout', () => {
   it('omits sourceScreen and destScreen when no screenIds', () => {
     const items = [
       item('a', 'desktop', 0, 0),
-      item('b', 'laptop', 1, 0),
+      item('b', 'laptop', DEFAULT_W, 0),
     ]
     const hosts = deriveHostsFromLayout(items)
     const desktop = hosts.find(h => h.name === 'desktop')!
@@ -77,7 +77,7 @@ describe('deriveHostsFromLayout', () => {
   it('creates down/up neighbours for vertical adjacency', () => {
     const items = [
       item('a', 'desktop', 0, 0),
-      item('b', 'laptop', 0, 1),
+      item('b', 'laptop', 0, DEFAULT_H),
     ]
     const hosts = deriveHostsFromLayout(items)
     const desktop = hosts.find(h => h.name === 'desktop')!
@@ -93,8 +93,8 @@ describe('deriveHostsFromLayout', () => {
   it('handles 3 hosts in a row', () => {
     const items = [
       item('a', 'pc', 0, 0),
-      item('b', 'mac', 1, 0),
-      item('c', 'monitor', 2, 0),
+      item('b', 'mac', DEFAULT_W, 0),
+      item('c', 'monitor', DEFAULT_W * 2, 0),
     ]
     const hosts = deriveHostsFromLayout(items)
     const pc = hosts.find(h => h.name === 'pc')!
@@ -110,6 +110,52 @@ describe('deriveHostsFromLayout', () => {
     expect(monitor.neighbours).toHaveLength(1)
     expect(monitor.neighbours![0].name).toBe('mac')
   })
+
+  it('computes sourceStart when right neighbour is vertically offset', () => {
+    // laptop starts halfway down desktop — cursor arriving at laptop lands at its top
+    const items = [
+      item('a', 'desktop', 0, 0, DEFAULT_W, DEFAULT_H),
+      item('b', 'laptop', DEFAULT_W, DEFAULT_H / 2, DEFAULT_W, DEFAULT_H),
+    ]
+    const hosts = deriveHostsFromLayout(items)
+    const desktop = hosts.find(h => h.name === 'desktop')!
+    const n = desktop.neighbours![0]
+    expect(n.direction).toBe('Right')
+    expect(n.sourceStart).toBe(50)      // desktop active edge starts 50% down
+    expect(n.sourceEnd).toBeUndefined() // reaches to 100% (default)
+    expect(n.destStart).toBeUndefined() // laptop top aligns with overlap top (default 0)
+    expect(n.destEnd).toBe(50)          // overlap covers only bottom 50% of laptop
+  })
+
+  it('computes both source and dest ranges for partial overlaps', () => {
+    // desktop starts at y=540 (offset 50%), laptop starts at y=0
+    // overlap: y=540–1080, which is the bottom half of desktop and top half of laptop
+    const items = [
+      item('a', 'desktop', 0, DEFAULT_H / 2, DEFAULT_W, DEFAULT_H),
+      item('b', 'laptop', DEFAULT_W, 0, DEFAULT_W, DEFAULT_H),
+    ]
+    const hosts = deriveHostsFromLayout(items)
+    const desktop = hosts.find(h => h.name === 'desktop')!
+    const n = desktop.neighbours![0]
+    expect(n.sourceStart).toBeUndefined() // overlap starts at desktop's top edge (default 0)
+    expect(n.sourceEnd).toBe(50)           // overlap ends at 50% of desktop
+    expect(n.destStart).toBe(50)           // overlap starts 50% down laptop
+    expect(n.destEnd).toBeUndefined()      // reaches 100% of laptop (default)
+  })
+
+  it('omits all range fields when blocks are perfectly aligned', () => {
+    const items = [
+      item('a', 'desktop', 0, 0, DEFAULT_W, DEFAULT_H),
+      item('b', 'laptop', DEFAULT_W, 0, DEFAULT_W, DEFAULT_H),
+    ]
+    const hosts = deriveHostsFromLayout(items)
+    const desktop = hosts.find(h => h.name === 'desktop')!
+    const n = desktop.neighbours![0]
+    expect(n.sourceStart).toBeUndefined()
+    expect(n.sourceEnd).toBeUndefined()
+    expect(n.destStart).toBeUndefined()
+    expect(n.destEnd).toBeUndefined()
+  })
 })
 
 describe('inferLayoutFromHosts', () => {
@@ -117,14 +163,16 @@ describe('inferLayoutFromHosts', () => {
     expect(inferLayoutFromHosts([])).toEqual([])
   })
 
-  it('places a single host at a stable position', () => {
+  it('places a single host with default dimensions', () => {
     const hosts: HostConfig[] = [{ name: 'desktop', neighbours: [] }]
     const layout = inferLayoutFromHosts(hosts)
     expect(layout).toHaveLength(1)
     expect(layout[0].hostName).toBe('desktop')
+    expect(layout[0].w).toBe(DEFAULT_W)
+    expect(layout[0].h).toBe(DEFAULT_H)
   })
 
-  it('places right-neighbour host one column to the right', () => {
+  it('places right-neighbour host one screen-width to the right', () => {
     const hosts: HostConfig[] = [
       { name: 'desktop', neighbours: [{ direction: 'Right', name: 'laptop' }] },
       { name: 'laptop', neighbours: [] },
@@ -132,11 +180,11 @@ describe('inferLayoutFromHosts', () => {
     const layout = inferLayoutFromHosts(hosts)
     const desktop = layout.find(i => i.hostName === 'desktop')!
     const laptop = layout.find(i => i.hostName === 'laptop')!
-    expect(laptop.col).toBe(desktop.col + 1)
-    expect(laptop.row).toBe(desktop.row)
+    expect(laptop.x).toBe(desktop.x + DEFAULT_W)
+    expect(laptop.y).toBe(desktop.y)
   })
 
-  it('places down-neighbour host one row below', () => {
+  it('places down-neighbour host one screen-height below', () => {
     const hosts: HostConfig[] = [
       { name: 'desktop', neighbours: [{ direction: 'Down', name: 'laptop' }] },
       { name: 'laptop', neighbours: [] },
@@ -144,8 +192,8 @@ describe('inferLayoutFromHosts', () => {
     const layout = inferLayoutFromHosts(hosts)
     const desktop = layout.find(i => i.hostName === 'desktop')!
     const laptop = layout.find(i => i.hostName === 'laptop')!
-    expect(laptop.row).toBe(desktop.row + 1)
-    expect(laptop.col).toBe(desktop.col)
+    expect(laptop.y).toBe(desktop.y + DEFAULT_H)
+    expect(laptop.x).toBe(desktop.x)
   })
 
   it('creates one block per unique host for simple configs', () => {
@@ -168,5 +216,18 @@ describe('inferLayoutFromHosts', () => {
     const derived = deriveHostsFromLayout(layout)
     const desktopDerived = derived.find(h => h.name === 'desktop')!
     expect(desktopDerived.neighbours!.some(n => n.name === 'laptop' && n.direction === 'Right')).toBe(true)
+  })
+
+  it('applies sourceStart offset when inferring neighbour position', () => {
+    // laptop is a right neighbour starting at sourceStart=50 (halfway down desktop)
+    const hosts: HostConfig[] = [
+      { name: 'desktop', neighbours: [{ direction: 'Right', name: 'laptop', sourceStart: 50 }] },
+      { name: 'laptop', neighbours: [] },
+    ]
+    const layout = inferLayoutFromHosts(hosts)
+    const desktop = layout.find(i => i.hostName === 'desktop')!
+    const laptop = layout.find(i => i.hostName === 'laptop')!
+    // laptop.y should be offset by 50% of desktop.h
+    expect(laptop.y).toBe(desktop.y + DEFAULT_H * 0.5)
   })
 })

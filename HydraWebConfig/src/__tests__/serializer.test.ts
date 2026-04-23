@@ -143,8 +143,8 @@ describe('serialize', () => {
     const json = JSON.parse(serialize(state({
       mode: 'Master',
       layoutItems: [
-        { id: '1', hostName: 'desktop', col: 0, row: 0 },
-        { id: '2', hostName: 'laptop', col: 1, row: 0 },
+        { id: '1', hostName: 'desktop', x: 0, y: 0, w: 1920, h: 1080 },
+        { id: '2', hostName: 'laptop', x: 1920, y: 0, w: 1920, h: 1080 },
       ],
     })))
     const hosts = json.profiles[0].hosts

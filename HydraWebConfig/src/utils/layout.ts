@@ -13,21 +13,43 @@ const OPPOSITE: Record<Direction, Direction> = {
 
 const DIRS: Direction[] = ['Left', 'Right', 'Up', 'Down']
 
-const GRID_INITIAL_COL = 2     // starting column for first host
-const GRID_INITIAL_ROW = 2     // starting row for first host
-const GRID_FALLBACK_ROW = 5    // row for disconnected (unreachable) hosts
-const GRID_MAX_COL = 7         // wrap column at width 8
+export const ADJACENCY_THRESHOLD = 80  // logical px — how close edges must be to count as neighbours
+export const DEFAULT_W = 1920          // default screen width in logical pixels
+export const DEFAULT_H = 1080          // default screen height in logical pixels
 
-// derives HostConfig[] from a visual layout — creates neighbours for adjacent items from different hosts
+const INITIAL_X = 1920  // starting x for first host when inferring layout
+const INITIAL_Y = 1080  // starting y for first host when inferring layout
+
+// computes the source/dest percentage ranges for a neighbour edge pair
+// itemStart/itemSize describe the item's dimension parallel to the shared edge (y for L/R, x for U/D)
+// returns undefined fields for any value that equals the default (0 for start, 100 for end)
+function computeEdgeRanges(
+  itemStart: number, itemSize: number,
+  adjStart: number, adjSize: number,
+): { srcStart?: number; srcEnd?: number; dstStart?: number; dstEnd?: number } | null {
+  const overlapLow = Math.max(itemStart, adjStart)
+  const overlapHigh = Math.min(itemStart + itemSize, adjStart + adjSize)
+  if (overlapHigh <= overlapLow) return null
+
+  const srcStart = Math.round((overlapLow - itemStart) / itemSize * 100)
+  const srcEnd = Math.round((overlapHigh - itemStart) / itemSize * 100)
+  const dstStart = Math.round((overlapLow - adjStart) / adjSize * 100)
+  const dstEnd = Math.round((overlapHigh - adjStart) / adjSize * 100)
+
+  return {
+    srcStart: srcStart !== 0 ? srcStart : undefined,
+    srcEnd: srcEnd !== 100 ? srcEnd : undefined,
+    dstStart: dstStart !== 0 ? dstStart : undefined,
+    dstEnd: dstEnd !== 100 ? dstEnd : undefined,
+  }
+}
+
+// derives HostConfig[] from a free-form visual layout
+// two blocks are neighbours when their edges are within ADJACENCY_THRESHOLD px and their ranges overlap
 export function deriveHostsFromLayout(items: LayoutItem[]): HostConfig[] {
   if (!items.length) return []
 
-  const byPos = new Map<string, LayoutItem>()
-  for (const item of items) {
-    byPos.set(`${item.col},${item.row}`, item)
-  }
-
-  // group items by host name to collect deadCorners (all items for a host should agree; use first found)
+  // collect deadCorners per host (first occurrence wins)
   const hostDeadCorners = new Map<string, number | undefined>()
   for (const item of items) {
     if (!hostDeadCorners.has(item.hostName)) {
@@ -35,20 +57,39 @@ export function deriveHostsFromLayout(items: LayoutItem[]): HostConfig[] {
     }
   }
 
-  // build neighbour list per host name
   const hostNeighbours = new Map<string, NeighbourConfig[]>()
   const hostNames = new Set(items.map(i => i.hostName))
   for (const name of hostNames) hostNeighbours.set(name, [])
 
   for (const item of items) {
-    for (const dir of DIRS) {
-      const [dc, dr] = DIR_DELTA[dir]
-      const adj = byPos.get(`${item.col + dc},${item.row + dr}`)
-      if (!adj || adj.hostName === item.hostName) continue
+    for (const adj of items) {
+      if (adj.id === item.id || adj.hostName === item.hostName) continue
+
+      const vOverlap = Math.min(item.y + item.h, adj.y + adj.h) - Math.max(item.y, adj.y)
+      const hOverlap = Math.min(item.x + item.w, adj.x + adj.w) - Math.max(item.x, adj.x)
+
+      let dir: Direction | null = null
+      if (Math.abs(adj.x - (item.x + item.w)) < ADJACENCY_THRESHOLD && vOverlap > 0) dir = 'Right'
+      else if (Math.abs(item.x - (adj.x + adj.w)) < ADJACENCY_THRESHOLD && vOverlap > 0) dir = 'Left'
+      else if (Math.abs(adj.y - (item.y + item.h)) < ADJACENCY_THRESHOLD && hOverlap > 0) dir = 'Down'
+      else if (Math.abs(item.y - (adj.y + adj.h)) < ADJACENCY_THRESHOLD && hOverlap > 0) dir = 'Up'
+
+      if (!dir) continue
 
       const n: NeighbourConfig = { direction: dir, name: adj.hostName }
       if (item.screenId) n.sourceScreen = item.screenId
       if (adj.screenId) n.destScreen = adj.screenId
+
+      const ranges = (dir === 'Left' || dir === 'Right')
+        ? computeEdgeRanges(item.y, item.h, adj.y, adj.h)
+        : computeEdgeRanges(item.x, item.w, adj.x, adj.w)
+
+      if (ranges) {
+        if (ranges.srcStart !== undefined) n.sourceStart = ranges.srcStart
+        if (ranges.srcEnd !== undefined) n.sourceEnd = ranges.srcEnd
+        if (ranges.dstStart !== undefined) n.destStart = ranges.dstStart
+        if (ranges.dstEnd !== undefined) n.destEnd = ranges.dstEnd
+      }
 
       hostNeighbours.get(item.hostName)!.push(n)
     }
@@ -64,7 +105,7 @@ export function deriveHostsFromLayout(items: LayoutItem[]): HostConfig[] {
   })
 }
 
-// infers a visual layout from HostConfig[] — positions hosts on a grid based on neighbour directions
+// infers a visual layout from HostConfig[] — places hosts on a pixel grid using BFS over neighbour directions
 export function inferLayoutFromHosts(hosts: HostConfig[]): LayoutItem[] {
   if (!hosts.length) return []
 
@@ -80,7 +121,7 @@ export function inferLayoutFromHosts(hosts: HostConfig[]): LayoutItem[] {
   function getOrCreate(hostName: string, screenId?: string): ItemKey {
     const k = key(hostName, screenId)
     if (!items.has(k)) {
-      items.set(k, { id: `inferred-${counter++}`, hostName, screenId, col: -1, row: -1 })
+      items.set(k, { id: `inferred-${counter++}`, hostName, screenId, x: -1, y: -1, w: DEFAULT_W, h: DEFAULT_H })
     }
     return k
   }
@@ -94,10 +135,10 @@ export function inferLayoutFromHosts(hosts: HostConfig[]): LayoutItem[] {
     }
   }
 
-  // BFS to assign grid positions
+  // BFS to assign pixel positions
   const firstKey = key(hosts[0].name)
   const first = items.get(firstKey)
-  if (first) { first.col = GRID_INITIAL_COL; first.row = GRID_INITIAL_ROW }
+  if (first) { first.x = INITIAL_X; first.y = INITIAL_Y }
 
   const queue: ItemKey[] = [firstKey]
   const visited = new Set<ItemKey>([firstKey])
@@ -111,7 +152,6 @@ export function inferLayoutFromHosts(hosts: HostConfig[]): LayoutItem[] {
     if (!host) continue
 
     for (const n of host.neighbours ?? []) {
-      // match this layout item (by screenId) to the neighbour
       const nSourceScreen = n.sourceScreen ?? undefined
       if (item.screenId !== nSourceScreen && nSourceScreen !== undefined) continue
 
@@ -121,30 +161,37 @@ export function inferLayoutFromHosts(hosts: HostConfig[]): LayoutItem[] {
       const destItem = items.get(destKey)
       if (!destItem) continue
 
-      const [dc, dr] = DIR_DELTA[n.direction]
-      destItem.col = item.col + dc
-      destItem.row = item.row + dr
+      const [dx, dy] = DIR_DELTA[n.direction]
+
+      if (n.direction === 'Right' || n.direction === 'Left') {
+        destItem.x = item.x + dx * item.w
+        // align using source/dest edge offsets so partial overlaps render correctly
+        const srcFrac = (n.sourceStart ?? 0) / 100
+        const dstFrac = (n.destStart ?? 0) / 100
+        destItem.y = item.y + srcFrac * item.h - dstFrac * destItem.h
+      } else {
+        destItem.y = item.y + dy * item.h
+        const srcFrac = (n.sourceStart ?? 0) / 100
+        const dstFrac = (n.destStart ?? 0) / 100
+        destItem.x = item.x + srcFrac * item.w - dstFrac * destItem.w
+      }
+
       visited.add(destKey)
       queue.push(destKey)
     }
   }
 
-  // handle unpositioned items (disconnected hosts)
-  let freeCol = 0; let freeRow = GRID_FALLBACK_ROW
-  const occupied = new Set([...items.values()].filter(i => i.col >= 0).map(i => `${i.col},${i.row}`))
+  // place disconnected (unreachable) items in a fallback row
+  let freeX = 0; let freeY = DEFAULT_H * 3
   for (const item of items.values()) {
-    if (item.col >= 0) continue
-    while (occupied.has(`${freeCol},${freeRow}`)) {
-      freeCol++
-      if (freeCol > GRID_MAX_COL) { freeCol = 0; freeRow++ }
-    }
-    item.col = freeCol
-    item.row = freeRow
-    occupied.add(`${freeCol},${freeRow}`)
-    freeCol++
+    if (item.x >= 0) continue
+    item.x = freeX
+    item.y = freeY
+    freeX += DEFAULT_W
+    if (freeX > DEFAULT_W * 5) { freeX = 0; freeY += DEFAULT_H }
   }
 
-  // assign deadCorners from host config
+  // propagate deadCorners from host config
   for (const host of hosts) {
     if (host.deadCorners === undefined) continue
     for (const item of items.values()) {
@@ -152,27 +199,17 @@ export function inferLayoutFromHosts(hosts: HostConfig[]): LayoutItem[] {
     }
   }
 
-  // deduplicate: prefer items with a screenId over items without (for same host/no-screen)
-  // remove the bare `host:` key if a screen-specific one covers the same host
+  // deduplicate: if a host has screen-specific items, drop the bare host item
   const result: LayoutItem[] = []
   for (const [, item] of items) {
-    // if this is a bare host key and there are other items for this host with screenIds, skip it
     if (!item.screenId) {
       const hasScreenItems = [...items.values()].some(i => i.hostName === item.hostName && i.screenId)
       if (hasScreenItems) continue
     }
-    // also skip host keys that refer to the same (host, screen?) as a non-bare key
     result.push(item)
   }
 
-  // remove duplicate positions by keeping the last item at each cell (may happen on dedup)
-  const posMap = new Map<string, LayoutItem>()
-  for (const item of result) {
-    posMap.set(`${item.col},${item.row}`, item)
-  }
-
-  return [...posMap.values()]
+  return result
 }
 
-// opposite direction helper exported for use elsewhere
 export { OPPOSITE, DIR_DELTA, DIRS }

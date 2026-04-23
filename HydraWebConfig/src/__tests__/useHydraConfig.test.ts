@@ -42,8 +42,8 @@ describe('useHydraConfig', () => {
       // set up two layout items side-by-side so deriveHostsFromLayout creates neighbours
       act(() => {
         result.current.updateLayoutItems([
-          { id: 'a', hostName: 'alpha', col: 0, row: 0 },
-          { id: 'b', hostName: 'beta', col: 1, row: 0 },
+          { id: 'a', hostName: 'alpha', x: 0, y: 0, w: 1920, h: 1080 },
+          { id: 'b', hostName: 'beta', x: 1920, y: 0, w: 1920, h: 1080 },
         ])
       })
       // start in visual mode, toggle to manual

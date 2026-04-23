@@ -12,8 +12,8 @@ export function newScreenDefinition(): ScreenDefinition {
   return { id: `s-${Date.now()}-${Math.random().toString(36).slice(2)}` }
 }
 
-export function newLayoutItem(hostName: string, screenId?: string, col = 0, row = 0): LayoutItem {
-  return { id: `layout-${Date.now()}-${Math.random().toString(36).slice(2)}`, hostName, screenId, col, row }
+export function newLayoutItem(hostName: string, screenId?: string, x = 0, y = 0, w = 1920, h = 1080): LayoutItem {
+  return { id: `layout-${Date.now()}-${Math.random().toString(36).slice(2)}`, hostName, screenId, x, y, w, h }
 }
 
 export function newProfile(): HydraProfile {
