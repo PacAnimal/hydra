@@ -218,7 +218,7 @@ public sealed class FileTransferService : IDisposable
             case MessageKind.FileTransferAbort: HandleFileTransferAbort(sourceHost, body); break;
             case MessageKind.FileTransferAccepted:
                 {
-                    // case 1: master was sending — unblock StreamAsync to start chunk flow
+                    // case 1: master was sending — unblock RunSendAsync to start chunk flow
                     TaskCompletionSource<bool>? tcs;
                     // case 3: master was coordinating — tell source slave to start streaming
                     string? coordSource; string[]? coordPaths; string? coordTarget;
@@ -435,7 +435,7 @@ public sealed class FileTransferService : IDisposable
         if (sourceHost.EqualsIgnoreCase(localHost))
         {
             // case 1: master is source — send FileTransferRequest to target, await accepted, then stream
-            StartSend([.. paths], targetHost, relay, localHost);
+            InitiateSend([.. paths], targetHost, relay, localHost);
             return true;
         }
 
@@ -457,9 +457,9 @@ public sealed class FileTransferService : IDisposable
         return true;
     }
 
-    // streams files as tar.gz to targetHost. called on the slave side in response to FileStreamRequest.
-    // master has already sent FileTransferStart to target and received FileTransferAccepted — go straight to chunks.
-    public async Task StreamToHost(string[] paths, string targetHost, IRelaySender relay)
+    // streams files to targetHost on the slave side in response to a FileStreamRequest.
+    // master already negotiated with the target — go straight to FileTransferStart + chunks.
+    public async Task ExecuteStreamRequest(string[] paths, string targetHost, IRelaySender relay)
     {
         var cts = new CancellationTokenSource();
         lock (_lock)
@@ -484,46 +484,16 @@ public sealed class FileTransferService : IDisposable
             TryCancelSend(out _, out _);
             SendTo(relay, targetHost, MessageKind.FileTransferAbort, new FileTransferAbortMessage(ex.Message));
             _dialog.ShowError($"Transfer failed: {ex.Message}");
-            _log.LogWarning(ex, "StreamToHost pre-stream setup failed");
+            _log.LogWarning(ex, "ExecuteStreamRequest pre-stream setup failed");
             return;
         }
 
         var startTick = Environment.TickCount64;
         _dialog.ShowTransferring(new FileTransferInfo(names, totalBytes, IsSender: true));
 
-        // stream chunks directly — master already negotiated with target
-        long totalSent = 0;
         try
         {
-            // inform target of what's coming before streaming
-            SendTo(relay, targetHost, MessageKind.FileTransferStart, new FileTransferStartMessage(names, totalBytes));
-
-            var sha = await TarGzStreamer.StreamAsync(pathList, async (data, seq, uncompressedBytes) =>
-            {
-                cts.Token.ThrowIfCancellationRequested();
-                var chunkPayload = MessageSerializer.Encode(MessageKind.FileTransferChunk, new FileTransferChunkMessage(seq, data));
-                relay.Send([targetHost], chunkPayload);
-                totalSent += data.Length;
-                _dialog.UpdateProgress(uncompressedBytes, CalcSpeed(startTick, totalSent));
-                _log.LogDebug("Sent chunk #{Seq}: {Bytes} bytes", seq, data.Length);
-                await ValueTask.CompletedTask;
-            }, _dialog.SetCurrentFile, cts.Token);
-
-            var donePayload = MessageSerializer.Encode(MessageKind.FileTransferDone, new FileTransferDoneMessage(totalSent, sha));
-            relay.Send([targetHost], donePayload);
-            _dialog.ShowCompleted();
-            _log.LogInformation("Transfer complete: {Bytes} compressed bytes sent", ByteSize.FromBytes(totalSent));
-        }
-        catch (OperationCanceledException) when (cts.Token.IsCancellationRequested)
-        {
-            _log.LogInformation("Transfer cancelled");
-            _dialog.Close();
-        }
-        catch (Exception ex)
-        {
-            _log.LogWarning(ex, "Transfer failed");
-            SendTo(relay, targetHost, MessageKind.FileTransferAbort, new FileTransferAbortMessage(ex.Message));
-            _dialog.ShowError($"Transfer failed: {ex.Message}");
+            await RunSendCoreAsync(pathList, names, totalBytes, startTick, targetHost, relay, cts.Token);
         }
         finally
         {
@@ -537,8 +507,9 @@ public sealed class FileTransferService : IDisposable
         }
     }
 
-    // starts an outbound transfer to targetHost (case 1: master is source).
-    public void StartSend(List<string> paths, string targetHost, IRelaySender relay, string localHost = "")
+    // starts an outbound transfer from the master (case 1: master is source).
+    // sends FileTransferRequest, waits for acceptance, then streams chunks.
+    public void InitiateSend(List<string> paths, string targetHost, IRelaySender relay, string localHost = "")
     {
         var cts = new CancellationTokenSource();
         lock (_lock)
@@ -560,51 +531,30 @@ public sealed class FileTransferService : IDisposable
         catch (Exception ex)
         {
             TryCancelSend(out _, out _);
-            _log.LogWarning(ex, "StartSend pre-stream setup failed");
+            _log.LogWarning(ex, "InitiateSend pre-stream setup failed");
             _dialog.ShowError($"Transfer failed: {ex.Message}");
             return;
         }
 
         var tick = Environment.TickCount64;
         _dialog.ShowTransferring(new FileTransferInfo(names, totalBytes, IsSender: true));
-        _ = Task.Run(() => StreamAsync(paths, names, totalBytes, tick, targetHost, localHost, relay, cts.Token));
+        _ = Task.Run(() => RunSendAsync(paths, names, totalBytes, tick, targetHost, localHost, relay, cts.Token));
     }
 
-    private async Task StreamAsync(List<string> paths, string[] names, long totalBytes, long startTick, string targetHost, string localHost, IRelaySender relay, CancellationToken cancel)
+    private async Task RunSendAsync(List<string> paths, string[] names, long totalBytes, long startTick, string targetHost, string localHost, IRelaySender relay, CancellationToken cancel)
     {
-        long totalSent = 0;
         try
         {
             var sourceHost = string.IsNullOrEmpty(localHost) ? null : localHost;
             // send request first — receiver validates its paste dir and sends Accepted before we stream
-            var requestPayload = MessageSerializer.Encode(MessageKind.FileTransferRequest, new FileTransferRequestMessage(SourceHost: sourceHost));
-            relay.Send([targetHost], requestPayload);
+            relay.Send([targetHost], MessageSerializer.Encode(MessageKind.FileTransferRequest, new FileTransferRequestMessage(SourceHost: sourceHost)));
 
-            // wait for receiver to validate the paste destination before streaming
+            // wait for receiver to accept before streaming
             TaskCompletionSource<bool>? acceptTcs;
             lock (_lock) acceptTcs = _sendAcceptTcs;
             if (acceptTcs != null) await acceptTcs.Task.WaitAsync(TimeSpan.FromMilliseconds(_watchdogTimeoutMs), cancel);
 
-            // inform receiver of what's coming before streaming
-            var startPayload = MessageSerializer.Encode(MessageKind.FileTransferStart, new FileTransferStartMessage(names, totalBytes));
-            relay.Send([targetHost], startPayload);
-
-            var sha = await TarGzStreamer.StreamAsync(paths, async (data, seq, uncompressedBytes) =>
-            {
-                cancel.ThrowIfCancellationRequested();
-                var chunkPayload = MessageSerializer.Encode(MessageKind.FileTransferChunk, new FileTransferChunkMessage(seq, data));
-                relay.Send([targetHost], chunkPayload);
-                totalSent += data.Length;
-                var speed = CalcSpeed(startTick, totalSent);
-                _dialog.UpdateProgress(uncompressedBytes, speed);
-                _log.LogDebug("Sent chunk #{Seq}: {Bytes} bytes", seq, data.Length);
-                await ValueTask.CompletedTask;
-            }, _dialog.SetCurrentFile, cancel);
-
-            var donePayload = MessageSerializer.Encode(MessageKind.FileTransferDone, new FileTransferDoneMessage(totalSent, sha));
-            relay.Send([targetHost], donePayload);
-            _dialog.ShowCompleted();
-            _log.LogInformation("Transfer complete: {Bytes} compressed bytes sent", ByteSize.FromBytes(totalSent));
+            await RunSendCoreAsync(paths, names, totalBytes, startTick, targetHost, relay, cancel);
         }
         catch (OperationCanceledException) when (cancel.IsCancellationRequested)
         {
@@ -617,12 +567,6 @@ public sealed class FileTransferService : IDisposable
             SendTo(relay, targetHost, MessageKind.FileTransferAbort, new FileTransferAbortMessage("transfer timed out"));
             _dialog.ShowError("Transfer failed: destination did not respond");
         }
-        catch (Exception ex)
-        {
-            _log.LogWarning(ex, "Transfer failed");
-            SendTo(relay, targetHost, MessageKind.FileTransferAbort, new FileTransferAbortMessage(ex.Message));
-            _dialog.ShowError($"Transfer failed: {ex.Message}");
-        }
         finally
         {
             lock (_lock)
@@ -633,6 +577,42 @@ public sealed class FileTransferService : IDisposable
                 _sendRelay = null;
                 _sendAcceptTcs = null;
             }
+        }
+    }
+
+    // shared chunk-streaming core: FileTransferStart → chunks → FileTransferDone.
+    // handles cancellation and generic errors internally; callers only need their own finally cleanup.
+    private async Task RunSendCoreAsync(List<string> paths, string[] names, long totalBytes, long startTick, string targetHost, IRelaySender relay, CancellationToken cancel)
+    {
+        long totalSent = 0;
+        try
+        {
+            relay.Send([targetHost], MessageSerializer.Encode(MessageKind.FileTransferStart, new FileTransferStartMessage(names, totalBytes)));
+
+            var sha = await TarGzStreamer.StreamAsync(paths, async (data, seq, uncompressedBytes) =>
+            {
+                cancel.ThrowIfCancellationRequested();
+                relay.Send([targetHost], MessageSerializer.Encode(MessageKind.FileTransferChunk, new FileTransferChunkMessage(seq, data)));
+                totalSent += data.Length;
+                _dialog.UpdateProgress(uncompressedBytes, CalcSpeed(startTick, totalSent));
+                _log.LogDebug("Sent chunk #{Seq}: {Bytes} bytes", seq, data.Length);
+                await ValueTask.CompletedTask;
+            }, _dialog.SetCurrentFile, cancel);
+
+            relay.Send([targetHost], MessageSerializer.Encode(MessageKind.FileTransferDone, new FileTransferDoneMessage(totalSent, sha)));
+            _dialog.ShowCompleted();
+            _log.LogInformation("Transfer complete: {Bytes} compressed bytes sent", ByteSize.FromBytes(totalSent));
+        }
+        catch (OperationCanceledException) when (cancel.IsCancellationRequested)
+        {
+            _log.LogInformation("Transfer cancelled");
+            _dialog.Close();
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Transfer failed");
+            SendTo(relay, targetHost, MessageKind.FileTransferAbort, new FileTransferAbortMessage(ex.Message));
+            _dialog.ShowError($"Transfer failed: {ex.Message}");
         }
     }
 

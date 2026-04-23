@@ -23,6 +23,7 @@ public enum MessageKind : byte
     ClipboardPush = 12,         // master → slave: apply this clipboard (text/image/files)
     ClipboardPull = 13,         // master → slave: send me your clipboard
     ClipboardPullResponse = 14, // slave → master: here's my clipboard
+    // 15, 16 reserved (formerly used; do not reuse — breaks wire compat with older clients)
     FileTransferRequest = 17,   // master → receiver: can you receive? (SourceHost = actual data sender if different)
     FileTransferStart = 26,     // data source → receiver: here's what's coming (FileNames + TotalBytes)
     FileTransferChunk = 18,     // data source → receiver: chunk of tar.gz data

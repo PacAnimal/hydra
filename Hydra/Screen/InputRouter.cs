@@ -1,5 +1,4 @@
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using System.Threading.Channels;
 using Cathedral.Extensions;
 using Hydra.Config;
@@ -599,23 +598,10 @@ public class InputRouter(
         }
     }
 
-    private static decimal GetRemoteScale(Dictionary<string, List<ScreenInfoEntry>> peerScreens, ScreenRect screen)
+    private static ScreenInfoEntry? FindRemoteEntry(Dictionary<string, List<ScreenInfoEntry>> peerScreens, ScreenRect screen)
     {
         if (peerScreens.TryGetValue(screen.Host, out var entries))
-        {
-            var entry = entries.FirstOrDefault(e => e.Name.EqualsIgnoreCase(screen.Name));
-            if (entry != null) return entry.MouseScale;
-        }
-        return 1.0m;
-    }
-
-    private static decimal? GetRemoteRelativeScale(Dictionary<string, List<ScreenInfoEntry>> peerScreens, ScreenRect screen)
-    {
-        if (peerScreens.TryGetValue(screen.Host, out var entries))
-        {
-            var entry = entries.FirstOrDefault(e => e.Name.EqualsIgnoreCase(screen.Name));
-            if (entry != null) return entry.RelativeMouseScale;
-        }
+            return entries.FirstOrDefault(e => e.Name.EqualsIgnoreCase(screen.Name));
         return null;
     }
 
@@ -624,8 +610,8 @@ public class InputRouter(
         List<ScreenRect> allScreens, Dictionary<string, List<ScreenInfoEntry>> peerScreens, ScreenRect target)
     {
         var screens = allScreens.Where(s => !s.IsLocal && s.Host.EqualsIgnoreCase(target.Host)).ToList();
-        var scaleMap = screens.ToDictionary(s => s.Name, s => GetRemoteScale(peerScreens, s), StringComparer.OrdinalIgnoreCase);
-        var relativeScaleMap = screens.ToDictionary(s => s.Name, s => GetRemoteRelativeScale(peerScreens, s), StringComparer.OrdinalIgnoreCase);
+        var scaleMap = screens.ToDictionary(s => s.Name, s => FindRemoteEntry(peerScreens, s)?.MouseScale ?? 1.0m, StringComparer.OrdinalIgnoreCase);
+        var relativeScaleMap = screens.ToDictionary(s => s.Name, s => FindRemoteEntry(peerScreens, s)?.RelativeMouseScale, StringComparer.OrdinalIgnoreCase);
         return new RemoteScreenInfo(screens, scaleMap, relativeScaleMap);
     }
 
@@ -894,8 +880,8 @@ public class InputRouter(
         if (!relay.IsConnected) return;
 
         var peerScreens = await _peerState.GetPeerScreensSnapshot();
-        var scale = GetRemoteScale(peerScreens, hit.Destination);
         var remoteInfo = GetRemoteScreensAndScales(st.Screens, peerScreens, hit.Destination);
+        var scale = remoteInfo.ScaleMap.GetValueOrDefault(hit.Destination.Name, 1.0m);
 
         // block edge crossing while any button is held
         if (platform.AnyMouseButtonHeld()) return;
@@ -911,12 +897,9 @@ public class InputRouter(
         st.LastWarpY = st.WarpY;
         log.LogInformation("Entered remote screen '{Name}' → ({X}, {Y})", hit.Destination.Name, hit.EntryX, hit.EntryY);
 
-        if (relay.IsConnected)
-        {
-            var payload = MessageSerializer.Encode(MessageKind.EnterScreen, new EnterScreenMessage(hit.Destination.Name, hit.EntryX, hit.EntryY, hit.Destination.Width, hit.Destination.Height));
-            relay.Send([hit.Destination.Host], payload);
-            PushClipboardToHost(hit.Destination.Host);
-        }
+        var payload = MessageSerializer.Encode(MessageKind.EnterScreen, new EnterScreenMessage(hit.Destination.Name, hit.EntryX, hit.EntryY, hit.Destination.Width, hit.Destination.Height));
+        relay.Send([hit.Destination.Host], payload);
+        PushClipboardToHost(hit.Destination.Host);
     }
 
     private async ValueTask HandleVirtualScreenMove(LocalMasterState st, double x, double y)
@@ -1192,17 +1175,12 @@ public class InputRouter(
     private static ScreenRect? FindLocalScreenAt(LocalMasterState st, int x, int y) =>
         st.LocalScreens.FirstOrDefault(s => s.Contains(x, y));
 
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
-    };
-
     private void LogDetectedScreens(List<ScreenRect> detected)
     {
         log.LogInformation("Detected {Count} local screen(s):", detected.Count);
         for (var i = 0; i < detected.Count; i++)
             if (detected[i].Identity != null)
-                log.LogInformation("  Screen {I}: {Json}", i, JsonSerializer.Serialize(detected[i].Identity, JsonOptions));
+                log.LogInformation("  Screen {I}: {Json}", i, JsonSerializer.Serialize(detected[i].Identity, ScreenDetector.JsonOptions));
     }
 
     // combines local screens with placeholder remote screens (Width=0 until ScreenInfo arrives)

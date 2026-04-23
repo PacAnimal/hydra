@@ -30,11 +30,12 @@ internal static class FileUtils
         var dir = Path.GetDirectoryName(path) ?? "";
         var nameNoExt = Path.GetFileNameWithoutExtension(path);
         var ext = Path.GetExtension(path);
-        for (var i = 1; ; i++)
+        for (var i = 1; i <= 10_000; i++)
         {
             var candidate = Path.Combine(dir, $"{nameNoExt} ({i}){ext}");
             if (!File.Exists(candidate) && !Directory.Exists(candidate)) return candidate;
         }
+        throw new IOException($"Could not find a unique path for '{path}' after 10,000 attempts");
     }
 
     private static void MoveDirectory(string src, string dest)

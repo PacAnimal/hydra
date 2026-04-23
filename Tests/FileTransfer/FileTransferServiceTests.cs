@@ -184,7 +184,7 @@ public class FileTransferServiceTests
     [Test]
     public async Task OnMessage_FileTransferAbort_DuringSend_ClosesDialog()
     {
-        _service.StartSend([CreateTempFile()], "slave", _relay);
+        _service.InitiateSend([CreateTempFile()], "slave", _relay);
         _relay.Sent.Clear();
 
         // receiver ("slave") aborts — we were the sender, so we close without sending our own abort
@@ -214,7 +214,7 @@ public class FileTransferServiceTests
     [Test]
     public void CancelRequested_DuringSend_SendsAbortAndClosesDialog()
     {
-        _service.StartSend([CreateTempFile()], "slave", _relay);
+        _service.InitiateSend([CreateTempFile()], "slave", _relay);
         _relay.Sent.Clear();
 
         _dialog.TriggerCancel();
@@ -247,7 +247,7 @@ public class FileTransferServiceTests
     [Test]
     public void Abort_DuringSend_SendsAbortAndClosesDialog()
     {
-        _service.StartSend([CreateTempFile()], "slave", _relay);
+        _service.InitiateSend([CreateTempFile()], "slave", _relay);
         _relay.Sent.Clear();
 
         _service.Abort(_relay, "peer disconnected");
@@ -297,7 +297,7 @@ public class FileTransferServiceTests
     [Test]
     public void FileTransferOngoing_TrueWhileSending()
     {
-        _service.StartSend([CreateTempFile()], "slave", _relay);
+        _service.InitiateSend([CreateTempFile()], "slave", _relay);
         Assert.That(_service.FileTransferOngoing, Is.True);
     }
 
@@ -327,7 +327,7 @@ public class FileTransferServiceTests
     [Test]
     public void IsSendingTo_TrueForTargetHost_FalseOtherwise()
     {
-        _service.StartSend([CreateTempFile()], "slave", _relay);
+        _service.InitiateSend([CreateTempFile()], "slave", _relay);
 
         using (Assert.EnterMultipleScope())
         {
@@ -438,13 +438,13 @@ public class FileTransferServiceTests
         }
     }
 
-    // -- StartSend --
+    // -- InitiateSend --
 
     [Test]
-    public async Task StartSend_IncludesLocalHostAsSourceHostInRequestMessage()
+    public async Task InitiateSend_IncludesLocalHostAsSourceHostInRequestMessage()
     {
-        // StartSend runs StreamAsync on Task.Run — poll until it produces FileTransferRequest
-        _service.StartSend([CreateTempFile()], "slave", _relay, "my-machine");
+        // InitiateSend runs RunSendAsync on Task.Run — poll until it produces FileTransferRequest
+        _service.InitiateSend([CreateTempFile()], "slave", _relay, "my-machine");
         await WaitForMessage(_relay, MessageKind.FileTransferRequest);
 
         var (_, _, json) = _relay.Sent.FirstOrDefault(m => m.Kind == MessageKind.FileTransferRequest);
@@ -452,13 +452,13 @@ public class FileTransferServiceTests
         Assert.That(msg?.SourceHost, Is.EqualTo("my-machine"));
     }
 
-    // -- StreamToHost (slave-side) --
+    // -- ExecuteStreamRequest (slave-side) --
 
     [Test]
-    public async Task StreamToHost_SendsFileTransferStartWithTotalBeforeChunks()
+    public async Task ExecuteStreamRequest_SendsFileTransferStartWithTotalBeforeChunks()
     {
         // slave informs target of total size before streaming so target can show accurate progress
-        await _service.StreamToHost([CreateTempFile()], "target", _relay);
+        await _service.ExecuteStreamRequest([CreateTempFile()], "target", _relay);
 
         var startIdx = _relay.Sent.FindIndex(m => m.Kind == MessageKind.FileTransferStart);
         var firstChunkIdx = _relay.Sent.FindIndex(m => m.Kind == MessageKind.FileTransferChunk);
@@ -475,10 +475,9 @@ public class FileTransferServiceTests
     }
 
     [Test]
-    public async Task StreamToHost_RelayThrows_ShowsError()
+    public async Task ExecuteStreamRequest_RelayThrows_ShowsError()
     {
-        // StreamToHost is awaitable — no polling needed
-        await _service.StreamToHost([CreateTempFile()], "target", new ThrowingRelay());
+        await _service.ExecuteStreamRequest([CreateTempFile()], "target", new ThrowingRelay());
         Assert.That(_dialog.LastState, Is.EqualTo("error"));
     }
 
@@ -531,10 +530,10 @@ public class FileTransferServiceTests
     }
 
     [Test]
-    public async Task StartSend_NoAcceptedResponseWithinTimeout_ShowsError()
+    public async Task InitiateSend_NoAcceptedResponseWithinTimeout_ShowsError()
     {
         using var service = FastTimeoutService();
-        service.StartSend([CreateTempFile()], "slave", _relay);
+        service.InitiateSend([CreateTempFile()], "slave", _relay);
 
         await WaitForDialogNotTransferring(_dialog);
 
@@ -596,7 +595,7 @@ public class FileTransferServiceTests
     [Test]
     public void HandleBusy_DuringSend_CancelsAndClosesDialog()
     {
-        _service.StartSend([CreateTempFile()], "slave", _relay);
+        _service.InitiateSend([CreateTempFile()], "slave", _relay);
 
         _service.HandleBusy("slave");
 
@@ -639,7 +638,7 @@ public class FileTransferServiceTests
     [Test]
     public void HandleBusy_FromUnrelatedHost_IsIgnored()
     {
-        _service.StartSend([CreateTempFile()], "slave", _relay);
+        _service.InitiateSend([CreateTempFile()], "slave", _relay);
 
         _service.HandleBusy("other-host");
 
@@ -650,7 +649,7 @@ public class FileTransferServiceTests
     public async Task HandleFileTransferRequest_WhenBusy_SendsBusyInsteadOfAccepted()
     {
         // put service into sending state (FileTransferOngoing = true)
-        _service.StartSend([CreateTempFile()], "slave", _relay);
+        _service.InitiateSend([CreateTempFile()], "slave", _relay);
         _relay.Sent.Clear();
 
         // another host now tries to transfer to us
@@ -668,7 +667,7 @@ public class FileTransferServiceTests
     [Test]
     public void Dispose_DuringSend_CleansUp()
     {
-        _service.StartSend([CreateTempFile()], "slave", _relay);
+        _service.InitiateSend([CreateTempFile()], "slave", _relay);
         _service.Dispose();
 
         using (Assert.EnterMultipleScope())
@@ -716,9 +715,7 @@ internal sealed class FakeFileTransferDialog : IFileTransferDialog
     public string LastState { get; private set; } = "none";
     public string? LastError { get; private set; }
 
-    public void ShowPending(FileTransferInfo info) => LastState = "pending";
     public void ShowTransferring(FileTransferInfo info) => LastState = "transferring";
-    public void UpdateTotal(FileTransferInfo info) { }
     public void SetCurrentFile(string fileName) { }
     public void UpdateProgress(long bytesTransferred, double bytesPerSecond) { }
     public void ShowCompleted() => LastState = "completed";

@@ -59,8 +59,6 @@ public sealed class WindowsProgressDialog : IFileTransferDialog, IDisposable
             handle.Free();
     }
 
-    public void ShowPending(FileTransferInfo info) => ShowTransferring(info);
-
     public void ShowTransferring(FileTransferInfo info)
     {
         _totalBytes = info.TotalBytes;
@@ -95,19 +93,6 @@ public sealed class WindowsProgressDialog : IFileTransferDialog, IDisposable
         _dlg = null;
         try { dlg.StopProgressDialog(); } catch (Exception ex) { _log.LogDebug(ex, "StopProgressDialog threw"); }
         try { Marshal.ReleaseComObject(dlg); } catch { /* already released */ }
-    }
-
-    public void UpdateTotal(FileTransferInfo info)
-    {
-        _totalBytes = info.TotalBytes;
-        _lastProgressTick = 0;
-        PostToSta(() =>
-        {
-            if (_dlg == null) return;
-            _dlg.SetLine(1, BuildFileNames(info.FileNames), false, nint.Zero);
-            _dlg.SetProgress64(0, (ulong)info.TotalBytes);
-            _dlg.Timer(PdtimerReset, nint.Zero);
-        });
     }
 
     public void SetCurrentFile(string fileName)

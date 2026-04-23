@@ -7,14 +7,7 @@ public record FileTransferInfo(string[] FileNames, long TotalBytes, bool IsSende
 
 public interface IFileTransferDialog
 {
-    // show the dialog in "waiting for drop" state
-    void ShowPending(FileTransferInfo info);
-
-    // switch to active transfer state
     void ShowTransferring(FileTransferInfo info);
-
-    // update the total bytes once known (called when FileTransferStart arrives after ShowTransferring with totalBytes=0)
-    void UpdateTotal(FileTransferInfo info);
 
     // update the name of the file currently being compressed or extracted
     void SetCurrentFile(string fileName);
@@ -37,9 +30,7 @@ public interface IFileTransferDialog
 
 public sealed class NullFileTransferDialog : IFileTransferDialog
 {
-    public void ShowPending(FileTransferInfo info) { }
     public void ShowTransferring(FileTransferInfo info) { }
-    public void UpdateTotal(FileTransferInfo info) { }
     public void SetCurrentFile(string fileName) { }
     public void UpdateProgress(long bytesTransferred, double bytesPerSecond) { }
     public void ShowCompleted() { }

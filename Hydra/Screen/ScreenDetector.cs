@@ -20,7 +20,7 @@ public record LocalScreenSnapshot(List<ScreenRect> Screens, List<ScreenInfoEntry
 
 public abstract class ScreenDetector : SimpleHostedService, IScreenDetector
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
+    internal static readonly JsonSerializerOptions JsonOptions = new()
     {
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
@@ -109,24 +109,19 @@ public abstract class ScreenDetector : SimpleHostedService, IScreenDetector
         return new LocalScreenSnapshot(screens, entries);
     }
 
+    private ScreenDefinition? FindScreenDefinition(DetectedScreen d) =>
+        _profile.ScreenDefinitions.FirstOrDefault(def => Matches(d, def));
+
     private decimal ResolveScale(DetectedScreen d)
     {
-        foreach (var def in _profile.ScreenDefinitions)
-        {
-            if (Matches(d, def))
-                return def.MouseScale ?? _profile.MouseScale ?? 1.0m;
-        }
-        return _profile.MouseScale ?? 1.0m;
+        var def = FindScreenDefinition(d);
+        return def?.MouseScale ?? _profile.MouseScale ?? 1.0m;
     }
 
     private decimal? ResolveRelativeScale(DetectedScreen d)
     {
-        foreach (var def in _profile.ScreenDefinitions)
-        {
-            if (Matches(d, def))
-                return def.RelativeMouseScale ?? _profile.RelativeMouseScale;
-        }
-        return _profile.RelativeMouseScale;
+        var def = FindScreenDefinition(d);
+        return def?.RelativeMouseScale ?? _profile.RelativeMouseScale;
     }
 
     private static bool Matches(DetectedScreen d, ScreenDefinition def) =>

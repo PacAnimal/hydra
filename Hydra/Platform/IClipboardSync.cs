@@ -13,13 +13,7 @@ public interface IClipboardSync
     void SetImagePng(byte[] pngData) { }
 
     // atomically clears and writes text and/or image in a single clipboard open.
-    // WARNING: the default implementation calls individual setters sequentially — each one clears the clipboard,
-    // so only the last format survives. any real platform implementation must override this method.
-    void SetClipboard(string? text, string? primaryText, byte[]? imagePng)
-    {
-        if (text == null && primaryText == null && imagePng == null) return;
-        if (text != null) SetText(text);
-        if (primaryText != null) SetPrimaryText(primaryText);
-        if (imagePng != null) SetImagePng(imagePng);
-    }
+    // every platform implementation must override this — there is no safe default.
+    void SetClipboard(string? text, string? primaryText, byte[]? imagePng) =>
+        throw new NotImplementedException($"{GetType().Name} must override SetClipboard");
 }

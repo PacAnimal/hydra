@@ -208,9 +208,9 @@ public class SlaveRelayConnection : RelayConnection
 
         if (msg.Type == KeyEventType.KeyUp)
         {
-            // cancel any active repeat timer for this key
+            // cancel any active repeat timer for this key; the task disposes it in its finally
             if (_repeatTimers.Remove(repeatKey, out var cts))
-                cts.Cancel(); // don't dispose — timer task may still be running; let GC handle it
+                cts.Cancel();
             _heldKeys.Remove(repeatKey);
             _output.InjectKey(msg);
             return;
@@ -246,6 +246,7 @@ public class SlaveRelayConnection : RelayConnection
             }
             catch (OperationCanceledException) { }
             catch (Exception ex) { _log.LogWarning(ex, "Key repeat timer error for {Key}", repeatKey); }
+            finally { repeatCts.Dispose(); }
         }, ct);
     }
 
@@ -286,7 +287,7 @@ public class SlaveRelayConnection : RelayConnection
         }
         var req = Parse<FileStreamRequestMessage>(body, MessageKind.FileStreamRequest);
         if (req != null)
-            _ = _fileTransfer.StreamToHost(req.Paths, req.TargetHost, this);
+            _ = _fileTransfer.ExecuteStreamRequest(req.Paths, req.TargetHost, this);
         return Task.CompletedTask;
     }
 

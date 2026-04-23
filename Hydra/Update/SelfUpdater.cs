@@ -15,6 +15,7 @@ internal sealed class SelfUpdater(IHydraProfile profile, ILogger<SelfUpdater> lo
 {
     private const string Repo = "pacanimal/hydra";
     private readonly Toggle _warned = new();
+    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(30) };
 
     // set by ServiceHost to stop the child process before a binary swap
     internal Func<Task>? StopChild { get; set; }
@@ -54,11 +55,9 @@ internal sealed class SelfUpdater(IHydraProfile profile, ILogger<SelfUpdater> lo
         var current = CurrentVersion();
         log.LogInformation("Checking for updates (current: {Version})", current);
 
-        using var http = new HttpClient();
-        http.DefaultRequestHeaders.UserAgent.ParseAdd("Hydra");
-        http.Timeout = TimeSpan.FromSeconds(30);
+        Http.DefaultRequestHeaders.UserAgent.TryParseAdd("Hydra");
 
-        var json = await http.GetStringAsync($"https://api.github.com/repos/{Repo}/releases/latest", cancel);
+        var json = await Http.GetStringAsync($"https://api.github.com/repos/{Repo}/releases/latest", cancel);
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
 
@@ -98,10 +97,10 @@ internal sealed class SelfUpdater(IHydraProfile profile, ILogger<SelfUpdater> lo
         }
 
         log.LogInformation("Downloading {Asset}", assetName);
-        await DownloadAndApply(http, downloadUrl, cancel);
+        await DownloadAndApply(downloadUrl, cancel);
     }
 
-    private async Task DownloadAndApply(HttpClient http, string url, CancellationToken cancel)
+    private async Task DownloadAndApply(string url, CancellationToken cancel)
     {
         var exePath = Environment.ProcessPath
             ?? throw new InvalidOperationException("cannot determine process path");
@@ -115,7 +114,7 @@ internal sealed class SelfUpdater(IHydraProfile profile, ILogger<SelfUpdater> lo
         using var downloadCancel = CancellationTokenSource.CreateLinkedTokenSource(cancel);
         downloadCancel.CancelAfter(TimeSpan.FromMinutes(2));
 
-        using var response = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, downloadCancel.Token);
+        using var response = await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, downloadCancel.Token);
         response.EnsureSuccessStatusCode();
 
         await using var httpStream = await response.Content.ReadAsStreamAsync(downloadCancel.Token);
