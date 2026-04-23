@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Runtime.Versioning;
 using Hydra.FileTransfer;
 using Microsoft.Extensions.Logging;
@@ -49,28 +48,17 @@ public sealed class MacFileSelectionDetector : IFileSelectionDetector
             end tell
             """;
 
-        using var proc = Process.Start(new ProcessStartInfo("osascript", ["-e", script])
+        var result = OsaScript.Run(script);
+        if (!result.Success)
         {
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-        });
-        if (proc == null) return new FileSelectionResult(false, null);
-
-        var stdout = proc.StandardOutput.ReadToEnd();
-        var stderr = proc.StandardError.ReadToEnd();
-        proc.WaitForExit();
-
-        if (proc.ExitCode != 0)
-        {
-            _log.LogWarning("osascript exited {Code}: {Stderr}", proc.ExitCode, stderr.Trim());
+            _log.LogWarning("osascript exited {Code}: {Stderr}", result.ExitCode, result.Stderr.Trim());
             return new FileSelectionResult(false, null);
         }
 
-        if (stdout.Trim() == "NOT_FOCUSED")
+        if (result.Stdout.Trim() == "NOT_FOCUSED")
             return new FileSelectionResult(false, null);
 
-        var paths = stdout
+        var paths = result.Stdout
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Where(p => p.Length > 0)
             .ToList();

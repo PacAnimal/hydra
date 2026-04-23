@@ -122,7 +122,7 @@ public sealed class CoalescingOutputWrapper : IPlatformOutput
     private void Drain()
     {
         try { foreach (var action in _actions.GetConsumingEnumerable()) action(); }
-        catch (InvalidOperationException) { }
+        catch (InvalidOperationException) { } // thrown by BlockingCollection when CompleteAdding races with enumeration start
     }
 
     public void Dispose()

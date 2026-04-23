@@ -1,3 +1,4 @@
+using Cathedral.Utils;
 using Common;
 using Common.DTO;
 using Common.Interfaces;
@@ -5,7 +6,6 @@ using Hydra.Config;
 using Microsoft.AspNetCore.Http.Connections.Client;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using System.Net.Sockets;
 using System.Threading.Channels;
@@ -14,7 +14,7 @@ using TypedSignalR.Client;
 namespace Hydra.Relay;
 
 public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log, IWorldState peerState)
-    : BackgroundService, IStyxClient, IRelaySender
+    : SimpleHostedService(log), IStyxClient, IRelaySender
 {
     private IStyxServer? _server;
     private RelayEncryption? _encryption;
@@ -110,7 +110,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         };
     }
 
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    protected override async Task Execute(CancellationToken cancel)
     {
         if (profile.NetworkConfig == null) return;
 
@@ -128,13 +128,13 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         var hostName = profile.Name;
         log.LogInformation("Starting relay connection to {Server} as {HostName}", netConfig.StyxServer, hostName);
 
-        while (!stoppingToken.IsCancellationRequested)
+        while (!cancel.IsCancellationRequested)
         {
             try
             {
-                await Connect(netConfig, hostName, stoppingToken);
+                await Connect(netConfig, hostName, cancel);
             }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            catch (OperationCanceledException) when (cancel.IsCancellationRequested)
             {
                 break;
             }
@@ -163,14 +163,14 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
                 }
             }
 
-            if (!stoppingToken.IsCancellationRequested)
-                await Task.Delay(TimeSpan.FromSeconds(Constants.ReconnectDelaySeconds), stoppingToken).ConfigureAwait(false);
+            if (!cancel.IsCancellationRequested)
+                await Task.Delay(TimeSpan.FromSeconds(Constants.ReconnectDelaySeconds), cancel).ConfigureAwait(false);
         }
     }
 
-    private async Task Connect(NetworkConfig netConfig, string hostName, CancellationToken stoppingToken)
+    private async Task Connect(NetworkConfig netConfig, string hostName, CancellationToken cancel)
     {
-        using var disco = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+        using var disco = CancellationTokenSource.CreateLinkedTokenSource(cancel);
 
         await using var con = new HubConnectionBuilder()
             .WithUrl($"{netConfig.StyxServer}/relay", ConfigureHubUrl)
@@ -218,7 +218,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         {
             try
             {
-                var encrypted = await _encryption.Encrypt(payload, stoppingToken);
+                var encrypted = await _encryption.Encrypt(payload, cancel);
                 await _server.Send(targets, encrypted);
             }
             catch (OperationCanceledException) { break; }

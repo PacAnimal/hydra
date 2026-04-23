@@ -11,9 +11,7 @@ namespace Hydra.Platform.Windows;
 [SupportedOSPlatform("windows")]
 public sealed class WindowsDropTargetResolver(ILogger<WindowsDropTargetResolver> log) : IDropTargetResolver, IDisposable
 {
-    private readonly Lock _lock = new();
-    private Type? _shellType;
-    private object? _shell;
+    private readonly WindowsShellApplication _comShell = new();
 
     public string? GetPasteDirectory()
     {
@@ -28,12 +26,7 @@ public sealed class WindowsDropTargetResolver(ILogger<WindowsDropTargetResolver>
         }
     }
 
-    public void Dispose()
-    {
-        object? shell;
-        lock (_lock) { shell = _shell; _shell = null; }
-        if (shell != null) TryReleaseComObject(shell);
-    }
+    public void Dispose() => _comShell.Dispose();
 
     public void MoveToDestination(string tempDir, string destDir)
     {
@@ -91,9 +84,9 @@ public sealed class WindowsDropTargetResolver(ILogger<WindowsDropTargetResolver>
 
         // hold the lock for the entire enumeration so InvalidateShell() can't release the
         // shell object while we're mid-enumeration on another thread
-        lock (_lock)
+        lock (_comShell.Lock)
         {
-            var (shellType, shell) = GetShellUnderLock();
+            var (shellType, shell) = _comShell.GetShellUnderLock();
             if (shell == null || shellType == null) return null;
 
             dynamic? windows = null;
@@ -123,20 +116,18 @@ public sealed class WindowsDropTargetResolver(ILogger<WindowsDropTargetResolver>
                         var localPath = FileUtils.FileUrlToLocalPath(locationUrl);
                         if (localPath != null) return localPath;
                     }
-                    finally { TryReleaseComObject(window); }
+                    finally { WindowsShellApplication.TryRelease(window); }
                 }
             }
             catch (Exception ex) when (ex is COMException or InvalidCastException or RuntimeBinderException)
             {
                 // cached shell object became stale — release it and recreate next call
-                var stale = _shell;
-                _shell = null;
-                if (stale != null) TryReleaseComObject(stale);
+                _comShell.InvalidateUnderLock();
                 log.LogDebug(ex, "Shell.Application COM object became stale — will recreate on next call");
             }
             finally
             {
-                if (windows != null) TryReleaseComObject(windows);
+                if (windows != null) WindowsShellApplication.TryRelease(windows);
             }
         }
 
@@ -151,19 +142,4 @@ public sealed class WindowsDropTargetResolver(ILogger<WindowsDropTargetResolver>
         return len > 0 ? new string(buf, 0, len) : string.Empty;
     }
 
-    // caller must hold _lock
-    private (Type?, object?) GetShellUnderLock()
-    {
-        if (_shell != null) return (_shellType, _shell);
-        _shellType = Type.GetTypeFromProgID("Shell.Application");
-        if (_shellType == null) return (null, null);
-        _shell = Activator.CreateInstance(_shellType);
-        return (_shellType, _shell);
-    }
-
-    private static void TryReleaseComObject(object shell)
-    {
-        try { Marshal.ReleaseComObject(shell); }
-        catch { /* already released */ }
-    }
 }

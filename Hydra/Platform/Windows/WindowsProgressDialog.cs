@@ -186,29 +186,27 @@ public sealed class WindowsProgressDialog : IFileTransferDialog, IDisposable
         }
         _ = Task.Run(async () =>
         {
-            while (!newCts.Token.IsCancellationRequested)
+            try
             {
-                try { await Task.Delay(150, newCts.Token); }
-                catch (OperationCanceledException) { return; }
-                // poll HasUserCancelled on the STA thread (it owns _dlg)
-                PostToSta(() =>
+                while (!newCts.Token.IsCancellationRequested)
                 {
-                    try
+                    try { await Task.Delay(150, newCts.Token); }
+                    catch (OperationCanceledException) { return; }
+                    // poll HasUserCancelled on the STA thread (it owns _dlg)
+                    PostToSta(() =>
                     {
-                        if (_dlg?.HasUserCancelled() != true) return;
-                        lock (_lock) { _pollCts?.Cancel(); _pollCts = null; }
-                        try { CancelRequested?.Invoke(); }
-                        catch
+                        try
                         {
-                            // ignored
+                            if (_dlg?.HasUserCancelled() != true) return;
+                            lock (_lock) { _pollCts?.Cancel(); _pollCts = null; }
+                            try { CancelRequested?.Invoke(); }
+                            catch { /* ignored */ }
                         }
-                    }
-                    catch
-                    {
-                        // ignored
-                    }
-                });
+                        catch { /* ignored */ }
+                    });
+                }
             }
+            catch (Exception ex) { _log.LogDebug(ex, "Cancel poll loop exited unexpectedly"); }
         }, CancellationToken.None);
     }
 

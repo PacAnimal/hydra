@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Runtime.Versioning;
 using Hydra.FileTransfer;
 using Microsoft.Extensions.Logging;
@@ -45,24 +44,14 @@ public sealed class MacDropTargetResolver(ILogger<MacDropTargetResolver> log) : 
             end tell
             """;
 
-        using var proc = Process.Start(new ProcessStartInfo("osascript", ["-e", script])
+        var result = OsaScript.Run(script);
+        if (!result.Success)
         {
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-        });
-        if (proc == null) return null;
-
-        var stdout = proc.StandardOutput.ReadToEnd().Trim();
-        var stderr = proc.StandardError.ReadToEnd();
-        proc.WaitForExit();
-
-        if (proc.ExitCode != 0)
-        {
-            _log.LogDebug("osascript exited {Code}: {Stderr}", proc.ExitCode, stderr.Trim());
+            _log.LogDebug("osascript exited {Code}: {Stderr}", result.ExitCode, result.Stderr.Trim());
             return null;
         }
 
+        var stdout = result.Stdout.Trim();
         _log.LogDebug("Finder paste target: {Path}", stdout);
         if (stdout == "NOT_FINDER" || stdout.Length == 0) return null;
         return stdout;

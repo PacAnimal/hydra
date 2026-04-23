@@ -258,11 +258,12 @@ public class InputRouter(
         if (profile.RemoteOnly)
         {
             var tcs2 = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            _commands.Writer.TryWrite(async st =>
+            if (!_commands.Writer.TryWrite(async st =>
             {
                 await TryEnterRemoteOnly(st);
                 tcs2.TrySetResult();
-            });
+            }))
+                return;
             await tcs2.Task;
         }
     }
@@ -296,7 +297,7 @@ public class InputRouter(
 
     private void OnScreensaverActivated()
     {
-        _commands.Writer.TryWrite(async st =>
+        _ = _commands.Writer.TryWrite(async st =>
         {
             if (st.ScreensaverActive) return;
             st.ScreensaverActive = true;
@@ -324,7 +325,7 @@ public class InputRouter(
 
     private void OnScreensaverDeactivated()
     {
-        _commands.Writer.TryWrite(async st =>
+        _ = _commands.Writer.TryWrite(async st =>
         {
             if (!st.ScreensaverActive) return;
             st.ScreensaverActive = false;
@@ -344,18 +345,12 @@ public class InputRouter(
                 {
                     var peerScreens = await _peerState.GetPeerScreensSnapshot();
                     var remoteInfo = GetRemoteScreensAndScales(st.Screens, peerScreens, dest);
-                    var scale = remoteInfo.ScaleMap.GetValueOrDefault(dest.Name, 1.0m);
                     await platform.HideCursor();
                     platform.IsOnVirtualScreen = true;
-                    st.Mouse.EnterScreen(dest, remoteInfo.Screens, savedX, savedY, scale, remoteInfo.ScaleMap, remoteInfo.RelativeScaleMap);
-                    st.PendingDx = 0;
-                    st.PendingDy = 0;
+                    ApplyEnterScreen(st, dest, remoteInfo, savedX, savedY);
                     st.LastWarpX = st.WarpX;
                     st.LastWarpY = st.WarpY;
-                    var enterPayload = MessageSerializer.Encode(MessageKind.EnterScreen,
-                        new EnterScreenMessage(dest.Name, savedX, savedY, dest.Width, dest.Height));
-                    relay.Send([dest.Host], enterPayload);
-                    PushClipboardToHost(dest.Host);
+                    SendEnterScreen(dest, savedX, savedY);
                     log.LogInformation("Restored cursor to '{Screen}' after screensaver", savedScreen);
                 }
             }
@@ -406,7 +401,7 @@ public class InputRouter(
         switch (kind)
         {
             case MessageKind.ScreenInfo:
-                var info = body.FromSaneJson<ScreenInfoMessage>();
+                var info = body.ParseMessage<ScreenInfoMessage>(log, $"ScreenInfo from {sourceHost}");
                 if (info != null && info.Screens.Count > 0)
                 {
                     await _peerState.SetPeerScreens(sourceHost, info.Screens);
@@ -430,24 +425,24 @@ public class InputRouter(
                 }
                 break;
             case MessageKind.SlaveLog:
-                var entry = body.FromSaneJson<SlaveLogMessage>();
+                var entry = body.ParseMessage<SlaveLogMessage>(log, $"SlaveLog from {sourceHost}");
                 if (entry != null) ForwardSlaveLog(sourceHost, entry);
                 break;
             case MessageKind.ScreensaverSync:
                 break; // master never acts on screensaver sync messages
             case MessageKind.ClipboardPullResponse:
-                var clip = body.FromSaneJson<ClipboardPullResponseMessage>();
+                var clip = body.ParseMessage<ClipboardPullResponseMessage>(log, $"ClipboardPullResponse from {sourceHost}");
                 if (clip != null)
                 {
                     log.LogDebug("Clipboard pull response from {Host}: text={TextLen}, primary={PrimaryLen}, image={ImageLen}",
                         sourceHost, clip.Text?.Length, clip.PrimaryText?.Length, clip.ImagePng?.Length);
                     var validated = ClipboardUtils.ValidateFields(clip.Text, clip.PrimaryText, clip.ImagePng, log, "pull response", sourceHost);
-                    _lastReceived = validated;
                     _clipboardSync.SetClipboard(validated.Text, validated.PrimaryText, validated.ImagePng);
                     // if cursor is currently on a remote screen, forward the clipboard to it
                     var tcs = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
                     if (_commands.Writer.TryWrite(st =>
                     {
+                        _lastReceived = validated;
                         tcs.TrySetResult(st.Mouse.CurrentScreen?.Host);
                         return ValueTask.CompletedTask;
                     }))
@@ -468,7 +463,7 @@ public class InputRouter(
             case MessageKind.FileTransferBusy:
                 {
                     _fileTransfer.HandleBusy(sourceHost);
-                    _commands.Writer.TryWrite(st => { ShowOsd(st, "Transfer in progress"); return ValueTask.CompletedTask; });
+                    _ = _commands.Writer.TryWrite(st => { ShowOsd(st, "Transfer in progress"); return ValueTask.CompletedTask; });
                     break;
                 }
             case var _ when FileTransferService.IsFileTransferMessage(kind):
@@ -619,7 +614,7 @@ public class InputRouter(
     {
         var label = keyEvent.Character.HasValue ? $" '{keyEvent.Character}'" : keyEvent.Key.HasValue ? $" {keyEvent.Key}" : "";
 
-        _commands.Writer.TryWrite(async st =>
+        _ = _commands.Writer.TryWrite(async st =>
         {
             if (st.Mouse.IsOnVirtualScreen)
                 log.LogDebug("Key: {Type}{Label} mods={Modifiers}", keyEvent.Type, label, keyEvent.Modifiers);
@@ -649,9 +644,7 @@ public class InputRouter(
                                 st.Mouse.LeaveScreen();
                                 platform.IsOnVirtualScreen = false;
                                 await platform.ShowCursor();
-                                var payload = MessageSerializer.Encode(MessageKind.LeaveScreen, new LeaveScreenMessage());
-                                relay.Send([leavingHost], payload);
-                                PullClipboardFromHost(leavingHost);
+                                LeaveRemoteScreen(leavingHost);
                             }
                         }
                     }
@@ -768,7 +761,7 @@ public class InputRouter(
 
     private void OnMouseButton(MouseButtonEvent e)
     {
-        _commands.Writer.TryWrite(st =>
+        _ = _commands.Writer.TryWrite(st =>
         {
             if (st.Mouse.IsOnVirtualScreen && relay.IsConnected)
             {
@@ -781,7 +774,7 @@ public class InputRouter(
 
     private void OnMouseScroll(MouseScrollEvent e)
     {
-        _commands.Writer.TryWrite(st =>
+        _ = _commands.Writer.TryWrite(st =>
         {
             if (st.Mouse.IsOnVirtualScreen && relay.IsConnected)
             {
@@ -851,7 +844,7 @@ public class InputRouter(
 
     private void OnMouseMove(double x, double y)
     {
-        _commands.Writer.TryWrite(async st =>
+        _ = _commands.Writer.TryWrite(async st =>
         {
             if (st.Layout is null || st.ActiveLocalScreen is null) return;
             if (!st.Mouse.IsOnVirtualScreen)
@@ -881,25 +874,19 @@ public class InputRouter(
 
         var peerScreens = await _peerState.GetPeerScreensSnapshot();
         var remoteInfo = GetRemoteScreensAndScales(st.Screens, peerScreens, hit.Destination);
-        var scale = remoteInfo.ScaleMap.GetValueOrDefault(hit.Destination.Name, 1.0m);
 
         // block edge crossing while any button is held
         if (platform.AnyMouseButtonHeld()) return;
 
         await platform.HideCursor();
         platform.IsOnVirtualScreen = true;
-        st.Mouse.EnterScreen(hit.Destination, remoteInfo.Screens, hit.EntryX, hit.EntryY, scale, remoteInfo.ScaleMap, remoteInfo.RelativeScaleMap);
-        st.PendingDx = 0;
-        st.PendingDy = 0;
+        ApplyEnterScreen(st, hit.Destination, remoteInfo, hit.EntryX, hit.EntryY);
         // warp immediately so pre-queued events compute large dx → caught by bogus filter
         platform.WarpCursor(st.WarpX, st.WarpY);
         st.LastWarpX = st.WarpX;
         st.LastWarpY = st.WarpY;
         log.LogInformation("Entered remote screen '{Name}' → ({X}, {Y})", hit.Destination.Name, hit.EntryX, hit.EntryY);
-
-        var payload = MessageSerializer.Encode(MessageKind.EnterScreen, new EnterScreenMessage(hit.Destination.Name, hit.EntryX, hit.EntryY, hit.Destination.Width, hit.Destination.Height));
-        relay.Send([hit.Destination.Host], payload);
-        PushClipboardToHost(hit.Destination.Host);
+        SendEnterScreen(hit.Destination, hit.EntryX, hit.EntryY);
     }
 
     private async ValueTask HandleVirtualScreenMove(LocalMasterState st, double x, double y)
@@ -951,24 +938,14 @@ public class InputRouter(
                             FlushMouseDelta(st);
                             var peerScreens = await _peerState.GetPeerScreensSnapshot();
                             var remoteInfo = GetRemoteScreensAndScales(st.Screens, peerScreens, hit.Destination);
-                            var scale = remoteInfo.ScaleMap.GetValueOrDefault(hit.Destination.Name, 1.0m);
-                            st.Mouse.EnterScreen(hit.Destination, remoteInfo.Screens, hit.EntryX, hit.EntryY, scale, remoteInfo.ScaleMap, remoteInfo.RelativeScaleMap);
-                            st.PendingDx = 0;
-                            st.PendingDy = 0;
+                            ApplyEnterScreen(st, hit.Destination, remoteInfo, hit.EntryX, hit.EntryY);
                             log.LogInformation("Switched to remote screen '{Name}' → ({X}, {Y})", hit.Destination.Name, hit.EntryX, hit.EntryY);
 
                             if (relay.IsConnected)
                             {
                                 if (leavingScreen != null && leavingScreen.Host != hit.Destination.Host)
-                                {
-                                    var leavePayload = MessageSerializer.Encode(MessageKind.LeaveScreen, new LeaveScreenMessage());
-                                    relay.Send([leavingScreen.Host], leavePayload);
-                                    PullClipboardFromHost(leavingScreen.Host);
-                                }
-                                var enterPayload = MessageSerializer.Encode(MessageKind.EnterScreen,
-                                    new EnterScreenMessage(hit.Destination.Name, hit.EntryX, hit.EntryY, hit.Destination.Width, hit.Destination.Height));
-                                relay.Send([hit.Destination.Host], enterPayload);
-                                PushClipboardToHost(hit.Destination.Host);
+                                    LeaveRemoteScreen(leavingScreen.Host);
+                                SendEnterScreen(hit.Destination, hit.EntryX, hit.EntryY);
                             }
                             return;
                         }
@@ -993,11 +970,7 @@ public class InputRouter(
                         log.LogInformation("Returned to local screen ← ({X}, {Y})", globalX, globalY);
 
                         if (relay.IsConnected && leavingScreen != null)
-                        {
-                            var payload = MessageSerializer.Encode(MessageKind.LeaveScreen, new LeaveScreenMessage());
-                            relay.Send([leavingScreen.Host], payload);
-                            PullClipboardFromHost(leavingScreen.Host);
-                        }
+                            LeaveRemoteScreen(leavingScreen.Host);
                         return;
                     }
                 }
@@ -1059,28 +1032,22 @@ public class InputRouter(
 
         var peerScreens = await _peerState.GetPeerScreensSnapshot();
         var remoteInfo = GetRemoteScreensAndScales(st.Screens, peerScreens, target);
-        var scale = remoteInfo.ScaleMap.GetValueOrDefault(target.Name, 1.0m);
         var entryX = target.Width / 2;
         var entryY = target.Height / 2;
 
         await platform.HideCursor();
         platform.IsOnVirtualScreen = true;
-        st.Mouse.EnterScreen(target, remoteInfo.Screens, entryX, entryY, scale, remoteInfo.ScaleMap, remoteInfo.RelativeScaleMap);
-        st.PendingDx = 0;
-        st.PendingDy = 0;
+        ApplyEnterScreen(st, target, remoteInfo, entryX, entryY);
         st.LockedToScreen = true;
         log.LogInformation("Remote-only: entered '{Name}' → ({X}, {Y})", target.Name, entryX, entryY);
-
-        var payload = MessageSerializer.Encode(MessageKind.EnterScreen, new EnterScreenMessage(target.Name, entryX, entryY, target.Width, target.Height));
-        relay.Send([target.Host], payload);
-        PushClipboardToHost(target.Host);
+        SendEnterScreen(target, entryX, entryY);
     }
 
     // handles raw mouse deltas — used by evdev (remote-only) and Xorg (local master, virtual screen).
     // feeds directly into VirtualMouseState — no warp-point math needed.
     private void OnMouseDelta(double dx, double dy)
     {
-        _commands.Writer.TryWrite(async st =>
+        _ = _commands.Writer.TryWrite(async st =>
         {
             if (!st.Mouse.IsOnVirtualScreen) return;
 
@@ -1117,11 +1084,7 @@ public class InputRouter(
                     UpdateWarpPoint(st, targetScreen);
                     log.LogInformation("Returned to local screen ← ({X}, {Y})", globalX, globalY);
                     if (relay.IsConnected)
-                    {
-                        var payload = MessageSerializer.Encode(MessageKind.LeaveScreen, new LeaveScreenMessage());
-                        relay.Send([leavingScreen.Host], payload);
-                        PullClipboardFromHost(leavingScreen.Host);
-                    }
+                        LeaveRemoteScreen(leavingScreen.Host);
                     return;
                 }
             }
@@ -1146,22 +1109,35 @@ public class InputRouter(
         FlushMouseDelta(st);
         var peerScreens = await _peerState.GetPeerScreensSnapshot();
         var remoteInfo = GetRemoteScreensAndScales(st.Screens, peerScreens, hit.Destination);
-        var scale = remoteInfo.ScaleMap.GetValueOrDefault(hit.Destination.Name, 1.0m);
-        st.Mouse.EnterScreen(hit.Destination, remoteInfo.Screens, hit.EntryX, hit.EntryY, scale, remoteInfo.ScaleMap, remoteInfo.RelativeScaleMap);
+        ApplyEnterScreen(st, hit.Destination, remoteInfo, hit.EntryX, hit.EntryY);
+        log.LogInformation("Switched to remote screen '{Name}' → ({X}, {Y})", hit.Destination.Name, hit.EntryX, hit.EntryY);
+        if (leavingScreen.Host != hit.Destination.Host)
+            LeaveRemoteScreen(leavingScreen.Host);
+        SendEnterScreen(hit.Destination, hit.EntryX, hit.EntryY);
+    }
+
+    // updates mouse state when entering a remote screen; always called before sending relay messages
+    private static void ApplyEnterScreen(LocalMasterState st, ScreenRect dest, RemoteScreenInfo remoteInfo, int entryX, int entryY)
+    {
+        var scale = remoteInfo.ScaleMap.GetValueOrDefault(dest.Name, 1.0m);
+        st.Mouse.EnterScreen(dest, remoteInfo.Screens, entryX, entryY, scale, remoteInfo.ScaleMap, remoteInfo.RelativeScaleMap);
         st.PendingDx = 0;
         st.PendingDy = 0;
-        log.LogInformation("Switched to remote screen '{Name}' → ({X}, {Y})", hit.Destination.Name, hit.EntryX, hit.EntryY);
+    }
 
-        if (leavingScreen.Host != hit.Destination.Host)
-        {
-            var leavePayload = MessageSerializer.Encode(MessageKind.LeaveScreen, new LeaveScreenMessage());
-            relay.Send([leavingScreen.Host], leavePayload);
-            PullClipboardFromHost(leavingScreen.Host);
-        }
-        var crossPayload = MessageSerializer.Encode(MessageKind.EnterScreen,
-            new EnterScreenMessage(hit.Destination.Name, hit.EntryX, hit.EntryY, hit.Destination.Width, hit.Destination.Height));
-        relay.Send([hit.Destination.Host], crossPayload);
-        PushClipboardToHost(hit.Destination.Host);
+    // sends EnterScreen relay message + pushes clipboard to destination host
+    private void SendEnterScreen(ScreenRect dest, int entryX, int entryY)
+    {
+        var payload = MessageSerializer.Encode(MessageKind.EnterScreen, new EnterScreenMessage(dest.Name, entryX, entryY, dest.Width, dest.Height));
+        relay.Send([dest.Host], payload);
+        PushClipboardToHost(dest.Host);
+    }
+
+    // sends LeaveScreen relay message + pulls clipboard from host (unconditional — callers guard the condition)
+    private void LeaveRemoteScreen(string host)
+    {
+        relay.Send([host], MessageSerializer.Encode(MessageKind.LeaveScreen, new LeaveScreenMessage()));
+        PullClipboardFromHost(host);
     }
 
     private static void UpdateWarpPoint(LocalMasterState st, ScreenRect screen)

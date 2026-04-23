@@ -97,7 +97,7 @@ public class SlaveRelayConnection : RelayConnection
                 HandleInputMessage<MouseScrollMessage>(body, kind, sourceHost, _output.InjectMouseScroll);
                 break;
             case MessageKind.EnterScreen:
-                var enter = Parse<EnterScreenMessage>(body, kind);
+                var enter = body.ParseMessage<EnterScreenMessage>(_log, kind.ToString());
                 if (enter != null)
                 {
                     MoveToCachedScreen(enter.Screen, enter.X, enter.Y);
@@ -110,7 +110,7 @@ public class SlaveRelayConnection : RelayConnection
                 _cursorHider.OnLeaveScreen(sourceHost);
                 break;
             case MessageKind.ScreensaverSync:
-                var ss = Parse<ScreensaverSyncMessage>(body, kind);
+                var ss = body.ParseMessage<ScreensaverSyncMessage>(_log, kind.ToString());
                 if (ss != null)
                 {
                     _log.LogInformation("Screensaver sync from {Host}: active={Active}", sourceHost, ss.Active);
@@ -119,7 +119,7 @@ public class SlaveRelayConnection : RelayConnection
                 }
                 break;
             case MessageKind.ClipboardPush:
-                var push = Parse<ClipboardPushMessage>(body, kind);
+                var push = body.ParseMessage<ClipboardPushMessage>(_log, kind.ToString());
                 if (push != null)
                 {
                     _log.LogDebug("Clipboard push from {Host}: text={TextLen}, primary={PrimaryLen}, image={ImageLen}",
@@ -138,7 +138,7 @@ public class SlaveRelayConnection : RelayConnection
                 break;
             case MessageKind.Osd:
                 {
-                    var osdMsg = Parse<OsdMessage>(body, kind);
+                    var osdMsg = body.ParseMessage<OsdMessage>(_log, kind.ToString());
                     if (osdMsg != null) _osd.Show(osdMsg.Text);
                     break;
                 }
@@ -193,7 +193,7 @@ public class SlaveRelayConnection : RelayConnection
     // parses and dispatches an input event, calling _cursorHider.OnMasterActivity first
     private void HandleInputMessage<T>(ReadOnlyMemory<byte> body, MessageKind kind, string sourceHost, Action<T> handler) where T : class
     {
-        var msg = Parse<T>(body, kind);
+        var msg = body.ParseMessage<T>(_log, kind.ToString());
         if (msg == null) return;
         _cursorHider.OnMasterActivity(sourceHost);
         handler(msg);
@@ -285,17 +285,10 @@ public class SlaveRelayConnection : RelayConnection
             Send([sourceHost], MessageSerializer.Encode(MessageKind.FileTransferBusy, new FileTransferBusyMessage()));
             return Task.CompletedTask;
         }
-        var req = Parse<FileStreamRequestMessage>(body, MessageKind.FileStreamRequest);
+        var req = body.ParseMessage<FileStreamRequestMessage>(_log, MessageKind.FileStreamRequest.ToString());
         if (req != null)
             _ = _fileTransfer.ExecuteStreamRequest(req.Paths, req.TargetHost, this);
         return Task.CompletedTask;
-    }
-
-    private T? Parse<T>(ReadOnlyMemory<byte> body, MessageKind kind) where T : class
-    {
-        var result = body.FromSaneJson<T>();
-        if (result == null) _log.LogWarning("Failed to deserialize {Kind} message — dropping", kind);
-        return result;
     }
 
     private void ReleaseAllKeys()

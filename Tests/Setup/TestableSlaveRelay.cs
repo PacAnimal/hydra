@@ -49,7 +49,7 @@ public sealed class TestableSlaveRelay : SlaveRelayConnection
     public Task SimulateReceive(string host, MessageKind kind, string json) => OnReceive(host, kind, Encoding.UTF8.GetBytes(json));
     public Task SimulateDisconnected() => OnDisconnected();
 
-    public override void Dispose()
+    public new void Dispose()
     {
         if (_ownsHider) _hider.Dispose();
         base.Dispose();

@@ -14,9 +14,7 @@ namespace Hydra.Platform.Windows;
 public sealed class WindowsFileSelectionDetector(ILogger<WindowsFileSelectionDetector> log) : IFileSelectionDetector, IDisposable
 {
     private readonly ILogger<WindowsFileSelectionDetector> _log = log;
-    private readonly Lock _lock = new();
-    private Type? _shellType;
-    private object? _shell;
+    private readonly WindowsShellApplication _comShell = new();
 
     public string FileManagerName => "Explorer";
     public bool IsFileTransferSupported => true;
@@ -34,12 +32,7 @@ public sealed class WindowsFileSelectionDetector(ILogger<WindowsFileSelectionDet
         }
     }
 
-    public void Dispose()
-    {
-        object? shell;
-        lock (_lock) { shell = _shell; _shell = null; }
-        if (shell != null) TryReleaseComObject(shell);
-    }
+    public void Dispose() => _comShell.Dispose();
 
     private FileSelectionResult FindSelectedInForegroundExplorer()
     {
@@ -52,9 +45,9 @@ public sealed class WindowsFileSelectionDetector(ILogger<WindowsFileSelectionDet
         // on some Windows versions the desktop's foreground window is Progman/WorkerW
         var fgIsDesktop = IsDesktopHwnd(rootHwnd);
 
-        lock (_lock)
+        lock (_comShell.Lock)
         {
-            var (shellType, shell) = GetShellUnderLock();
+            var (shellType, shell) = _comShell.GetShellUnderLock();
             if (shell == null || shellType == null) return new FileSelectionResult(false, null);
 
             dynamic? windows = null;
@@ -96,28 +89,26 @@ public sealed class WindowsFileSelectionDetector(ILogger<WindowsFileSelectionDet
                                 string? path;
                                 try { path = item.Path as string; }
                                 catch { path = null; }
-                                finally { TryReleaseComObject(item); }
+                                finally { WindowsShellApplication.TryRelease(item); }
                                 if (path != null) paths.Add(path);
                             }
                         }
-                        finally { TryReleaseComObject(items); }
+                        finally { WindowsShellApplication.TryRelease(items); }
 
                         return new FileSelectionResult(true, paths.Count > 0 ? paths : null);
                     }
-                    finally { TryReleaseComObject(window); }
+                    finally { WindowsShellApplication.TryRelease(window); }
                 }
             }
             catch (Exception ex) when (ex is COMException or InvalidCastException or RuntimeBinderException)
             {
                 // cached shell object became stale — release it and recreate next call
-                var stale = _shell;
-                _shell = null;
-                if (stale != null) TryReleaseComObject(stale);
+                _comShell.InvalidateUnderLock();
                 _log.LogDebug(ex, "Shell.Application COM object became stale — will recreate on next call");
             }
             finally
             {
-                if (windows != null) TryReleaseComObject(windows);
+                if (windows != null) WindowsShellApplication.TryRelease(windows);
             }
         }
 
@@ -284,22 +275,6 @@ public sealed class WindowsFileSelectionDetector(ILogger<WindowsFileSelectionDet
         int len = NativeMethods.GetClassNameW(hwnd, cls, maxLen);
         var name = new ReadOnlySpan<char>(cls, len);
         return name.SequenceEqual("Progman") || name.SequenceEqual("WorkerW");
-    }
-
-    // caller must hold _lock
-    private (Type?, object?) GetShellUnderLock()
-    {
-        if (_shell != null) return (_shellType, _shell);
-        _shellType = Type.GetTypeFromProgID("Shell.Application");
-        if (_shellType == null) return (null, null);
-        _shell = Activator.CreateInstance(_shellType);
-        return (_shellType, _shell);
-    }
-
-    private static void TryReleaseComObject(object obj)
-    {
-        try { Marshal.ReleaseComObject(obj); }
-        catch { /* already released */ }
     }
 
     // LVITEM layout for LVM_GETITEMTEXTW — explicit offsets match the 64-bit Windows LVITEMW struct.

@@ -242,16 +242,9 @@ public sealed class FileTransferService : IDisposable
         }
     }
 
-    private T? Deserialize<T>(ReadOnlyMemory<byte> body, string sourceHost) where T : class
-    {
-        var msg = body.FromSaneJson<T>();
-        if (msg == null) _log.LogWarning("Failed to deserialize {Type} from {Host}", typeof(T).Name, sourceHost);
-        return msg;
-    }
-
     private void HandleFileTransferRequest(string sourceHost, ReadOnlyMemory<byte> body, IRelaySender relay)
     {
-        var msg = Deserialize<FileTransferRequestMessage>(body, sourceHost);
+        var msg = body.ParseMessage<FileTransferRequestMessage>(_log, $"from {sourceHost}");
         if (msg == null) return;
 
         if (FileTransferOngoing)
@@ -278,7 +271,7 @@ public sealed class FileTransferService : IDisposable
 
     private void HandleFileTransferStart(string sourceHost, ReadOnlyMemory<byte> body)
     {
-        var msg = Deserialize<FileTransferStartMessage>(body, sourceHost);
+        var msg = body.ParseMessage<FileTransferStartMessage>(_log, $"from {sourceHost}");
         if (msg == null) return;
 
         ReceiverTransfer? receiver;
@@ -297,7 +290,7 @@ public sealed class FileTransferService : IDisposable
 
     private async Task HandleFileTransferChunkAsync(string sourceHost, ReadOnlyMemory<byte> body)
     {
-        var chunk = Deserialize<FileTransferChunkMessage>(body, sourceHost);
+        var chunk = body.ParseMessage<FileTransferChunkMessage>(_log, $"from {sourceHost}");
         if (chunk == null) return;
         var (sequence, data) = (chunk.Sequence, chunk.Data);
         ReceiverTransfer? receiver;
@@ -320,7 +313,7 @@ public sealed class FileTransferService : IDisposable
 
     private async Task HandleFileTransferDoneAsync(string sourceHost, ReadOnlyMemory<byte> body, IRelaySender relay)
     {
-        var msg = Deserialize<FileTransferDoneMessage>(body, sourceHost);
+        var msg = body.ParseMessage<FileTransferDoneMessage>(_log, $"from {sourceHost}");
 
         ReceiverTransfer? receiver;
         lock (_lock)
@@ -341,7 +334,7 @@ public sealed class FileTransferService : IDisposable
 
     private void HandleFileTransferAbort(string sourceHost, ReadOnlyMemory<byte> body)
     {
-        var msg = Deserialize<FileTransferAbortMessage>(body, sourceHost);
+        var msg = body.ParseMessage<FileTransferAbortMessage>(_log, $"from {sourceHost}");
 
         bool relevant;
         lock (_lock)
@@ -566,6 +559,11 @@ public sealed class FileTransferService : IDisposable
             _log.LogWarning("Transfer timed out waiting for {Target} to respond", targetHost);
             SendTo(relay, targetHost, MessageKind.FileTransferAbort, new FileTransferAbortMessage("transfer timed out"));
             _dialog.ShowError("Transfer failed: destination did not respond");
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "Unexpected error during file transfer to {Target}", targetHost);
+            _dialog.ShowError($"Transfer failed: {ex.Message}");
         }
         finally
         {
