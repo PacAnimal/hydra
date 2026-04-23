@@ -742,6 +742,11 @@ button:disabled { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
   background: #e0505011;
 }
 
+.layout-block-ghost.floating {
+  border-color: #f59e0b88;
+  background: #f59e0b11;
+}
+
 /* corner resize handles — visible only when block is selected */
 .layout-resize-handle {
   position: absolute;

@@ -2,6 +2,7 @@ import { useState, useRef, useCallback, useId } from 'react'
 import type { LayoutItem } from '../types'
 import { newLayoutItem } from '../defaults'
 import { deriveHostsFromLayout, ADJACENCY_THRESHOLD, DEFAULT_W, DEFAULT_H } from '../utils/layout'
+import { hasAdjacentNeighbour, snapToNearestSide } from '../utils/canvasLayout'
 
 const SCALE = 1 / 12        // 1920 logical px → 160 canvas px
 const PAD = 24              // canvas padding (canvas px)
@@ -39,6 +40,7 @@ interface DragState {
 interface Ghost {
   x: number; y: number; w: number; h: number
   overlapping: boolean
+  disconnected: boolean  // would float — auto-snap applied on drop
 }
 
 interface SelectedItem {
@@ -204,6 +206,7 @@ export function LayoutCanvas({ items, onChange }: Props) {
 
   const derivedHosts = deriveHostsFromLayout(items)
   const connectionCount = derivedHosts.reduce((s, h) => s + (h.neighbours?.length ?? 0), 0)
+  const masterHostName = items.find(i => i.isMaster)?.hostName
 
   function pointerCanvasXY(e: React.PointerEvent): { px: number; py: number } {
     const rect = canvasRef.current!.getBoundingClientRect()
@@ -269,13 +272,19 @@ export function LayoutCanvas({ items, onChange }: Props) {
     nx = Math.max(0, nx); ny = Math.max(0, ny)
     const proposed = { x: nx, y: ny, w: nw, h: nh }
     const overlapping = items.some(i => i.id !== drag.id && rectsOverlap(proposed, i))
-    setGhost({ ...proposed, overlapping })
+    const disconnected = !overlapping && items.length > 1 && !hasAdjacentNeighbour(proposed, items, drag.id)
+    setGhost({ ...proposed, overlapping, disconnected })
   }, [drag, items])
 
   const onPointerUp = useCallback(() => {
     if (!drag || !ghost) { setDrag(null); setGhost(null); return }
     if (!ghost.overlapping) {
-      const { x, y, w, h } = ghost
+      let { x, y, w, h } = ghost
+      // auto-snap to nearest side when the dropped position would be floating
+      if (ghost.disconnected) {
+        const snapped = snapToNearestSide({ x, y, w, h }, items, drag.id)
+        x = Math.max(0, snapped.x); y = Math.max(0, snapped.y)
+      }
       onChange(items.map(i => i.id === drag.id ? { ...i, x, y, w, h } : i))
       setSelected(s => s?.id === drag.id ? { ...s, w: String(w), h: String(h) } : s)
     }
@@ -285,8 +294,10 @@ export function LayoutCanvas({ items, onChange }: Props) {
   const addItem = useCallback(() => {
     const hostName = addForm.hostName.trim()
     if (!hostName) return
-    const x = items.length > 0 ? Math.max(...items.map(i => i.x + i.w)) + 100 : DEFAULT_W
-    const y = DEFAULT_H
+    // place touching the rightmost existing block (same y); first block goes to origin
+    const anchor = items.length > 0 ? items.reduce((a, b) => (a.x + a.w) >= (b.x + b.w) ? a : b) : null
+    const x = anchor ? anchor.x + anchor.w : DEFAULT_W
+    const y = anchor ? anchor.y : DEFAULT_H
     const isMaster = items.length === 0  // first item is master by default
     const newItem: LayoutItem = { ...newLayoutItem(hostName, addForm.screenId.trim() || undefined, x, y), isMaster }
     onChange([...items, newItem])
@@ -335,9 +346,11 @@ export function LayoutCanvas({ items, onChange }: Props) {
   }, [selected, items, onChange])
 
   const setMaster = useCallback((id: string, master: boolean) => {
+    const targetHost = items.find(i => i.id === id)?.hostName
+    // move isMaster to every item of the new master host; strip it from all others
     const updated = items.map(i => ({
       ...i,
-      isMaster: master ? i.id === id : (i.id === id ? false : i.isMaster),
+      isMaster: master && i.hostName === targetHost ? true : (master ? false : i.isMaster),
     }))
     onChange(updated)
     setSelected(s => s?.id === id ? { ...s, isMaster: master } : s)
@@ -388,7 +401,7 @@ export function LayoutCanvas({ items, onChange }: Props) {
 
           {drag && ghost && (
             <div
-              className={`layout-block-ghost${ghost.overlapping ? ' overlap' : ''}`}
+              className={`layout-block-ghost${ghost.overlapping ? ' overlap' : ghost.disconnected ? ' floating' : ''}`}
               style={{ left: blockLeft(ghost.x), top: blockTop(ghost.y), width: toPx(ghost.w), height: toPx(ghost.h) }}
             />
           )}
@@ -397,6 +410,7 @@ export function LayoutCanvas({ items, onChange }: Props) {
             const color = colorMap.get(item.hostName) ?? '#888'
             const isDragging = drag?.id === item.id
             const isSelected = selected?.id === item.id
+            const isMasterHost = masterHostName !== undefined && item.hostName === masterHostName
             const edgeIndicators = getEdgeIndicators(item, items, colorMap)
 
             return (
@@ -418,7 +432,7 @@ export function LayoutCanvas({ items, onChange }: Props) {
                   setSelected({ id: item.id, hostName: item.hostName, screenId: item.screenId ?? '', w: String(item.w), h: String(item.h), isMaster: item.isMaster ?? false })
                 }}
               >
-                {item.isMaster && <div className="layout-block-master-badge">M</div>}
+                {isMasterHost && <div className="layout-block-master-badge">M</div>}
                 <div className="layout-block-host" style={{ color }}>{item.hostName}</div>
                 {item.screenId && <div className="layout-block-screen">{item.screenId}</div>}
                 <div className="layout-block-size">{item.w} × {item.h}</div>
@@ -478,10 +492,15 @@ export function LayoutCanvas({ items, onChange }: Props) {
               />
             </div>
             <div className="field" style={{ justifyContent: 'flex-end' }}>
-              <label className="checkbox-label" style={{ marginBottom: 4 }}>
+              <label
+                className="checkbox-label"
+                style={{ marginBottom: 4 }}
+                title={selected.isMaster ? 'There must be one master in the configuration' : undefined}
+              >
                 <input
                   type="checkbox"
                   checked={selected.isMaster}
+                  disabled={selected.isMaster}
                   onChange={e => setMaster(selected.id, e.target.checked)}
                 />
                 Master
