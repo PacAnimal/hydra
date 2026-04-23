@@ -7,7 +7,7 @@ using Styx.Services;
 
 namespace Styx;
 
-public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, ILogger<StyxHub> log) : Hub<IStyxClient>, IStyxServer
+public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, IStyxPasswordProvider passwordProvider, ILogger<StyxHub> log) : Hub<IStyxClient>, IStyxServer
 {
     [AllowAnonymousHub]
     public async Task<RelayLoginResponse> Authenticate(RelayLogin login)
@@ -15,10 +15,14 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, ILogger<S
         // throttle — minimum response time regardless of outcome
         var throttle = Task.Delay(TimeSpan.FromSeconds(Constants.AuthThrottleSeconds), Context.ConnectionAborted);
 
-        var password = Environment.GetEnvironmentVariable(Constants.RelayPasswordEnvVar);
-        if (string.IsNullOrEmpty(password))
+        string password;
+        try
         {
-            log.LogError("RELAY_PASSWORD is not set");
+            password = passwordProvider.Password;
+        }
+        catch (InvalidOperationException ex)
+        {
+            log.LogError("Relay password unavailable: {Message}", ex.Message);
             await throttle;
             return new RelayLoginResponse { Authenticated = false, Message = "Server misconfigured" };
         }

@@ -1,3 +1,4 @@
+using Common;
 using System.Text;
 using Cathedral.Extensions;
 using Cathedral.Logging;
@@ -120,7 +121,14 @@ else
     config = HydraConfig.Resolve(profiles, new ConditionState(activeSsids, screenCount));
 }
 
-var profile = new HydraProfile(configFile, config);
+// derive network config blob from embeddedStyx (explicit) or embeddedStyxServer (auto-localhost)
+string? embeddedNetworkConfig = null;
+if (config?.EmbeddedStyx != null)
+    embeddedNetworkConfig = await NetworkConfig.ComputeEmbeddedBlob(config.EmbeddedStyx.Server, config.EmbeddedStyx.Password);
+else if (config?.EmbeddedStyxServer != null)
+    embeddedNetworkConfig = await NetworkConfig.ComputeEmbeddedBlob($"http://localhost:{config.EmbeddedStyxServer.Port}", config.EmbeddedStyxServer.Password);
+
+var profile = new HydraProfile(configFile, config, embeddedNetworkConfig);
 services.AddSingleton<IHydraProfile>(profile);
 
 services.AddSereneConsoleLogging(c => c.MinLogLevel = profile.LogLevel);
@@ -136,6 +144,12 @@ if (logFileSetting is { } logFile)
 
 var startupLog = await services.CreateLogger<HydraProfile>();
 startupLog.LogInformation("Active profile: {ProfileName}", profile.ProfileName ?? "<none>");
+
+if (config?.EmbeddedStyxServer != null)
+{
+    startupLog.LogInformation("Embedded Styx relay on port {Port}", config.EmbeddedStyxServer.Port);
+    startupLog.LogInformation("Remote hosts can connect with: embeddedStyx: {{\"server\": \"http://<your-ip>:{Port}\", \"password\": \"<password>\"}}", config.EmbeddedStyxServer.Port);
+}
 
 // shared services always registered
 services.AddSingleton(profiles);
@@ -296,15 +310,17 @@ if (config != null)
     }
     services.AddSingleton<FileTransferService>();
 
-    if (profile.NetworkConfig != null)
+    // embedded Styx must be registered before the relay connection so it starts first
+    if (config.EmbeddedStyxServer != null)
     {
-        if (profile.Mode == Mode.Slave)
-            services.AddHostedService<IRelaySender, SlaveRelayConnection>();
-        else
-            services.AddHostedService<IRelaySender, MasterRelayConnection>();
+        services.AddSingleton(config.EmbeddedStyxServer);
+        services.AddHostedService<EmbeddedStyxServer>();
     }
+
+    if (profile.Mode == Mode.Slave)
+        services.AddHostedService<IRelaySender, SlaveRelayConnection>();
     else
-        services.AddSingleton<IRelaySender, NullRelaySender>();
+        services.AddHostedService<IRelaySender, MasterRelayConnection>();
 }
 
 if (OperatingSystem.IsWindows() && RunMode.IsSessionChild)

@@ -28,7 +28,7 @@ public interface IHydraProfile
     IEnumerable<HostConfig> RemoteHosts { get; }
 }
 
-public class HydraProfile(HydraConfigFile configFile, HydraConfig? activeProfile) : IHydraProfile
+public class HydraProfile(HydraConfigFile configFile, HydraConfig? activeProfile, string? networkConfigOverride = null) : IHydraProfile
 {
     private readonly HydraConfig? _activeProfile = activeProfile;
 
@@ -43,7 +43,7 @@ public class HydraProfile(HydraConfigFile configFile, HydraConfig? activeProfile
     public List<ScreenDefinition> ScreenDefinitions => _activeProfile?.ScreenDefinitions ?? [];
     public decimal? MouseScale => _activeProfile?.MouseScale;
     public decimal? RelativeMouseScale => _activeProfile?.RelativeMouseScale;
-    public string? NetworkConfig => _activeProfile?.NetworkConfig;
+    public string? NetworkConfig => networkConfigOverride ?? _activeProfile?.NetworkConfig;
     public bool RemoteOnly => _activeProfile?.RemoteOnly ?? false;
     public bool SyncScreensaver => _activeProfile?.SyncScreensaver ?? true;
     public int? DeadCorners => _activeProfile?.DeadCorners;

@@ -25,6 +25,19 @@ public class NeighbourConfig
     public bool Mirror { get; init; } = true;         // auto-create the reverse mapping
 }
 
+public class EmbeddedStyxServerConfig
+{
+    public required int Port { get; init; }
+    public required string Password { get; init; }
+}
+
+// connection config for connecting to an embedded Styx server (local or remote)
+public class EmbeddedStyxConfig
+{
+    public required string Server { get; init; }
+    public required string Password { get; init; }
+}
+
 public class ScreenDefinition
 {
     public string? DisplayName { get; init; }  // matches DetectedScreen.DisplayName (e.g. "DELL U2720Q")
@@ -46,6 +59,8 @@ public class HydraConfig
     public decimal? RelativeMouseScale { get; init; }  // slave only — fallback relative-mode cursor speed; overridden by per-screen relativeMouseScale
 
     public string? NetworkConfig { get; init; }
+    public EmbeddedStyxConfig? EmbeddedStyx { get; init; }         // connect to embedded Styx (plain-text alternative to base64 networkConfig)
+    public EmbeddedStyxServerConfig? EmbeddedStyxServer { get; init; }  // run an embedded Styx server on this machine
 
     public bool RemoteOnly { get; init; } = false;
     public bool SyncScreensaver { get; init; } = true;
@@ -194,6 +209,9 @@ public class HydraConfig
 
         foreach (var cfg in profiles)
         {
+            if (cfg.NetworkConfig == null && cfg.EmbeddedStyx == null && cfg.EmbeddedStyxServer == null)
+                throw new InvalidOperationException($"Profile '{cfg.ProfileName ?? "(default)"}' has no relay configured. Add networkConfig, embeddedStyx, or embeddedStyxServer.");
+
             // no duplicate host names within a profile
             var dupHost = cfg.Hosts
                 .GroupBy(h => h.Name.Trim(), StringComparer.OrdinalIgnoreCase)

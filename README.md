@@ -69,7 +69,9 @@ Neighbours are **mirrored by default** — declaring that `laptop` has `desktop`
 
 - `profileName` — name for this profile, logged at startup so you know which one is active (no duplicates allowed)
 - `mode` — `Master` or `Slave`
-- `networkConfig` — base64 relay config string from Styx (required when using the relay)
+- `networkConfig` — base64 relay config string from the Styx web UI; use this to connect to a standalone Styx server
+- `embeddedStyx` — connect to a Styx server using plain-text credentials: `{ "server": "http://<host>:<port>", "password": "<password>" }` — a more readable alternative to copying the base64 `networkConfig` blob
+- `embeddedStyxServer` — run a Styx relay server embedded inside this Hydra process: `{ "port": <port>, "password": "<password>" }` — useful for home setups where you don't want a separate Styx container; the machine running this automatically connects to its own server, and other machines connect to it using `embeddedStyx`
 - `hosts` — list of host entries for the neighbour graph (master only; slaves don't need this)
 - `screenDefinitions` — per-screen scale config (slave only; reported to master via ScreenInfo)
 - `mouseScale` — fallback cursor speed multiplier for all screens on this slave (slave only)
@@ -437,9 +439,53 @@ Slaves do not need a `hosts` section — they receive and replay input from the 
 
 ## Networking with Styx
 
-For machines on different networks, **Styx** is a relay server that securely tunnels Hydra connections.
+For machines on different networks, **Styx** is a relay server that securely tunnels Hydra connections. You can run Styx as a **standalone** server (Docker or from source) or **embedded** directly inside a Hydra process.
 
-### Running Styx
+### Embedded Styx
+
+If you don't want to run a separate Styx container, you can embed a Styx server directly inside a Hydra process. This is ideal for home setups where one machine acts as a hub.
+
+**On the machine that hosts the relay** (e.g. your desktop), add `embeddedStyxServer` to your profile. Hydra will start Styx on the specified port and connect to it automatically:
+
+```json
+{
+  "name": "desktop",
+  "profiles": [
+    {
+      "mode": "Master",
+      "embeddedStyxServer": { "port": 5000, "password": "my-secret" },
+      "hosts": [
+        { "name": "desktop", "neighbours": [{ "direction": "right", "name": "laptop" }] }
+      ]
+    }
+  ]
+}
+```
+
+On startup, Hydra logs how other machines should connect:
+
+```
+Embedded Styx relay on port 5000
+Remote hosts can connect with: embeddedStyx: {"server": "http://<your-ip>:5000", "password": "<password>"}
+```
+
+**On each other machine** (master or slave), use `embeddedStyx` with your hub's IP and the same password — no need to copy a base64 blob:
+
+```json
+{
+  "name": "laptop",
+  "profiles": [
+    {
+      "mode": "Slave",
+      "embeddedStyx": { "server": "http://192.168.1.10:5000", "password": "my-secret" }
+    }
+  ]
+}
+```
+
+The `embeddedStyx` property is also an alternative to `networkConfig` for any external Styx server — just point it at the server URL and provide the password instead of copying a base64 string.
+
+### Running standalone Styx
 
 ```bash
 docker run -e RELAY_PASSWORD=<secret> -p 5000:5000 ghcr.io/pacanimal/styx:latest
@@ -462,7 +508,7 @@ docker run -e RELAY_PASSWORD=<secret> -p 5000:5000 styx:local
 
 Open `http://<your-styx-host>:5000` in a browser, enter the relay password, and click **Generate**. Copy the config string.
 
-### Connecting Hydra to Styx
+### Connecting Hydra to a standalone Styx server
 
 Add `networkConfig` to `hydra.conf` on both machines. Use the same config string on all machines in a network.
 

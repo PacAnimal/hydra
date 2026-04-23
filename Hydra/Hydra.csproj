@@ -43,7 +43,12 @@
     </ItemGroup>
 
     <ItemGroup>
+        <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    </ItemGroup>
+
+    <ItemGroup>
         <ProjectReference Include="../Common/Common.csproj" />
+        <ProjectReference Include="../Styx/Styx.csproj" />
     </ItemGroup>
 
     <ItemGroup>

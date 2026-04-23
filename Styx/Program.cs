@@ -38,6 +38,7 @@ services.AddSignalR(options =>
 
 services.AddSingleton<IClientRegistry, ClientRegistry>();
 services.AddHostedService<IPeerBroadcaster, PeerBroadcastService>();
+services.AddSingleton<IStyxPasswordProvider, EnvironmentStyxPasswordProvider>();
 services.AddSingleton<AuthenticationHubFilter>();
 services.Configure<HubOptions>(options => options.AddFilter<AuthenticationHubFilter>());
 
@@ -64,12 +65,15 @@ app.UseStaticFiles();
 
 app.MapHub<StyxHub>("/relay");
 
-app.MapPost("/api/network-config", async (NetworkConfigRequest request, CancellationToken ct) =>
+app.MapPost("/api/network-config", async (NetworkConfigRequest request, IStyxPasswordProvider passwordProvider, CancellationToken ct) =>
 {
     var throttle = Task.Delay(TimeSpan.FromSeconds(Constants.NetworkConfigThrottleSeconds), ct);
 
-    var password = Environment.GetEnvironmentVariable(Constants.RelayPasswordEnvVar);
-    if (string.IsNullOrEmpty(password) || request.Password != password)
+    string password;
+    try { password = passwordProvider.Password; }
+    catch { await throttle; return Results.Unauthorized(); }
+
+    if (request.Password != password)
     {
         await throttle;
         return Results.Unauthorized();

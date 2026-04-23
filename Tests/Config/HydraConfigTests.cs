@@ -20,7 +20,9 @@ public class HydraConfigTests
     private static ConditionState State(List<string>? ssids = null, int screenCount = 1) =>
         new(ssids ?? [], screenCount);
 
-    // wraps profile JSON objects in the root file format
+    // minimum relay config — injected into profile JSON objects that need it
+    private const string Relay = ",\"embeddedStyx\":{\"server\":\"http://localhost:5000\",\"password\":\"test\"}";
+
     private static string AsFile(string profilesJson) => $$"""{"profiles":{{profilesJson}}}""";
 
     [Test]
@@ -86,13 +88,13 @@ public class HydraConfigTests
     [Test]
     public void Load_ScreenDefinitions_Deserialized()
     {
-        var json = AsFile("""
+        var json = AsFile($$"""
             [{
               "mode": "Slave",
               "screenDefinitions": [
                 { "displayName": "DELL U2720Q", "mouseScale": 1.5 },
                 { "displayName": "Built-in Retina Display", "mouseScale": 1.0 }
-              ]
+              ]{{Relay}}
             }]
             """);
         var configs = HydraConfig.ParseAndValidate(json);
@@ -109,7 +111,7 @@ public class HydraConfigTests
     [Test]
     public void Load_RootMouseScale_Deserialized()
     {
-        var json = AsFile("""[{ "mode": "Slave", "mouseScale": 2.5 }]""");
+        var json = AsFile($$"""[{ "mode": "Slave", "mouseScale": 2.5{{Relay}} }]""");
         var configs = HydraConfig.ParseAndValidate(json);
         Assert.That(configs[0].MouseScale, Is.EqualTo(2.5m));
     }
@@ -117,7 +119,7 @@ public class HydraConfigTests
     [Test]
     public void Load_RootLogLevel_Deserialized()
     {
-        var json = """{"logLevel":"warn","profiles":[{"mode":"Master"}]}""";
+        var json = $$"""{"logLevel":"warn","profiles":[{"mode":"Master"{{Relay}}}]}""";
         var file = HydraConfigFile.Parse(json, "<test>");
         Assert.That(file.LogLevel, Is.EqualTo(Microsoft.Extensions.Logging.LogLevel.Warning));
     }
@@ -125,7 +127,7 @@ public class HydraConfigTests
     [Test]
     public void Load_AutoUpdate_DefaultsToTrue()
     {
-        var json = AsFile("""[{ "mode": "Slave" }]""");
+        var json = AsFile($$"""[{ "mode": "Slave"{{Relay}} }]""");
         var file = HydraConfigFile.Parse(json, "<test>");
         Assert.That(file.AutoUpdate, Is.True);
     }
@@ -133,7 +135,7 @@ public class HydraConfigTests
     [Test]
     public void Load_AutoUpdate_CanBeDisabled()
     {
-        var json = """{"autoUpdate":false,"profiles":[{"mode":"Master"}]}""";
+        var json = $$"""{"autoUpdate":false,"profiles":[{"mode":"Master"{{Relay}}}]}""";
         var file = HydraConfigFile.Parse(json, "<test>");
         Assert.That(file.AutoUpdate, Is.False);
     }
@@ -141,7 +143,7 @@ public class HydraConfigTests
     [Test]
     public void ScreenDefinition_Validation_ThrowsWhenNoMatchCriteria()
     {
-        var json = AsFile("""[{ "mode": "Slave", "screenDefinitions": [{ "mouseScale": 1.5 }] }]""");
+        var json = AsFile($$"""[{ "mode": "Slave", "screenDefinitions": [{ "mouseScale": 1.5 }]{{Relay}} }]""");
         Assert.That(() => HydraConfig.ParseAndValidate(json), Throws.InvalidOperationException
             .With.Message.Contains("no matching criteria"));
     }
@@ -149,7 +151,7 @@ public class HydraConfigTests
     [Test]
     public void ScreenDefinition_Validation_ThrowsWhenOnMasterProfile()
     {
-        var json = AsFile("""[{ "mode": "Master", "screenDefinitions": [{ "displayName": "DELL" }] }]""");
+        var json = AsFile($$"""[{ "mode": "Master", "screenDefinitions": [{ "displayName": "DELL" }]{{Relay}} }]""");
         Assert.That(() => HydraConfig.ParseAndValidate(json), Throws.InvalidOperationException
             .With.Message.Contains("slave-only"));
     }
@@ -157,7 +159,7 @@ public class HydraConfigTests
     [Test]
     public void MouseScale_Validation_ThrowsWhenOnMasterProfile()
     {
-        var json = AsFile("""[{ "mode": "Master", "mouseScale": 1.5 }]""");
+        var json = AsFile($$"""[{ "mode": "Master", "mouseScale": 1.5{{Relay}} }]""");
         Assert.That(() => HydraConfig.ParseAndValidate(json), Throws.InvalidOperationException
             .With.Message.Contains("slave-only"));
     }
@@ -309,7 +311,7 @@ public class HydraConfigTests
     public void Validate_EmptyConditions_TreatedAsUnconditional()
     {
         // {} is the same as no conditions — valid, treated as fallback
-        var json = AsFile("""[{"mode":"Master","conditions":{}},{"mode":"Slave","conditions":{"ssid":"Home"}}]""");
+        var json = AsFile($$"""[{"mode":"Master","conditions":{}{{Relay}}},{"mode":"Slave","conditions":{"ssid":"Home"}{{Relay}}}]""");
         Assert.That(() => HydraConfig.ParseAndValidate(json), Throws.Nothing);
     }
 
@@ -329,11 +331,11 @@ public class HydraConfigTests
     [Test]
     public void Validate_SameSSID_DifferentScreenCount_IsAllowed()
     {
-        var json = AsFile("""
+        var json = AsFile($$"""
             [
-              {"mode":"Master","conditions":{"ssid":"Office","screenCount":1}},
-              {"mode":"Master","conditions":{"ssid":"Office","screenCount":2}},
-              {"mode":"Slave"}
+              {"mode":"Master","conditions":{"ssid":"Office","screenCount":1}{{Relay}}},
+              {"mode":"Master","conditions":{"ssid":"Office","screenCount":2}{{Relay}}},
+              {"mode":"Slave"{{Relay}}}
             ]
             """);
         Assert.That(() => HydraConfig.ParseAndValidate(json), Throws.Nothing);
@@ -350,10 +352,10 @@ public class HydraConfigTests
     [Test]
     public void Validate_Accepts_ScreenCountOnlyCondition()
     {
-        var json = AsFile("""
+        var json = AsFile($$"""
             [
-              {"mode":"Master","conditions":{"screenCount":2}},
-              {"mode":"Slave"}
+              {"mode":"Master","conditions":{"screenCount":2}{{Relay}}},
+              {"mode":"Slave"{{Relay}}}
             ]
             """);
         Assert.That(() => HydraConfig.ParseAndValidate(json), Throws.Nothing);
@@ -362,11 +364,11 @@ public class HydraConfigTests
     [Test]
     public void Validate_Accepts_MultipleConditionalConfigs()
     {
-        var json = AsFile("""
+        var json = AsFile($$"""
             [
-              {"mode":"Master","conditions":{"ssid":"Office"}},
-              {"mode":"Master","conditions":{"ssid":"Home"}},
-              {"mode":"Slave"}
+              {"mode":"Master","conditions":{"ssid":"Office"}{{Relay}}},
+              {"mode":"Master","conditions":{"ssid":"Home"}{{Relay}}},
+              {"mode":"Slave"{{Relay}}}
             ]
             """);
         Assert.That(() => HydraConfig.ParseAndValidate(json), Throws.Nothing);
@@ -414,7 +416,7 @@ public class HydraConfigTests
     [Test]
     public void Validate_Accepts_ValidProfileOverride()
     {
-        var json = """{"profile":"Home","profiles":[{"mode":"Master","profileName":"Home","conditions":{"ssid":"HomeNet"}}]}""";
+        var json = $$"""{"profile":"Home","profiles":[{"mode":"Master","profileName":"Home","conditions":{"ssid":"HomeNet"}{{Relay}}}]}""";
         Assert.That(() => HydraConfigFile.Parse(json, "<test>"), Throws.Nothing);
     }
 
@@ -478,7 +480,7 @@ public class HydraConfigTests
     [Test]
     public void RemoteOnly_ValidConfig_Parses()
     {
-        var json = AsFile("""[{ "mode": "Master", "remoteOnly": true, "hosts": [{ "name": "mac" }] }]""");
+        var json = AsFile($$"""[{ "mode": "Master", "remoteOnly": true, "hosts": [{ "name": "mac" }]{{Relay}} }]""");
         Assert.That(() => HydraConfig.ParseAndValidate(json), Throws.Nothing);
     }
 
@@ -500,10 +502,10 @@ public class HydraConfigTests
     [Test]
     public void Validate_Accepts_UniqueProfileNames()
     {
-        var json = AsFile("""
+        var json = AsFile($$"""
             [
-              { "mode": "Master", "profileName": "Home", "conditions": { "ssid": "HomeWifi" } },
-              { "mode": "Slave",  "profileName": "Work", "conditions": { "ssid": "WorkWifi" } }
+              { "mode": "Master", "profileName": "Home", "conditions": { "ssid": "HomeWifi" }{{Relay}} },
+              { "mode": "Slave",  "profileName": "Work", "conditions": { "ssid": "WorkWifi" }{{Relay}} }
             ]
             """);
         Assert.That(() => HydraConfig.ParseAndValidate(json), Throws.Nothing);
@@ -512,15 +514,15 @@ public class HydraConfigTests
     [Test]
     public void Validate_Accepts_MissingProfileName()
     {
-        var json = AsFile("""[{ "mode": "Master" }]""");
+        var json = AsFile($$"""[{ "mode": "Master"{{Relay}} }]""");
         Assert.That(() => HydraConfig.ParseAndValidate(json), Throws.Nothing);
     }
 
     [Test]
     public void Validate_Throws_OnDuplicateHostName()
     {
-        var json = AsFile("""
-            [{ "mode": "Master", "hosts": [{ "name": "mac" }, { "name": "mac" }] }]
+        var json = AsFile($$"""
+            [{ "mode": "Master", "hosts": [{ "name": "mac" }, { "name": "mac" }]{{Relay}} }]
             """);
         Assert.That(() => HydraConfig.ParseAndValidate(json),
             Throws.InvalidOperationException.With.Message.Contains("duplicate host name"));
@@ -529,11 +531,11 @@ public class HydraConfigTests
     [Test]
     public void Validate_Accepts_UniqueBidirectionalHosts()
     {
-        var json = AsFile("""
+        var json = AsFile($$"""
             [{ "mode": "Master", "hosts": [
               { "name": "mac", "neighbours": [{ "direction": "up", "name": "windows" }] },
               { "name": "windows", "neighbours": [{ "direction": "down", "name": "mac" }] }
-            ]}]
+            ]{{Relay}} }]
             """);
         Assert.That(() => HydraConfig.ParseAndValidate(json), Throws.Nothing);
     }

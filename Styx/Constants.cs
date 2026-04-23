@@ -1,6 +1,6 @@
 namespace Styx;
 
-internal static class Constants
+public static class Constants
 {
     public const string RelayPasswordEnvVar = "RELAY_PASSWORD";
 
