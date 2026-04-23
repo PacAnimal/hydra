@@ -235,14 +235,14 @@ internal sealed class DesktopInputDispatcher : IDisposable
 
         if (msg.Character is { } ch)
         {
-            // when shortcut modifiers are held, inject via vk so WM_KEYDOWN fires and apps see the shortcut.
-            // KEYEVENTF_UNICODE generates WM_CHAR which bypasses shortcut detection entirely.
-            // AltGr characters are excluded: the char is already resolved by the Mac side, inject it directly.
-            const KeyModifiers shortcutMods = KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Super;
             var scan = NativeMethods.VkKeyScanW(ch); // char implicit-converts to ushort
             var isAltGr = (msg.Modifiers & KeyModifiers.AltGr) != 0;
             var isSuper = (msg.Modifiers & KeyModifiers.Super) != 0;
-            if (!isAltGr && (msg.Modifiers & shortcutMods) != 0 && scan != -1)
+
+            // use vk injection for all chars that map to a key+optional-shift combo on the slave's layout.
+            // this gives correct key-hold semantics (GetKeyState works) and proper WM_KEYDOWN for shortcuts.
+            // AltGr compositions and unmappable chars fall back to atomic KEYEVENTF_UNICODE.
+            if (!isAltGr && scan != -1 && (scan >> 8) is 0 or 1)
             {
                 var vk = (ushort)(scan & 0xFF);
                 if (isSuper && vk == 0x4C) // Win+L: UIPI blocks SendInput; use the API directly
@@ -274,15 +274,15 @@ internal sealed class DesktopInputDispatcher : IDisposable
             }
             else
             {
-                // normal typing — unicode scan code, no vk mapping needed
+                // AltGr or unmappable char — send down+up atomically to avoid VK_PACKET overlap.
+                // all KEYEVENTF_UNICODE events share VK_PACKET; overlapping downs for different chars
+                // cause Windows to retype the first char's scan code instead of the second.
                 if (_winKeyDown) _winUsedAsModifier = true;
-                var flags = NativeMethods.KEYEVENTF_UNICODE | (isUp ? NativeMethods.KEYEVENTF_KEYUP : 0);
-                var input = new INPUT
-                {
-                    type = NativeMethods.INPUT_KEYBOARD,
-                    ki = new KEYBDINPUT { wVk = 0, wScan = ch, dwFlags = flags },
-                };
-                return NativeMethods.SendInput(1, &input, sizeof(INPUT));
+                if (isUp) return 1; // already released with the paired down event
+                var inputs = stackalloc INPUT[2];
+                inputs[0] = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = 0, wScan = ch, dwFlags = NativeMethods.KEYEVENTF_UNICODE } };
+                inputs[1] = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = 0, wScan = ch, dwFlags = NativeMethods.KEYEVENTF_UNICODE | NativeMethods.KEYEVENTF_KEYUP } };
+                return NativeMethods.SendInput(2, inputs, sizeof(INPUT));
             }
         }
         else if (msg.Key is SpecialKey.MoveToBeginningOfLine or SpecialKey.MoveToEndOfLine)
