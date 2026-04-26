@@ -184,10 +184,13 @@ internal sealed class XorgKeyResolver
     // Xkb group is encoded in bits 13-14 of the X11 state field (XkbGroupForCoreState macro)
     private static int ExtractGroup(uint state) => (int)((state >> 13) & 3);
 
-    // shift level: 0=base, 1=Shift, 2=AltGr, 3=Shift+AltGr
+    // shift level: 0=base, 1=Shift, 2=AltGr, 3=Shift+AltGr.
+    // when Super or Control is held (shortcut context), Shift is stripped from level so the base
+    // character is resolved (e.g. '4' not '¤' on Norwegian for Super+Shift+4). Shift remains in mods.
     private static int ComputeLevel(uint state)
     {
-        var shift = (state & NativeMethods.ShiftMask) != 0;
+        var isShortcut = (state & (NativeMethods.Mod4Mask | NativeMethods.ControlMask)) != 0;
+        var shift = !isShortcut && (state & NativeMethods.ShiftMask) != 0;
         var altGr = (state & NativeMethods.Mod5Mask) != 0;
         return (shift ? 1 : 0) + (altGr ? 2 : 0);
     }

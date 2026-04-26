@@ -185,8 +185,18 @@ internal sealed class WinKeyResolver
             _resolveState[WinVirtualKey.RControl] = 0;
             _resolveState[WinVirtualKey.Control] = 0;
         }
+
+        // strip Win and, when Win is held, also Shift — so shortcut keys return their base character
+        // (e.g. '4' not '¤' on Norwegian for Win+Shift+4), matching the Linux/Mac resolver behaviour.
+        bool superActive = ((_resolveState[WinVirtualKey.LWin] | _resolveState[WinVirtualKey.RWin]) & 0x80) != 0;
         _resolveState[WinVirtualKey.LWin] = 0;
         _resolveState[WinVirtualKey.RWin] = 0;
+        if (superActive)
+        {
+            _resolveState[WinVirtualKey.LShift] = 0;
+            _resolveState[WinVirtualKey.RShift] = 0;
+            _resolveState[WinVirtualKey.Shift] = 0;
+        }
 
         // get keyboard layout of the foreground window's thread for correct character mapping
         var hkl = GetForegroundKeyboardLayout();

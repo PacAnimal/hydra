@@ -69,6 +69,16 @@ internal sealed class EvdevKeyResolver : IDisposable
         _ = EvdevNativeMethods.xkb_state_update_key(_state, xkbKey, EvdevNativeMethods.XKB_KEY_DOWN);
         if (keysym == 0) return null;
 
+        // when Super or Control is held (shortcut context), override to the base keysym (level 0) so
+        // shortcut keys send their unshifted character (e.g. '4' not '¤' on Norwegian for Super+Shift+4).
+        if (IsModActive("Mod4") || IsModActive("Control"))
+        {
+            var layout = EvdevNativeMethods.xkb_state_serialize_layout(_state, EvdevNativeMethods.XKB_STATE_LAYOUT_EFFECTIVE);
+            var count = EvdevNativeMethods.xkb_keymap_key_get_syms_by_level(_keymap, xkbKey, layout, 0, out var symsPtr);
+            if (count > 0 && symsPtr != nint.Zero)
+                keysym = (ulong)(uint)System.Runtime.InteropServices.Marshal.ReadInt32(symsPtr);
+        }
+
         // keypad dual-purpose keys: normalize based on numlock state.
         // xkbcommon applies KEYPAD XOR semantics (numlock XOR shift → level), but we want
         // simple numlock-on=chars, numlock-off=navigation regardless of shift.

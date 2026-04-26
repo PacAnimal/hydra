@@ -120,7 +120,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
         }
         else if (msg.Character is { } ch)
         {
-            // deskflow approach: inject via IOHIDPostEvent (NX_KEYDOWN/UP, flags=0) so the system uses the
+            // deskflow approach: inject via IOHIDPostEvent (NX_KEYDOWN/UP) so the system uses the
             // current HID modifier state for shortcut resolution. fall back to CGEventPost with unicode
             // string for chars with no VK mapping (foreign/composed characters).
             if (CharToVk.TryGetValue(char.ToLowerInvariant(ch), out var charVk))
@@ -237,8 +237,10 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
         return kr == 0;
     }
 
-    // post NX_KEYDOWN/NX_KEYUP via IOHIDPostEvent — flags carry the Fn bit for fn-row keys.
-    // mirrors deskflow's postHIDVirtualKey() for non-modifier keys.
+    // post NX_KEYDOWN/NX_KEYUP via IOHIDPostEvent.
+    // eventFlags carries only the Fn flag (where applicable); modifier context comes from the global
+    // HID state set by NX_FLAGSCHANGED — adding modifiers inline causes character translation
+    // (e.g. VK_4 + Shift → '¤' on Norwegian) to happen before the shortcut handler fires.
     private bool PostHidKey(ushort vk, bool isDown)
     {
         var conn = GetHidConnection();

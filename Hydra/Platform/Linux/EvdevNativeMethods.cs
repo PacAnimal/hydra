@@ -56,6 +56,7 @@ internal static partial class EvdevNativeMethods
     internal const int XKB_KEY_UP = 0;
     internal const int XKB_KEY_DOWN = 1;
     internal const int XKB_STATE_MODS_EFFECTIVE = 1 << 3;
+    internal const uint XKB_STATE_LAYOUT_EFFECTIVE = 1 << 7;
 
     // -- libc file I/O --
 
@@ -123,6 +124,16 @@ internal static partial class EvdevNativeMethods
     [LibraryImport(Xkb, StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial int xkb_state_mod_name_is_active(nint state, string name, int type);
+
+    [LibraryImport(Xkb)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial uint xkb_state_serialize_layout(nint state, uint components);
+
+    // returns the number of keysyms and writes a pointer to the keysym array into syms_out.
+    // syms_out points into keymap-owned memory — do not free.
+    [LibraryImport(Xkb)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int xkb_keymap_key_get_syms_by_level(nint keymap, uint key, uint layout, uint level, out nint syms_out);
 
     // -- helpers --
 

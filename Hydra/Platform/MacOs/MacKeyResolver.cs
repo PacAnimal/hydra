@@ -126,10 +126,12 @@ internal sealed class MacKeyResolver
 
             // include Shift, CapsLock, and Option (when not a Cmd/Ctrl shortcut) in UCKeyTranslate.
             // Hydra resolves the final character server-side, so Option must be included to get
-            // e.g. Opt+Shift+4 → '€' rather than '$'. Cmd/Ctrl shortcuts still strip Option.
+            // e.g. Opt+Shift+4 → '€' rather than '$'. Cmd/Ctrl shortcuts strip both Option AND Shift
+            // so the base key character is sent (e.g. '4' not '¤' for Cmd+Shift+4 on a Norwegian keyboard).
+            // The slave receives Shift in mods and reconstructs the correct VK + Shift injection.
             uint ucMods = 0;
-            if ((cgFlags & NativeMethods.KCGEventFlagMaskShift) != 0) ucMods |= 0x02;       // shiftKey >> 8
-            if ((cgFlags & NativeMethods.KCGEventFlagMaskAlphaShift) != 0) ucMods |= 0x04;  // alphaLock >> 8
+            if (!isCommand && (cgFlags & NativeMethods.KCGEventFlagMaskShift) != 0) ucMods |= 0x02;      // shiftKey >> 8
+            if ((cgFlags & NativeMethods.KCGEventFlagMaskAlphaShift) != 0) ucMods |= 0x04;               // alphaLock >> 8
             if (!isCommand && (cgFlags & NativeMethods.KCGEventFlagMaskAlternate) != 0) ucMods |= 0x08;  // optionKey >> 8
 
             CharClassification classified;
