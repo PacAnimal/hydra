@@ -120,10 +120,14 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
         }
         else if (msg.Character is { } ch)
         {
-            // deskflow approach: inject via IOHIDPostEvent (NX_KEYDOWN/UP) so the system uses the
-            // current HID modifier state for shortcut resolution. fall back to CGEventPost with unicode
-            // string for chars with no VK mapping (foreign/composed characters).
-            if (CharToVk.TryGetValue(char.ToLowerInvariant(ch), out var charVk))
+            // AltGr characters: inject via unicode string — the VK path requires knowing which
+            // Mac key+modifier combination produces the char, but AltGr chars from Linux/Windows
+            // layouts have no Mac equivalent (e.g. AltGr+4='$' on Norwegian: CharToVk finds '$'→VK_4
+            // but without Shift in modifier state, VK_4 produces '4' instead).
+            // for regular and Super/Ctrl shortcut keys, use IOHIDPostEvent so the shortcut handler
+            // fires correctly before the character reaches the focused app.
+            var isAltGr = (msg.Modifiers & KeyModifiers.AltGr) != 0;
+            if (!isAltGr && CharToVk.TryGetValue(char.ToLowerInvariant(ch), out var charVk))
             {
                 if (!PostHidKey(charVk, isDown))
                     PostCgKey(charVk, isDown, flags);

@@ -76,7 +76,7 @@ internal sealed class EvdevKeyResolver : IDisposable
             var layout = EvdevNativeMethods.xkb_state_serialize_layout(_state, EvdevNativeMethods.XKB_STATE_LAYOUT_EFFECTIVE);
             var count = EvdevNativeMethods.xkb_keymap_key_get_syms_by_level(_keymap, xkbKey, layout, 0, out var symsPtr);
             if (count > 0 && symsPtr != nint.Zero)
-                keysym = (ulong)(uint)System.Runtime.InteropServices.Marshal.ReadInt32(symsPtr);
+                keysym = (uint)Marshal.ReadInt32(symsPtr);
         }
 
         // keypad dual-purpose keys: normalize based on numlock state.
