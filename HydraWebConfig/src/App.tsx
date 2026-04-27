@@ -6,7 +6,6 @@ import { DropZone } from './components/DropZone'
 import { ModeSelect } from './components/ModeSelect'
 import { RootSettings } from './components/RootSettings'
 import { GlobalSettings } from './components/GlobalSettings'
-import { HostsEditor } from './components/HostsEditor'
 import { LayoutCanvas } from './components/LayoutCanvas'
 import { ScreenDefinitions } from './components/ScreenDefinitions'
 import { ConditionsEditor } from './components/ConditionsEditor'
@@ -17,10 +16,7 @@ export default function App() {
     state, current,
     updateRoot,
     updateCurrent,
-    toggleVisualMode,
     updateLayoutItems,
-    addHost, removeHost, updateHost,
-    addNeighbour, removeNeighbour, updateNeighbour,
     addScreen, removeScreen, updateScreen,
     updateConditions,
     addProfile, removeProfile, setActiveIndex,
@@ -31,7 +27,6 @@ export default function App() {
 
   const { profiles, activeIndex } = state
   const isMaster = current.mode === 'Master'
-  const isVisual = current.visualMode !== false
   const errors = validate(profiles)
   const isValid = errors.length === 0
 
@@ -118,40 +113,11 @@ export default function App() {
               {/* master: screen layout editor */}
               {isMaster && (
                 <div className="section">
-                  <div className="section-header-row">
-                    <h2>Screen Layout</h2>
-                    <div className="view-toggle">
-                      <button
-                        className={`view-toggle-btn${isVisual ? ' active' : ''}`}
-                        onClick={() => !isVisual && toggleVisualMode()}
-                      >
-                        Visual
-                      </button>
-                      <button
-                        className={`view-toggle-btn${!isVisual ? ' active' : ''}`}
-                        onClick={() => isVisual && toggleVisualMode()}
-                      >
-                        Manual
-                      </button>
-                    </div>
-                  </div>
-
-                  {isVisual ? (
-                    <LayoutCanvas
-                      items={current.layoutItems ?? []}
-                      onChange={updateLayoutItems}
-                    />
-                  ) : (
-                    <HostsEditor
-                      hosts={current.hosts ?? []}
-                      onAdd={addHost}
-                      onRemove={removeHost}
-                      onUpdate={updateHost}
-                      onAddNeighbour={addNeighbour}
-                      onRemoveNeighbour={removeNeighbour}
-                      onUpdateNeighbour={updateNeighbour}
-                    />
-                  )}
+                  <h2>Screen Layout</h2>
+                  <LayoutCanvas
+                    items={current.layoutItems ?? []}
+                    onChange={updateLayoutItems}
+                  />
                 </div>
               )}
 
