@@ -85,41 +85,41 @@ internal sealed class MacKeyResolver
         };
         if (kpChar.HasValue)
         {
-            KeyEvent? kpDeadFlush = null;
+            KeyEvent?[]? kpDeadFlush = null;
             if (_deadKeyState != 0)
-                kpDeadFlush = ResolveCharacter((int)MacVirtualKey.Space, 0, KeyModifiers.None);
+                kpDeadFlush = DeadFlushPair();
             _deadKeyState = 0;
             _keyDownId[vkCode] = new CharClassification(kpChar, null);
             var digitEvent = KeyEvent.Char(KeyEventType.KeyDown, kpChar.Value, mods);
-            return kpDeadFlush is not null ? [kpDeadFlush, digitEvent] : [digitEvent];
+            return kpDeadFlush is not null ? [.. kpDeadFlush, digitEvent] : [digitEvent];
         }
         // keypad decimal/separator: use UCKeyTranslate for locale-correct char ('.' or ',')
         if ((ulong)vkCode == MacVirtualKey.KeypadDecimal)
         {
-            KeyEvent? decDeadFlush = null;
+            KeyEvent?[]? decDeadFlush = null;
             if (_deadKeyState != 0)
-                decDeadFlush = ResolveCharacter((int)MacVirtualKey.Space, 0, KeyModifiers.None);
+                decDeadFlush = DeadFlushPair();
             _deadKeyState = 0;
             var decEvent = ResolveCharacter(vkCode, cgFlags, mods);
             if (decEvent is not null)
                 _keyDownId[vkCode] = new CharClassification(decEvent.Character, decEvent.Key);
             else
                 _keyDownId[vkCode] = new CharClassification(null, null);  // sentinel: ensure key-up is replayed
-            if (decDeadFlush is not null) return decEvent is not null ? [decDeadFlush, decEvent] : [decDeadFlush];
+            if (decDeadFlush is not null) return decEvent is not null ? [.. decDeadFlush, decEvent] : decDeadFlush;
             return decEvent is not null ? [decEvent] : null;
         }
 
         // special key (function keys, arrows, modifiers, keypad operators)?
         if (MacSpecialKeyMap.Instance.TryGet((ulong)vkCode, out var specialKey))
         {
-            KeyEvent? deadFlush = null;
+            KeyEvent?[]? deadFlush = null;
             if (!specialKey.IsModifier())
             {
                 // non-modifier special key aborts dead key composition — emit spacing form first.
                 // call UCKeyTranslate with Space to resolve the pending dead key to its spacing form
                 // (e.g. dead_grave pending → ` emitted before Tab/Esc/arrow).
                 if (_deadKeyState != 0)
-                    deadFlush = ResolveCharacter((int)MacVirtualKey.Space, 0, KeyModifiers.None);
+                    deadFlush = DeadFlushPair();
                 _deadKeyState = 0;  // clear in case UCKeyTranslate didn't reset it (dead key with no spacing form)
             }
             // scroll lock (F14) has no CGEventFlag — track toggle in software so the bit travels with every event.
@@ -130,17 +130,17 @@ internal sealed class MacKeyResolver
             }
             _keyDownId[vkCode] = new CharClassification(null, specialKey);
             var specialEvent = KeyEvent.Special(KeyEventType.KeyDown, specialKey, mods);
-            return deadFlush is not null ? [deadFlush, specialEvent] : [specialEvent];
+            return deadFlush is not null ? [.. deadFlush, specialEvent] : [specialEvent];
         }
 
         // resolve character via UCKeyTranslate.
         // if a Cmd/Ctrl shortcut would clear a pending dead key inside ResolveCharacter, flush it first
         // so the spacing form is emitted before the shortcut char (dead_grave + Cmd+a → ` then Cmd+a).
         var isCommandChar = (cgFlags & (NativeMethods.KCGEventFlagMaskCommand | NativeMethods.KCGEventFlagMaskControl)) != 0;
-        KeyEvent? charDeadFlush = null;
+        KeyEvent?[]? charDeadFlush = null;
         if (isCommandChar && _deadKeyState != 0)
         {
-            charDeadFlush = ResolveCharacter((int)MacVirtualKey.Space, 0, KeyModifiers.None);
+            charDeadFlush = DeadFlushPair();
             _deadKeyState = 0;
         }
         var ev = ResolveCharacter(vkCode, cgFlags, mods);
@@ -161,8 +161,17 @@ internal sealed class MacKeyResolver
             // sentinel suppresses OS auto-repeat, which would otherwise re-enter UCKeyTranslate unguarded.
             _keyDownId[vkCode] = new CharClassification(null, null);
         }
-        if (charDeadFlush is not null) return ev is not null ? [charDeadFlush, ev] : [charDeadFlush];
+        if (charDeadFlush is not null) return ev is not null ? [.. charDeadFlush, ev] : charDeadFlush;
         return ev is not null ? [ev] : null;
+    }
+
+    // emit current dead key state as [down, up] pair by resolving with Space, then synthesizing the up.
+    // the dead key slave has no physical key-up for a flush event, so a standalone down would stick.
+    private KeyEvent?[]? DeadFlushPair()
+    {
+        var downEvent = ResolveCharacter((int)MacVirtualKey.Space, 0, KeyModifiers.None);
+        if (downEvent?.Character is not { } ch) return null;
+        return [downEvent, KeyEvent.Char(KeyEventType.KeyUp, ch, KeyModifiers.None)];
     }
 
     private KeyEvent? ResolveCharacter(int vkCode, ulong cgFlags, KeyModifiers mods)

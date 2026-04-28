@@ -26,9 +26,10 @@ public class XorgKeyResolverTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(ev, Is.Not.Null);
-            Assert.That(ev!.Character, Is.EqualTo('`'));
-            Assert.That(ev.Modifiers, Is.EqualTo(KeyModifiers.None));
-            Assert.That(ev.Type, Is.EqualTo(KeyEventType.KeyDown));
+            Assert.That(ev![0]!.Character, Is.EqualTo('`'));
+            Assert.That(ev[0]!.Modifiers, Is.EqualTo(KeyModifiers.None));
+            Assert.That(ev[0]!.Type, Is.EqualTo(KeyEventType.KeyDown));
+            Assert.That(ev[1]!.Type, Is.EqualTo(KeyEventType.KeyUp));
             Assert.That(dead, Is.EqualTo('\0'));
             Assert.That(spacing, Is.EqualTo('\0'));
         }
@@ -68,7 +69,7 @@ public class XorgKeyResolverTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(ev, Is.Not.Null);
-            Assert.That(ev!.Character, Is.EqualTo('`'));
+            Assert.That(ev![0]!.Character, Is.EqualTo('`'));
             Assert.That(dead, Is.EqualTo('\0'));
         }
     }
@@ -140,8 +141,10 @@ public class XorgKeyResolverTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(ev, Is.Not.Null);
-            Assert.That(ev!.Character, Is.EqualTo('\u0060'), "spacing form of dead_grave is backtick (U+0060)");
-            Assert.That(ev.Modifiers, Is.EqualTo(KeyModifiers.None));
+            Assert.That(ev![0]!.Character, Is.EqualTo('\u0060'), "spacing form of dead_grave is backtick (U+0060)");
+            Assert.That(ev[0]!.Modifiers, Is.EqualTo(KeyModifiers.None));
+            Assert.That(ev[0]!.Type, Is.EqualTo(KeyEventType.KeyDown));
+            Assert.That(ev[1]!.Type, Is.EqualTo(KeyEventType.KeyUp));
         }
     }
 
@@ -287,8 +290,9 @@ public class XorgKeyResolverTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(flush, Is.Not.Null, "pending dead key must be flushed before Ctrl shortcut");
-            Assert.That(flush!.Character, Is.EqualTo('`'), "spacing form of dead_grave is backtick");
-            Assert.That(flush.Type, Is.EqualTo(KeyEventType.KeyDown));
+            Assert.That(flush![0]!.Character, Is.EqualTo('`'), "spacing form of dead_grave is backtick");
+            Assert.That(flush[0]!.Type, Is.EqualTo(KeyEventType.KeyDown));
+            Assert.That(flush[1]!.Type, Is.EqualTo(KeyEventType.KeyUp));
             Assert.That(dead, Is.EqualTo('\0'), "dead key state cleared after flush");
         }
     }

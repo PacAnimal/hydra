@@ -81,7 +81,7 @@ internal sealed class XorgKeyResolver
             var prevFlush = TakeDeadKeySpacing(ref _pendingDeadKey, ref _pendingDeadSpacing);
             _keyDownId[keycode] = new CharClassification(deadShortcut.Spacing, null);
             var shortcutEvent = KeyEvent.Char(KeyEventType.KeyDown, deadShortcut.Spacing, mods);
-            return prevFlush is not null ? [prevFlush, shortcutEvent] : [shortcutEvent];
+            return prevFlush is not null ? [.. prevFlush, shortcutEvent] : [shortcutEvent];
         }
 
         // flush pending dead key before any shortcut character (mirrors Windows/Mac behaviour).
@@ -99,14 +99,16 @@ internal sealed class XorgKeyResolver
         // shortcutFlush ?? deadFlush: if shortcutFlush fired it already cleared _pendingDeadKey, so
         // FlushDeadKeyBeforeSpecial (above) would have seen '\0' and returned null — ?? never resolves to deadFlush.
         var flush = shortcutFlush ?? deadFlush;
-        return flush is not null ? (ev is not null ? [flush, ev] : [flush]) : ev is not null ? [ev] : null;
+        if (flush is not null && ev is not null) return [.. flush, .. ev];
+        if (flush is not null) return flush;
+        return ev;
     }
 
     // flushes a pending dead key as its spacing form when a non-modifier special key interrupts composition.
     // dead keys with no spacing form (e.g. dead_belowdot) are dropped — never emit the raw combining char.
     // modifiers are always None: the spacing form belongs to the dead key press, not the aborting key.
-    // returns the flush event, or null if no flush is needed.
-    internal static KeyEvent? FlushDeadKeyBeforeSpecial(ulong keysym, ref char pendingDeadKey, ref char pendingDeadSpacing)
+    // returns [down, up] pair, or null if no flush is needed.
+    internal static KeyEvent?[]? FlushDeadKeyBeforeSpecial(ulong keysym, ref char pendingDeadKey, ref char pendingDeadSpacing)
     {
         if (pendingDeadKey == '\0') return null;
         var possibleSpecial = KeySymToSpecialKey(keysym);
@@ -116,19 +118,23 @@ internal sealed class XorgKeyResolver
 
     // unconditionally takes the pending dead key spacing form; clears pending state regardless.
     // used when a shortcut or numpad key interrupts composition and pending state must always be flushed.
-    internal static KeyEvent? TakeDeadKeySpacing(ref char pendingDeadKey, ref char pendingDeadSpacing)
+    // returns [down, up] pair so the slave does not get a stuck key from the synthetic press.
+    internal static KeyEvent?[]? TakeDeadKeySpacing(ref char pendingDeadKey, ref char pendingDeadSpacing)
     {
         if (pendingDeadKey == '\0') return null;
         var spacing = pendingDeadSpacing;
         pendingDeadKey = '\0';
         pendingDeadSpacing = '\0';
         if (spacing == '\0') return null;  // no spacing form — drop silently
-        return KeyEvent.Char(KeyEventType.KeyDown, spacing, KeyModifiers.None);
+        return [
+            KeyEvent.Char(KeyEventType.KeyDown, spacing, KeyModifiers.None),
+            KeyEvent.Char(KeyEventType.KeyUp, spacing, KeyModifiers.None),
+        ];
     }
 
     // shared dead-key → special → char resolution pipeline, used by XorgKeyResolver and EvdevKeyResolver.
     // trackDeadKey: evdev needs a placeholder _keyDownId entry for dead keys to support key-up replay.
-    internal static KeyEvent? ResolveKeysym(
+    internal static KeyEvent?[]? ResolveKeysym(
         ulong keysym, uint keycode, Dictionary<uint, CharClassification> keyDownId,
         ref char pendingDeadKey, ref char pendingDeadSpacing,
         KeyModifiers mods, KeyEventType type, bool trackDeadKey = false)
@@ -147,7 +153,11 @@ internal sealed class XorgKeyResolver
                 if (spc == '\0') return null;
                 // do NOT overwrite the (null,null) placeholder: this key's release should not
                 // replay the spacing form — the flush is a synthetic event, not a character produced by this key.
-                return KeyEvent.Char(type, spc, KeyModifiers.None);
+                // emit [down, up] pair: the flush has no physical key-up coming, so the slave must not get a stuck key.
+                return [
+                    KeyEvent.Char(type, spc, KeyModifiers.None),
+                    KeyEvent.Char(KeyEventType.KeyUp, spc, KeyModifiers.None),
+                ];
             }
             pendingDeadKey = dead.Combining;
             pendingDeadSpacing = dead.Spacing;
@@ -166,7 +176,7 @@ internal sealed class XorgKeyResolver
                 pendingDeadSpacing = '\0';
             }
             keyDownId[keycode] = new CharClassification(null, special.Value);
-            return KeyEvent.Special(type, special.Value, mods);
+            return [KeyEvent.Special(type, special.Value, mods)];
         }
 
         // character key
@@ -182,7 +192,7 @@ internal sealed class XorgKeyResolver
                 ch = KeyResolver.ComposeOrSpacing(ch.Value, pd, spc);
             }
             keyDownId[keycode] = new CharClassification(ch, null);
-            return KeyEvent.Char(type, ch.Value, mods);
+            return [KeyEvent.Char(type, ch.Value, mods)];
         }
 
         return null;

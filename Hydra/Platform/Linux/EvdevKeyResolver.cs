@@ -110,7 +110,7 @@ internal sealed class EvdevKeyResolver : IDisposable
                 var prevFlush = XorgKeyResolver.TakeDeadKeySpacing(ref _pendingDeadKey, ref _pendingDeadSpacing);
                 _keyDownId[evdevCode] = new CharClassification(deadShortcut.Spacing, null);
                 var shortcutEvent = KeyEvent.Char(KeyEventType.KeyDown, deadShortcut.Spacing, GetModifiers());
-                return prevFlush is not null ? [prevFlush, shortcutEvent] : [shortcutEvent];
+                return prevFlush is not null ? [.. prevFlush, shortcutEvent] : [shortcutEvent];
             }
         }
 
@@ -157,7 +157,9 @@ internal sealed class EvdevKeyResolver : IDisposable
         // shortcutFlush ?? deadFlush: if shortcutFlush fired it already cleared _pendingDeadKey, so
         // FlushDeadKeyBeforeSpecial (above) would have seen '\0' and returned null — ?? never resolves to deadFlush.
         var flush = shortcutFlush ?? deadFlush;
-        return flush is not null ? (ev is not null ? [flush, ev] : [flush]) : ev is not null ? [ev] : null;
+        if (flush is not null && ev is not null) return [.. flush, .. ev];
+        if (flush is not null) return flush;
+        return ev;
     }
 
     private KeyModifiers GetModifiers()
