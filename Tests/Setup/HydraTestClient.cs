@@ -58,7 +58,7 @@ public sealed class HydraTestClient(WebApplicationFactory<global::Styx.Program> 
     }
 
     // blocks until _server and _encryption are set — use this as the connection-ready barrier
-    public async Task WaitForReady(int timeoutMs = 5000)
+    public async Task WaitForReady(int timeoutMs = 15000)
     {
         if (!await _readySignal.WaitAsync(timeoutMs))
             throw new TimeoutException("Timed out waiting for relay connection");

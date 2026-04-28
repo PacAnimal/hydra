@@ -43,7 +43,7 @@ public static class TestLog
         {
             fc.TimestampFormat = "yyyy-MM-dd HH:mm:ss.fff";
             fc.TimestampUtc = true;
-            fc.MinLogLevel = LogLevel.Trace;
+            fc.MinLogLevel = LogLevel.Debug;
         });
     }
 
