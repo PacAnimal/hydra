@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Hydra.Keyboard;
 
 namespace Hydra.Platform.Linux;
@@ -13,6 +14,8 @@ internal sealed class XorgKeyResolver
     private readonly Dictionary<uint, CharClassification> _keyDownId = [];
     // tracks hold count per modifier bit to avoid dropping ShiftMask when one of two held shifts releases
     private readonly Dictionary<uint, int> _heldModifierCounts = [];
+    // ScrollLock modifier mask — detected at startup via XGetModifierMapping; defaults to Mod3 (standard)
+    private uint _scrollLockMask = NativeMethods.Mod3Mask;
 
     internal KeyEvent?[]? Resolve(int evType, uint keycode, uint state, nint display)
     {
@@ -81,13 +84,22 @@ internal sealed class XorgKeyResolver
             return prevFlush is not null ? [prevFlush, shortcutEvent] : [shortcutEvent];
         }
 
+        // flush pending dead key before any shortcut character (mirrors Windows/Mac behaviour).
+        // the shortcut-dead-key branch above handles Ctrl/Super+dead_key; this handles Ctrl/Super+normal_char
+        // (e.g. dead_grave + Ctrl+A → '`' then Ctrl+A, not 'à' with Control).
+        var shortcutFlush = (isShortcut && _pendingDeadKey != '\0')
+            ? TakeDeadKeySpacing(ref _pendingDeadKey, ref _pendingDeadSpacing) : null;
+
         // pre-flush: non-modifier special key while dead key pending — emit spacing form before the special key.
         // this mirrors Windows' FlushPendingDeadKey: dead_acute + Tab → '´' then Tab, not just Tab.
         var deadFlush = FlushDeadKeyBeforeSpecial(keysym, ref _pendingDeadKey, ref _pendingDeadSpacing);
 
         // trackDeadKey: register dead keys in _keyDownId so OS auto-repeat is suppressed
         var ev = ResolveKeysym(keysym, keycode, _keyDownId, ref _pendingDeadKey, ref _pendingDeadSpacing, mods, type, trackDeadKey: true);
-        return deadFlush is not null ? [deadFlush, ev] : ev is not null ? [ev] : null;
+        // shortcutFlush ?? deadFlush: if shortcutFlush fired it already cleared _pendingDeadKey, so
+        // FlushDeadKeyBeforeSpecial (above) would have seen '\0' and returned null — ?? never resolves to deadFlush.
+        var flush = shortcutFlush ?? deadFlush;
+        return flush is not null ? (ev is not null ? [flush, ev] : [flush]) : ev is not null ? [ev] : null;
     }
 
     // flushes a pending dead key as its spacing form when a non-modifier special key interrupts composition.
@@ -247,6 +259,8 @@ internal sealed class XorgKeyResolver
         // 0xFE00-0xFEFF is the X11 dead-key / XFree86 extension range — not Unicode codepoints.
         // unlisted dead keysyms in this range (e.g. XK_dead_currency 0xFE6F) would otherwise be
         // returned as garbage characters rather than being handled by DeadKeyLookup or dropped.
+        // for any legacy script range NOT in LegacyKeysymMap, this cast also produces garbage —
+        // such scripts should either have map entries above or use the 0x01000000-extension format.
         if (keysym is > 0x00FF and < 0xFE00)
             return (char)keysym;
 
@@ -370,7 +384,7 @@ internal sealed class XorgKeyResolver
     // legacy X11 keysyms where the keysym value is NOT equal to the Unicode codepoint.
     // covers latin 2-4 (0x01xx-0x03xx), katakana (0x04xx), arabic (0x05xx), cyrillic (0x06xx),
     // greek (0x07xx), technical (0x08xx), special (0x09xx), publishing (0x0Axx), APL (0x0Bxx),
-    // hebrew (0x0Cxx), thai (0x0Dxx), hangul (0x0Exx), and latin 9 extras (0x13xx).
+    // hebrew (0x0Cxx), thai (0x0Dxx), hangul (0x0Exx), latin 8 / Celtic (0x12xx), and latin 9 extras (0x13xx).
     // excludes entries where keysym == unicode (those are handled by the raw-cast fallback).
     // excludes the 0x01000000+ unicode-extension range (handled by the flag-strip case above).
     // source: X11 keysymdef.h + XKBUtil.cpp from input-leap.
@@ -1157,15 +1171,83 @@ internal sealed class XorgKeyResolver
         { 0x0EFA, '\u11F9' },  // XK_Hangul_J_YeorinHieuh
         { 0x0EFF, '\u20A9' },  // XK_Korean_Won
 
+        // latin 8 / Celtic (XK_LATIN8, byte 3 = 12)
+        { 0x12A1, '\u1E02' },  // XK_Babovedot    → Ḃ
+        { 0x12A2, '\u1E03' },  // XK_babovedot    → ḃ
+        { 0x12A3, '\u1E0A' },  // XK_Dabovedot    → Ḋ
+        { 0x12A4, '\u1E80' },  // XK_Wgrave       → Ẁ
+        { 0x12A5, '\u1E82' },  // XK_Wacute       → Ẃ
+        { 0x12A6, '\u1E0B' },  // XK_dabovedot    → ḋ
+        { 0x12A7, '\u1EF2' },  // XK_Ygrave       → Ỳ
+        { 0x12A8, '\u1E1E' },  // XK_Fabovedot    → Ḟ
+        { 0x12A9, '\u1E1F' },  // XK_fabovedot    → ḟ
+        { 0x12AA, '\u1E40' },  // XK_Mabovedot    → Ṁ
+        { 0x12AB, '\u1E41' },  // XK_mabovedot    → ṁ
+        { 0x12AC, '\u1E56' },  // XK_Pabovedot    → Ṗ
+        { 0x12AD, '\u1E81' },  // XK_wgrave       → ẁ
+        { 0x12AE, '\u1E57' },  // XK_pabovedot    → ṗ
+        { 0x12AF, '\u1E83' },  // XK_wacute       → ẃ
+        { 0x12B0, '\u1E60' },  // XK_Sabovedot    → Ṡ
+        { 0x12B1, '\u1EF3' },  // XK_ygrave       → ỳ
+        { 0x12B2, '\u1E84' },  // XK_Wdiaeresis   → Ẅ
+        { 0x12B3, '\u1E85' },  // XK_wdiaeresis   → ẅ
+        { 0x12B4, '\u1E61' },  // XK_sabovedot    → ṡ
+        { 0x12B5, '\u0174' },  // XK_Wcircumflex  → Ŵ
+        { 0x12B6, '\u1E6A' },  // XK_Tabovedot    → Ṫ
+        { 0x12B7, '\u0176' },  // XK_Ycircumflex  → Ŷ
+        { 0x12B8, '\u0175' },  // XK_wcircumflex  → ŵ
+        { 0x12B9, '\u1E6B' },  // XK_tabovedot    → ṫ
+        { 0x12BA, '\u0177' },  // XK_ycircumflex  → ŷ
+
         // latin 9 extras (OE/oe/Ydiaeresis, 0x13xx)
         { 0x13BC, '\u0152' },  // XK_OE              → Œ
         { 0x13BD, '\u0153' },  // XK_oe              → œ
         { 0x13BE, '\u0178' },  // XK_Ydiaeresis      → Ÿ
     };
 
+    // detects which X11 modifier slot holds Scroll_Lock (XK_Scroll_Lock = 0xFF14) and caches the mask.
+    // must be called once after XOpenDisplay. safe to skip — _scrollLockMask defaults to Mod3.
+    internal void Init(nint display)
+    {
+        _scrollLockMask = DetectScrollLockMask(display);
+    }
+
+    // walks XGetModifierMapping to find which Mod* slot contains the Scroll_Lock keysym.
+    // Mod3 (0x20) is the conventional mapping but is not guaranteed on all desktop configurations.
+    // returns 0 if Scroll_Lock is not bound to any modifier slot.
+    private static uint DetectScrollLockMask(nint display)
+    {
+        const ulong xkScrollLock = 0xFF14;
+        var modmap = NativeMethods.XGetModifierMapping(display);
+        if (modmap == nint.Zero) return NativeMethods.Mod3Mask;
+        try
+        {
+            // XModifierKeymap layout: int max_keypermod at offset 0, then (LP64) 4-byte pad + 8-byte pointer at offset 8.
+            // on ILP32 (32-bit Linux) the pointer would be at offset 4 — this code targets linux-x64 (LP64) only.
+            var maxPerMod = Marshal.ReadInt32(modmap, 0);
+            var keycodePtr = Marshal.ReadIntPtr(modmap, 8);
+            for (var slot = 0; slot < 8; slot++)
+            {
+                for (var k = 0; k < maxPerMod; k++)
+                {
+                    var keycode = Marshal.ReadByte(keycodePtr, slot * maxPerMod + k);
+                    if (keycode == 0) continue;
+                    if (NativeMethods.XkbKeycodeToKeysym(display, keycode, 0, 0) == xkScrollLock)
+                        return (uint)(1 << slot);
+                }
+            }
+            return 0;
+        }
+        finally
+        {
+            _ = NativeMethods.XFreeModifiermap(modmap);
+        }
+    }
+
     // X11 standard modifier mask bits (from X.h).
     // Mod1 = Alt, Mod2 = NumLock, Mod4 = Super, Mod5 = AltGr on standard desktop configurations.
-    private static KeyModifiers MapModifiers(uint state)
+    // ScrollLock mask is determined dynamically by Init() — defaults to Mod3 if not called.
+    private KeyModifiers MapModifiers(uint state)
     {
         var mods = KeyModifiers.None;
         if ((state & NativeMethods.ShiftMask) != 0) mods |= KeyModifiers.Shift;
@@ -1173,6 +1255,7 @@ internal sealed class XorgKeyResolver
         if ((state & NativeMethods.ControlMask) != 0) mods |= KeyModifiers.Control;
         if ((state & NativeMethods.Mod1Mask) != 0) mods |= KeyModifiers.Alt;
         if ((state & NativeMethods.Mod2Mask) != 0) mods |= KeyModifiers.NumLock;
+        if (_scrollLockMask != 0 && (state & _scrollLockMask) != 0) mods |= KeyModifiers.ScrollLock;
         if ((state & NativeMethods.Mod4Mask) != 0) mods |= KeyModifiers.Super;
         if ((state & NativeMethods.Mod5Mask) != 0) mods |= KeyModifiers.AltGr;
         // AltGr and Alt are mutually exclusive: strip Alt when AltGr is active

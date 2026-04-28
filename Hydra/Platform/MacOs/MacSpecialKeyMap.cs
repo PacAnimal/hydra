@@ -43,7 +43,7 @@ internal sealed class MacSpecialKeyMap : SpecialKeyMap
         { MacVirtualKey.F11, SpecialKey.F11 },
         { MacVirtualKey.F12, SpecialKey.F12 },
         { MacVirtualKey.F13, SpecialKey.F13 },
-        { MacVirtualKey.F14, SpecialKey.F14 },
+        { MacVirtualKey.F14, SpecialKey.ScrollLock },
         { MacVirtualKey.F15, SpecialKey.F15 },
         { MacVirtualKey.F16, SpecialKey.F16 },
         { MacVirtualKey.F17, SpecialKey.F17 },

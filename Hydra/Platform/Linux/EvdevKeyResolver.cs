@@ -14,6 +14,12 @@ internal sealed class EvdevKeyResolver : IDisposable
     private char _pendingDeadKey;
     private char _pendingDeadSpacing;
     private readonly Dictionary<uint, CharClassification> _keyDownId = [];
+    // scroll lock modifier name — "ScrollLock" (evdev/pc105 keymap) or "Mod3" (fallback)
+    private readonly string _scrollLockModName;
+    // xkb keycodes for lock keys looked up by name at init; 0 if not present in the keymap
+    private readonly uint _capsLockXkbKey;
+    private readonly uint _numLockXkbKey;
+    private readonly uint _scrollLockXkbKey;
 
     internal EvdevKeyResolver(string layout)
     {
@@ -43,6 +49,17 @@ internal sealed class EvdevKeyResolver : IDisposable
 
         if (_keymap == 0) throw new InvalidOperationException($"Failed to create xkb keymap for layout '{layout}'.");
 
+        // detect whether the keymap names ScrollLock as a virtual modifier; fall back to Mod3
+        _scrollLockModName = EvdevNativeMethods.xkb_keymap_mod_get_index(_keymap, "ScrollLock") != uint.MaxValue
+            ? "ScrollLock" : "Mod3";
+        // look up xkb keycodes for lock keys by standard XKB name; 0 if not in keymap
+        var capsKey = EvdevNativeMethods.xkb_keymap_key_by_name(_keymap, "CAPS");
+        _capsLockXkbKey = capsKey != uint.MaxValue ? capsKey : 0;
+        var nmlkKey = EvdevNativeMethods.xkb_keymap_key_by_name(_keymap, "NMLK");
+        _numLockXkbKey = nmlkKey != uint.MaxValue ? nmlkKey : 0;
+        var sclkKey = EvdevNativeMethods.xkb_keymap_key_by_name(_keymap, "SCLK");
+        _scrollLockXkbKey = sclkKey != uint.MaxValue ? sclkKey : 0;
+
         _state = EvdevNativeMethods.xkb_state_new(_keymap);
         if (_state == 0) throw new InvalidOperationException("Failed to create xkb state.");
     }
@@ -56,8 +73,12 @@ internal sealed class EvdevKeyResolver : IDisposable
         var xkbKey = evdevCode + 8;
         var isDown = value == 1;
 
-        // key-up: replay the character that was recorded on key-down.
-        // update state first so modifier key-up reports the post-release modifier state.
+        // key-up: update xkb state FIRST, then read modifiers.
+        // xkbcommon state reflects held keys; after updating for key-up the released key is no
+        // longer marked held. GetModifiers() must see post-release state so that, e.g., a Shift
+        // key-up carries modifiers WITHOUT Shift — the slave uses these mods to track its own
+        // modifier state. reading mods before the update sends stale pre-release state, causing
+        // the slave to think the released modifier is still held. DO NOT swap this order.
         if (!isDown)
         {
             _ = EvdevNativeMethods.xkb_state_update_key(_state, xkbKey, EvdevNativeMethods.XKB_KEY_UP);
@@ -122,13 +143,21 @@ internal sealed class EvdevKeyResolver : IDisposable
         var downMods = GetModifiers();
         var type = KeyEventType.KeyDown;
 
+        // flush pending dead key before any shortcut character (mirrors Windows/Mac behaviour).
+        // the shortcut-dead-key branch above handles Ctrl/Super+dead_key; this handles Ctrl/Super+normal_char.
+        var shortcutFlush = (_pendingDeadKey != '\0' && (IsModActive("Mod4") || IsModActive("Control")))
+            ? XorgKeyResolver.TakeDeadKeySpacing(ref _pendingDeadKey, ref _pendingDeadSpacing) : null;
+
         // pre-flush: non-modifier special key while dead key pending — emit spacing form before the special key
         var deadFlush = XorgKeyResolver.FlushDeadKeyBeforeSpecial(keysym, ref _pendingDeadKey, ref _pendingDeadSpacing);
 
         // evdev needs a placeholder _keyDownId entry for dead keys to support key-up replay
         var ev = XorgKeyResolver.ResolveKeysym(keysym, evdevCode, _keyDownId,
             ref _pendingDeadKey, ref _pendingDeadSpacing, downMods, type, trackDeadKey: true);
-        return deadFlush is not null ? [deadFlush, ev] : ev is not null ? [ev] : null;
+        // shortcutFlush ?? deadFlush: if shortcutFlush fired it already cleared _pendingDeadKey, so
+        // FlushDeadKeyBeforeSpecial (above) would have seen '\0' and returned null — ?? never resolves to deadFlush.
+        var flush = shortcutFlush ?? deadFlush;
+        return flush is not null ? (ev is not null ? [flush, ev] : [flush]) : ev is not null ? [ev] : null;
     }
 
     private KeyModifiers GetModifiers()
@@ -139,6 +168,7 @@ internal sealed class EvdevKeyResolver : IDisposable
         if (IsModActive("Control")) mods |= KeyModifiers.Control;
         if (IsModActive("Mod1")) mods |= KeyModifiers.Alt;
         if (IsModActive("Mod2")) mods |= KeyModifiers.NumLock;
+        if (IsModActive(_scrollLockModName)) mods |= KeyModifiers.ScrollLock;
         if (IsModActive("Mod4")) mods |= KeyModifiers.Super;
         if (IsModActive("Mod5")) mods |= KeyModifiers.AltGr;
         // AltGr and Alt are mutually exclusive: strip Alt when AltGr is active
@@ -158,8 +188,24 @@ internal sealed class EvdevKeyResolver : IDisposable
         _pendingDeadKey = '\0';
         _pendingDeadSpacing = '\0';
         _keyDownId.Clear();
+        var capsLockWasActive = IsModActive("Lock");  // "Lock" is the XKB virtual modifier name for CapsLock
+        var numLockWasActive = IsModActive("Mod2");
+        var scrollLockWasActive = IsModActive(_scrollLockModName);
         if (_state != 0) EvdevNativeMethods.xkb_state_unref(_state);
         _state = EvdevNativeMethods.xkb_state_new(_keymap);
+        // xkb_state_new() starts all locks off — restore any that were active via down+up simulation.
+        if (_state != 0)
+        {
+            if (_capsLockXkbKey != 0 && capsLockWasActive) RestoreLock(_capsLockXkbKey);
+            if (_numLockXkbKey != 0 && numLockWasActive) RestoreLock(_numLockXkbKey);
+            if (_scrollLockXkbKey != 0 && scrollLockWasActive) RestoreLock(_scrollLockXkbKey);
+        }
+    }
+
+    private void RestoreLock(uint xkbKey)
+    {
+        _ = EvdevNativeMethods.xkb_state_update_key(_state, xkbKey, EvdevNativeMethods.XKB_KEY_DOWN);
+        _ = EvdevNativeMethods.xkb_state_update_key(_state, xkbKey, EvdevNativeMethods.XKB_KEY_UP);
     }
 
     public void Dispose()

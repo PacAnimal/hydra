@@ -35,7 +35,7 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
     private volatile TaskCompletionSource<string>? _pendingReply; // completed by ReadOutput when echo arrives
     private Process? _process;
     private TaskCompletionSource? _initialStateTcs;
-    private TaskCompletionSource? _authSettledTcs; // completed when location auth leaves notDetermined
+    private volatile TaskCompletionSource? _authSettledTcs; // completed when location auth leaves notDetermined
     private readonly Toggle _stopping = new();
     private volatile string _lastState = CmdHide; // last show/hide command; re-applied after unexpected restart
     private const int SendReplyTimeoutMs = 5_000;     // how long to wait for shield to echo a command back
@@ -69,12 +69,14 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
         if (_initialStateTcs.Task.IsCompleted) return;
 
         // if auth is still undetermined, wait for it to settle (location permission prompt)
-        if (networkState.WifiAuthStatus == 0)
+        if (networkState.WifiAuthStatus is null or 0)
             await Task.WhenAny(_initialStateTcs.Task, _authSettledTcs.Task, Task.Delay(TimeSpan.FromSeconds(8)));
 
         // if auth is now authorized, give ssid a moment to arrive
         if (!_initialStateTcs.Task.IsCompleted && networkState.WifiAuthStatus is 3 or 4)
             await Task.WhenAny(_initialStateTcs.Task, Task.Delay(TimeSpan.FromSeconds(2)));
+
+        _authSettledTcs = null;
     }
 
     public Task StartAsync(CancellationToken cancellationToken)

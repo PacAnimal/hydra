@@ -125,6 +125,16 @@ internal static partial class EvdevNativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial int xkb_state_mod_name_is_active(nint state, string name, int type);
 
+    // returns XKB_MOD_INVALID (uint.MaxValue) if the name is not found in the keymap.
+    [LibraryImport(Xkb, StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial uint xkb_keymap_mod_get_index(nint keymap, string name);
+
+    // returns XKB_KEYCODE_INVALID (uint.MaxValue) if the named key is not in the keymap.
+    [LibraryImport(Xkb, StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial uint xkb_keymap_key_by_name(nint keymap, string name);
+
     [LibraryImport(Xkb)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial uint xkb_state_serialize_layout(nint state, uint components);

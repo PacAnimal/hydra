@@ -67,6 +67,7 @@ internal static partial class NativeMethods
     internal const uint ControlMask = 0x04;
     internal const uint Mod1Mask = 0x08;   // Alt
     internal const uint Mod2Mask = 0x10;   // NumLock
+    internal const uint Mod3Mask = 0x20;   // ScrollLock (on standard desktop configurations)
     internal const uint Mod4Mask = 0x40;   // Super/Win
     internal const uint Mod5Mask = 0x80;   // AltGr (ISO_Level3_Shift)
 
@@ -280,6 +281,15 @@ internal static partial class NativeMethods
     internal static partial int XTestGrabControl(nint display, [MarshalAs(UnmanagedType.Bool)] bool impervious);
 
     // -- Xkb keyboard --
+
+    // returns heap-allocated XModifierKeymap* — caller must XFreeModifiermap
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint XGetModifierMapping(nint display);
+
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int XFreeModifiermap(nint modmap);
 
     [LibraryImport(X11)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]

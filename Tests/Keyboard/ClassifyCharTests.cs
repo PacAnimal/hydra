@@ -42,6 +42,9 @@ public class ClassifyCharTests
     [TestCase((char)7)]
     [TestCase((char)10)]
     [TestCase((char)31)]
+    [TestCase((char)0x80)]  // C1 range start
+    [TestCase((char)0x9F)]  // C1 range end
+    [TestCase((char)0x85)]  // NEL — typical C1 garbage from legacy keysym maps
     public void UnmappedControlChar_ReturnsBothNull(char c)
     {
         var (ch, key) = KeyResolver.ClassifyChar(c);

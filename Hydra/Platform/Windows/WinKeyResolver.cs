@@ -16,6 +16,10 @@ internal sealed class WinKeyResolver
 
     private readonly Dictionary<int, CharClassification> _keyDownId = [];
 
+    // synthetic tracking key for KP_Enter: VK_RETURN (0x0D) is shared with regular Return.
+    // using a distinct key lets both be held simultaneously without overwriting each other.
+    private const int KpEnterTrackingVk = WinVirtualKey.Return | 0x10000;
+
     // pending dead key combining character (e.g. '\u0301' for acute accent)
     private char _pendingDeadKey;
     private char _pendingDeadSpacing;  // spacing form used when composition fails (e.g. dead_circumflex + space → ^)
@@ -44,7 +48,10 @@ internal sealed class WinKeyResolver
         {
             _injectedLCtrlPending = false;
             var prefix = FlushDeferredLCtrl();
-            var up = KeyResolver.ReplayKeyUp(_keyDownId, vk, mods);
+            // KP_Enter key-up: use synthetic tracking key so it doesn't collide with Return
+            var trackingVk = (vk == WinVirtualKey.Return && (info.flags & NativeMethods.LLKHF_EXTENDED) != 0)
+                ? KpEnterTrackingVk : vk;
+            var up = KeyResolver.ReplayKeyUp(_keyDownId, trackingVk, mods);
             return Events(prefix, up);
         }
 
@@ -104,15 +111,18 @@ internal sealed class WinKeyResolver
         // numpad Enter: VK_RETURN with extended-key flag — distinct from regular Enter
         if (vk == WinVirtualKey.Return && (info.flags & NativeMethods.LLKHF_EXTENDED) != 0)
         {
-            if (_keyDownId.TryGetValue(vk, out var stored) && stored.Key == SpecialKey.KP_Enter) return Events(flushed, null);
-            _keyDownId[vk] = new CharClassification(null, SpecialKey.KP_Enter);
+            if (_keyDownId.ContainsKey(KpEnterTrackingVk)) return Events(flushed, null);
+            _keyDownId[KpEnterTrackingVk] = new CharClassification(null, SpecialKey.KP_Enter);
             return Events3(flushed, FlushPendingDeadKey(), KeyEvent.Special(KeyEventType.KeyDown, SpecialKey.KP_Enter, mods));
         }
 
         if (WinSpecialKeyMap.Instance.TryGet((ulong)vk, out var specialKey))
         {
-            // suppress auto-repeat — only emit on initial press, not while held
-            if (_keyDownId.ContainsKey(vk)) return Events(flushed, null);
+            // suppress auto-repeat — only emit on initial press, not while held.
+            // key type check guards against cross-type collision (e.g. KP_Enter vs Return sharing VK_RETURN).
+            // note: KP_Enter hits the vk==Return && LLKHF_EXTENDED branch above before reaching here,
+            // so the tracked.Key == specialKey guard never needs a KP_Enter carve-out.
+            if (_keyDownId.TryGetValue(vk, out var tracked) && tracked.Key == specialKey) return Events(flushed, null);
             // modifier keys are transparent to dead key composition (Shift while dead key pending stays armed).
             // non-modifier special keys (Tab, Escape, arrows, F-keys, etc.) abort composition: flush spacing form.
             var flushedDead = specialKey.IsModifier() ? null : FlushPendingDeadKey();
@@ -131,8 +141,15 @@ internal sealed class WinKeyResolver
         // suppress character key auto-repeat
         if (_keyDownId.ContainsKey(vk)) return Events(flushed, null);
 
+        // dead key pending + Ctrl/Super shortcut: flush spacing form first, then send the shortcut.
+        // without this, dead_grave + Ctrl+A would compose to 'à' with Ctrl — wrong on every slave.
+        // mirrors Mac (MacKeyResolver) and Linux (XorgKeyResolver) shortcut-flush behaviour.
+        // AltGr is excluded: its dead-key flush happens earlier when AltGr itself is pressed.
+        var shortcutDeadFlush = ((mods & (KeyModifiers.Control | KeyModifiers.Super)) != 0)
+            ? FlushPendingDeadKey() : null;
+
         var charEvent = ResolveCharacter(vk, info.scanCode, info.flags, mods);
-        return Events(flushed, charEvent);
+        return Events3(flushed, shortcutDeadFlush, charEvent);
     }
 
     private void UpdateKeyState(int vk, uint flags, bool isKeyUp)
@@ -178,6 +195,7 @@ internal sealed class WinKeyResolver
         if ((_keyState[WinVirtualKey.LWin] | _keyState[WinVirtualKey.RWin]) != 0) mods |= KeyModifiers.Super;
         if ((_keyState[WinVirtualKey.Capital] & 0x01) != 0) mods |= KeyModifiers.CapsLock;
         if ((_keyState[WinVirtualKey.Numlock] & 0x01) != 0) mods |= KeyModifiers.NumLock;
+        if ((_keyState[WinVirtualKey.Scroll] & 0x01) != 0) mods |= KeyModifiers.ScrollLock;
         // AltGr = RMenu alone; the synthesized LCtrl is detected and stripped separately
         if ((_keyState[WinVirtualKey.RMenu] & 0x80) != 0) mods |= KeyModifiers.AltGr;
         // strip Control and Alt when AltGr is active — receiver only needs AltGr (matches Linux behaviour)

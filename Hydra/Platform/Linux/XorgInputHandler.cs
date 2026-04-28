@@ -56,6 +56,7 @@ public sealed class XorgInputHandler : IPlatformInput
         _inputSink = CreateInputSink();
         _xiOpcode = DetectXi2();
         _lockKeycode = (int)NativeMethods.XKeysymToKeycode(_display, 0x006C); // XK_l
+        _keyResolver.Init(_display);
 
         _keyboard = new XGrabSession("Keyboard", _grabLock, log,
             preGrab: () =>
@@ -73,6 +74,12 @@ public sealed class XorgInputHandler : IPlatformInput
             },
             preRetry: () =>
             {
+                // reset resolver state before each re-grab attempt: if the grab succeeds, any key
+                // events arriving immediately will have clean state. called before every attempt so
+                // modifier bits dirtied between retries (e.g. user typed while grab was unowned)
+                // don't bleed into the new session. safe to call with no grab active — no events
+                // can arrive from X11 until the grab succeeds.
+                _keyResolver.Reset();
                 // dismiss transient grabs (xsecurelock technique: redirect focus to pointer root)
                 _ = NativeMethods.XSetInputFocus(_display, NativeMethods.PointerRoot,
                     NativeMethods.RevertToPointerRoot, NativeMethods.CurrentTime);

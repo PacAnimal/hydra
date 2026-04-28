@@ -201,6 +201,8 @@ public sealed class XorgOutputHandler : IPlatformOutput, ICursorVisibility
         }
     }
 
+    // the fast path below does not acquire _lock — _lock only protects _tempBindings/_unusedKeycodes/_naturalHeld,
+    // none of which the fast path accesses (it only calls XKeysymToKeycode and XTestFakeKeyEvent).
     private void InjectKeysym(ulong keysym, bool isDown)
     {
         var keycode = NativeMethods.XKeysymToKeycode(_display, keysym);

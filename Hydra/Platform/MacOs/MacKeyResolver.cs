@@ -9,6 +9,9 @@ namespace Hydra.Platform.MacOs;
 internal sealed class MacKeyResolver
 {
     private uint _deadKeyState;
+    // CGEventFlags has no ScrollLock bit — this toggle is software-only and cannot be initialised
+    // from OS state at startup. it will be wrong if ScrollLock was active before Hydra launched.
+    private bool _scrollLockOn;
     private readonly HashSet<int> _pressedModifierVks = [];
     private readonly Dictionary<int, CharClassification> _keyDownId = [];
 
@@ -38,6 +41,7 @@ internal sealed class MacKeyResolver
         var vkCode = (int)NativeMethods.CGEventGetIntegerValueField(eventRef, NativeMethods.KCGKeyboardEventKeycode);
         var cgFlags = NativeMethods.CGEventGetFlags(eventRef);
         var newMods = MapModifiers(cgFlags);
+        if (_scrollLockOn) newMods |= KeyModifiers.ScrollLock;
         if (!MacSpecialKeyMap.Instance.TryGet((ulong)vkCode, out var specialKey)) return null;
 
         // determine press/release by tracking per-vkCode state, not just generic modifier flags.
@@ -55,6 +59,7 @@ internal sealed class MacKeyResolver
         var vkCode = (int)NativeMethods.CGEventGetIntegerValueField(eventRef, NativeMethods.KCGKeyboardEventKeycode);
         var cgFlags = NativeMethods.CGEventGetFlags(eventRef);
         var mods = MapModifiers(cgFlags);
+        if (_scrollLockOn) mods |= KeyModifiers.ScrollLock;
 
         // key-up: replay the keyId that was emitted on key-down (modifier state may have changed)
         if (eventType == NativeMethods.KCGEventKeyUp)
@@ -116,6 +121,12 @@ internal sealed class MacKeyResolver
                 if (_deadKeyState != 0)
                     deadFlush = ResolveCharacter((int)MacVirtualKey.Space, 0, KeyModifiers.None);
                 _deadKeyState = 0;  // clear in case UCKeyTranslate didn't reset it (dead key with no spacing form)
+            }
+            // scroll lock (F14) has no CGEventFlag — track toggle in software so the bit travels with every event.
+            if (specialKey == SpecialKey.ScrollLock)
+            {
+                _scrollLockOn = !_scrollLockOn;
+                if (_scrollLockOn) mods |= KeyModifiers.ScrollLock; else mods &= ~KeyModifiers.ScrollLock;
             }
             _keyDownId[vkCode] = new CharClassification(null, specialKey);
             var specialEvent = KeyEvent.Special(KeyEventType.KeyDown, specialKey, mods);
@@ -235,6 +246,8 @@ internal sealed class MacKeyResolver
     // resets composition and press-tracking state after the event tap is re-enabled.
     // missed key-up events while the tap was disabled leave stale entries in _pressedModifierVks
     // and _keyDownId; clearing them prevents phantom held-key state.
+    // _scrollLockOn is intentionally NOT reset — it is a persistent lock state (like CapsLock),
+    // not per-grab transient state. missed events during the tap gap cannot corrupt it.
     internal void Reset()
     {
         _deadKeyState = 0;

@@ -25,6 +25,7 @@ public class MacSpecialKeyMapTests
     [TestCase(0x6DUL, SpecialKey.F10)]
     [TestCase(0x6FUL, SpecialKey.F12)]
     [TestCase(0x69UL, SpecialKey.F13)]
+    [TestCase(0x6BUL, SpecialKey.ScrollLock)]  // F14 is the Mac ScrollLock key
     [TestCase(0x6AUL, SpecialKey.F16)]
     public void FunctionKeys_AreMapped(ulong vk, SpecialKey expected)
     {
@@ -88,5 +89,16 @@ public class MacSpecialKeyMapTests
     {
         // 0x00 (kVK_ANSI_A) is a character key, not in the special map
         Assert.That(MacSpecialKeyMap.Instance.TryGet(0x00, out _), Is.False);
+    }
+
+    [Test]
+    public void ScrollLock_OutputOverride_MapsToF14()
+    {
+        using (Assert.EnterMultipleScope())
+        {
+            // scroll lock has no dedicated Mac key — F14 (0x6B) is the conventional substitute
+            Assert.That(MacSpecialKeyMap.OutputOverrides.TryGetValue(SpecialKey.ScrollLock, out var ov), Is.True);
+            Assert.That(ov.Vk, Is.EqualTo((ushort)0x6B));
+        }
     }
 }
