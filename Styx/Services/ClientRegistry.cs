@@ -9,8 +9,8 @@ public interface IClientRegistry
     ValueTask Unregister(string connectionId);
     ValueTask<string?> GetConnectionId(Guid networkId, string hostName);
     ValueTask<ClientIdentity?> GetIdentity(string connectionId);
-    // returns the old connectionId if a duplicate was kicked, null otherwise
-    ValueTask<string?> KickDuplicate(Guid networkId, string hostName, string newConnectionId);
+    // returns all connectionIds that were kicked (may be >1 if stale entries accumulated)
+    ValueTask<IReadOnlyList<string>> KickDuplicates(Guid networkId, string hostName, string newConnectionId);
     // returns all (connectionId, hostName) pairs on a network, optionally excluding one connection
     ValueTask<IReadOnlyList<(string ConnectionId, string HostName)>> GetNetworkClients(Guid networkId, string? excludeConnectionId = null);
 }
@@ -52,24 +52,21 @@ public class ClientRegistry(ILogger<ClientRegistry> log) : IClientRegistry
         return clients.Value.TryGetValue(connectionId, out var identity) ? identity : null;
     }
 
-    // finds any existing connection with the same network+hostname, removes it, returns its connectionId
-    public async ValueTask<string?> KickDuplicate(Guid networkId, string hostName, string newConnectionId)
+    // finds all existing connections with the same network+hostname, removes them, returns their connectionIds
+    public async ValueTask<IReadOnlyList<string>> KickDuplicates(Guid networkId, string hostName, string newConnectionId)
     {
         using var clients = await _clients.WaitForDisposable();
-        string? found = null;
-        foreach (var (connectionId, identity) in clients.Value)
+        var found = clients.Value
+            .Where(kv => kv.Value.NetworkId == networkId
+                && kv.Value.HostName.EqualsIgnoreCase(hostName)
+                && kv.Key != newConnectionId)
+            .Select(kv => kv.Key)
+            .ToList();
+        foreach (var connectionId in found)
         {
-            if (identity.NetworkId == networkId
-                && identity.HostName.EqualsIgnoreCase(hostName)
-                && connectionId != newConnectionId)
-            {
-                found = connectionId;
-                break;
-            }
+            clients.Value.Remove(connectionId);
+            log.LogInformation("Kicked duplicate {HostName} ({NetworkId}) on {ConnectionId}", hostName, networkId, connectionId);
         }
-        if (found is null) return null;
-        clients.Value.Remove(found);
-        log.LogInformation("Kicked duplicate {HostName} ({NetworkId}) on {ConnectionId}", hostName, networkId, found);
         return found;
     }
 

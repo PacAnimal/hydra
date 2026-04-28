@@ -39,10 +39,10 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, IStyxPass
             return new RelayLoginResponse { Authenticated = false, Message = "Invalid authorization" };
         }
 
-        // kick any existing connection with the same network+hostname
-        var kicked = await registry.KickDuplicate(networkId, login.HostName, Context.ConnectionId);
-        if (kicked != null)
-            await Clients.Client(kicked).Kicked("duplicate hostname");
+        // kick any existing connections with the same network+hostname (stale entries can accumulate on unclean disconnect)
+        var kicked = await registry.KickDuplicates(networkId, login.HostName, Context.ConnectionId);
+        foreach (var connectionId in kicked)
+            await Clients.Client(connectionId).Kicked("duplicate hostname");
 
         await registry.Register(Context.ConnectionId, networkId, login.HostName);
         log.LogInformation("Authenticated {HostName} on network {NetworkId}", login.HostName, networkId);

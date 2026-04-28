@@ -216,21 +216,49 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         await OnAuthenticated();
 
         // drain outbound queue until the connection drops
-        await foreach (var (targets, payload) in _sendQueue.Reader.ReadAllAsync(disco.Token))
+        (string[] Targets, byte[] Payload)? lookahead = null;
+        while (true)
         {
+            (string[] Targets, byte[] Payload) item;
+            if (lookahead.HasValue)
+            {
+                item = lookahead.Value;
+                lookahead = null;
+            }
+            else
+            {
+                if (!await _sendQueue.Reader.WaitToReadAsync(disco.Token)) break;
+                if (!_sendQueue.Reader.TryRead(out item)) continue;
+            }
+
+            // coalesce mouse moves — skip intermediate positions, only send the latest
+            if (item.Payload.Length > 0 && item.Payload[0] == (byte)MessageKind.MouseMove)
+            {
+                while (_sendQueue.Reader.TryRead(out var next))
+                {
+                    if (next.Payload.Length > 0 && next.Payload[0] == (byte)MessageKind.MouseMove && next.Targets.SequenceEqual(item.Targets))
+                        item = next;
+                    else
+                    {
+                        lookahead = next;
+                        break;
+                    }
+                }
+            }
+
             try
             {
-                var encrypted = await _encryption.Encrypt(payload, cancel);
-                await _server.Send(targets, encrypted);
+                var encrypted = await _encryption.Encrypt(item.Payload, cancel);
+                await _server.Send(item.Targets, encrypted);
             }
             catch (OperationCanceledException) { break; }
             catch (HttpRequestException ex)
             {
-                log.LogWarning("Failed to send relay message to [{TargetHosts}]: {Message}", string.Join(", ", targets), ex.InnerException?.Message ?? ex.Message);
+                log.LogWarning("Failed to send relay message to [{TargetHosts}]: {Message}", string.Join(", ", item.Targets), ex.InnerException?.Message ?? ex.Message);
             }
             catch (Exception ex)
             {
-                log.LogWarning(ex, "Failed to send relay message to [{TargetHosts}]", string.Join(", ", targets));
+                log.LogWarning(ex, "Failed to send relay message to [{TargetHosts}]", string.Join(", ", item.Targets));
             }
         }
     }
