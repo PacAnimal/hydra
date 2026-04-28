@@ -24,6 +24,8 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         Channel.CreateUnbounded<(string[], byte[])>(
             new UnboundedChannelOptions { SingleReader = true });
 
+    protected virtual TimeSpan ReconnectDelay => TimeSpan.FromSeconds(Constants.ReconnectDelaySeconds);
+
     // IRelaySender
     public bool IsConnected => _server != null;
     public event Func<string[], Task>? PeersChanged;
@@ -140,15 +142,15 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
             }
             catch (OperationCanceledException)
             {
-                log.LogWarning("Relay connection lost — retrying in {ReconnectDelay}s", Constants.ReconnectDelaySeconds);
+                log.LogWarning("Relay connection lost — retrying in {ReconnectDelay}s", ReconnectDelay.TotalSeconds);
             }
             catch (HttpRequestException ex)
             {
-                log.LogWarning("Relay connection failed — retrying in {ReconnectDelay}s: {Message}", Constants.ReconnectDelaySeconds, ex.InnerException?.Message ?? ex.Message);
+                log.LogWarning("Relay connection failed — retrying in {ReconnectDelay}s: {Message}", ReconnectDelay.TotalSeconds, ex.InnerException?.Message ?? ex.Message);
             }
             catch (Exception ex)
             {
-                log.LogError(ex, "Relay connection failed — retrying in {ReconnectDelay}s", Constants.ReconnectDelaySeconds);
+                log.LogError(ex, "Relay connection failed — retrying in {ReconnectDelay}s", ReconnectDelay.TotalSeconds);
             }
             finally
             {
@@ -164,7 +166,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
             }
 
             if (!cancel.IsCancellationRequested)
-                await Task.Delay(TimeSpan.FromSeconds(Constants.ReconnectDelaySeconds), cancel).ConfigureAwait(false);
+                await Task.Delay(ReconnectDelay, cancel).ConfigureAwait(false);
         }
     }
 

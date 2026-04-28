@@ -75,8 +75,9 @@ public class MacModifierMappingTests
         Assert.That(MacKeyResolver.MapModifiers(AlphaShift), Is.EqualTo(KeyModifiers.CapsLock));
 
     [Test]
-    public void NumericPadFlag_ReturnsNumLock() =>
-        Assert.That(MacKeyResolver.MapModifiers(NumericPad), Is.EqualTo(KeyModifiers.NumLock));
+    public void NumericPadFlag_DoesNotMapToNumLock() =>
+        // NumericPad is a source flag ("key came from numpad"), not a NumLock state indicator
+        Assert.That(MacKeyResolver.MapModifiers(NumericPad), Is.EqualTo(KeyModifiers.None));
 
     [Test]
     public void MultipleFlags_ReturnsCombination()
@@ -88,7 +89,7 @@ public class MacModifierMappingTests
     [Test]
     public void AllModifiers_MapsCorrectly()
     {
-        var mods = MacKeyResolver.MapModifiers(AlphaShift | Shift | Control | Alternate | Command | NumericPad);
+        var mods = MacKeyResolver.MapModifiers(AlphaShift | Shift | Control | Alternate | Command);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(mods.HasFlag(KeyModifiers.Shift), Is.True);
@@ -96,7 +97,7 @@ public class MacModifierMappingTests
             Assert.That(mods.HasFlag(KeyModifiers.Alt), Is.True);
             Assert.That(mods.HasFlag(KeyModifiers.Super), Is.True);
             Assert.That(mods.HasFlag(KeyModifiers.CapsLock), Is.True);
-            Assert.That(mods.HasFlag(KeyModifiers.NumLock), Is.True);
+            Assert.That(mods.HasFlag(KeyModifiers.NumLock), Is.False);
         }
     }
 }

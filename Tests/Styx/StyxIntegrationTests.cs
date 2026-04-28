@@ -7,13 +7,17 @@ namespace Tests.Styx;
 [TestFixture]
 public class StyxIntegrationTests
 {
-    private Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactory<global::Styx.Program>? _factory;
+    private static Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactory<global::Styx.Program>? _factory;
 
-    [SetUp]
-    public void SetUp() => _factory = StyxTestServer.Create();
+    [OneTimeSetUp]
+    public static void OneTimeSetUp()
+    {
+        _factory = StyxTestServer.Create();
+        _ = _factory.Server; // eager init — avoid paying startup cost inside a test
+    }
 
-    [TearDown]
-    public async Task TearDown()
+    [OneTimeTearDown]
+    public static async Task OneTimeTearDown()
     {
         if (_factory != null)
             await _factory.DisposeAsync();

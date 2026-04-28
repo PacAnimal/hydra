@@ -105,8 +105,8 @@ public class SlaveRelayConnection : RelayConnection
                 }
                 break;
             case MessageKind.LeaveScreen:
-                ReleaseAllKeys();
                 CancelAllRepeatTimers();
+                ReleaseAllKeys();
                 _cursorHider.OnLeaveScreen(sourceHost);
                 break;
             case MessageKind.ScreensaverSync:
@@ -163,8 +163,8 @@ public class SlaveRelayConnection : RelayConnection
         var masters = await _peerState.GetMasters();
         foreach (var master in masters)
             _cursorHider.OnMasterDisconnected(master);
-        ReleaseAllKeys();
         CancelAllRepeatTimers();
+        ReleaseAllKeys();
         if (masters.Length > 0)
             _screensaverSuppressor.Restore();
         await _peerState.PruneMasters([]);

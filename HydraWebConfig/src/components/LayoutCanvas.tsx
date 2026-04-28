@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useId } from 'react'
-import type { LayoutItem } from '../types'
+import type { LayoutItem, HostConfig } from '../types'
 import { newLayoutItem } from '../defaults'
 import { deriveHostsFromLayout, ADJACENCY_THRESHOLD, DEFAULT_W, DEFAULT_H } from '../utils/layout'
 import { hasAdjacentNeighbour, snapToNearestSide } from '../utils/canvasLayout'
@@ -122,28 +122,32 @@ interface Connection {
   color: string
 }
 
-function buildConnections(items: LayoutItem[], colorMap: Map<string, string>): Connection[] {
-  const seen = new Set<string>()
+// builds directed connections using BFS-derived host edges so arrows radiate outward from master
+function buildConnections(items: LayoutItem[], hosts: HostConfig[], colorMap: Map<string, string>): Connection[] {
   const conns: Connection[] = []
 
-  for (const item of items) {
-    for (const adj of items) {
-      if (adj.id === item.id || adj.hostName === item.hostName) continue
+  for (const host of hosts) {
+    for (const n of host.neighbours ?? []) {
+      const srcItem = items.find(i => i.hostName === host.name && i.screenId === n.sourceScreen)
+        ?? items.find(i => i.hostName === host.name)
+      const dstItem = items.find(i => i.hostName === n.name && i.screenId === n.destScreen)
+        ?? items.find(i => i.hostName === n.name)
+      if (!srcItem || !dstItem) continue
 
-      const pairKey = [item.id, adj.id].sort().join('|')
-      if (seen.has(pairKey)) continue
+      const color = colorMap.get(host.name) ?? '#888'
 
-      const vOverlap = Math.min(item.y + item.h, adj.y + adj.h) - Math.max(item.y, adj.y)
-      const hOverlap = Math.min(item.x + item.w, adj.x + adj.w) - Math.max(item.x, adj.x)
-
-      if (Math.abs(adj.x - (item.x + item.w)) < ADJACENCY_THRESHOLD && vOverlap > 0) {
-        const midY = (Math.max(item.y, adj.y) + Math.min(item.y + item.h, adj.y + adj.h)) / 2
-        conns.push({ fromId: item.id, toId: adj.id, x1: blockLeft(item.x + item.w), y1: blockTop(midY), x2: blockLeft(adj.x), y2: blockTop(midY), color: colorMap.get(item.hostName) ?? '#888' })
-        seen.add(pairKey)
-      } else if (Math.abs(adj.y - (item.y + item.h)) < ADJACENCY_THRESHOLD && hOverlap > 0) {
-        const midX = (Math.max(item.x, adj.x) + Math.min(item.x + item.w, adj.x + adj.w)) / 2
-        conns.push({ fromId: item.id, toId: adj.id, x1: blockLeft(midX), y1: blockTop(item.y + item.h), x2: blockLeft(midX), y2: blockTop(adj.y), color: colorMap.get(item.hostName) ?? '#888' })
-        seen.add(pairKey)
+      if (n.direction === 'Right') {
+        const midY = (Math.max(srcItem.y, dstItem.y) + Math.min(srcItem.y + srcItem.h, dstItem.y + dstItem.h)) / 2
+        conns.push({ fromId: srcItem.id, toId: dstItem.id, x1: blockLeft(srcItem.x + srcItem.w), y1: blockTop(midY), x2: blockLeft(dstItem.x), y2: blockTop(midY), color })
+      } else if (n.direction === 'Left') {
+        const midY = (Math.max(srcItem.y, dstItem.y) + Math.min(srcItem.y + srcItem.h, dstItem.y + dstItem.h)) / 2
+        conns.push({ fromId: srcItem.id, toId: dstItem.id, x1: blockLeft(srcItem.x), y1: blockTop(midY), x2: blockLeft(dstItem.x + dstItem.w), y2: blockTop(midY), color })
+      } else if (n.direction === 'Down') {
+        const midX = (Math.max(srcItem.x, dstItem.x) + Math.min(srcItem.x + srcItem.w, dstItem.x + dstItem.w)) / 2
+        conns.push({ fromId: srcItem.id, toId: dstItem.id, x1: blockLeft(midX), y1: blockTop(srcItem.y + srcItem.h), x2: blockLeft(midX), y2: blockTop(dstItem.y), color })
+      } else if (n.direction === 'Up') {
+        const midX = (Math.max(srcItem.x, dstItem.x) + Math.min(srcItem.x + srcItem.w, dstItem.x + dstItem.w)) / 2
+        conns.push({ fromId: srcItem.id, toId: dstItem.id, x1: blockLeft(midX), y1: blockTop(srcItem.y), x2: blockLeft(midX), y2: blockTop(dstItem.y + dstItem.h), color })
       }
     }
   }
@@ -199,14 +203,13 @@ export function LayoutCanvas({ items, onChange }: Props) {
 
   const colorMap = makeColorMap(items)
   const { w: cw, h: ch } = canvasSize(items, ghost)
-  const connections = buildConnections(items, colorMap)
-
   const allHostNames = uniqueHosts(items)
   const hostListId = `${formIdPrefix}-hosts`
 
   const derivedHosts = deriveHostsFromLayout(items)
   const connectionCount = derivedHosts.reduce((s, h) => s + (h.neighbours?.length ?? 0), 0)
   const masterHostName = items.find(i => i.isMaster)?.hostName
+  const connections = buildConnections(items, derivedHosts, colorMap)
 
   function pointerCanvasXY(e: React.PointerEvent): { px: number; py: number } {
     const rect = canvasRef.current!.getBoundingClientRect()

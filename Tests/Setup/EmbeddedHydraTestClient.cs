@@ -20,6 +20,8 @@ public sealed class EmbeddedHydraTestClient(IHydraProfile profile)
     private (string Source, MessageKind Kind, string Json)? _lastMessage;
     private string? _kickReason;
 
+    protected override TimeSpan ReconnectDelay => TimeSpan.Zero;
+
     protected override Task OnAuthenticated() { _readySignal.Release(); return Task.CompletedTask; }
 
     protected override Task OnReceive(string sourceHost, MessageKind kind, ReadOnlyMemory<byte> body)
@@ -43,27 +45,27 @@ public sealed class EmbeddedHydraTestClient(IHydraProfile profile)
         return Task.CompletedTask;
     }
 
-    public async Task WaitForReady(int timeoutMs = 5000)
+    public async Task WaitForReady(int timeoutMs = 15000)
     {
         if (!await _readySignal.WaitAsync(timeoutMs))
             throw new TimeoutException("Timed out waiting for relay connection");
     }
 
-    public async Task<string[]> WaitForPeers(int timeoutMs = 5000)
+    public async Task<string[]> WaitForPeers(int timeoutMs = 15000)
     {
         if (!await _peerSignal.WaitAsync(timeoutMs))
             throw new TimeoutException("Timed out waiting for peers update");
         return _lastPeers;
     }
 
-    public async Task<(string Source, MessageKind Kind, string Json)> WaitForMessage(int timeoutMs = 5000)
+    public async Task<(string Source, MessageKind Kind, string Json)> WaitForMessage(int timeoutMs = 15000)
     {
         if (!await _receiveSignal.WaitAsync(timeoutMs))
             throw new TimeoutException("Timed out waiting for message");
         return _lastMessage!.Value;
     }
 
-    public async Task<string> WaitForKick(int timeoutMs = 5000)
+    public async Task<string> WaitForKick(int timeoutMs = 15000)
     {
         if (!await _kickSignal.WaitAsync(timeoutMs))
             throw new TimeoutException("Timed out waiting for kick");

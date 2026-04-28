@@ -30,11 +30,24 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
     // IOKit HID driver connection (deskflow's getEventDriver() pattern)
     private uint _hidConnection;
 
+    private CFNotificationCallback? _layoutChangeCallback;  // keep-alive to prevent GC
+    private readonly nint _layoutNotificationCenter;
+
     // ReSharper disable once ConvertToPrimaryConstructor
 #pragma warning disable IDE0290
     public MacOutputHandler(ILogger<MacOutputHandler> log)
     {
         _log = log;
+        // rebuild char→vk map whenever the user switches keyboard layout mid-session
+        _layoutNotificationCenter = NativeMethods.CFNotificationCenterGetDistributedCenter();
+        if (_layoutNotificationCenter != nint.Zero)
+        {
+            _layoutChangeCallback = (_, _, _, _, _) => { _charToVk = BuildCharToVkMap(); };
+            var name = NativeMethods.MakeNsString("com.apple.Carbon.TISNotifySelectedKeyboardInputSourceChanged");
+            NativeMethods.CFNotificationCenterAddObserver(_layoutNotificationCenter, 1, _layoutChangeCallback, name, nint.Zero,
+                NativeMethods.CFNotificationSuspensionBehaviorDeliverImmediately);
+            NativeMethods.CFRelease(name);
+        }
     }
 #pragma warning restore IDE0290
 
@@ -50,8 +63,8 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
     private static readonly double DoubleClickMaxDist = Math.Sqrt(2) + 0.0001;
     private static readonly double DoubleClickIntervalMs = GetDoubleClickIntervalMs();
 
-    // char produced by each vk code (no modifiers) — used to find the correct vk for character injection
-    private static readonly Dictionary<char, ushort> CharToVk = BuildCharToVkMap();
+    // char produced by each vk code (no modifiers) — rebuilt whenever keyboard layout changes
+    private volatile Dictionary<char, ushort> _charToVk = BuildCharToVkMap();
 
     public void MoveMouse(int x, int y)
     {
@@ -106,20 +119,60 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
         var isDown = msg.Type == KeyEventType.KeyDown;
         var flags = MapModifiersToFlags(msg.Modifiers);
 
-        if (msg.Key is { } key && key.IsModifier() && MacSpecialKeyMap.Instance.Reverse.TryGetValue(key, out var modVk))
+        if (msg.Key is { } key && key.IsModifier())
         {
+            // AltGr → Option (Mac has no physical AltGr key); other modifiers look up in MacSpecialKeyMap
+            ulong modVk;
+            if (key == SpecialKey.AltGr)
+                modVk = MacVirtualKey.RightOption;
+            else if (!MacSpecialKeyMap.Instance.Reverse.TryGetValue(key, out modVk))
+            {
+                // not in Reverse (e.g. ScrollLock) — check OutputOverrides (ScrollLock → F14)
+                if (MacSpecialKeyMap.OutputOverrides.TryGetValue(key, out var ovr))
+                    PostCgKey(ovr.Vk, isDown, flags | ovr.ExtraFlags);
+                return;
+            }
+
+            var (generic, device) = VkToModifierMasks((ushort)modVk);
+            if (generic == 0 && device == 0)
+            {
+                // NumLock (KeypadClear) has no modifier mask — inject as a regular toggle key, not a flags change
+                if (!PostHidKey((ushort)modVk, isDown))
+                    PostCgKey((ushort)modVk, isDown, flags);
+                return;
+            }
+
             // update accumulated modifier state, then inject via IOHIDPostEvent (NX_FLAGSCHANGED) to update
             // the system-wide HID modifier state read by [NSEvent modifierFlags] class method (what Chromium queries).
             // falls back to CGEventPost when IOKit unavailable.
-            var (generic, device) = VkToModifierMasks((ushort)modVk);
-            if (isDown) { _modifierFlags |= generic; _deviceModifierFlags |= device; }
-            else { _modifierFlags &= ~generic; _deviceModifierFlags &= ~device; }
+            if (isDown) _deviceModifierFlags |= device;
+            else _deviceModifierFlags &= ~device;
+            // CapsLock has no device bit — toggle generic flag on KeyDown only (it's a toggle key, not a hold key)
+            if (generic == NativeMethods.KCGEventFlagMaskAlphaShift && isDown)
+                _modifierFlags ^= NativeMethods.KCGEventFlagMaskAlphaShift;
+            // derive generic flags from device bits so L+R held simultaneously keeps the generic flag set
+            _modifierFlags = ComputeGenericFlags(_deviceModifierFlags) | (_modifierFlags & NativeMethods.KCGEventFlagMaskAlphaShift);
 
             if (!PostHidModifier((ushort)modVk))
                 PostFlagsChanged((ushort)modVk, isDown);
         }
         else if (msg.Character is { } ch)
         {
+            // sync CapsLock state on key-down: IOHIDPostEvent relies on the global HID modifier state
+            // set by NX_FLAGSCHANGED — if master had CapsLock on at connect time, _modifierFlags starts
+            // at 0 (off) on the slave. correct it from the per-character modifier before injecting.
+            if (isDown)
+            {
+                var wantCapsLock = (msg.Modifiers & KeyModifiers.CapsLock) != 0;
+                var haveCapsLock = (_modifierFlags & NativeMethods.KCGEventFlagMaskAlphaShift) != 0;
+                if (wantCapsLock != haveCapsLock)
+                {
+                    _modifierFlags ^= NativeMethods.KCGEventFlagMaskAlphaShift;
+                    if (!PostHidModifier((ushort)MacVirtualKey.CapsLock))
+                        PostFlagsChanged((ushort)MacVirtualKey.CapsLock, true);
+                }
+            }
+
             // AltGr characters: inject via unicode string — the VK path requires knowing which
             // Mac key+modifier combination produces the char, but AltGr chars from Linux/Windows
             // layouts have no Mac equivalent (e.g. AltGr+4='$' on Norwegian: CharToVk finds '$'→VK_4
@@ -127,14 +180,28 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
             // for regular and Super/Ctrl shortcut keys, use IOHIDPostEvent so the shortcut handler
             // fires correctly before the character reaches the focused app.
             var isAltGr = (msg.Modifiers & KeyModifiers.AltGr) != 0;
-            if (!isAltGr && CharToVk.TryGetValue(char.ToLowerInvariant(ch), out var charVk))
+            if (!isAltGr && _charToVk.TryGetValue(ch, out var charVk))
             {
                 if (!PostHidKey(charVk, isDown))
                     PostCgKey(charVk, isDown, flags);
             }
+            else if (!isAltGr && _charToVk.TryGetValue(char.ToLowerInvariant(ch), out charVk))
+            {
+                // lowercase-VK fallback for an uppercase char. PostHidKey relies on global HID modifier
+                // state for Shift; if Shift is not yet in _deviceModifierFlags (e.g. focus arrived while
+                // Shift was already held), use PostCgKey which applies flags — including Shift — directly.
+                var shiftReady = (_deviceModifierFlags & (NativeMethods.NxDeviceLShiftKeyMask | NativeMethods.NxDeviceRShiftKeyMask)) != 0;
+                if (!shiftReady || !PostHidKey(charVk, isDown))
+                    PostCgKey(charVk, isDown, flags);
+            }
             else
             {
-                InjectCharacter(ch, isDown, flags);
+                // AltGr chars are injected as unicode — strip Option and Shift so the CGEvent doesn't
+                // re-trigger Option-based composition or text-selection behaviour in the receiving app.
+                // Shift was consumed by level-3 resolution on the master; it must not reach the slave.
+                InjectCharacter(ch, isDown, isAltGr
+                    ? flags & ~(NativeMethods.KCGEventFlagMaskAlternate | NativeMethods.KCGEventFlagMaskShift)
+                    : flags);
             }
         }
         else if (msg.Key is { } key2)
@@ -358,8 +425,9 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
         NativeMethods.CFRelease(eventRef);
     }
 
-    // returns kCGEventFlagMaskSecondaryFn for vk codes that macOS hardware events carry it on.
-    // fn-row keys (ForwardDelete, Home/End/PageUp/PageDown, Help, F1-F20) always have this flag set.
+    // returns the extra event flags that macOS hardware events carry for certain vk codes.
+    // fn-row keys (ForwardDelete, Home/End/PageUp/PageDown, Help, F1-F20) carry kCGEventFlagMaskSecondaryFn.
+    // numpad keys carry kCGEventFlagMaskNumericPad so that apps checking NSEventModifierFlagNumericPad work.
     // ReSharper disable once RedundantCast
     private static ulong FnFlagForVk(ushort vk) => (ulong)vk switch
     {
@@ -373,20 +441,45 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
         MacVirtualKey.F13 or MacVirtualKey.F14 or MacVirtualKey.F15 or MacVirtualKey.F16 or
         MacVirtualKey.F17 or MacVirtualKey.F18 or MacVirtualKey.F19 or MacVirtualKey.F20
             => NativeMethods.KCGEventFlagMaskSecondaryFn,
+        MacVirtualKey.KeypadClear or
+        MacVirtualKey.KeypadEnter or
+        MacVirtualKey.KeypadDecimal or
+        MacVirtualKey.KeypadMultiply or
+        MacVirtualKey.KeypadPlus or
+        MacVirtualKey.KeypadDivide or
+        MacVirtualKey.KeypadMinus or
+        MacVirtualKey.KeypadEquals or
+        MacVirtualKey.Keypad0 or MacVirtualKey.Keypad1 or MacVirtualKey.Keypad2 or
+        MacVirtualKey.Keypad3 or MacVirtualKey.Keypad4 or MacVirtualKey.Keypad5 or
+        MacVirtualKey.Keypad6 or MacVirtualKey.Keypad7 or MacVirtualKey.Keypad8 or
+        MacVirtualKey.Keypad9
+            => NativeMethods.KCGEventFlagMaskNumericPad,
         _ => 0,
     };
+
+    // derives generic CGEventFlag bits from device-dependent NX masks.
+    // used so releasing one of two held L/R modifiers keeps the generic flag set.
+    private static ulong ComputeGenericFlags(uint deviceFlags)
+    {
+        ulong flags = 0;
+        if ((deviceFlags & (NativeMethods.NxDeviceLShiftKeyMask | NativeMethods.NxDeviceRShiftKeyMask)) != 0) flags |= NativeMethods.KCGEventFlagMaskShift;
+        if ((deviceFlags & (NativeMethods.NxDeviceLCtlKeyMask | NativeMethods.NxDeviceRCtlKeyMask)) != 0) flags |= NativeMethods.KCGEventFlagMaskControl;
+        if ((deviceFlags & (NativeMethods.NxDeviceLAltKeyMask | NativeMethods.NxDeviceRAltKeyMask)) != 0) flags |= NativeMethods.KCGEventFlagMaskAlternate;
+        if ((deviceFlags & (NativeMethods.NxDeviceLCmdKeyMask | NativeMethods.NxDeviceRCmdKeyMask)) != 0) flags |= NativeMethods.KCGEventFlagMaskCommand;
+        return flags;
+    }
 
     // maps a macOS virtual key code to (generic CGEventFlag mask, device-dependent NX mask).
     private static (ulong generic, uint device) VkToModifierMasks(ushort vk) => (ulong)vk switch
     {
-        MacVirtualKey.Command or MacVirtualKey.RightCommand =>
-            (NativeMethods.KCGEventFlagMaskCommand, NativeMethods.NxDeviceLCmdKeyMask),
-        MacVirtualKey.Shift or MacVirtualKey.RightShift =>
-            (NativeMethods.KCGEventFlagMaskShift, NativeMethods.NxDeviceLShiftKeyMask),
-        MacVirtualKey.Control or MacVirtualKey.RightControl =>
-            (NativeMethods.KCGEventFlagMaskControl, NativeMethods.NxDeviceLCtlKeyMask),
-        MacVirtualKey.Option or MacVirtualKey.RightOption =>
-            (NativeMethods.KCGEventFlagMaskAlternate, NativeMethods.NxDeviceLAltKeyMask),
+        MacVirtualKey.Command => (NativeMethods.KCGEventFlagMaskCommand, NativeMethods.NxDeviceLCmdKeyMask),
+        MacVirtualKey.RightCommand => (NativeMethods.KCGEventFlagMaskCommand, NativeMethods.NxDeviceRCmdKeyMask),
+        MacVirtualKey.Shift => (NativeMethods.KCGEventFlagMaskShift, NativeMethods.NxDeviceLShiftKeyMask),
+        MacVirtualKey.RightShift => (NativeMethods.KCGEventFlagMaskShift, NativeMethods.NxDeviceRShiftKeyMask),
+        MacVirtualKey.Control => (NativeMethods.KCGEventFlagMaskControl, NativeMethods.NxDeviceLCtlKeyMask),
+        MacVirtualKey.RightControl => (NativeMethods.KCGEventFlagMaskControl, NativeMethods.NxDeviceRCtlKeyMask),
+        MacVirtualKey.Option => (NativeMethods.KCGEventFlagMaskAlternate, NativeMethods.NxDeviceLAltKeyMask),
+        MacVirtualKey.RightOption => (NativeMethods.KCGEventFlagMaskAlternate, NativeMethods.NxDeviceRAltKeyMask),
         MacVirtualKey.CapsLock => (NativeMethods.KCGEventFlagMaskAlphaShift, 0),
         _ => (0, 0)
     };
@@ -430,6 +523,13 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
             {
                 for (ushort vk = 0; vk < 128; vk++)
                 {
+                    // probe without kUCKeyTranslateNoDeadKeysBit: if deadKeyState goes non-zero the
+                    // key is a dead key at this level. injecting that VK on the slave would start a
+                    // dead-key sequence instead of producing the char — exclude it from the map.
+                    uint deadProbeState = 0;
+                    _ = NativeMethods.UCKeyTranslate(layoutPtr, vk, NativeMethods.KUCKeyActionDown, ucMods, kbdType, 0, ref deadProbeState, 2, out _, chars);
+                    if (deadProbeState != 0) continue;
+
                     uint deadKeyState = 0;
                     var status = NativeMethods.UCKeyTranslate(
                         layoutPtr,
@@ -481,6 +581,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
         if ((mods & KeyModifiers.Alt) != 0) flags |= NativeMethods.KCGEventFlagMaskAlternate;
         if ((mods & KeyModifiers.Super) != 0) flags |= NativeMethods.KCGEventFlagMaskCommand;
         if ((mods & KeyModifiers.CapsLock) != 0) flags |= NativeMethods.KCGEventFlagMaskAlphaShift;
+        if ((mods & KeyModifiers.AltGr) != 0) flags |= NativeMethods.KCGEventFlagMaskAlternate;
         return flags;
     }
 
@@ -562,6 +663,13 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
 
     public void Dispose()
     {
+        if (_layoutNotificationCenter != nint.Zero)
+        {
+            var name = NativeMethods.MakeNsString("com.apple.Carbon.TISNotifySelectedKeyboardInputSourceChanged");
+            NativeMethods.CFNotificationCenterRemoveObserver(_layoutNotificationCenter, 1, name, nint.Zero);
+            NativeMethods.CFRelease(name);
+            _layoutChangeCallback = null;
+        }
         if (_cursorHidden)
             _ = NativeMethods.CGDisplayShowCursor(_display);
         if (_hidConnection != 0)

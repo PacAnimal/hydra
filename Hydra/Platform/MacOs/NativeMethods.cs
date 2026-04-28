@@ -23,6 +23,7 @@ internal static partial class NativeMethods
     internal const int KCGEventTapOptionDefault = 0;
     internal const ulong KCGEventMaskForAllEvents = ~0UL;
     internal const int KCGEventTapDisabledByTimeout = unchecked((int)0xFFFFFFFE);
+    internal const int KCGEventTapDisabledByUserInput = unchecked((int)0xFFFFFFFD);
     internal const int KCGEventLeftMouseDown = 1;
     internal const int KCGEventLeftMouseUp = 2;
     internal const int KCGEventRightMouseDown = 3;
@@ -449,9 +450,13 @@ internal static partial class NativeMethods
 
     // device-dependent modifier masks (IOLLEvent.h) — combined with generic CGEventFlag masks
     internal const uint NxDeviceLCmdKeyMask = 0x00000008;
+    internal const uint NxDeviceRCmdKeyMask = 0x00000010;
     internal const uint NxDeviceLShiftKeyMask = 0x00000002;
+    internal const uint NxDeviceRShiftKeyMask = 0x00000004;
     internal const uint NxDeviceLCtlKeyMask = 0x00000001;
+    internal const uint NxDeviceRCtlKeyMask = 0x00002000;
     internal const uint NxDeviceLAltKeyMask = 0x00000020;
+    internal const uint NxDeviceRAltKeyMask = 0x00000040;
 
     [LibraryImport(IOKit)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]

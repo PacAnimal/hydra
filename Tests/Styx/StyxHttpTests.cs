@@ -13,21 +13,22 @@ namespace Tests.Styx;
 [TestFixture]
 public class StyxHttpTests
 {
-    private Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactory<global::Styx.Program>? _factory;
-    private HttpClient? _http;
+    private static Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactory<global::Styx.Program>? _factory;
+    private static HttpClient? _http;
 
-    [SetUp]
-    public void SetUp()
+    [OneTimeSetUp]
+    public static void OneTimeSetUp()
     {
         _factory = StyxTestServer.Create();
+        _ = _factory.Server; // eager init
         _http = _factory.CreateClient(new Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactoryClientOptions
         {
             AllowAutoRedirect = false
         });
     }
 
-    [TearDown]
-    public async Task TearDown()
+    [OneTimeTearDown]
+    public static async Task OneTimeTearDown()
     {
         _http?.Dispose();
         if (_factory != null)
@@ -114,7 +115,7 @@ public class StyxHttpTests
         var config = new NetworkConfig(styxServer, key, authorization);
         var configBase64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(config, SaneJson.Options)));
 
-        await using var client = new HydraTestClient(_factory!, TransitionTestHelper.Profile("api-test", new HydraConfig { Mode = Mode.Master, NetworkConfig = configBase64 }));
+        await using var client = new HydraTestClient(_factory, TransitionTestHelper.Profile("api-test", new HydraConfig { Mode = Mode.Master, NetworkConfig = configBase64 }));
         await client.StartAsync(CancellationToken.None);
         await client.WaitForReady();
 

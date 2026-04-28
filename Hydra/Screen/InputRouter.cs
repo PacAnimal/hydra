@@ -24,7 +24,8 @@ public class InputRouter(
     FileTransferService fileTransfer,
     IFileSelectionDetector selectionDetector,
     IOsdNotification osd,
-    IWorldState? peerState = null)
+    IWorldState? peerState = null,
+    Func<long>? getTickCount = null)
     : IHostedService
 {
     private const KeyModifiers LockHotkey = KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Super;
@@ -38,6 +39,7 @@ public class InputRouter(
     private volatile int _repeatRateMs = 33;
 
     private readonly IWorldState _peerState = peerState ?? new WorldState();
+    private readonly Func<long> _getTickCount = getTickCount ?? (() => Environment.TickCount64);
 
     // channel-based actor model: single consumer processes all state mutations sequentially.
     // event tap callbacks post commands via TryWrite (non-blocking); async callers use TCS.
@@ -312,7 +314,7 @@ public class InputRouter(
                 if (disconnectedHost != null)
                 {
                     _fileTransfer.Abort(relay, "screensaver activated");
-                    relay.Send([disconnectedHost], MessageSerializer.Encode(MessageKind.LeaveScreen, new LeaveScreenMessage()));
+                    LeaveRemoteScreen(disconnectedHost);
                     ReturnToLocalScreen(warpX, warpY);
                     await platform.ShowCursor();
                 }
@@ -348,6 +350,7 @@ public class InputRouter(
                     await platform.HideCursor();
                     platform.IsOnVirtualScreen = true;
                     ApplyEnterScreen(st, dest, remoteInfo, savedX, savedY);
+                    platform.WarpCursor(st.WarpX, st.WarpY);
                     st.LastWarpX = st.WarpX;
                     st.LastWarpY = st.WarpY;
                     SendEnterScreen(dest, savedX, savedY);
@@ -823,7 +826,7 @@ public class InputRouter(
         var screen = st.Mouse.CurrentScreen;
         var isRelative = st.RelativeMouseScreens.GetValueOrDefault(screen.Name);
         if (isRelative && st.PendingDx == 0 && st.PendingDy == 0) return;
-        SendMousePosition(st, Environment.TickCount64);
+        SendMousePosition(st, _getTickCount());
     }
 
     // remap Home/End to platform-independent line-nav keys when master is not Mac.
@@ -912,7 +915,7 @@ public class InputRouter(
             st.PendingDy += dy * scale;
         }
 
-        var now = Environment.TickCount64;
+        var now = _getTickCount();
         if (now - st.LastVirtualLogTick >= 100)
         {
             st.LastVirtualLogTick = now;
@@ -1094,7 +1097,7 @@ public class InputRouter(
             st.PendingDx += dx * scale;
             st.PendingDy += dy * scale;
 
-            var now = Environment.TickCount64;
+            var now = _getTickCount();
             if (now - st.LastMouseSendTick >= MinMouseIntervalMs)
                 SendMousePosition(st, now);
 

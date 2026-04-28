@@ -31,9 +31,13 @@ public sealed class WindowsOutputHandler(ILogger<WindowsOutputHandler> log, IScr
 
     public void MoveMouse(int x, int y)
     {
-        // normalize to 0-65535 across entire virtual desktop (all monitors)
-        var dx = ((x - _vLeft) * 65536 + _vWidth / 2) / _vWidth;
-        var dy = ((y - _vTop) * 65536 + _vHeight / 2) / _vHeight;
+        // normalize to 0-65535 across entire virtual desktop (all monitors).
+        // SendInput MOUSEEVENTF_ABSOLUTE: 0=left edge, 65535=right edge. divide by (width-1) so
+        // pixel vWidth-1 maps exactly to 65535, not ~65519 (the 65536/width off-by-one error).
+        var dw = Math.Max(1, _vWidth - 1);
+        var dh = Math.Max(1, _vHeight - 1);
+        var dx = ((x - _vLeft) * 65535 + dw / 2) / dw;
+        var dy = ((y - _vTop) * 65535 + dh / 2) / dh;
 
         _dispatcher.Dispatch(new MoveMouseCommand(dx, dy));
     }

@@ -157,10 +157,12 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
 
     private nint TapCallback(nint proxy, int type, nint eventRef, nint userInfo)
     {
-        if (type == NativeMethods.KCGEventTapDisabledByTimeout)
+        if (type is NativeMethods.KCGEventTapDisabledByTimeout or NativeMethods.KCGEventTapDisabledByUserInput)
         {
-            log.LogWarning("Event tap disabled by timeout, re-enabling");
+            log.LogWarning("Event tap disabled (type={Type}), re-enabling", type);
             NativeMethods.CGEventTapEnable(_tapPort, true);
+            // missed events while disabled leave stale dead-key and modifier-press state
+            _keyResolver.Reset();
             return eventRef;
         }
 
@@ -230,9 +232,10 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
             or NativeMethods.KCGEventFlagsChanged)
         {
             // always resolve to track modifier state even on the real screen
-            var keyEvent = _keyResolver.Resolve(type, eventRef);
-            if (keyEvent is not null)
-                _onKeyEvent?.Invoke(keyEvent);
+            var keyEvents = _keyResolver.Resolve(type, eventRef);
+            if (keyEvents is not null)
+                foreach (var keyEvent in keyEvents)
+                    if (keyEvent is not null) _onKeyEvent?.Invoke(keyEvent);
             return IsOnVirtualScreen ? nint.Zero : eventRef;
         }
 

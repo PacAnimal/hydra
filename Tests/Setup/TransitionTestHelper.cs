@@ -34,13 +34,13 @@ public static class TransitionTestHelper
         ],
     });
 
-    public static TestServiceBundle CreateService()
+    public static TestServiceBundle CreateService(Func<long>? getTickCount = null)
     {
         var platform = new FakePlatform();
         var relay = new FakeRelay();
         var screens = new FakeScreenDetector();
         var service = new InputRouter(platform, TestConfig, relay, screens, NullLoggerFactory.Instance, NullLogger<InputRouter>.Instance, new NullScreenSaverSync(), new NullClipboardSync(),
-            FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification());
+            FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification(), getTickCount: getTickCount);
         platform.AfterFireCallback = service.FlushAsync;
         return new TestServiceBundle(platform, relay, service);
     }

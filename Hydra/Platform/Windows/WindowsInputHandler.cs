@@ -185,6 +185,13 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, bool d
         if (_mouseHook == nint.Zero || _keyboardHook == nint.Zero)
             log.LogWarning("Hook reinstall failed after desktop change");
 
+        // emit key-up events for any held keys so the slave doesn't get stuck
+        foreach (var keyUp in _keyResolver.TakeHeldKeyUps())
+            _onKeyEvent?.Invoke(keyUp);
+
+        // clear stale key state — modifier bits from the old desktop bleed into new events otherwise
+        _keyResolver.Reset();
+
         // recreate shield on new desktop; re-show if we were on a virtual screen
         _shield.Destroy();
         _shield.Create(debugShield);

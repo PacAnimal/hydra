@@ -26,7 +26,6 @@ public class ClassifyCharTests
     [TestCase((char)13, SpecialKey.Return)]
     [TestCase((char)27, SpecialKey.Escape)]
     [TestCase((char)127, SpecialKey.Delete)]
-    [TestCase((char)3, SpecialKey.KP_Enter)]
     public void ControlChar_ReturnsMappedSpecialKey(char c, SpecialKey expected)
     {
         var (ch, key) = KeyResolver.ClassifyChar(c);
@@ -39,6 +38,7 @@ public class ClassifyCharTests
 
     [TestCase((char)0)]
     [TestCase((char)1)]
+    [TestCase((char)3)]
     [TestCase((char)7)]
     [TestCase((char)10)]
     [TestCase((char)31)]

@@ -9,13 +9,12 @@ internal static class KeyResolver
     // control characters are mapped to their SpecialKey constants; other printable chars pass through.
     internal static CharClassification ClassifyChar(char c) => c switch
     {
-        (char)3 => new(null, SpecialKey.KP_Enter),
         (char)8 => new(null, SpecialKey.BackSpace),
         (char)9 => new(null, SpecialKey.Tab),
         (char)13 => new(null, SpecialKey.Return),
         (char)27 => new(null, SpecialKey.Escape),
         (char)127 => new(null, SpecialKey.Delete),
-        _ when c < 32 => new(null, null),
+        _ when c < 32 || (c >= '\x80' && c <= '\x9F') => new(null, null),
         _ => new(c, null),
     };
 

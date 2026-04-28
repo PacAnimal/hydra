@@ -52,16 +52,8 @@ internal sealed class MacSpecialKeyMap : SpecialKeyMap
         { MacVirtualKey.F20, SpecialKey.F20 },
 
         // keypad
-        { MacVirtualKey.Keypad0, SpecialKey.KP_0 },
-        { MacVirtualKey.Keypad1, SpecialKey.KP_1 },
-        { MacVirtualKey.Keypad2, SpecialKey.KP_2 },
-        { MacVirtualKey.Keypad3, SpecialKey.KP_3 },
-        { MacVirtualKey.Keypad4, SpecialKey.KP_4 },
-        { MacVirtualKey.Keypad5, SpecialKey.KP_5 },
-        { MacVirtualKey.Keypad6, SpecialKey.KP_6 },
-        { MacVirtualKey.Keypad7, SpecialKey.KP_7 },
-        { MacVirtualKey.Keypad8, SpecialKey.KP_8 },
-        { MacVirtualKey.Keypad9, SpecialKey.KP_9 },
+        // note: Keypad0–9 are intentionally absent — MacKeyResolver emits them as char events ('0'–'9')
+        // before reaching this map, so KP_0–KP_9 entries here would be unreachable dead code.
         { MacVirtualKey.KeypadDecimal, SpecialKey.KP_Decimal },
         { MacVirtualKey.KeypadEquals, SpecialKey.KP_Equal },
         { MacVirtualKey.KeypadMultiply, SpecialKey.KP_Multiply },
@@ -93,10 +85,15 @@ internal sealed class MacSpecialKeyMap : SpecialKeyMap
     // output-only overrides: keys that need a different VK (and optional extra flags) when synthesizing output.
     // MoveToBeginningOfLine/MoveToEndOfLine are sent by Win/Linux masters in place of Home/End.
     // on Mac, line start/end is Command+Left/Right, not the native Home/End keys (Fn+Left/Right = document nav).
+    // ScrollLock: F14 is the Mac equivalent (no dedicated ScrollLock key on Apple keyboards).
+    // KP_Tab/KP_Space: no distinct numpad VK on Mac — map to regular Tab/Space.
     internal static readonly IReadOnlyDictionary<SpecialKey, (ushort Vk, ulong ExtraFlags)> OutputOverrides =
         new Dictionary<SpecialKey, (ushort Vk, ulong ExtraFlags)>
         {
             { SpecialKey.MoveToBeginningOfLine, ((ushort)MacVirtualKey.LeftArrow,  NativeMethods.KCGEventFlagMaskCommand) },
             { SpecialKey.MoveToEndOfLine,       ((ushort)MacVirtualKey.RightArrow, NativeMethods.KCGEventFlagMaskCommand) },
+            { SpecialKey.ScrollLock,            ((ushort)MacVirtualKey.F14, 0UL) },
+            { SpecialKey.KP_Tab,                ((ushort)MacVirtualKey.Tab, 0UL) },
+            { SpecialKey.KP_Space,              ((ushort)MacVirtualKey.Space, 0UL) },
         };
 }

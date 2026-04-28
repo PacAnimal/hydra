@@ -315,6 +315,11 @@ internal static partial class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool XkbGetAutoRepeatRate(nint display, uint deviceSpec, out uint delay, out uint interval);
 
+    // returns 0 on success; fills stateReturn.Group with the effective keyboard group (layout index)
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int XkbGetState(nint display, uint deviceSpec, out XkbStateRec stateReturn);
+
     // -- XRandR multi-monitor enumeration --
 
     private const string XRandR = "libXrandr.so.2";
@@ -463,6 +468,27 @@ internal static partial class NativeMethods
     [LibraryImport(X11)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial int XDeleteProperty(nint display, nint window, nint property);
+}
+
+// XkbStateRec — filled by XkbGetState; only Group (effective layout index) is used here
+[StructLayout(LayoutKind.Sequential)]
+internal struct XkbStateRec
+{
+    public byte Group;
+    public byte LockedGroup;
+    public ushort BaseGroup;
+    public ushort LatchedGroup;
+    public byte Mods;
+    public byte BaseMods;
+    public byte LatchedMods;
+    public byte LockedMods;
+    public byte CompatState;
+    public byte GrabMods;
+    public byte CompatGrabMods;
+    public byte LookupMods;
+    public byte CompatLookupMods;
+    public byte Pad;
+    public ushort PtrButtons;
 }
 
 // struct pollfd for use with poll()

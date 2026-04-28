@@ -27,6 +27,7 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
         {
             if (_grabbed == value) return;
             _grabbed = value;
+            if (value) _keyResolver?.Reset();  // clear stale state from previous grab session
             SetGrab(value);
         }
     }
@@ -183,8 +184,10 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
             return;
         }
 
-        var keyEvent = _keyResolver.Resolve(code, value);
-        if (keyEvent != null) _onKeyEvent?.Invoke(keyEvent);
+        var keyEvents = _keyResolver.Resolve(code, value);
+        if (keyEvents is not null)
+            foreach (var keyEvent in keyEvents)
+                if (keyEvent is not null) _onKeyEvent?.Invoke(keyEvent);
     }
 
     private void HandleMouseEvent(InputEvent ev, ref double pendingDx, ref double pendingDy)
@@ -245,7 +248,11 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
     {
         var all = _keyboardFds.Concat(_mouseFds);
         foreach (var fd in all)
-            _ = EvdevNativeMethods.ioctl_grab(fd, EvdevNativeMethods.EVIOCGRAB, grab ? 1 : 0);
+        {
+            var r = EvdevNativeMethods.ioctl_grab(fd, EvdevNativeMethods.EVIOCGRAB, grab ? 1 : 0);
+            if (r < 0)
+                log.LogWarning("EVIOCGRAB({Grab}) failed on fd={Fd}", grab, fd);
+        }
     }
 
     public void Dispose()

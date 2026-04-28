@@ -143,6 +143,7 @@ public sealed class XorgInputHandler : IPlatformInput
             _isOnVirtualScreen.TrySet(value);
             if (value)
             {
+                _keyResolver.Reset();  // clear stale key state from previous session
                 _pointer.Grab();
                 _keyboard.Grab();
             }
@@ -240,9 +241,10 @@ public sealed class XorgInputHandler : IPlatformInput
                 if (next.Type == NativeMethods.KeyPress && next.XKeyKeycode == ev.XKeyKeycode)
                     return;
             }
-            var keyEvent = _keyResolver.Resolve(ev.Type, ev.XKeyKeycode, ev.XKeyState, _display);
-            if (keyEvent is not null)
-                _onKeyEvent?.Invoke(keyEvent);
+            var keyEvents = _keyResolver.Resolve(ev.Type, ev.XKeyKeycode, ev.XKeyState, _display);
+            if (keyEvents is not null)
+                foreach (var keyEvent in keyEvents)
+                    if (keyEvent is not null) _onKeyEvent?.Invoke(keyEvent);
             return;
         }
 

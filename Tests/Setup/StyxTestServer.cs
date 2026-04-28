@@ -3,7 +3,10 @@ using System.Text.Json;
 using Cathedral.Config;
 using Cathedral.Utils;
 using Common;
+using Microsoft.AspNetCore.Http.Connections;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.SignalR;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Tests.Setup;
 
@@ -19,7 +22,14 @@ public static class StyxTestServer
         return new WebApplicationFactory<global::Styx.Program>()
             .WithWebHostBuilder(builder =>
             {
-                builder.ConfigureServices(services => TestLog.ConfigureFileLogging(services));
+                builder.ConfigureServices(services =>
+                {
+                    TestLog.ConfigureFileLogging(services);
+                    // short keep-alive so long-poll GETs cycle every ~2s; this ensures hub connections
+                    // close within the 5s StopAsync timeout in HydraTestClient.DisposeAsync()
+                    services.Configure<HubOptions>(o => o.KeepAliveInterval = TimeSpan.FromSeconds(2));
+                    services.Configure<HttpConnectionDispatcherOptions>(o => o.LongPolling.PollTimeout = TimeSpan.FromSeconds(2));
+                });
             });
     }
 

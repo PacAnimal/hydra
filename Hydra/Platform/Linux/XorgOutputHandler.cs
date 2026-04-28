@@ -15,7 +15,11 @@ public sealed class XorgOutputHandler : IPlatformOutput, ICursorVisibility
     private readonly Toggle _disposed = new();
     private readonly Queue<int> _unusedKeycodes = [];
     private readonly Dictionary<ulong, int> _tempBindings = [];
+    private readonly Dictionary<ulong, uint> _naturalHeld = [];  // keysym → keycode injected via natural path (stable key-up even after layout switch)
+    private readonly Lock _lock = new();                 // protects _tempBindings, _unusedKeycodes, _naturalHeld
     private readonly ILogger<XorgOutputHandler> _log;
+    private int _keysymsPerKeycode = 4;  // actual server value; overridden in FindUnusedKeycodes
+    private ulong[] _emptyCharSlots = [0UL, 0UL, 0UL, 0UL];  // pre-allocated; sized after FindUnusedKeycodes
 
     public XorgOutputHandler(ILogger<XorgOutputHandler> log)
     {
@@ -38,6 +42,9 @@ public sealed class XorgOutputHandler : IPlatformOutput, ICursorVisibility
         var count = maxKeycode - minKeycode + 1;
         var map = NativeMethods.XGetKeyboardMapping(_display, (uint)minKeycode, count, out var keysymsPerKeycode);
         if (map == nint.Zero) return;
+
+        _keysymsPerKeycode = keysymsPerKeycode;
+        _emptyCharSlots = new ulong[_keysymsPerKeycode];
 
         var keysyms = (ulong*)map;
         for (var i = 0; i < count; i++)
@@ -77,7 +84,7 @@ public sealed class XorgOutputHandler : IPlatformOutput, ICursorVisibility
             // unicode char → keysym, always injected via temp-binding at all 4 levels so the
             // produced character is independent of the slave's keyboard layout and current modifier state.
             var keysym = ch <= '\xFF' ? (ulong)ch : 0x01000000u | ch;
-            InjectCharKeysym(keysym, isDown);
+            InjectCharKeysym(keysym, isDown, msg.Modifiers);
         }
         else if (msg.Key is SpecialKey.MoveToBeginningOfLine or SpecialKey.MoveToEndOfLine)
         {
@@ -139,39 +146,58 @@ public sealed class XorgOutputHandler : IPlatformOutput, ICursorVisibility
         }
     }
 
-    // inject a character keysym via temp-binding, layout- and modifier-state-independent.
-    // binds the keysym at all 4 levels (base, Shift, AltGr, Shift+AltGr) so that whatever
-    // modifiers happen to be held in the X server state, the produced keysym is always correct.
-    private void InjectCharKeysym(ulong keysym, bool isDown)
+    // inject a character keysym. prefers using the key's natural keycode for game/scancode
+    // compatibility. on key-down, stores (keysym → keycode) in _naturalHeld so key-up uses the
+    // same keycode even if the XKB layout changes between press and release.
+    private void InjectCharKeysym(ulong keysym, bool isDown, KeyModifiers modifiers = KeyModifiers.None)
     {
-        if (isDown)
+        lock (_lock)
         {
-            if (_tempBindings.TryGetValue(keysym, out var stale))
+            // on key-up: use the keycode stored at key-down time (not re-resolved — layout may have changed)
+            if (!isDown && _naturalHeld.Remove(keysym, out var heldKeycode))
             {
-                _ = NativeMethods.XChangeKeyboardMapping(_display, stale, 1, [0UL], 1);
-                _ = NativeMethods.XSync(_display, false);
-                _unusedKeycodes.Enqueue(stale);
-            }
-            if (_unusedKeycodes.Count == 0)
-            {
-                _log.LogWarning("No unused keycodes available — dropping keysym 0x{Keysym:X}", keysym);
+                _ = NativeMethods.XTestFakeKeyEvent(_display, heldKeycode, false, 0);
+                _ = NativeMethods.XFlush(_display);
                 return;
             }
-            var tempKeycode = _unusedKeycodes.Dequeue();
-            _ = NativeMethods.XChangeKeyboardMapping(_display, tempKeycode, 4, [keysym, keysym, keysym, keysym], 1);
-            _ = NativeMethods.XSync(_display, false);
-            _ = NativeMethods.XTestFakeKeyEvent(_display, (uint)tempKeycode, true, 0);
-            _ = NativeMethods.XFlush(_display);
-            _tempBindings[keysym] = tempKeycode;
-        }
-        else
-        {
-            if (!_tempBindings.TryGetValue(keysym, out var tempKeycode)) return;
-            _ = NativeMethods.XTestFakeKeyEvent(_display, (uint)tempKeycode, false, 0);
-            _ = NativeMethods.XChangeKeyboardMapping(_display, tempKeycode, 1, [0UL], 1);
-            _ = NativeMethods.XSync(_display, false);
-            _unusedKeycodes.Enqueue(tempKeycode);
-            _tempBindings.Remove(keysym);
+
+            var naturalKeycode = NativeMethods.XKeysymToKeycode(_display, keysym);
+
+            // skip natural keycode path if the keysym is currently temp-bound: that means key-down
+            // already used a temp keycode and key-up must release the same one.
+            // AltGr guard is key-down only: on key-up the _naturalHeld check above already handled it.
+            if (naturalKeycode != 0 && !_tempBindings.ContainsKey(keysym) && (!isDown || (modifiers & KeyModifiers.AltGr) == 0))
+            {
+                // query effective XKB group (layout) so multi-group setups (e.g. Cyrillic+Latin switcher) use
+                // the correct group when checking whether the keysym lives on the natural keycode.
+                var activeGroup = NativeMethods.XkbGetState(_display, NativeMethods.XkbUseCoreKbd, out var xkbState) == 0
+                    ? xkbState.Group
+                    : 0;
+
+                // level 0: unshifted base — safe regardless of held modifiers
+                if (NativeMethods.XkbKeycodeToKeysym(_display, naturalKeycode, activeGroup, 0) == keysym)
+                {
+                    if (isDown) _naturalHeld[keysym] = naturalKeycode;
+                    _ = NativeMethods.XTestFakeKeyEvent(_display, naturalKeycode, isDown, 0);
+                    _ = NativeMethods.XFlush(_display);
+                    return;
+                }
+
+                // level 1 (Shift variant): on key-down require Shift to be held.
+                // CapsLock is intentionally excluded: slave CapsLock state may not match master's at startup,
+                // so chars uppercase-via-CapsLock fall through to temp-binding (which is CapsLock-independent).
+                if (NativeMethods.XkbKeycodeToKeysym(_display, naturalKeycode, activeGroup, 1) == keysym &&
+                    (!isDown || (modifiers & KeyModifiers.Shift) != 0))
+                {
+                    if (isDown) _naturalHeld[keysym] = naturalKeycode;
+                    _ = NativeMethods.XTestFakeKeyEvent(_display, naturalKeycode, isDown, 0);
+                    _ = NativeMethods.XFlush(_display);
+                    return;
+                }
+            }
+
+            // keysym not at level 0/1 of natural keycode — temp-bind at all levels so modifier state doesn't matter
+            TempBind(keysym, isDown);
         }
     }
 
@@ -185,23 +211,37 @@ public sealed class XorgOutputHandler : IPlatformOutput, ICursorVisibility
             return;
         }
 
-        // keysym has no keycode in the slave's layout — temporarily bind it to an unused keycode
+        lock (_lock)
+        {
+            TempBind(keysym, isDown);
+        }
+    }
+
+    // temporarily binds keysym to an unused keycode for injection, then unbinds on key-up.
+    // fills all levels with the same keysym so modifier state on the slave doesn't affect the result.
+    private void TempBind(ulong keysym, bool isDown)
+    {
         if (isDown)
         {
+            // clear any existing binding for this keysym first (returns its keycode to the pool)
+            if (_tempBindings.TryGetValue(keysym, out var stale))
+            {
+                // release stale key before unmapping to avoid stuck key
+                _ = NativeMethods.XTestFakeKeyEvent(_display, (uint)stale, false, 0);
+                _ = NativeMethods.XFlush(_display);
+                _ = NativeMethods.XChangeKeyboardMapping(_display, stale, _keysymsPerKeycode, _emptyCharSlots, 1);
+                _ = NativeMethods.XSync(_display, false);
+                _unusedKeycodes.Enqueue(stale);
+            }
             if (_unusedKeycodes.Count == 0)
             {
                 _log.LogWarning("No unused keycodes available — dropping keysym 0x{Keysym:X}", keysym);
                 return;
             }
-            // clear any existing binding for this keysym before creating a new one
-            if (_tempBindings.TryGetValue(keysym, out var stale))
-            {
-                _ = NativeMethods.XChangeKeyboardMapping(_display, stale, 1, [0UL], 1);
-                _ = NativeMethods.XSync(_display, false);
-                _unusedKeycodes.Enqueue(stale);
-            }
             var tempKeycode = _unusedKeycodes.Dequeue();
-            _ = NativeMethods.XChangeKeyboardMapping(_display, tempKeycode, 1, [keysym], 1);
+            var filledSlots = new ulong[_keysymsPerKeycode];
+            Array.Fill(filledSlots, keysym);
+            _ = NativeMethods.XChangeKeyboardMapping(_display, tempKeycode, _keysymsPerKeycode, filledSlots, 1);
             _ = NativeMethods.XSync(_display, false);
             _ = NativeMethods.XTestFakeKeyEvent(_display, (uint)tempKeycode, true, 0);
             _ = NativeMethods.XFlush(_display);
@@ -211,7 +251,8 @@ public sealed class XorgOutputHandler : IPlatformOutput, ICursorVisibility
         {
             if (!_tempBindings.TryGetValue(keysym, out var tempKeycode)) return;
             _ = NativeMethods.XTestFakeKeyEvent(_display, (uint)tempKeycode, false, 0);
-            _ = NativeMethods.XChangeKeyboardMapping(_display, tempKeycode, 1, [0UL], 1);
+            _ = NativeMethods.XFlush(_display);
+            _ = NativeMethods.XChangeKeyboardMapping(_display, tempKeycode, _keysymsPerKeycode, _emptyCharSlots, 1);
             _ = NativeMethods.XSync(_display, false);
             _unusedKeycodes.Enqueue(tempKeycode);
             _tempBindings.Remove(keysym);
@@ -260,10 +301,19 @@ public sealed class XorgOutputHandler : IPlatformOutput, ICursorVisibility
         if (!_disposed.TrySet()) return;
         if (_display != nint.Zero)
         {
-            foreach (var tempKeycode in _tempBindings.Values)
-                _ = NativeMethods.XChangeKeyboardMapping(_display, tempKeycode, 1, [0UL], 1);
-            if (_tempBindings.Count > 0)
-                _ = NativeMethods.XSync(_display, false);
+            lock (_lock)
+            {
+                foreach (var (_, kc) in _naturalHeld)
+                    if (kc != 0) _ = NativeMethods.XTestFakeKeyEvent(_display, kc, false, 0);
+                foreach (var tempKeycode in _tempBindings.Values)
+                {
+                    _ = NativeMethods.XTestFakeKeyEvent(_display, (uint)tempKeycode, false, 0);
+                    _ = NativeMethods.XFlush(_display);
+                    _ = NativeMethods.XChangeKeyboardMapping(_display, tempKeycode, _keysymsPerKeycode, _emptyCharSlots, 1);
+                }
+                if (_naturalHeld.Count > 0 || _tempBindings.Count > 0)
+                    _ = NativeMethods.XSync(_display, false);
+            }
             if (_cursorHidden)
                 NativeMethods.XFixesShowCursor(_display, _rootWindow);
             _ = NativeMethods.XCloseDisplay(_display);

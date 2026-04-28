@@ -17,6 +17,7 @@ internal static class MacVirtualKey
     // navigation
     internal const ulong Return = 0x24;
     internal const ulong Tab = 0x30;
+    internal const ulong Space = 0x31;
     internal const ulong Delete = 0x33;       // backspace
     internal const ulong Escape = 0x35;
     internal const ulong ForwardDelete = 0x75;

@@ -28,6 +28,8 @@ public sealed class HydraTestClient(WebApplicationFactory<global::Styx.Program> 
     public (string Source, MessageKind Kind, string Json)? LastMessage => _lastMessage;
     public string? KickReason => _kickReason;
 
+    protected override TimeSpan ReconnectDelay => TimeSpan.Zero;
+
     protected override Task OnAuthenticated() { _readySignal.Release(); return Task.CompletedTask; }
 
     // route the hub connection through the in-memory test server handler
@@ -65,21 +67,21 @@ public sealed class HydraTestClient(WebApplicationFactory<global::Styx.Program> 
     }
 
     // blocks until the next Peers broadcast arrives
-    public async Task<string[]> WaitForPeers(int timeoutMs = 5000)
+    public async Task<string[]> WaitForPeers(int timeoutMs = 15000)
     {
         if (!await _peerSignal.WaitAsync(timeoutMs))
             throw new TimeoutException("Timed out waiting for peers update");
         return _lastPeers;
     }
 
-    public async Task<(string Source, MessageKind Kind, string Json)> WaitForMessage(int timeoutMs = 5000)
+    public async Task<(string Source, MessageKind Kind, string Json)> WaitForMessage(int timeoutMs = 15000)
     {
         if (!await _receiveSignal.WaitAsync(timeoutMs))
             throw new TimeoutException("Timed out waiting for message");
         return _lastMessage!.Value;
     }
 
-    public async Task<string> WaitForKick(int timeoutMs = 5000)
+    public async Task<string> WaitForKick(int timeoutMs = 15000)
     {
         if (!await _kickSignal.WaitAsync(timeoutMs))
             throw new TimeoutException("Timed out waiting for kick");

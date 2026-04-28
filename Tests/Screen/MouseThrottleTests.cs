@@ -29,22 +29,29 @@ public class MouseThrottleTests
     }
 
     [Test]
-    public void MouseMoves_AreThrottled_ToMaxHz()
+    public async Task MouseMoves_AreThrottled_ToMaxHz()
     {
-        // enter virtual screen
-        _platform.FireMouseMove(2559, 720);
-        Assert.That(_platform.IsOnVirtualScreen, Is.True);
-        _relay.Sent.Clear();
+        // frozen clock: all 50 events share the same tick so only the first send fires
+        var (platform, relay, service) = TransitionTestHelper.CreateService(getTickCount: () => 1000L);
+        await service.StartAsync(CancellationToken.None);
+        await BringRemoteOnline(relay);
 
-        var warpX = _platform.WarpX;
-        var warpY = _platform.WarpY;
+        platform.FireMouseMove(2559, 720);
+        Assert.That(platform.IsOnVirtualScreen, Is.True);
+        relay.Sent.Clear();
+
+        var warpX = platform.WarpX;
+        var warpY = platform.WarpY;
 
         for (var i = 0; i < 50; i++)
-            _platform.FireMouseMove(warpX + 5, warpY);
+            platform.FireMouseMove(warpX + 5, warpY);
 
-        var mouseMoves = _relay.Sent.Count(s => s.Kind == MessageKind.MouseMove);
+        var mouseMoves = relay.Sent.Count(s => s.Kind == MessageKind.MouseMove);
         Assert.That(mouseMoves, Is.LessThan(15),
             $"Expected throttling but got {mouseMoves} MouseMove sends for 50 events");
+
+        await service.StopAsync(CancellationToken.None);
+        platform.Dispose();
     }
 
     [Test]

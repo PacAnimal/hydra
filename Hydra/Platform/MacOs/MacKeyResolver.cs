@@ -9,7 +9,7 @@ namespace Hydra.Platform.MacOs;
 internal sealed class MacKeyResolver
 {
     private uint _deadKeyState;
-    private KeyModifiers _previousModifiers;
+    private readonly HashSet<int> _pressedModifierVks = [];
     private readonly Dictionary<int, CharClassification> _keyDownId = [];
 
     private static readonly nint Carbon =
@@ -19,10 +19,13 @@ internal sealed class MacKeyResolver
     private static readonly nint TisPropertyUnicodeKeyLayoutData =
         Marshal.ReadIntPtr(NativeLibrary.GetExport(Carbon, "kTISPropertyUnicodeKeyLayoutData"));
 
-    internal KeyEvent? Resolve(int eventType, nint eventRef)
+    internal KeyEvent?[]? Resolve(int eventType, nint eventRef)
     {
         if (eventType == NativeMethods.KCGEventFlagsChanged)
-            return ResolveModifierChange(eventRef);
+        {
+            var ev = ResolveModifierChange(eventRef);
+            return ev is not null ? [ev] : null;
+        }
 
         if (eventType is NativeMethods.KCGEventKeyDown or NativeMethods.KCGEventKeyUp)
             return ResolveKeyEvent(eventType, eventRef);
@@ -35,19 +38,19 @@ internal sealed class MacKeyResolver
         var vkCode = (int)NativeMethods.CGEventGetIntegerValueField(eventRef, NativeMethods.KCGKeyboardEventKeycode);
         var cgFlags = NativeMethods.CGEventGetFlags(eventRef);
         var newMods = MapModifiers(cgFlags);
-
-        var changed = _previousModifiers ^ newMods;
-        _previousModifiers = newMods;
-
-        if (changed == KeyModifiers.None) return null;
         if (!MacSpecialKeyMap.Instance.TryGet((ulong)vkCode, out var specialKey)) return null;
 
-        var isPress = (newMods & changed) != 0;
+        // determine press/release by tracking per-vkCode state, not just generic modifier flags.
+        // generic flags can't distinguish L vs R (e.g. Shift_R pressed while Shift_L held keeps Shift set,
+        // so changed=0, making the old isPress=(newMods&changed)!=0 logic always wrong in that case).
+        var isPress = _pressedModifierVks.Add(vkCode);
+        if (!isPress) _pressedModifierVks.Remove(vkCode);
+
         var type = isPress ? KeyEventType.KeyDown : KeyEventType.KeyUp;
         return KeyEvent.Special(type, specialKey, newMods);
     }
 
-    private KeyEvent? ResolveKeyEvent(int eventType, nint eventRef)
+    private KeyEvent?[]? ResolveKeyEvent(int eventType, nint eventRef)
     {
         var vkCode = (int)NativeMethods.CGEventGetIntegerValueField(eventRef, NativeMethods.KCGKeyboardEventKeycode);
         var cgFlags = NativeMethods.CGEventGetFlags(eventRef);
@@ -55,7 +58,7 @@ internal sealed class MacKeyResolver
 
         // key-up: replay the keyId that was emitted on key-down (modifier state may have changed)
         if (eventType == NativeMethods.KCGEventKeyUp)
-            return KeyResolver.ReplayKeyUp(_keyDownId, vkCode, mods);
+            return [KeyResolver.ReplayKeyUp(_keyDownId, vkCode, mods)];
 
         // suppress auto-repeat: if vkCode already in _keyDownId, this is an OS repeat — drop it
         if (_keyDownId.ContainsKey(vkCode)) return null;
@@ -77,35 +80,78 @@ internal sealed class MacKeyResolver
         };
         if (kpChar.HasValue)
         {
+            KeyEvent? kpDeadFlush = null;
+            if (_deadKeyState != 0)
+                kpDeadFlush = ResolveCharacter((int)MacVirtualKey.Space, 0, KeyModifiers.None);
             _deadKeyState = 0;
             _keyDownId[vkCode] = new CharClassification(kpChar, null);
-            return KeyEvent.Char(KeyEventType.KeyDown, kpChar.Value, mods);
+            var digitEvent = KeyEvent.Char(KeyEventType.KeyDown, kpChar.Value, mods);
+            return kpDeadFlush is not null ? [kpDeadFlush, digitEvent] : [digitEvent];
         }
         // keypad decimal/separator: use UCKeyTranslate for locale-correct char ('.' or ',')
         if ((ulong)vkCode == MacVirtualKey.KeypadDecimal)
         {
+            KeyEvent? decDeadFlush = null;
+            if (_deadKeyState != 0)
+                decDeadFlush = ResolveCharacter((int)MacVirtualKey.Space, 0, KeyModifiers.None);
             _deadKeyState = 0;
             var decEvent = ResolveCharacter(vkCode, cgFlags, mods);
             if (decEvent is not null)
                 _keyDownId[vkCode] = new CharClassification(decEvent.Character, decEvent.Key);
-            return decEvent;
+            else
+                _keyDownId[vkCode] = new CharClassification(null, null);  // sentinel: ensure key-up is replayed
+            if (decDeadFlush is not null) return decEvent is not null ? [decDeadFlush, decEvent] : [decDeadFlush];
+            return decEvent is not null ? [decEvent] : null;
         }
 
         // special key (function keys, arrows, modifiers, keypad operators)?
         if (MacSpecialKeyMap.Instance.TryGet((ulong)vkCode, out var specialKey))
         {
-            _deadKeyState = 0;
+            KeyEvent? deadFlush = null;
+            if (!specialKey.IsModifier())
+            {
+                // non-modifier special key aborts dead key composition — emit spacing form first.
+                // call UCKeyTranslate with Space to resolve the pending dead key to its spacing form
+                // (e.g. dead_grave pending → ` emitted before Tab/Esc/arrow).
+                if (_deadKeyState != 0)
+                    deadFlush = ResolveCharacter((int)MacVirtualKey.Space, 0, KeyModifiers.None);
+                _deadKeyState = 0;  // clear in case UCKeyTranslate didn't reset it (dead key with no spacing form)
+            }
             _keyDownId[vkCode] = new CharClassification(null, specialKey);
-            return KeyEvent.Special(KeyEventType.KeyDown, specialKey, mods);
+            var specialEvent = KeyEvent.Special(KeyEventType.KeyDown, specialKey, mods);
+            return deadFlush is not null ? [deadFlush, specialEvent] : [specialEvent];
         }
 
-        // resolve character via UCKeyTranslate
+        // resolve character via UCKeyTranslate.
+        // if a Cmd/Ctrl shortcut would clear a pending dead key inside ResolveCharacter, flush it first
+        // so the spacing form is emitted before the shortcut char (dead_grave + Cmd+a → ` then Cmd+a).
+        var isCommandChar = (cgFlags & (NativeMethods.KCGEventFlagMaskCommand | NativeMethods.KCGEventFlagMaskControl)) != 0;
+        KeyEvent? charDeadFlush = null;
+        if (isCommandChar && _deadKeyState != 0)
+        {
+            charDeadFlush = ResolveCharacter((int)MacVirtualKey.Space, 0, KeyModifiers.None);
+            _deadKeyState = 0;
+        }
         var ev = ResolveCharacter(vkCode, cgFlags, mods);
         if (ev is not null)
         {
             _keyDownId[vkCode] = new CharClassification(ev.Character, ev.Key);
         }
-        return ev;
+        else if (_deadKeyState != 0)
+        {
+            // dead key consumed — track sentinel so OS auto-repeat events for this vkCode are suppressed.
+            // without this, each OS repeat fires UCKeyTranslate again with non-zero dead state, which
+            // interprets the repeat as a second dead-key press and emits the spacing form prematurely.
+            _keyDownId[vkCode] = new CharClassification(null, null);
+        }
+        else if (charDeadFlush is not null)
+        {
+            // pre-flushed a dead key but this key produced no event (e.g. Cmd+dead_key that maps to nothing) —
+            // sentinel suppresses OS auto-repeat, which would otherwise re-enter UCKeyTranslate unguarded.
+            _keyDownId[vkCode] = new CharClassification(null, null);
+        }
+        if (charDeadFlush is not null) return ev is not null ? [charDeadFlush, ev] : [charDeadFlush];
+        return ev is not null ? [ev] : null;
     }
 
     private KeyEvent? ResolveCharacter(int vkCode, ulong cgFlags, KeyModifiers mods)
@@ -123,6 +169,8 @@ internal sealed class MacKeyResolver
 
             // is this a command (ctrl or cmd held)? used for AltGr detection
             bool isCommand = (cgFlags & (NativeMethods.KCGEventFlagMaskCommand | NativeMethods.KCGEventFlagMaskControl)) != 0;
+            // shortcut context: discard any pending dead key — it would otherwise compose with the shortcut character
+            if (isCommand) _deadKeyState = 0;
 
             // include Shift, CapsLock, and Option (when not a Cmd/Ctrl shortcut) in UCKeyTranslate.
             // Hydra resolves the final character server-side, so Option must be included to get
@@ -138,13 +186,16 @@ internal sealed class MacKeyResolver
             unsafe
             {
                 ushort* chars = stackalloc ushort[2];
+                // kUCKeyTranslateNoDeadKeysBit=1: prevent Cmd/Ctrl+dead_key from activating dead-key state.
+                // without this, pressing Cmd+` (dead_grave on some layouts) leaves _deadKeyState non-zero,
+                // so the next character press (e.g. 'a') composes 'à' instead of 'a'.
                 var status = NativeMethods.UCKeyTranslate(
                     layoutPtr,
                     (ushort)(vkCode & 0xFFu),
                     NativeMethods.KUCKeyActionDown,
                     ucMods,
                     NativeMethods.LMGetKbdType(),
-                    0,
+                    isCommand ? 1u : 0u,
                     ref _deadKeyState,
                     2,
                     out var count,
@@ -152,7 +203,8 @@ internal sealed class MacKeyResolver
 
                 if (status != 0) return null;
 
-                // count=0 with non-zero dead state means a dead key was consumed; next keypress will compose
+                // count=0 with non-zero dead state means a dead key was consumed; next keypress will compose.
+                // _deadKeyState intentionally not cleared here — xkb needs it for composition on the next keypress.
                 if (count == 0 && _deadKeyState != 0) return null;
 
                 _deadKeyState = 0;
@@ -166,7 +218,10 @@ internal sealed class MacKeyResolver
             // detect AltGr: option was held and produced a printable character (not a keyboard shortcut)
             bool optionHeld = (cgFlags & NativeMethods.KCGEventFlagMaskAlternate) != 0;
             if (DetectAltGr(classified.Ch, isCommand, optionHeld))
+            {
                 mods |= KeyModifiers.AltGr;
+                mods &= ~(KeyModifiers.Alt | KeyModifiers.Shift); // AltGr and Alt are mutually exclusive; Shift consumed by level-3 resolution
+            }
 
             if (classified.Ch.HasValue) return KeyEvent.Char(KeyEventType.KeyDown, classified.Ch.Value, mods);
             return KeyEvent.Special(KeyEventType.KeyDown, classified.Key!.Value, mods);
@@ -175,6 +230,16 @@ internal sealed class MacKeyResolver
         {
             NativeMethods.CFRelease(layoutSource);
         }
+    }
+
+    // resets composition and press-tracking state after the event tap is re-enabled.
+    // missed key-up events while the tap was disabled leave stale entries in _pressedModifierVks
+    // and _keyDownId; clearing them prevents phantom held-key state.
+    internal void Reset()
+    {
+        _deadKeyState = 0;
+        _pressedModifierVks.Clear();
+        _keyDownId.Clear();
     }
 
     // maps CGEventFlags to the platform-independent KeyModifiers bitmask.
@@ -187,7 +252,9 @@ internal sealed class MacKeyResolver
         if ((cgFlags & NativeMethods.KCGEventFlagMaskAlternate) != 0) mods |= KeyModifiers.Alt;
         if ((cgFlags & NativeMethods.KCGEventFlagMaskCommand) != 0) mods |= KeyModifiers.Super;
         if ((cgFlags & NativeMethods.KCGEventFlagMaskAlphaShift) != 0) mods |= KeyModifiers.CapsLock;
-        if ((cgFlags & NativeMethods.KCGEventFlagMaskNumericPad) != 0) mods |= KeyModifiers.NumLock;
+        // KCGEventFlagMaskNumericPad is a source flag ("event came from numpad"), not a NumLock state indicator.
+        // macOS has no traditional NumLock; mapping this flag to KeyModifiers.NumLock causes spurious NumLock
+        // bits on every numpad keystroke regardless of lock state.
         return mods;
     }
 

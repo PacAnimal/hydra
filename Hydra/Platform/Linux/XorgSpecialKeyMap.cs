@@ -91,6 +91,7 @@ internal sealed class XorgSpecialKeyMap : SpecialKeyMap
 
         // modifiers
         { XorgVirtualKey.ISO_Level3_Shift, SpecialKey.AltGr },
+        { 0xFF7E, SpecialKey.AltGr },  // Mode_switch — legacy AltGr keysym on older X11 configurations
         { XorgVirtualKey.Shift_L, SpecialKey.Shift_L },
         { XorgVirtualKey.Shift_R, SpecialKey.Shift_R },
         { XorgVirtualKey.Control_L, SpecialKey.Control_L },

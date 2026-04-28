@@ -89,9 +89,10 @@ public class XorgSpecialKeyMapTests
     public void NoDuplicateSpecialKeys()
     {
         // ISO_Left_Tab intentionally shares SpecialKey.Tab with Tab (Shift+Tab alias)
+        // Mode_switch intentionally shares SpecialKey.AltGr with ISO_Level3_Shift (legacy AltGr alias)
         var unintentionalDupes = XorgSpecialKeyMap.Instance.Entries
             .GroupBy(kvp => kvp.Value)
-            .Where(g => g.Count() > 1 && g.Key != SpecialKey.Tab)
+            .Where(g => g.Count() > 1 && g.Key is not (SpecialKey.Tab or SpecialKey.AltGr))
             .ToList();
         using (Assert.EnterMultipleScope())
         {
