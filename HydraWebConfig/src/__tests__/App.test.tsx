@@ -39,7 +39,7 @@ describe('App', () => {
   it('resets to initial state', async () => {
     const user = userEvent.setup()
     render(<App />)
-    await user.click(screen.getByRole('button', { name: /\+/i }))
+    await user.click(screen.getByRole('button', { name: '+' }))
     expect(screen.getByText('Profile 2')).toBeInTheDocument()
     await user.click(screen.getByText('Reset'))
     expect(screen.queryByText('Profile 2')).not.toBeInTheDocument()
