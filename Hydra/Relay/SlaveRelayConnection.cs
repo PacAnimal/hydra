@@ -12,6 +12,7 @@ public class SlaveRelayConnection : RelayConnection
 {
     private readonly IPlatformOutput _output;
     private readonly ILogger<RelayConnection> _log;
+    private readonly IHydraProfile _profile;
     private readonly IScreenDetector _screens;
     private readonly IWorldState _peerState;
     private readonly SlaveCursorHider _cursorHider;
@@ -41,6 +42,7 @@ public class SlaveRelayConnection : RelayConnection
     {
         _output = output;
         _log = log;
+        _profile = profile;
         _screens = screens;
         _peerState = peerState;
         _cursorHider = cursorHider;
@@ -80,15 +82,23 @@ public class SlaveRelayConnection : RelayConnection
                 await HandleMasterConfig(sourceHost, body);
                 break;
             case MessageKind.MouseMove:
-                HandleInputMessage<MouseMoveMessage>(body, kind, sourceHost,
-                    move => MoveToCachedScreen(move.Screen, move.X, move.Y));
+                HandleInputMessage<MouseMoveMessage>(body, kind, sourceHost, move =>
+                {
+                    if (_profile.DebugMouse)
+                        _log.LogInformation("[mouse] move from {Host}: screen={Screen} x={X} y={Y}", sourceHost, move.Screen, move.X, move.Y);
+                    MoveToCachedScreen(move.Screen, move.X, move.Y);
+                });
                 break;
             case MessageKind.KeyEvent:
                 HandleInputMessage<KeyEventMessage>(body, kind, sourceHost, HandleKeyEvent);
                 break;
             case MessageKind.MouseMoveDelta:
-                HandleInputMessage<MouseMoveDeltaMessage>(body, kind, sourceHost,
-                    delta => _output.MoveMouseRelative(delta.Dx, delta.Dy));
+                HandleInputMessage<MouseMoveDeltaMessage>(body, kind, sourceHost, delta =>
+                {
+                    if (_profile.DebugMouse)
+                        _log.LogInformation("[mouse] delta from {Host}: dx={Dx} dy={Dy}", sourceHost, delta.Dx, delta.Dy);
+                    _output.MoveMouseRelative(delta.Dx, delta.Dy);
+                });
                 break;
             case MessageKind.MouseButton:
                 HandleInputMessage<MouseButtonMessage>(body, kind, sourceHost, _output.InjectMouseButton);

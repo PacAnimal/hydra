@@ -803,6 +803,8 @@ public class InputRouter(
             if (intDx == 0 && intDy == 0) return;
             st.PendingDx -= intDx;
             st.PendingDy -= intDy;
+            if (profile.DebugMouse)
+                log.LogInformation("[mouse] delta to {Host}: dx={Dx} dy={Dy}", screen.Host, intDx, intDy);
             payload = MessageSerializer.Encode(MessageKind.MouseMoveDelta, new MouseMoveDeltaMessage(intDx, intDy));
         }
         else
@@ -810,6 +812,8 @@ public class InputRouter(
             // absolute mode: send current virtual position, discard accumulated deltas
             st.PendingDx = 0;
             st.PendingDy = 0;
+            if (profile.DebugMouse)
+                log.LogInformation("[mouse] move to {Host}: screen={Screen} x={X} y={Y}", screen.Host, screen.Name, (int)st.Mouse.X, (int)st.Mouse.Y);
             payload = MessageSerializer.Encode(MessageKind.MouseMove, new MouseMoveMessage(screen.Name, (int)st.Mouse.X, (int)st.Mouse.Y));
         }
 
