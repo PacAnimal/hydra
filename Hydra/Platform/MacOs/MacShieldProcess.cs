@@ -35,6 +35,7 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
     private volatile TaskCompletionSource<string>? _pendingReply; // completed by ReadOutput when echo arrives
     private Process? _process;
     private TaskCompletionSource? _initialStateTcs;
+    private TaskCompletionSource? _authSettledTcs; // completed when location auth leaves notDetermined
     private readonly Toggle _stopping = new();
     private volatile string _lastState = CmdHide; // last show/hide command; re-applied after unexpected restart
     private const int SendReplyTimeoutMs = 5_000;     // how long to wait for shield to echo a command back
@@ -55,11 +56,25 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
 
     // starts the shield and waits up to `timeout` for the first network state report.
     // called pre-DI so that config resolution has accurate network state on startup.
+    // if location auth is still notDetermined at timeout, extends the wait to handle the
+    // first-run case where macOS needs time to prompt/grant location permission.
     internal async Task WaitForInitialState(TimeSpan timeout)
     {
         _initialStateTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _authSettledTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         StartProcess();
         await Task.WhenAny(_initialStateTcs.Task, Task.Delay(timeout));
+
+        // if ssid arrived, we're done
+        if (_initialStateTcs.Task.IsCompleted) return;
+
+        // if auth is still undetermined, wait for it to settle (location permission prompt)
+        if (networkState.WifiAuthStatus == 0)
+            await Task.WhenAny(_initialStateTcs.Task, _authSettledTcs.Task, Task.Delay(TimeSpan.FromSeconds(8)));
+
+        // if auth is now authorized, give ssid a moment to arrive
+        if (!_initialStateTcs.Task.IsCompleted && networkState.WifiAuthStatus is 3 or 4)
+            await Task.WhenAny(_initialStateTcs.Task, Task.Delay(TimeSpan.FromSeconds(2)));
     }
 
     public Task StartAsync(CancellationToken cancellationToken)
@@ -246,6 +261,7 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
                         3 or 4 => "authorized",
                         _ => authStatus.ToString()
                     });
+                    if (authStatus != 0) _authSettledTcs?.TrySetResult();
                 }
                 else if (line == PfxTransferCancel)
                 {
