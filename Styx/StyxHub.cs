@@ -7,7 +7,7 @@ using Styx.Services;
 
 namespace Styx;
 
-public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, IStyxPasswordProvider passwordProvider, ILogger<StyxHub> log) : Hub<IStyxClient>, IStyxServer
+public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, IStyxPasswordProvider passwordProvider, ILogger<StyxHub> log, StyxOptions options) : Hub<IStyxClient>, IStyxServer
 {
     [AllowAnonymousHub]
     public async Task<RelayLoginResponse> Authenticate(RelayLogin login)
@@ -66,6 +66,10 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, IStyxPass
 
         var identity = await registry.GetIdentity(Context.ConnectionId);
         if (identity == null) return;
+
+        if (options.DebugMessages)
+            log.LogInformation("MSG net={NetworkId} {Sender} → [{Targets}] {Size}B",
+                identity.NetworkId, identity.HostName, string.Join(", ", targetHosts), payload.Length);
 
         foreach (var targetHost in targetHosts)
         {

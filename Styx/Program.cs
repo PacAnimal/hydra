@@ -36,6 +36,9 @@ services.AddSignalR(options =>
     options.MaximumParallelInvocationsPerClient = Constants.MaxParallelInvocations;
 }).AddMessagePackProtocol();
 
+var debugMessages = Environment.GetEnvironmentVariable(Constants.DebugMessagesEnvVar)?.EqualsIgnoreCase("true") ?? false;
+services.AddSingleton(new StyxOptions(debugMessages));
+
 services.AddSingleton<IClientRegistry, ClientRegistry>();
 services.AddHostedService<IPeerBroadcaster, PeerBroadcastService>();
 services.AddSingleton<IStyxPasswordProvider, EnvironmentStyxPasswordProvider>();
@@ -87,6 +90,7 @@ app.MapPost("/api/network-config", async (NetworkConfigRequest request, IStyxPas
 
 
 app.Logger.LogInformation("Styx listening on port {Port}", port);
+if (debugMessages) app.Logger.LogInformation("Message debug logging enabled");
 app.Run();
 return 0;
 

@@ -3,6 +3,7 @@ namespace Styx;
 public static class Constants
 {
     public const string RelayPasswordEnvVar = "RELAY_PASSWORD";
+    public const string DebugMessagesEnvVar = "DEBUG_MESSAGES";
 
     // SignalR hub tuning
     public const int KeepAliveSeconds = 15;
