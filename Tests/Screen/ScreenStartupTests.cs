@@ -26,8 +26,9 @@ public class ScreenStartupTests
         });
 
         var logs = new ErrorCapture();
+        var platform = new FakePlatform();
         var service = new InputRouter(
-            new FakePlatform(), profile, new NullRelaySender(),
+            platform, platform, profile, new NullRelaySender(),
             new FakeScreenDetector(), NullLoggerFactory.Instance, logs.CreateLogger(), new NullScreenSaverSync(), new NullClipboardSync(),
             FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification());
 

@@ -44,22 +44,22 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, bool d
         NativeMethods.SetCursorPos(x, y);
     }
 
-    public Task HideCursor()
+    public ValueTask HideCursor()
     {
         // hide cursor immediately — fast counter op, safe inside hook callback
         _shield.HideCursorNow();
         // window management (SetWindowPos, SetForegroundWindow) is slow; post to hook thread
         // so it runs outside the hook callback and doesn't trigger the LL hook timeout
         NativeMethods.PostThreadMessage(_hookThreadId, WmShieldShow, nint.Zero, nint.Zero);
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
-    public Task ShowCursor()
+    public ValueTask ShowCursor()
     {
         // restore cursor synchronously, same as HideCursor hides it — then post shield teardown
         _shield.ShowCursorNow();
         NativeMethods.PostThreadMessage(_hookThreadId, WmShieldHide, nint.Zero, nint.Zero);
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
     public async Task StartEventTap(
@@ -168,7 +168,7 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, bool d
             || (NativeMethods.GetKeyState(0x06) & 0x8000) != 0;
     }
 
-    public void Dispose() => StopEventTap();
+    public ValueTask DisposeAsync() { StopEventTap(); return ValueTask.CompletedTask; }
 
     // called on the hook thread — checks if the desktop has changed and reinstalls hooks if needed
     private void CheckHookHealth()

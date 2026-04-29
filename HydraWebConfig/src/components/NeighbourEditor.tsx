@@ -1,4 +1,5 @@
 import type { NeighbourConfig, Direction } from '../types'
+import { RangeSlider } from './RangeSlider'
 
 const DIRECTIONS: Direction[] = ['Left', 'Right', 'Up', 'Down']
 
@@ -68,45 +69,19 @@ export function NeighbourEditor({ neighbour, onChange, onRemove }: Props) {
           </div>
         </div>
 
-        <div className="range-editor">
-          <div className="range-label">Source edge range (%)</div>
-          <div className="range-inputs">
-            <input
-              type="number" min="0" max="100"
-              value={sourceStart}
-              onChange={e => onChange({ sourceStart: Number(e.target.value) })}
-            />
-            <span className="range-sep">–</span>
-            <input
-              type="number" min="0" max="100"
-              value={sourceEnd}
-              onChange={e => onChange({ sourceEnd: Number(e.target.value) })}
-            />
-          </div>
-          <div className="range-bar-wrap">
-            <div className="range-bar" style={{ left: `${sourceStart}%`, width: `${Math.max(0, sourceEnd - sourceStart)}%` }} />
-          </div>
-        </div>
+        <RangeSlider
+          label="Source edge range"
+          start={sourceStart}
+          end={sourceEnd}
+          onChange={(s, e) => onChange({ sourceStart: s === 0 ? undefined : s, sourceEnd: e === 100 ? undefined : e })}
+        />
 
-        <div className="range-editor">
-          <div className="range-label">Dest edge range (%)</div>
-          <div className="range-inputs">
-            <input
-              type="number" min="0" max="100"
-              value={destStart}
-              onChange={e => onChange({ destStart: Number(e.target.value) })}
-            />
-            <span className="range-sep">–</span>
-            <input
-              type="number" min="0" max="100"
-              value={destEnd}
-              onChange={e => onChange({ destEnd: Number(e.target.value) })}
-            />
-          </div>
-          <div className="range-bar-wrap">
-            <div className="range-bar" style={{ left: `${destStart}%`, width: `${Math.max(0, destEnd - destStart)}%` }} />
-          </div>
-        </div>
+        <RangeSlider
+          label="Dest edge range"
+          start={destStart}
+          end={destEnd}
+          onChange={(s, e) => onChange({ destStart: s === 0 ? undefined : s, destEnd: e === 100 ? undefined : e })}
+        />
 
         <label className="checkbox-label mt-8">
           <input

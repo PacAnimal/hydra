@@ -23,7 +23,7 @@ public class ScreenLockTests
     public async Task TearDown()
     {
         await _service.StopAsync(CancellationToken.None);
-        _platform.Dispose();
+        await _platform.DisposeAsync();
     }
 
     // -- lock toggle --

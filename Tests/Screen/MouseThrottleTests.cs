@@ -25,7 +25,7 @@ public class MouseThrottleTests
     public async Task TearDown()
     {
         await _service.StopAsync(CancellationToken.None);
-        _platform.Dispose();
+        await _platform.DisposeAsync();
     }
 
     [Test]
@@ -51,7 +51,7 @@ public class MouseThrottleTests
             $"Expected throttling but got {mouseMoves} MouseMove sends for 50 events");
 
         await service.StopAsync(CancellationToken.None);
-        platform.Dispose();
+        await platform.DisposeAsync();
     }
 
     [Test]

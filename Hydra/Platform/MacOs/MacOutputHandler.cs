@@ -6,7 +6,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform.MacOs;
 
-public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
+public sealed class MacOutputHandler : IPlatformOutput, ICursor
 {
     private readonly ILogger<MacOutputHandler> _log;
 
@@ -637,28 +637,21 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursorVisibility
         _ => 4,
     };
 
-    public void HideCursor()
+    public ValueTask HideCursor()
     {
-        if (_cursorHidden) return;
+        if (_cursorHidden) return ValueTask.CompletedTask;
         NativeMethods.EnableBackgroundCursorManipulation();
         _ = NativeMethods.CGDisplayHideCursor(_display);
         _cursorHidden = true;
+        return ValueTask.CompletedTask;
     }
 
-    public void ShowCursor()
+    public ValueTask ShowCursor()
     {
-        if (!_cursorHidden) return;
+        if (!_cursorHidden) return ValueTask.CompletedTask;
         _ = NativeMethods.CGDisplayShowCursor(_display);
         _cursorHidden = false;
-    }
-
-    public CursorPosition GetCursorPosition()
-    {
-        var evt = NativeMethods.CGEventCreate(nint.Zero);
-        if (evt == nint.Zero) return new CursorPosition(0, 0);
-        var pos = NativeMethods.CGEventGetLocation(evt);
-        NativeMethods.CFRelease(evt);
-        return new CursorPosition((int)pos.X, (int)pos.Y);
+        return ValueTask.CompletedTask;
     }
 
     public void Dispose()

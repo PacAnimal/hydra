@@ -17,11 +17,8 @@ public record DetectedScreen(
 
 public record KeyRepeatSettings(int DelayMs, int RateMs);
 
-public interface IPlatformInput : IDisposable
+public interface IPlatformInput : IAsyncDisposable, ICursor
 {
-    void WarpCursor(int x, int y);
-    Task HideCursor();
-    Task ShowCursor();
     Task StartEventTap(
         Action<double, double> onMouseMove,
         Action<double, double>? onMouseDelta,

@@ -30,7 +30,9 @@ Hydra runs on the machine with the physical keyboard and mouse (the **master**).
 
 ## Configuration
 
-Edit `hydra.conf` (sits next to the binary):
+The easiest way to create and edit your config is the **[Hydra Config Editor](https://hydra-config.c-net.org/)** — a web UI that lets you visually arrange screens, configure profiles, and download a ready-to-use `hydra.conf`.
+
+Alternatively, edit `hydra.conf` directly (sits next to the binary, or set `CONFIG=/path/to/hydra.conf` to use a different location):
 
 ```json
 {

@@ -116,6 +116,97 @@ describe('useHydraConfig', () => {
     })
   })
 
+  describe('undo / redo', () => {
+    it('undoes the last change', () => {
+      const { result } = renderHook(() => useHydraConfig())
+      act(() => { result.current.addProfile() })
+      expect(result.current.state.profiles).toHaveLength(2)
+      act(() => { result.current.undo() })
+      expect(result.current.state.profiles).toHaveLength(1)
+    })
+
+    it('redoes after undo', () => {
+      const { result } = renderHook(() => useHydraConfig())
+      act(() => { result.current.addProfile() })
+      act(() => { result.current.undo() })
+      act(() => { result.current.redo() })
+      expect(result.current.state.profiles).toHaveLength(2)
+    })
+
+    it('clears redo stack on new change after undo', () => {
+      const { result } = renderHook(() => useHydraConfig())
+      act(() => { result.current.addProfile() })
+      act(() => { result.current.undo() })
+      expect(result.current.canRedo).toBe(true)
+      act(() => { result.current.addProfile() })
+      expect(result.current.canRedo).toBe(false)
+    })
+
+    it('setActiveIndex does not push to history', () => {
+      const { result } = renderHook(() => useHydraConfig())
+      act(() => { result.current.addProfile() })
+      act(() => { result.current.undo() })
+      // only the addProfile is in history; setActiveIndex shouldn't add more
+      act(() => { result.current.setActiveIndex(0) })
+      expect(result.current.canUndo).toBe(false)
+    })
+
+    it('import clears history', () => {
+      const { result } = renderHook(() => useHydraConfig())
+      act(() => { result.current.addProfile() })
+      const json = JSON.stringify({ profiles: [{ mode: 'Slave' }] })
+      act(() => { result.current.importJson(json) })
+      expect(result.current.canUndo).toBe(false)
+    })
+
+    it('reset clears history', () => {
+      const { result } = renderHook(() => useHydraConfig())
+      act(() => { result.current.addProfile() })
+      act(() => { result.current.reset() })
+      expect(result.current.canUndo).toBe(false)
+    })
+  })
+
+  describe('duplicateProfile', () => {
+    it('inserts a copy after the source with (copy) suffix', () => {
+      const { result } = renderHook(() => useHydraConfig())
+      act(() => { result.current.updateCurrent({ profileName: 'Home' }) })
+      act(() => { result.current.duplicateProfile(0) })
+      expect(result.current.state.profiles).toHaveLength(2)
+      expect(result.current.state.profiles[1].profileName).toBe('Home (copy)')
+      expect(result.current.state.activeIndex).toBe(1)
+    })
+  })
+
+  describe('moveProfile', () => {
+    it('swaps a profile left', () => {
+      const { result } = renderHook(() => useHydraConfig())
+      act(() => { result.current.addProfile() })
+      act(() => { result.current.updateCurrent({ profileName: 'B' }) })
+      // profiles: [untitled, B], activeIndex: 1
+      act(() => { result.current.moveProfile(1, 'left') })
+      expect(result.current.state.profiles[0].profileName).toBe('B')
+      expect(result.current.state.activeIndex).toBe(0)
+    })
+
+    it('swaps a profile right', () => {
+      const { result } = renderHook(() => useHydraConfig())
+      act(() => { result.current.updateCurrent({ profileName: 'A' }) })
+      act(() => { result.current.addProfile() })
+      act(() => { result.current.setActiveIndex(0) })
+      act(() => { result.current.moveProfile(0, 'right') })
+      expect(result.current.state.profiles[1].profileName).toBe('A')
+      expect(result.current.state.activeIndex).toBe(1)
+    })
+
+    it('is a no-op when moving left from index 0', () => {
+      const { result } = renderHook(() => useHydraConfig())
+      const before = result.current.state
+      act(() => { result.current.moveProfile(0, 'left') })
+      expect(result.current.state).toBe(before)
+    })
+  })
+
   describe('addHost / removeHost', () => {
     it('addHost appends an empty host to the active profile', () => {
       const { result } = renderHook(() => useHydraConfig())

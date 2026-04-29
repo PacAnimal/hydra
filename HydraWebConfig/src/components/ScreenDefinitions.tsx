@@ -1,19 +1,22 @@
 import type { ScreenDefinition } from '../types'
+import type { ValidationError } from '../utils/validation'
 
 interface CardProps {
   screen: ScreenDefinition
   index: number
+  error?: string
   onChange: (patch: Partial<ScreenDefinition>) => void
   onRemove: () => void
 }
 
-function ScreenDefinitionCard({ screen, index, onChange, onRemove }: CardProps) {
+function ScreenDefinitionCard({ screen, index, error, onChange, onRemove }: CardProps) {
   return (
-    <div className="screen-card">
+    <div className={`screen-card${error ? ' card-error' : ''}`}>
       <div className="host-header">
         <span className="host-label">Screen {index + 1}</span>
         <button className="btn-remove" onClick={onRemove} aria-label="remove screen definition">✕</button>
       </div>
+      {error && <div className="field-error-msg" style={{ marginBottom: 10 }}>{error}</div>}
       <div className="field-row">
         <div className="field flex-grow">
           <label>Display Name</label>
@@ -73,12 +76,18 @@ function ScreenDefinitionCard({ screen, index, onChange, onRemove }: CardProps) 
 
 interface Props {
   screens: ScreenDefinition[]
+  errors?: ValidationError[]
+  profileIndex: number
   onAdd: () => void
   onRemove: (si: number) => void
   onUpdate: (si: number, patch: Partial<ScreenDefinition>) => void
 }
 
-export function ScreenDefinitions({ screens, onAdd, onRemove, onUpdate }: Props) {
+export function ScreenDefinitions({ screens, errors = [], profileIndex, onAdd, onRemove, onUpdate }: Props) {
+  function screenError(si: number): string | undefined {
+    return errors.find(e => e.path === `profiles[${profileIndex}].screenDefinitions[${si}]`)?.message
+  }
+
   return (
     <div className="section">
       <h2>Screen Definitions</h2>
@@ -88,6 +97,7 @@ export function ScreenDefinitions({ screens, onAdd, onRemove, onUpdate }: Props)
           key={s.id ?? si}
           screen={s}
           index={si}
+          error={screenError(si)}
           onChange={patch => onUpdate(si, patch)}
           onRemove={() => onRemove(si)}
         />

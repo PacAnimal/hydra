@@ -23,7 +23,7 @@ public class ClipboardSyncTests
             await _service.StopAsync(CancellationToken.None);
             _service = null;
         }
-        _platform?.Dispose();
+        if (_platform != null) await _platform.DisposeAsync();
         _platform = null;
     }
 
@@ -414,7 +414,7 @@ public class ClipboardSyncTests
         _platform = new FakePlatform();
         var relay = new FakeRelay();
         _service = new InputRouter(
-            _platform, TransitionTestHelper.TestConfig, relay,
+            _platform, _platform, TransitionTestHelper.TestConfig, relay,
             new FakeScreenDetector(), NullLoggerFactory.Instance, NullLogger<InputRouter>.Instance,
             new NullScreenSaverSync(), clipboard,
             FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification());

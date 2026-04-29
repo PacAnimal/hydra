@@ -214,16 +214,17 @@ if (config != null)
         else
             throw new PlatformNotSupportedException($"Unsupported OS: {Environment.OSVersion}");
 
+        services.AddSingleton<ICursor>(sp => sp.GetRequiredService<IPlatformInput>());
+        services.AddHostedService<ICursorHider, CursorHiderService>();
         services.AddHostedService<InputRouter>();
     }
     else if (profile.Mode == Mode.Slave)
     {
-        // register concrete handler under its own type so ICursorVisibility can resolve to it directly
         if (OperatingSystem.IsMacOS())
         {
             services.AddSingleton<MacOutputHandler>();
             services.AddSingleton<IPlatformOutput>(sp => new CoalescingOutputWrapper(sp.GetRequiredService<MacOutputHandler>()));
-            services.AddSingleton<ICursorVisibility>(sp => sp.GetRequiredService<MacOutputHandler>());
+            services.AddSingleton<ICursor>(sp => sp.GetRequiredService<MacOutputHandler>());
         }
         else if (OperatingSystem.IsWindows())
         {
@@ -235,18 +236,19 @@ if (config != null)
                 handler.Initialize();
                 return new CoalescingOutputWrapper(handler);
             });
-            services.AddSingleton<ICursorVisibility>(sp => sp.GetRequiredService<WindowsOutputHandler>());
+            services.AddSingleton<ICursor>(sp => sp.GetRequiredService<WindowsOutputHandler>());
 #pragma warning restore CA1416
         }
         else if (OperatingSystem.IsLinux())
         {
             services.AddSingleton<XorgOutputHandler>();
             services.AddSingleton<IPlatformOutput>(sp => new CoalescingOutputWrapper(sp.GetRequiredService<XorgOutputHandler>()));
-            services.AddSingleton<ICursorVisibility>(sp => sp.GetRequiredService<XorgOutputHandler>());
+            services.AddSingleton<ICursor>(sp => sp.GetRequiredService<XorgOutputHandler>());
         }
         else
             throw new PlatformNotSupportedException($"Unsupported OS: {Environment.OSVersion}");
-        services.AddSingleton<SlaveCursorHider>();
+
+        services.AddHostedService<ICursorHider, CursorHiderService>();
 
         // forwarder buffers log entries; SlaveLogSender drains them to masters
         var forwarder = new SlaveLogForwarder();

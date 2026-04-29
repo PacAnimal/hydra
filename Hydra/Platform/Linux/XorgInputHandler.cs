@@ -121,25 +121,25 @@ public sealed class XorgInputHandler : IPlatformInput
         _ = NativeMethods.XFlush(_display);
     }
 
-    public Task HideCursor()
+    public ValueTask HideCursor()
     {
-        if (_cursorHidden) return Task.CompletedTask;
+        if (_cursorHidden) return ValueTask.CompletedTask;
         _ = NativeMethods.XMapWindow(_display, _inputSink);
         _ = NativeMethods.XRaiseWindow(_display, _inputSink);
         NativeMethods.XFixesHideCursor(_display, _rootWindow);
         _ = NativeMethods.XFlush(_display);
         _cursorHidden = true;
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
-    public Task ShowCursor()
+    public ValueTask ShowCursor()
     {
-        if (!_cursorHidden) return Task.CompletedTask;
+        if (!_cursorHidden) return ValueTask.CompletedTask;
         _ = NativeMethods.XUnmapWindow(_display, _inputSink);
         NativeMethods.XFixesShowCursor(_display, _rootWindow);
         _ = NativeMethods.XFlush(_display);
         _cursorHidden = false;
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
     public bool IsOnVirtualScreen
@@ -224,16 +224,17 @@ public sealed class XorgInputHandler : IPlatformInput
         _eventThread?.Join(TimeSpan.FromSeconds(2));
     }
 
-    public void Dispose()
+    public async ValueTask DisposeAsync()
     {
         StopEventTap();
         _keyboard.Ungrab();
         _pointer.Ungrab();
         UngrabLockHotkey();
-        if (_cursorHidden) _ = ShowCursor();
+        if (_cursorHidden) await ShowCursor();
         if (_inputSink != nint.Zero) _ = NativeMethods.XDestroyWindow(_display, _inputSink);
         if (_display != nint.Zero) _ = NativeMethods.XCloseDisplay(_display);
     }
+
 
     private void HandleEvent(ref XEvent ev)
     {

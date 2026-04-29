@@ -4,7 +4,7 @@ using Hydra.Platform;
 
 namespace Tests.Setup;
 
-public sealed class FakePlatform : IPlatformInput
+public sealed class FakePlatform : IPlatformInput, ICursorHider
 {
     private Action<double, double>? _onMouseMove;
     private Action<double, double>? _onMouseDelta;
@@ -63,7 +63,11 @@ public sealed class FakePlatform : IPlatformInput
     public KeyRepeatSettings GetKeyRepeatSettings() => new(500, 33);
     public void StopEventTap() { }
     public void WarpCursor(int x, int y) { WarpX = x; WarpY = y; }
-    public Task HideCursor() { HideCursorCalled = true; return Task.CompletedTask; }
-    public Task ShowCursor() { ShowCursorCalled = true; return Task.CompletedTask; }
-    public void Dispose() { }
+    // ICursorHider — what InputRouter calls
+    void ICursorHider.Hide() { HideCursorCalled = true; }
+    void ICursorHider.Show() { ShowCursorCalled = true; }
+
+    public ValueTask HideCursor() { HideCursorCalled = true; return ValueTask.CompletedTask; }
+    public ValueTask ShowCursor() { ShowCursorCalled = true; return ValueTask.CompletedTask; }
+    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }

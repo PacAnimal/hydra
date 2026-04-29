@@ -24,7 +24,7 @@ public class RemoteOnlyTests
     public async Task TearDown()
     {
         await _service.StopAsync(CancellationToken.None);
-        _platform.Dispose();
+        await _platform.DisposeAsync();
     }
 
     // -- auto-entry --

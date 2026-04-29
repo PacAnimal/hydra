@@ -14,6 +14,7 @@ namespace Hydra.Screen;
 
 public class InputRouter(
     IPlatformInput platform,
+    ICursorHider cursorHider,
     IHydraProfile profile,
     IRelaySender relay,
     IScreenDetector screens,
@@ -139,7 +140,7 @@ public class InputRouter(
         if (_state.Mouse.IsOnVirtualScreen)
         {
             platform.IsOnVirtualScreen = false;
-            await platform.ShowCursor();
+            cursorHider.Show();
         }
     }
 
@@ -245,7 +246,7 @@ public class InputRouter(
         {
             _fileTransfer.Abort(relay, $"peer '{disconnectedHost}' disconnected");
             ReturnToLocalScreen(warpX, warpY);
-            await platform.ShowCursor();
+            cursorHider.Show();
             log.LogInformation("Remote peer '{Name}' disconnected — returned to local screen", disconnectedHost);
         }
 
@@ -292,7 +293,7 @@ public class InputRouter(
         {
             _fileTransfer.Abort(relay, "relay disconnected");
             ReturnToLocalScreen(warpX, warpY);
-            await platform.ShowCursor();
+            cursorHider.Show();
             log.LogWarning("Relay disconnected — returned to local screen from '{Host}'", disconnectedHost);
         }
     }
@@ -316,7 +317,7 @@ public class InputRouter(
                     _fileTransfer.Abort(relay, "screensaver activated");
                     LeaveRemoteScreen(disconnectedHost);
                     ReturnToLocalScreen(warpX, warpY);
-                    await platform.ShowCursor();
+                    cursorHider.Show();
                 }
             }
 
@@ -347,7 +348,7 @@ public class InputRouter(
                 {
                     var peerScreens = await _peerState.GetPeerScreensSnapshot();
                     var remoteInfo = GetRemoteScreensAndScales(st.Screens, peerScreens, dest);
-                    await platform.HideCursor();
+                    cursorHider.Hide();
                     platform.IsOnVirtualScreen = true;
                     ApplyEnterScreen(st, dest, remoteInfo, savedX, savedY);
                     platform.WarpCursor(st.WarpX, st.WarpY);
@@ -646,7 +647,7 @@ public class InputRouter(
                                 FlushMouseDelta(st);
                                 st.Mouse.LeaveScreen();
                                 platform.IsOnVirtualScreen = false;
-                                await platform.ShowCursor();
+                                cursorHider.Show();
                                 LeaveRemoteScreen(leavingHost);
                             }
                         }
@@ -885,7 +886,7 @@ public class InputRouter(
         // block edge crossing while any button is held
         if (platform.AnyMouseButtonHeld()) return;
 
-        await platform.HideCursor();
+        cursorHider.Hide();
         platform.IsOnVirtualScreen = true;
         ApplyEnterScreen(st, hit.Destination, remoteInfo, hit.EntryX, hit.EntryY);
         // warp immediately so pre-queued events compute large dx → caught by bogus filter
@@ -971,7 +972,7 @@ public class InputRouter(
                         var leavingScreen = st.Mouse.CurrentScreen;
                         st.Mouse.LeaveScreen();
                         ReturnToLocalScreen(globalX, globalY);
-                        await platform.ShowCursor();
+                        cursorHider.Show();
                         st.ActiveLocalScreen = targetScreen;
                         UpdateWarpPoint(st, targetScreen);
                         log.LogInformation("Returned to local screen ← ({X}, {Y})", globalX, globalY);
@@ -1042,7 +1043,7 @@ public class InputRouter(
         var entryX = target.Width / 2;
         var entryY = target.Height / 2;
 
-        await platform.HideCursor();
+        cursorHider.Hide();
         platform.IsOnVirtualScreen = true;
         ApplyEnterScreen(st, target, remoteInfo, entryX, entryY);
         st.LockedToScreen = true;
@@ -1086,7 +1087,7 @@ public class InputRouter(
                     var globalY = targetScreen.Y + hit.EntryY;
                     st.Mouse.LeaveScreen();
                     ReturnToLocalScreen(globalX, globalY);
-                    await platform.ShowCursor();
+                    cursorHider.Show();
                     st.ActiveLocalScreen = targetScreen;
                     UpdateWarpPoint(st, targetScreen);
                     log.LogInformation("Returned to local screen ← ({X}, {Y})", globalX, globalY);
@@ -1147,12 +1148,13 @@ public class InputRouter(
         PullClipboardFromHost(host);
     }
 
-    private static void UpdateWarpPoint(LocalMasterState st, ScreenRect screen)
+    private void UpdateWarpPoint(LocalMasterState st, ScreenRect screen)
     {
         st.HalfW = screen.Width / 2;
         st.HalfH = screen.Height / 2;
         st.WarpX = screen.X + st.HalfW;
         st.WarpY = screen.Y + st.HalfH;
+        cursorHider.UpdateWarpPoint(st.WarpX, st.WarpY);
     }
 
     private static ScreenRect? FindLocalScreenAt(LocalMasterState st, int x, int y) =>

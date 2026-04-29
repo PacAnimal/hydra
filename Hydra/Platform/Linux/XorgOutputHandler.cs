@@ -6,7 +6,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform.Linux;
 
-public sealed class XorgOutputHandler : IPlatformOutput, ICursorVisibility
+public sealed class XorgOutputHandler : IPlatformOutput, ICursor
 {
     private bool _cursorHidden;
     private readonly nint _display;
@@ -275,27 +275,22 @@ public sealed class XorgOutputHandler : IPlatformOutput, ICursorVisibility
         return 0;
     }
 
-    public void HideCursor()
+    public ValueTask HideCursor()
     {
-        if (_cursorHidden) return;
+        if (_cursorHidden) return ValueTask.CompletedTask;
         NativeMethods.XFixesHideCursor(_display, _rootWindow);
         _ = NativeMethods.XFlush(_display);
         _cursorHidden = true;
+        return ValueTask.CompletedTask;
     }
 
-    public void ShowCursor()
+    public ValueTask ShowCursor()
     {
-        if (!_cursorHidden) return;
+        if (!_cursorHidden) return ValueTask.CompletedTask;
         NativeMethods.XFixesShowCursor(_display, _rootWindow);
         _ = NativeMethods.XFlush(_display);
         _cursorHidden = false;
-    }
-
-    public CursorPosition GetCursorPosition()
-    {
-        NativeMethods.XQueryPointer(_display, _rootWindow,
-            out _, out _, out var rootX, out var rootY, out _, out _, out uint _);
-        return new CursorPosition(rootX, rootY);
+        return ValueTask.CompletedTask;
     }
 
     public void Dispose()

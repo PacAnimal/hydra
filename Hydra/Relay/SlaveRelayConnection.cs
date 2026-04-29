@@ -15,7 +15,7 @@ public class SlaveRelayConnection : RelayConnection
     private readonly IHydraProfile _profile;
     private readonly IScreenDetector _screens;
     private readonly IWorldState _peerState;
-    private readonly SlaveCursorHider _cursorHider;
+    private readonly ICursorHider _cursorHider;
     private readonly IScreenSaverSync _screenSaverSync;
     private readonly IScreensaverSuppressor _screensaverSuppressor;
     private readonly IClipboardSync _clipboardSync;
@@ -35,9 +35,12 @@ public class SlaveRelayConnection : RelayConnection
     // cached screen layout for synchronous mouse move handling (avoids async overhead on the relay hot path)
     private volatile LocalScreenSnapshot? _cachedScreens;
 
+    // masters whose cursor is currently on this slave's screen
+    private readonly HashSet<string> _onScreenMasters = new(StringComparer.OrdinalIgnoreCase);
+
     // ReSharper disable once ConvertToPrimaryConstructor
 #pragma warning disable IDE0290
-    public SlaveRelayConnection(IHydraProfile profile, ILogger<RelayConnection> log, IPlatformOutput output, IScreenDetector screens, IWorldState peerState, SlaveCursorHider cursorHider, IScreenSaverSync screenSaverSync, IScreensaverSuppressor screensaverSuppressor, IClipboardSync clipboardSync, FileTransferService fileTransfer, IFileSelectionDetector selectionDetector, IOsdNotification osd)
+    public SlaveRelayConnection(IHydraProfile profile, ILogger<RelayConnection> log, IPlatformOutput output, IScreenDetector screens, IWorldState peerState, ICursorHider cursorHider, IScreenSaverSync screenSaverSync, IScreensaverSuppressor screensaverSuppressor, IClipboardSync clipboardSync, FileTransferService fileTransfer, IFileSelectionDetector selectionDetector, IOsdNotification osd)
         : base(profile, log, peerState)
     {
         _output = output;
@@ -111,13 +114,16 @@ public class SlaveRelayConnection : RelayConnection
                 if (enter != null)
                 {
                     MoveToCachedScreen(enter.Screen, enter.X, enter.Y);
-                    _cursorHider.OnEnterScreen(sourceHost);
+                    _onScreenMasters.Add(sourceHost);
+                    _cursorHider.Show();
                 }
                 break;
             case MessageKind.LeaveScreen:
                 CancelAllRepeatTimers();
                 ReleaseAllKeys();
-                _cursorHider.OnLeaveScreen(sourceHost);
+                _onScreenMasters.Remove(sourceHost);
+                if (_onScreenMasters.Count == 0)
+                    _cursorHider.Hide();
                 break;
             case MessageKind.ScreensaverSync:
                 var ss = body.ParseMessage<ScreensaverSyncMessage>(_log, kind.ToString());
@@ -171,12 +177,14 @@ public class SlaveRelayConnection : RelayConnection
     {
         _fileTransfer.Abort(this, "relay disconnected");
         var masters = await _peerState.GetMasters();
-        foreach (var master in masters)
-            _cursorHider.OnMasterDisconnected(master);
+        _onScreenMasters.Clear();
         CancelAllRepeatTimers();
         ReleaseAllKeys();
         if (masters.Length > 0)
+        {
+            _cursorHider.Show();
             _screensaverSuppressor.Restore();
+        }
         await _peerState.PruneMasters([]);
         _log.LogWarning("Relay connection lost — cursor restored on slave");
     }
@@ -191,21 +199,28 @@ public class SlaveRelayConnection : RelayConnection
         var anyMasterLeft = false;
         foreach (var departed in before.Where(h => !afterSet.Contains(h)))
         {
-            _cursorHider.OnMasterDisconnected(departed);
+            _onScreenMasters.Remove(departed);
             anyMasterLeft = true;
         }
-        // restore screensaver suppression when all masters have disconnected
-        if (anyMasterLeft && after.Length == 0)
-            _screensaverSuppressor.Restore();
+        if (anyMasterLeft)
+        {
+            if (after.Length == 0)
+                _cursorHider.Show();
+            else if (_onScreenMasters.Count == 0)
+                _cursorHider.Hide();
+            if (after.Length == 0)
+                _screensaverSuppressor.Restore();
+        }
         await base.OnPeers(hostNames);
     }
 
-    // parses and dispatches an input event, calling _cursorHider.OnMasterActivity first
+    // parses and dispatches an input event; shows cursor if the master is actively on screen
     private void HandleInputMessage<T>(ReadOnlyMemory<byte> body, MessageKind kind, string sourceHost, Action<T> handler) where T : class
     {
         var msg = body.ParseMessage<T>(_log, kind.ToString());
         if (msg == null) return;
-        _cursorHider.OnMasterActivity(sourceHost);
+        if (_onScreenMasters.Contains(sourceHost))
+            _cursorHider.Show();
         handler(msg);
     }
 
@@ -321,10 +336,10 @@ public class SlaveRelayConnection : RelayConnection
         var before = await _peerState.GetMasters();
         await _peerState.AddMaster(masterHost, config);
         var after = await _peerState.GetMasters();
-        // only signal connected if this is a genuinely new master
         if (after.Length > before.Length)
         {
-            _cursorHider.OnMasterConnected();
+            if (after.Length == 1)
+                _cursorHider.Hide();
             _screensaverSuppressor.Suppress();
         }
         var snapshot = await _screens.Get();

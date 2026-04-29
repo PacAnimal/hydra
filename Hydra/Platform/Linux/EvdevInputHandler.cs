@@ -34,8 +34,8 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
 
     public bool IsAccessibilityTrusted() => true;
 
-    public Task HideCursor() => Task.CompletedTask;   // no-op: headless
-    public Task ShowCursor() => Task.CompletedTask;   // no-op: headless
+    public ValueTask HideCursor() => ValueTask.CompletedTask;   // no-op: headless
+    public ValueTask ShowCursor() => ValueTask.CompletedTask;   // no-op: headless
     public void WarpCursor(int x, int y) { }          // no-op: remote-only uses deltas
 
     // evdev is headless/remote-only — no local screen, no OS window snapping to worry about
@@ -255,7 +255,7 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
         }
     }
 
-    public void Dispose()
+    public ValueTask DisposeAsync()
     {
         StopEventTap();
         _keyResolver?.Dispose();
@@ -263,5 +263,6 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
             _ = EvdevNativeMethods.close(fd);
         _keyboardFds.Clear();
         _mouseFds.Clear();
+        return ValueTask.CompletedTask;
     }
 }

@@ -47,7 +47,7 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
         _ = NativeMethods.CGWarpMouseCursorPosition(new CGPoint { X = x, Y = y });
     }
 
-    public async Task HideCursor()
+    public async ValueTask HideCursor()
     {
         using var guard = await _cursorLock.WaitForDisposable();
         if (_cursorHidden) return;
@@ -63,7 +63,7 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
         NativeMethods.CGSetLocalEventsSuppressionInterval(0.0001);
     }
 
-    public async Task ShowCursor()
+    public async ValueTask ShowCursor()
     {
         using var guard = await _cursorLock.WaitForDisposable();
         if (!_cursorHidden) return;
@@ -150,10 +150,10 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
         _tapThread?.Join(TimeSpan.FromSeconds(2));
     }
 
-    public void Dispose()
+    public async ValueTask DisposeAsync()
     {
         StopEventTap();
-        if (_cursorHidden) AsyncHelper.RunSync(ShowCursor);
+        if (_cursorHidden) await ShowCursor();
     }
 
     private nint TapCallback(nint proxy, int type, nint eventRef, nint userInfo)

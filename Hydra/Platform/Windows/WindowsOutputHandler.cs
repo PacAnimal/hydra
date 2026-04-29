@@ -6,7 +6,7 @@ using Microsoft.Extensions.Logging;
 namespace Hydra.Platform.Windows;
 
 [SupportedOSPlatform("windows")]
-public sealed class WindowsOutputHandler(ILogger<WindowsOutputHandler> log, IScreenDetector screens) : IPlatformOutput, ICursorVisibility
+public sealed class WindowsOutputHandler(ILogger<WindowsOutputHandler> log, IScreenDetector screens) : IPlatformOutput, ICursor
 {
     private readonly WindowsCursorSnapshot _cursor = new();
     private readonly DesktopInputDispatcher _dispatcher = new(log);
@@ -62,15 +62,9 @@ public sealed class WindowsOutputHandler(ILogger<WindowsOutputHandler> log, IScr
         _dispatcher.Dispatch(new InjectMouseScrollCommand(msg));
     }
 
-    public void HideCursor() => _cursor.Hide();
+    public ValueTask HideCursor() { _cursor.Hide(); return ValueTask.CompletedTask; }
 
-    public void ShowCursor() => _cursor.Show();
-
-    public CursorPosition GetCursorPosition()
-    {
-        NativeMethods.GetCursorPos(out var pt);
-        return new CursorPosition(pt.x, pt.y);
-    }
+    public ValueTask ShowCursor() { _cursor.Show(); return ValueTask.CompletedTask; }
 
     public void Dispose()
     {

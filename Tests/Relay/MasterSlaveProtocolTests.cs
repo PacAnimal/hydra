@@ -64,7 +64,8 @@ public class MasterSlaveProtocolTests
         var config = MakeConfig("slave-pc");
         var relay = new FakeRelay();
         var logs = new LogCapture();
-        var service = new InputRouter(new FakePlatform(), config, relay, new FakeScreenDetector(), logs, NullLogger<InputRouter>.Instance, new NullScreenSaverSync(), new NullClipboardSync(),
+        var platform = new FakePlatform();
+        var service = new InputRouter(platform, platform, config, relay, new FakeScreenDetector(), logs, NullLogger<InputRouter>.Instance, new NullScreenSaverSync(), new NullClipboardSync(),
             FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification());
         await service.StartAsync(CancellationToken.None);
 
@@ -88,7 +89,8 @@ public class MasterSlaveProtocolTests
         var config = MakeConfig("slave-pc");
         var relay = new FakeRelay();
         var logs = new LogCapture();
-        var service = new InputRouter(new FakePlatform(), config, relay, new FakeScreenDetector(), logs, NullLogger<InputRouter>.Instance, new NullScreenSaverSync(), new NullClipboardSync(),
+        var platform = new FakePlatform();
+        var service = new InputRouter(platform, platform, config, relay, new FakeScreenDetector(), logs, NullLogger<InputRouter>.Instance, new NullScreenSaverSync(), new NullClipboardSync(),
             FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification());
         await service.StartAsync(CancellationToken.None);
 
@@ -156,46 +158,32 @@ public class MasterSlaveProtocolTests
     // -- slave relay disconnect --
 
     [Test]
-    public async Task SlaveRelay_OnDisconnected_EntersNoMasterState()
+    public async Task SlaveRelay_OnDisconnected_ShowsCursor()
     {
         var cursor = new FakeCursorVisibility();
-        var hider = new SlaveCursorHider(cursor, NullLogger<SlaveCursorHider>.Instance);
-        var slave = new TestableSlaveRelay(hider: hider);
+        var slave = new TestableSlaveRelay(cursorHider: cursor);
 
         await slave.SimulateMasterConfig("master-pc");
-        Assert.That(hider.State, Is.EqualTo(SlaveCursorState.Hidden), "pre-condition: cursor hidden when master connected");
+        Assert.That(cursor.IsHidden, Is.True, "pre-condition: cursor hidden when master connected");
 
         await slave.SimulateDisconnected();
 
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(hider.State, Is.EqualTo(SlaveCursorState.NoMaster));
-            Assert.That(cursor.IsHidden, Is.False);
-        }
-
-        hider.Dispose();
+        Assert.That(cursor.IsHidden, Is.False);
     }
 
     [Test]
     public async Task SlaveRelay_OnDisconnected_ClearsStateForReconnect()
     {
         var cursor = new FakeCursorVisibility();
-        var hider = new SlaveCursorHider(cursor, NullLogger<SlaveCursorHider>.Instance);
-        var slave = new TestableSlaveRelay(hider: hider);
+        var slave = new TestableSlaveRelay(cursorHider: cursor);
 
         await slave.SimulateMasterConfig("master-pc");
         await slave.SimulateDisconnected();
 
-        // master reconnects — cursor should hide again (master count goes from 0 to 1)
+        // master reconnects — cursor should hide again
         await slave.SimulateMasterConfig("master-pc");
 
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(hider.State, Is.EqualTo(SlaveCursorState.Hidden));
-            Assert.That(cursor.IsHidden, Is.True);
-        }
-
-        hider.Dispose();
+        Assert.That(cursor.IsHidden, Is.True);
     }
 
     // -- per-master log level handshake --
@@ -275,9 +263,12 @@ public class MasterSlaveProtocolTests
             Hosts = [new HostConfig { Name = "main" }, .. slaveNames.Select(n => new HostConfig { Name = n })],
         });
 
-    private static InputRouter MakeService(IHydraProfile profile, IRelaySender relay) =>
-        new(new FakePlatform(), profile, relay, new FakeScreenDetector(), NullLoggerFactory.Instance, NullLogger<InputRouter>.Instance, new NullScreenSaverSync(), new NullClipboardSync(),
+    private static InputRouter MakeService(IHydraProfile profile, IRelaySender relay)
+    {
+        var p = new FakePlatform();
+        return new(p, p, profile, relay, new FakeScreenDetector(), NullLoggerFactory.Instance, NullLogger<InputRouter>.Instance, new NullScreenSaverSync(), new NullClipboardSync(),
             FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification());
+    }
 
     private static List<string> MasterConfigTargets(FakeRelay relay) =>
         [.. relay.Sent.Where(s => s.Kind == MessageKind.MasterConfig).SelectMany(s => s.Targets)];
