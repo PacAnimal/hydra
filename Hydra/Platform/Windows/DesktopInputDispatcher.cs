@@ -243,6 +243,10 @@ internal sealed class DesktopInputDispatcher : IDisposable
     {
         var isUp = msg.Type == KeyEventType.KeyUp;
 
+        // sync CapsLock/NumLock state before injecting (skip when injecting the lock keys themselves)
+        if (!isUp && msg.Key is not (SpecialKey.CapsLock or SpecialKey.NumLock))
+            SyncLockState(msg.Modifiers);
+
         if (msg.Character is { } ch)
         {
             var scan = NativeMethods.VkKeyScanW(ch); // char implicit-converts to ushort
@@ -429,6 +433,23 @@ internal sealed class DesktopInputDispatcher : IDisposable
 
     // injects LWin down (if not already injected) and marks it as used as a modifier.
     // called whenever a key arrives while _winKeyDown is set, to flush the buffered Win press.
+    private void SyncLockState(KeyModifiers mods)
+    {
+        SyncLockKey(WinVirtualKey.Capital, want: (mods & KeyModifiers.CapsLock) != 0, extendedKey: false);
+        SyncLockKey(WinVirtualKey.Numlock, want: (mods & KeyModifiers.NumLock) != 0, extendedKey: true);
+    }
+
+    private unsafe void SyncLockKey(int vk, bool want, bool extendedKey)
+    {
+        var have = (NativeMethods.GetKeyState(vk) & 0x01) != 0;
+        if (have == want) return;
+        var flags = extendedKey ? NativeMethods.KEYEVENTF_EXTENDEDKEY : 0u;
+        var inputs = stackalloc INPUT[2];
+        inputs[0] = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = (ushort)vk, dwFlags = flags } };
+        inputs[1] = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = (ushort)vk, dwFlags = flags | NativeMethods.KEYEVENTF_KEYUP } };
+        _ = NativeMethods.SendInput(2, inputs, sizeof(INPUT));
+    }
+
     private unsafe void FlushWin(bool isUp)
     {
         if (!_winUsedAsModifier && !isUp)

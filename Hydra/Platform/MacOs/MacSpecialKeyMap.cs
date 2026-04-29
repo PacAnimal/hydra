@@ -52,8 +52,16 @@ internal sealed class MacSpecialKeyMap : SpecialKeyMap
         { MacVirtualKey.F20, SpecialKey.F20 },
 
         // keypad
-        // note: Keypad0–9 are intentionally absent — MacKeyResolver emits them as char events ('0'–'9')
-        // before reaching this map, so KP_0–KP_9 entries here would be unreachable dead code.
+        { MacVirtualKey.Keypad0, SpecialKey.KP_0 },
+        { MacVirtualKey.Keypad1, SpecialKey.KP_1 },
+        { MacVirtualKey.Keypad2, SpecialKey.KP_2 },
+        { MacVirtualKey.Keypad3, SpecialKey.KP_3 },
+        { MacVirtualKey.Keypad4, SpecialKey.KP_4 },
+        { MacVirtualKey.Keypad5, SpecialKey.KP_5 },
+        { MacVirtualKey.Keypad6, SpecialKey.KP_6 },
+        { MacVirtualKey.Keypad7, SpecialKey.KP_7 },
+        { MacVirtualKey.Keypad8, SpecialKey.KP_8 },
+        { MacVirtualKey.Keypad9, SpecialKey.KP_9 },
         { MacVirtualKey.KeypadDecimal, SpecialKey.KP_Decimal },
         { MacVirtualKey.KeypadEquals, SpecialKey.KP_Equal },
         { MacVirtualKey.KeypadMultiply, SpecialKey.KP_Multiply },

@@ -15,28 +15,27 @@ public class WinKeyResolverTests
     private static KeyEvent[]? Up(WinKeyResolver r, uint vk) =>
         r.Resolve(NativeMethods.WM_KEYUP, Hook(vk));
 
-    [TestCase((uint)WinVirtualKey.Numpad0, '0')]
-    [TestCase((uint)WinVirtualKey.Numpad1, '1')]
-    [TestCase((uint)WinVirtualKey.Numpad5, '5')]
-    [TestCase((uint)WinVirtualKey.Numpad9, '9')]
-    public void NumpadDigit_WithNumLockOn_EmitsCharEvent(uint vk, char expected)
+    [TestCase((uint)WinVirtualKey.Numpad0, SpecialKey.KP_0)]
+    [TestCase((uint)WinVirtualKey.Numpad1, SpecialKey.KP_1)]
+    [TestCase((uint)WinVirtualKey.Numpad5, SpecialKey.KP_5)]
+    [TestCase((uint)WinVirtualKey.Numpad9, SpecialKey.KP_9)]
+    public void NumpadDigit_WithNumLockOn_EmitsKpSpecialKey(uint vk, SpecialKey expected)
     {
-        // WinVirtualKey.Numpad0-9 only appear in the LL hook when NumLock is active.
-        // The resolver should emit a char event, not SpecialKey.KP_*, so the slave
-        // doesn't need to have NumLock active to produce the digit.
+        // VK_NUMPAD0-9 only appear in the LL hook when NumLock is active.
+        // The resolver emits KP_0-KP_9 so the slave injects the physical numpad key.
         var r = new WinKeyResolver();
         var events = Down(r, vk);
         Assert.That(events, Has.Length.EqualTo(1));
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(events![0].Character, Is.EqualTo(expected));
-            Assert.That(events[0].Key, Is.Null);
+            Assert.That(events![0].Key, Is.EqualTo(expected));
+            Assert.That(events[0].Character, Is.Null);
             Assert.That(events[0].Type, Is.EqualTo(KeyEventType.KeyDown));
         }
     }
 
     [Test]
-    public void NumpadDigit_KeyUp_ReplaysSameChar()
+    public void NumpadDigit_KeyUp_ReplaysSameSpecialKey()
     {
         var r = new WinKeyResolver();
         Down(r, WinVirtualKey.Numpad7);
@@ -44,7 +43,7 @@ public class WinKeyResolverTests
         Assert.That(up, Has.Length.EqualTo(1));
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(up![0].Character, Is.EqualTo('7'));
+            Assert.That(up![0].Key, Is.EqualTo(SpecialKey.KP_7));
             Assert.That(up[0].Type, Is.EqualTo(KeyEventType.KeyUp));
         }
     }

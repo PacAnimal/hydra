@@ -158,20 +158,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
         }
         else if (msg.Character is { } ch)
         {
-            // sync CapsLock state on key-down: IOHIDPostEvent relies on the global HID modifier state
-            // set by NX_FLAGSCHANGED — if master had CapsLock on at connect time, _modifierFlags starts
-            // at 0 (off) on the slave. correct it from the per-character modifier before injecting.
-            if (isDown)
-            {
-                var wantCapsLock = (msg.Modifiers & KeyModifiers.CapsLock) != 0;
-                var haveCapsLock = (_modifierFlags & NativeMethods.KCGEventFlagMaskAlphaShift) != 0;
-                if (wantCapsLock != haveCapsLock)
-                {
-                    _modifierFlags ^= NativeMethods.KCGEventFlagMaskAlphaShift;
-                    if (!PostHidModifier((ushort)MacVirtualKey.CapsLock))
-                        PostFlagsChanged((ushort)MacVirtualKey.CapsLock, true);
-                }
-            }
+            if (isDown) SyncCapsLock(msg.Modifiers);
 
             // AltGr characters: inject via unicode string — the VK path requires knowing which
             // Mac key+modifier combination produces the char, but AltGr chars from Linux/Windows
@@ -206,6 +193,8 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
         }
         else if (msg.Key is { } key2)
         {
+            if (isDown && key2 != SpecialKey.CapsLock) SyncCapsLock(msg.Modifiers);
+
             if (key2 == SpecialKey.MissionControl)
             {
                 if (isDown) System.Diagnostics.Process.Start("open", ["-a", "Mission Control"]);
@@ -223,6 +212,19 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
                     PostCgKey((ushort)vk, isDown, flags);
             }
         }
+    }
+
+    // syncs slave CapsLock state to match the master's modifier bits before injecting a key event.
+    // IOHIDPostEvent relies on the global HID modifier state (NX_FLAGSCHANGED); if master had CapsLock
+    // on at connect time, _modifierFlags starts at 0 on the slave and must be corrected here.
+    private void SyncCapsLock(KeyModifiers mods)
+    {
+        var want = (mods & KeyModifiers.CapsLock) != 0;
+        var have = (_modifierFlags & NativeMethods.KCGEventFlagMaskAlphaShift) != 0;
+        if (want == have) return;
+        _modifierFlags ^= NativeMethods.KCGEventFlagMaskAlphaShift;
+        if (!PostHidModifier((ushort)MacVirtualKey.CapsLock))
+            PostFlagsChanged((ushort)MacVirtualKey.CapsLock, true);
     }
 
     public void InjectMouseButton(MouseButtonMessage msg)

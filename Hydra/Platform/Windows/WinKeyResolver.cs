@@ -88,13 +88,13 @@ internal sealed class WinKeyResolver
         var flushed = FlushDeferredLCtrl();
 
         // numpad digits: only delivered when NumLock is on (NumLock off gives navigation VKs instead).
-        // emit as char events so the slave doesn't need to have NumLock active to produce a digit.
+        // emit as KP_0-KP_9 SpecialKey events so the slave injects the physical numpad key.
         if (vk is >= WinVirtualKey.Numpad0 and <= WinVirtualKey.Numpad9)
         {
             if (_keyDownId.ContainsKey(vk)) return Events(flushed, null);
-            var digit = (char)('0' + (vk - WinVirtualKey.Numpad0));
-            _keyDownId[vk] = new CharClassification(digit, null);
-            return Combine(flushed, FlushPendingDeadKey(), KeyEvent.Char(KeyEventType.KeyDown, digit, mods));
+            var kpKey = (SpecialKey)((uint)SpecialKey.KP_0 + (vk - WinVirtualKey.Numpad0));
+            _keyDownId[vk] = new CharClassification(null, kpKey);
+            return Combine(flushed, FlushPendingDeadKey(), KeyEvent.Special(KeyEventType.KeyDown, kpKey, mods));
         }
         // numpad decimal/separator: use ToUnicodeEx for locale-correct char ('.' on US, ',' on European layouts)
         if (vk == WinVirtualKey.Decimal)

@@ -68,31 +68,6 @@ internal sealed class MacKeyResolver
         // suppress auto-repeat: if vkCode already in _keyDownId, this is an OS repeat — drop it
         if (_keyDownId.ContainsKey(vkCode)) return null;
 
-        // keypad digits: always produce char events (mac has no traditional numlock state)
-        var kpChar = (ulong)vkCode switch
-        {
-            MacVirtualKey.Keypad0 => (char?)'0',
-            MacVirtualKey.Keypad1 => '1',
-            MacVirtualKey.Keypad2 => '2',
-            MacVirtualKey.Keypad3 => '3',
-            MacVirtualKey.Keypad4 => '4',
-            MacVirtualKey.Keypad5 => '5',
-            MacVirtualKey.Keypad6 => '6',
-            MacVirtualKey.Keypad7 => '7',
-            MacVirtualKey.Keypad8 => '8',
-            MacVirtualKey.Keypad9 => '9',
-            _ => null,
-        };
-        if (kpChar.HasValue)
-        {
-            KeyEvent?[]? kpDeadFlush = null;
-            if (_deadKeyState != 0)
-                kpDeadFlush = DeadFlushPair();
-            _deadKeyState = 0;
-            _keyDownId[vkCode] = new CharClassification(kpChar, null);
-            var digitEvent = KeyEvent.Char(KeyEventType.KeyDown, kpChar.Value, mods);
-            return kpDeadFlush is not null ? [.. kpDeadFlush, digitEvent] : [digitEvent];
-        }
         // keypad decimal/separator: use UCKeyTranslate for locale-correct char ('.' or ',')
         if ((ulong)vkCode == MacVirtualKey.KeypadDecimal)
         {

@@ -75,9 +75,16 @@ public sealed class XorgOutputHandler : IPlatformOutput, ICursor
         _ = NativeMethods.XFlush(_display);
     }
 
+    // tracks expected lock-key state so rapid events don't see stale XkbGetState results
+    private byte? _pendingLockedMods;
+
     public void InjectKey(KeyEventMessage msg)
     {
         var isDown = msg.Type == KeyEventType.KeyDown;
+
+        // sync CapsLock/NumLock state before injecting (skip when injecting the lock keys themselves)
+        if (isDown && msg.Key is not (SpecialKey.CapsLock or SpecialKey.NumLock))
+            SyncLockState(msg.Modifiers);
 
         if (msg.Character is { } ch)
         {
@@ -106,6 +113,9 @@ public sealed class XorgOutputHandler : IPlatformOutput, ICursor
             var keysym = SpecialKeyToKeysym(key);
             if (keysym != 0)
                 InjectKeysym(keysym, isDown);
+            // invalidate tracked state so next sync re-queries from server
+            if (key is SpecialKey.CapsLock or SpecialKey.NumLock)
+                _pendingLockedMods = null;
         }
     }
 
@@ -273,6 +283,36 @@ public sealed class XorgOutputHandler : IPlatformOutput, ICursor
             return raw & 0x00FFFFFFu;
 
         return 0;
+    }
+
+    private void SyncLockState(KeyModifiers mods)
+    {
+        byte lockedMods;
+        if (_pendingLockedMods.HasValue)
+        {
+            lockedMods = _pendingLockedMods.Value;
+        }
+        else
+        {
+            if (NativeMethods.XkbGetState(_display, NativeMethods.XkbUseCoreKbd, out var xkbState) != 0) return;
+            lockedMods = xkbState.LockedMods;
+        }
+
+        SyncLockKey(XorgVirtualKey.CapsLock, NativeMethods.LockMask, (mods & KeyModifiers.CapsLock) != 0, ref lockedMods);
+        SyncLockKey(XorgVirtualKey.NumLock, NativeMethods.Mod2Mask, (mods & KeyModifiers.NumLock) != 0, ref lockedMods);
+        _pendingLockedMods = lockedMods;
+    }
+
+    private void SyncLockKey(ulong keysym, uint lockMask, bool want, ref byte lockedMods)
+    {
+        var have = (lockedMods & lockMask) != 0;
+        if (have == want) return;
+        var keycode = NativeMethods.XKeysymToKeycode(_display, keysym);
+        if (keycode == 0) return;
+        _ = NativeMethods.XTestFakeKeyEvent(_display, keycode, true, 0);
+        _ = NativeMethods.XTestFakeKeyEvent(_display, keycode, false, 0);
+        _ = NativeMethods.XFlush(_display);
+        lockedMods = want ? (byte)(lockedMods | lockMask) : (byte)(lockedMods & ~lockMask);
     }
 
     public ValueTask HideCursor()

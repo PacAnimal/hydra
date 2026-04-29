@@ -130,7 +130,9 @@ internal sealed class EvdevKeyResolver : IDisposable
                     ? (uint)Marshal.ReadInt32(symsPtr)
                     : XorgKeyResolver.KpNavToChar(keysym);
             }
-            keysym = XorgKeyResolver.KpNumericToChar(keysym);
+            // KP digits (0xFFB0-0xFFB9) pass through as KP_0-KP_9 SpecialKeys; only decimal/separator become chars
+            if (keysym == XorgVirtualKey.KP_Decimal) keysym = '.';
+            else if (keysym == 0xFFAC) keysym = ',';  // KP_Separator
         }
         else
         {

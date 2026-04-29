@@ -71,8 +71,16 @@ public class MacSpecialKeyMapTests
         }
     }
 
-    // keypad digits (0x52–0x5C) intentionally absent from the map: MacKeyResolver emits them as
-    // char events ('0'–'9') before the special key map is consulted, so entries here are unreachable.
+    [TestCase(0x52UL, SpecialKey.KP_0)]
+    [TestCase(0x53UL, SpecialKey.KP_1)]
+    [TestCase(0x54UL, SpecialKey.KP_2)]
+    [TestCase(0x55UL, SpecialKey.KP_3)]
+    [TestCase(0x56UL, SpecialKey.KP_4)]
+    [TestCase(0x57UL, SpecialKey.KP_5)]
+    [TestCase(0x58UL, SpecialKey.KP_6)]
+    [TestCase(0x59UL, SpecialKey.KP_7)]
+    [TestCase(0x5BUL, SpecialKey.KP_8)]
+    [TestCase(0x5CUL, SpecialKey.KP_9)]
     [TestCase(0x4CUL, SpecialKey.KP_Enter)]
     [TestCase(0x47UL, SpecialKey.NumLock)]  // keypad clear = numlock on mac
     public void KeypadKeys_AreMapped(ulong vk, SpecialKey expected)
