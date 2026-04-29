@@ -315,6 +315,13 @@ public sealed class XorgOutputHandler : IPlatformOutput, ICursor
         lockedMods = want ? (byte)(lockedMods | lockMask) : (byte)(lockedMods & ~lockMask);
     }
 
+    public (int X, int Y)? GetCursorPosition()
+    {
+        if (_display == nint.Zero) return null;
+        NativeMethods.XQueryPointer(_display, _rootWindow, out _, out _, out var rootX, out var rootY, out _, out _, out _);
+        return (rootX, rootY);
+    }
+
     public ValueTask HideCursor()
     {
         if (_cursorHidden) return ValueTask.CompletedTask;

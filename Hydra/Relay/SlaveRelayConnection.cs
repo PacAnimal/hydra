@@ -146,9 +146,9 @@ public class SlaveRelayConnection : RelayConnection
                 }
                 break;
             case MessageKind.ClipboardPull:
-                _log.LogDebug("Clipboard pull from {Host}", sourceHost);
                 var pullClip = ClipboardUtils.ReadWithFallback(_clipboardSync, _lastPushed, _log, "pull response");
-                _log.LogDebug("Pull response: text={TextLen}, primary={PrimaryLen}, image={ImageLen}", pullClip.Text?.Length, pullClip.PrimaryText?.Length, pullClip.ImagePng?.Length);
+                _log.LogDebug("Clipboard pull to {Host}: text={TextLen}, primary={PrimaryLen}, image={ImageLen}",
+                    sourceHost, pullClip.Text?.Length, pullClip.PrimaryText?.Length, pullClip.ImagePng?.Length);
                 var response = MessageSerializer.Encode(MessageKind.ClipboardPullResponse, new ClipboardPullResponseMessage(pullClip.Text, pullClip.PrimaryText, pullClip.ImagePng));
                 Send([sourceHost], response);
                 break;

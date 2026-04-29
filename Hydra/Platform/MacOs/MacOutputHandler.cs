@@ -639,6 +639,15 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
         _ => 4,
     };
 
+    public (int X, int Y)? GetCursorPosition()
+    {
+        var eventRef = NativeMethods.CGEventCreate(nint.Zero);
+        if (eventRef == nint.Zero) return null;
+        var pos = NativeMethods.CGEventGetLocation(eventRef);
+        NativeMethods.CFRelease(eventRef);
+        return ((int)pos.X, (int)pos.Y);
+    }
+
     public ValueTask HideCursor()
     {
         if (_cursorHidden) return ValueTask.CompletedTask;
