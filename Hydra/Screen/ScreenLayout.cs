@@ -148,16 +148,16 @@ public class ScreenLayout(List<ScreenRect> screens, List<HostConfig> configs, in
         }
         if (match is null) return null;
 
-        // skip-through offline screens (Width=0 means slave not yet connected)
+        // skip-through offline screens (Width/Height == 0 means slave not yet connected)
         var dest = match.Destination;
         const int maxHops = 10;
-        for (var hops = 0; dest.Width == 0 && hops < maxHops; hops++)
+        for (var hops = 0; (dest.Width == 0 || dest.Height == 0) && hops < maxHops; hops++)
         {
             if (!_graph.TryGetValue((dest.Name, dir.Value), out var nextLinks) || nextLinks.Count == 0)
                 return null;
             dest = nextLinks[0].Destination;
         }
-        if (dest.Width == 0) return null;
+        if (dest.Width == 0 || dest.Height == 0) return null;
 
         var entry = MapEntry(dest, dir.Value, perpPos, edgeLen, match);
         return new EdgeHit(dest, dir.Value, entry.X, entry.Y);

@@ -211,4 +211,21 @@ public class VirtualMouseStateTests
             Assert.That(state.Y, Is.EqualTo(1076).Within(1)); // 0+1-5 - (-1080) = 1076
         }
     }
+
+    [Test]
+    public void ApplyDelta_PlaceholderScreenInList_DoesNotThrow()
+    {
+        // placeholder remote screens have Width=0 until ScreenInfo arrives;
+        // moving into a dead zone while placeholders are present must not throw
+        var real = new ScreenRect("right", "host", 0, 0, 2560, 1440, IsLocal: false);
+        var placeholder = new ScreenRect("other", "host2", 0, 0, 0, 0, IsLocal: false);
+        var all = new List<ScreenRect> { real, placeholder };
+
+        var state = new VirtualMouseState();
+        state.EnterScreen(real, all, 2559, 720);
+
+        // move way out of bounds — triggers ClampToNearest with placeholder in list
+        Assert.DoesNotThrow(() => state.ApplyDelta(99999, 99999));
+        Assert.That(state.CurrentScreen, Is.EqualTo(real));
+    }
 }

@@ -85,12 +85,16 @@ public class VirtualMouseState
     private void ClampToNearest(double globalX, double globalY)
     {
         // find the screen with the smallest clamped distance and snap to it
-        ScreenRect? best = CurrentScreen ?? (RemoteScreens.Count > 0 ? RemoteScreens[0] : null);
+        // skip placeholder screens (Width/Height == 0) — Math.Clamp throws if max < min
+        ScreenRect? best = (CurrentScreen?.Width > 0 && CurrentScreen?.Height > 0)
+            ? CurrentScreen
+            : RemoteScreens.FirstOrDefault(s => s.Width > 0 && s.Height > 0);
         if (best is null) return;
 
         var bestDistSq = double.MaxValue;
         foreach (var screen in RemoteScreens)
         {
+            if (screen.Width <= 0 || screen.Height <= 0) continue;
             var cx = Math.Clamp(globalX, screen.X, screen.X + screen.Width - 1);
             var cy = Math.Clamp(globalY, screen.Y, screen.Y + screen.Height - 1);
             var dx = globalX - cx;
