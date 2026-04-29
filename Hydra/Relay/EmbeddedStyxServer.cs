@@ -61,6 +61,7 @@ public class EmbeddedStyxServer(EmbeddedStyxServerConfig config, ILogger<Embedde
             options.MaximumParallelInvocationsPerClient = StyxConstants.MaxParallelInvocations;
         }).AddMessagePackProtocol();
 
+        services.AddSingleton(new StyxOptions(false));
         services.AddSingleton<IClientRegistry, ClientRegistry>();
         services.AddHostedService<IPeerBroadcaster, PeerBroadcastService>();
         services.AddSingleton<IStyxPasswordProvider>(new InlineStyxPasswordProvider(config.Password));
