@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { hasAdjacentNeighbour, snapToNearestSide } from '../utils/canvasLayout'
+import { hasAdjacentNeighbour, snapToNearestSide, compactLayout } from '../utils/canvasLayout'
 
 // helper to make a rect with an id
 function r(id: string, x: number, y: number, w: number, h: number) {
@@ -137,5 +137,48 @@ describe('snapToNearestSide', () => {
     const dragged = r('a', W + 100, 0, W, H)
     const snapped = snapToNearestSide(dragged, [anchor1, anchor2])
     expect(snapped.x).toBe(W) // snapped to right side of anchor1, not anchor2
+  })
+})
+
+describe('compactLayout', () => {
+  it('returns items unchanged when all are adjacent', () => {
+    // A–B–C in a row, all touching
+    const items = [r('A', 0, 0, W, H), r('B', W, 0, W, H), r('C', W * 2, 0, W, H)]
+    expect(compactLayout(items, 'X')).toEqual(items)
+  })
+
+  it('does not move the dropped item', () => {
+    // A floating far away from B; dropped item is A — should not be moved
+    const items = [r('A', 9999, 0, W, H), r('B', 0, 0, W, H)]
+    const result = compactLayout(items, 'A')
+    expect(result.find(i => i.id === 'A')!.x).toBe(9999)
+  })
+
+  it('closes the gap when middle screen is removed from a 3-screen row', () => {
+    // realistic layout: B was between A and C; user dragged B to the top of C
+    // B is now directly above C (adjacent vertically), leaving a gap between A and C
+    const A = r('A', 1920, 1080, W, H)
+    const B = r('B', 5760, 0, W, H)    // dropped above C
+    const C = r('C', 5760, 1080, W, H)
+    const result = compactLayout([A, B, C], 'B')
+    const rA = result.find(i => i.id === 'A')!
+    const rC = result.find(i => i.id === 'C')!
+    // A should snap rightward to be adjacent to C's left edge
+    expect(rA.x + rA.w).toBe(rC.x)
+  })
+
+  it('cascading: multiple floating items collapse toward each other', () => {
+    // A, B, C all floating with gaps; D (dropped) is far away
+    const A = r('A', 0, 0, W, H)
+    const B = r('B', W * 3, 0, W, H)   // gap W*2 between A and B
+    const C = r('C', W * 6, 0, W, H)   // gap W*2 between B and C
+    const D = r('D', W * 9, 0, W, H)   // dropped item
+    const result = compactLayout([A, B, C, D], 'D')
+    const rA = result.find(i => i.id === 'A')!
+    const rB = result.find(i => i.id === 'B')!
+    const rC = result.find(i => i.id === 'C')!
+    // A, B, C should collapse into a touching chain
+    expect(rA.x + rA.w).toBe(rB.x)
+    expect(rB.x + rB.w).toBe(rC.x)
   })
 })

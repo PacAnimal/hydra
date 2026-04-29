@@ -2,7 +2,7 @@ import { useState, useRef, useCallback, useId } from 'react'
 import type { LayoutItem, HostConfig } from '../types'
 import { newLayoutItem } from '../defaults'
 import { deriveHostsFromLayout, ADJACENCY_THRESHOLD, DEFAULT_W, DEFAULT_H } from '../utils/layout'
-import { hasAdjacentNeighbour, snapToNearestSide } from '../utils/canvasLayout'
+import { hasAdjacentNeighbour, snapToNearestSide, compactLayout } from '../utils/canvasLayout'
 
 const SCALE = 1 / 12        // 1920 logical px → 160 canvas px
 const PAD = 24              // canvas padding (canvas px)
@@ -136,18 +136,17 @@ function buildConnections(items: LayoutItem[], hosts: HostConfig[], colorMap: Ma
 
       const color = colorMap.get(host.name) ?? '#888'
 
-      if (n.direction === 'Right') {
+      if (n.direction === 'Right' || n.direction === 'Left') {
         const midY = (Math.max(srcItem.y, dstItem.y) + Math.min(srcItem.y + srcItem.h, dstItem.y + dstItem.h)) / 2
-        conns.push({ fromId: srcItem.id, toId: dstItem.id, x1: blockLeft(srcItem.x + srcItem.w), y1: blockTop(midY), x2: blockLeft(dstItem.x), y2: blockTop(midY), color })
-      } else if (n.direction === 'Left') {
-        const midY = (Math.max(srcItem.y, dstItem.y) + Math.min(srcItem.y + srcItem.h, dstItem.y + dstItem.h)) / 2
-        conns.push({ fromId: srcItem.id, toId: dstItem.id, x1: blockLeft(srcItem.x), y1: blockTop(midY), x2: blockLeft(dstItem.x + dstItem.w), y2: blockTop(midY), color })
-      } else if (n.direction === 'Down') {
+        // use block centers so the line has a defined direction even when screens are touching
+        const x1 = blockLeft(srcItem.x + srcItem.w / 2)
+        const x2 = blockLeft(dstItem.x + dstItem.w / 2)
+        conns.push({ fromId: srcItem.id, toId: dstItem.id, x1, y1: blockTop(midY), x2, y2: blockTop(midY), color })
+      } else if (n.direction === 'Down' || n.direction === 'Up') {
         const midX = (Math.max(srcItem.x, dstItem.x) + Math.min(srcItem.x + srcItem.w, dstItem.x + dstItem.w)) / 2
-        conns.push({ fromId: srcItem.id, toId: dstItem.id, x1: blockLeft(midX), y1: blockTop(srcItem.y + srcItem.h), x2: blockLeft(midX), y2: blockTop(dstItem.y), color })
-      } else if (n.direction === 'Up') {
-        const midX = (Math.max(srcItem.x, dstItem.x) + Math.min(srcItem.x + srcItem.w, dstItem.x + dstItem.w)) / 2
-        conns.push({ fromId: srcItem.id, toId: dstItem.id, x1: blockLeft(midX), y1: blockTop(srcItem.y), x2: blockLeft(midX), y2: blockTop(dstItem.y + dstItem.h), color })
+        const y1 = blockTop(srcItem.y + srcItem.h / 2)
+        const y2 = blockTop(dstItem.y + dstItem.h / 2)
+        conns.push({ fromId: srcItem.id, toId: dstItem.id, x1: blockLeft(midX), y1, x2: blockLeft(midX), y2, color })
       }
     }
   }
@@ -288,7 +287,8 @@ export function LayoutCanvas({ items, onChange }: Props) {
         const snapped = snapToNearestSide({ x, y, w, h }, items, drag.id)
         x = Math.max(0, snapped.x); y = Math.max(0, snapped.y)
       }
-      onChange(items.map(i => i.id === drag.id ? { ...i, x, y, w, h } : i))
+      const updated = items.map(i => i.id === drag.id ? { ...i, x, y, w, h } : i)
+      onChange(compactLayout(updated, drag.id))
       setSelected(s => s?.id === drag.id ? { ...s, w: String(w), h: String(h) } : s)
     }
     setDrag(null); setGhost(null)

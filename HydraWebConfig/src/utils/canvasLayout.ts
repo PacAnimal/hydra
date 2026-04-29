@@ -87,6 +87,28 @@ export function snapToNearestSide(r: Rect, others: (Rect & { id: string })[], ex
   return best ?? r
 }
 
+// after a drag-drop, snaps any items that are no longer adjacent to any neighbor
+// to their nearest side. droppedId is excluded from being moved (it was just placed).
+export function compactLayout<T extends Rect & { id: string }>(items: T[], droppedId: string): T[] {
+  let result = [...items]
+  let changed = true
+  for (let iter = 0; iter < items.length && changed; iter++) {
+    changed = false
+    for (const item of result) {
+      if (item.id === droppedId) continue
+      const others = result.filter(r => r.id !== item.id)
+      if (hasAdjacentNeighbour(item, others)) continue
+      const snapped = snapToNearestSide(item, others)
+      if (snapped.x !== item.x || snapped.y !== item.y) {
+        result = result.map(r => r.id === item.id ? { ...r, x: snapped.x, y: snapped.y } : r)
+        changed = true
+        break
+      }
+    }
+  }
+  return result
+}
+
 function clamp(val: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, val))
 }
