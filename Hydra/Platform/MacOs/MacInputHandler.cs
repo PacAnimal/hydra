@@ -1,13 +1,14 @@
 using System.Runtime.InteropServices;
 using Cathedral.Extensions;
 using Cathedral.Utils;
+using Hydra.Config;
 using Hydra.Keyboard;
 using Hydra.Mouse;
 using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform.MacOs;
 
-internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldProcess shield) : IPlatformInput
+internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldProcess shield, IHydraProfile profile) : IPlatformInput
 {
     private readonly MacShieldProcess _shield = shield;
     private readonly uint _display = NativeMethods.CGMainDisplayID();
@@ -215,12 +216,20 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
             }
             else
             {
-                // discrete mouse wheel: use integer line deltas (unaccelerated, ±1 per notch).
-                // this avoids forwarding macOS acceleration to the remote machine.
                 var dy = NativeMethods.CGEventGetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventDeltaAxis1);
                 var dx = NativeMethods.CGEventGetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventDeltaAxis2);
-                wireX = (short)Math.Clamp(dx * 120L, short.MinValue, short.MaxValue);
-                wireY = (short)Math.Clamp(dy * 120L, short.MinValue, short.MaxValue);
+                if (profile.AccelerateMouseWheel)
+                {
+                    // forward macOS line-delta acceleration as-is
+                    wireX = (short)Math.Clamp(dx * 120L, short.MinValue, short.MaxValue);
+                    wireY = (short)Math.Clamp(dy * 120L, short.MinValue, short.MaxValue);
+                }
+                else
+                {
+                    // normalize to ±120 per event — discard macOS acceleration, let slave apply its own
+                    wireX = (short)(Math.Sign(dx) * 120);
+                    wireY = (short)(Math.Sign(dy) * 120);
+                }
             }
             if (wireX != 0 || wireY != 0)
                 _onMouseScroll?.Invoke(new MouseScrollEvent(wireX, wireY));

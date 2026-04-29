@@ -22,6 +22,7 @@ public interface IHydraProfile
     string? NetworkConfig { get; }
     bool RemoteOnly { get; }
     bool SyncScreensaver { get; }
+    bool AccelerateMouseWheel { get; }
     int? DeadCorners { get; }
 
     // computed from Name + Hosts
@@ -48,6 +49,7 @@ public class HydraProfile(HydraConfigFile configFile, HydraConfig? activeProfile
     public string? NetworkConfig => networkConfigOverride ?? _activeProfile?.NetworkConfig;
     public bool RemoteOnly => _activeProfile?.RemoteOnly ?? false;
     public bool SyncScreensaver => _activeProfile?.SyncScreensaver ?? true;
+    public bool AccelerateMouseWheel => _activeProfile?.AccelerateMouseWheel ?? true;
     public int? DeadCorners => _activeProfile?.DeadCorners;
 
     public HostConfig? LocalHost => Hosts.FirstOrDefault(h => h.Name.EqualsIgnoreCase(Name));

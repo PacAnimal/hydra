@@ -70,14 +70,24 @@ export function GlobalSettings({ config, onChange }: Props) {
             Sync Screensaver
           </label>
           {isMaster && (
-            <label className="checkbox-label">
-              <input
-                type="checkbox"
-                checked={config.remoteOnly === true}
-                onChange={e => onChange({ remoteOnly: e.target.checked ? true : undefined })}
-              />
-              Remote Only
-            </label>
+            <>
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={config.remoteOnly === true}
+                  onChange={e => onChange({ remoteOnly: e.target.checked ? true : undefined })}
+                />
+                Remote Only
+              </label>
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={config.accelerateMouseWheel !== false}
+                  onChange={e => onChange({ accelerateMouseWheel: e.target.checked ? true : undefined })}
+                />
+                Accelerate Mouse Wheel
+              </label>
+            </>
           )}
         </div>
       </div>

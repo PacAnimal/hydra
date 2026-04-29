@@ -60,6 +60,7 @@ function serializeProfile(p: HydraProfile): Record<string, unknown> {
   if (p.remoteOnly === true) out.remoteOnly = true
   if (p.syncScreensaver === false) out.syncScreensaver = false
   if (p.debugShield === true) out.debugShield = true
+  if (p.accelerateMouseWheel === false) out.accelerateMouseWheel = false
 
   if (p.mode === 'Master') {
     // prefer layoutItems when present and non-empty; fall back to explicit hosts
