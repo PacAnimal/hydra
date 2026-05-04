@@ -61,7 +61,7 @@ internal static class AgentCommands
         Console.WriteLine("Hydra agent removed.");
     }
 
-    private static bool IsAlreadySigned(string path)
+    internal static bool IsAlreadySigned(string path)
     {
         using var proc = Process.Start(new ProcessStartInfo("codesign", $"--verify \"{path}\"")
         {
@@ -75,13 +75,25 @@ internal static class AgentCommands
 
     internal static void Codesign(string path)
     {
-        using var proc = Process.Start(new ProcessStartInfo("codesign", $"--force --deep --sign - \"{path}\"")
+        // -i embeds a stable bundle identifier so TCC tracks the entry by ID rather than binary hash
+        using var proc = Process.Start(new ProcessStartInfo("codesign", $"--force --deep --sign - -i {Label} \"{path}\"")
         {
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
         });
         proc?.WaitForExit(); // failure is non-fatal — app may still run without a local signature
+    }
+
+    internal static void ResetAccessibility()
+    {
+        using var proc = Process.Start(new ProcessStartInfo("tccutil", $"reset Accessibility {Label}")
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        });
+        proc?.WaitForExit(); // best effort — failure is non-fatal
     }
 
     private static void RemoveQuarantine(string path, bool recursive = false)

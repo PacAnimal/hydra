@@ -151,11 +151,14 @@ internal sealed class SelfUpdater(IHydraProfile profile, ILogger<SelfUpdater> lo
 
             if (OperatingSystem.IsMacOS())
             {
-                // re-sign both binaries — github release won't match the local ad-hoc signature
-                Platform.MacOs.AgentCommands.Codesign(exePath);
+                // only sign if unsigned — re-signing rotates code identity and invalidates TCC accessibility entry
+                if (!Platform.MacOs.AgentCommands.IsAlreadySigned(exePath))
+                    Platform.MacOs.AgentCommands.Codesign(exePath);
                 var shieldPath = Path.Combine(appDir, "Resources", "MacShield", "hydra-shield.app");
-                if (Directory.Exists(shieldPath))
+                if (Directory.Exists(shieldPath) && !Platform.MacOs.AgentCommands.IsAlreadySigned(shieldPath))
                     Platform.MacOs.AgentCommands.Codesign(shieldPath);
+                // clear stale TCC entry so the next startup prompts for a fresh grant
+                Platform.MacOs.AgentCommands.ResetAccessibility();
             }
         }
 
