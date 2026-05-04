@@ -80,9 +80,18 @@ internal static partial class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool AXIsProcessTrustedWithOptions(nint options);
 
-    // checks accessibility trust and, if not granted, triggers the system grant dialog
+    // checks accessibility trust and, if not granted, triggers the system grant dialog.
+    // retries silently first to avoid a spurious prompt on update restarts: after a binary
+    // swap, TCC needs a moment to re-evaluate the new binary against the stored csreq.
     internal static bool AXIsProcessTrustedWithPrompt()
     {
+        // give TCC up to ~4s to re-evaluate before falling through to the prompt
+        for (var i = 0; i < 8; i++)
+        {
+            if (AXIsProcessTrusted()) return true;
+            Thread.Sleep(500);
+        }
+
         EnsureAppKitLoaded();
         var cls = objc_getClass("NSMutableDictionary");
         var dict = objc_msgSend_noarg(objc_msgSend_noarg(cls, sel_registerName("alloc")), sel_registerName("init"));
