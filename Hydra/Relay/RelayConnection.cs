@@ -34,9 +34,12 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
 
     public void Send(string[] targetHosts, byte[] payload)
     {
+        OnSent(targetHosts, payload);
         if (_server == null || _encryption == null) return;
         _sendQueue.Writer.TryWrite((targetHosts, payload));
     }
+
+    protected virtual void OnSent(string[] targetHosts, byte[] payload) { }
 
     // IStyxClient
     public async Task Receive(string sourceHost, byte[] payload)

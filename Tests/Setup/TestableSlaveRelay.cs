@@ -26,8 +26,16 @@ public sealed class TestableSlaveRelay(
         clipboard ?? new NullClipboardSync(),
         FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification())
 {
+    public readonly List<(string[] Targets, MessageKind Kind, string Json)> Sent = [];
+
     public Task SimulateMasterConfig(string host) => OnReceive(host, MessageKind.MasterConfig, "{}"u8.ToArray());
     public Task SimulateMasterConfig(string host, string json) => OnReceive(host, MessageKind.MasterConfig, Encoding.UTF8.GetBytes(json));
     public Task SimulateReceive(string host, MessageKind kind, string json) => OnReceive(host, kind, Encoding.UTF8.GetBytes(json));
     public Task SimulateDisconnected() => OnDisconnected();
+
+    protected override void OnSent(string[] targetHosts, byte[] payload)
+    {
+        var decoded = MessageSerializer.Decode(payload);
+        Sent.Add((targetHosts, decoded.Kind, decoded.Json));
+    }
 }

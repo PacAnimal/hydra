@@ -56,6 +56,7 @@ public class InputRouter(
     private readonly FileTransferService _fileTransfer = fileTransfer;
     private readonly IFileSelectionDetector _selectionDetector = selectionDetector;
     private ClipboardSnapshot? _lastReceived;
+    private string? _lastPulledFrom;
 
 
     public async Task StartAsync(CancellationToken cancellationToken)
@@ -370,11 +371,33 @@ public class InputRouter(
         relay.Send(hosts, payload);
     }
 
+    // sends master's clipboard hash to slave; slave decides whether to request the full push
     private void PushClipboardToHost(string host)
     {
         try
         {
-            PushClipboardToHostInner(host);
+            var clip = ClipboardUtils.ReadWithFallback(_clipboardSync, _lastReceived, log, "push");
+            if (string.IsNullOrEmpty(clip.Text) && string.IsNullOrEmpty(clip.PrimaryText) && clip.ImagePng == null)
+                return; // nothing to push
+            var hash = ClipboardUtils.ClipboardHash(clip);
+            log.LogDebug("Sending clipboard hash to {Host}", host);
+            relay.Send([host], MessageSerializer.Encode(MessageKind.ClipboardHash, new ClipboardHashMessage(hash)));
+        }
+        catch (Exception ex)
+        {
+            log.LogWarning(ex, "Failed to send clipboard hash to {Host}", host);
+        }
+    }
+
+    // slave has compared hashes and determined it needs our clipboard; send the full push
+    private void OnClipboardPullRequest(string host)
+    {
+        try
+        {
+            var clip = ClipboardUtils.ReadWithFallback(_clipboardSync, _lastReceived, log, "push");
+            if (string.IsNullOrEmpty(clip.Text) && string.IsNullOrEmpty(clip.PrimaryText) && clip.ImagePng == null)
+                return;
+            relay.Send([host], MessageSerializer.Encode(MessageKind.ClipboardPush, new ClipboardPushMessage(clip.Text ?? "", clip.PrimaryText, clip.ImagePng)));
         }
         catch (Exception ex)
         {
@@ -382,22 +405,13 @@ public class InputRouter(
         }
     }
 
-    private void PushClipboardToHostInner(string host)
-    {
-        var clip = ClipboardUtils.ReadWithFallback(_clipboardSync, _lastReceived, log, "push");
-
-        if (!string.IsNullOrEmpty(clip.Text) || !string.IsNullOrEmpty(clip.PrimaryText) || clip.ImagePng != null)
-        {
-            var payload = MessageSerializer.Encode(MessageKind.ClipboardPush, new ClipboardPushMessage(clip.Text ?? "", clip.PrimaryText, clip.ImagePng));
-            relay.Send([host], payload);
-        }
-    }
-
     private void PullClipboardFromHost(string host)
     {
         log.LogDebug("Pulling clipboard from {Host}", host);
-        var payload = MessageSerializer.Encode(MessageKind.ClipboardPull, new ClipboardPullMessage());
-        relay.Send([host], payload);
+        _lastPulledFrom = host;
+        var localClip = ClipboardUtils.ReadWithFallback(_clipboardSync, _lastReceived, log, "pull");
+        var masterHash = ClipboardUtils.ClipboardHash(localClip);
+        relay.Send([host], MessageSerializer.Encode(MessageKind.ClipboardPull, new ClipboardPullMessage(masterHash)));
     }
 
     private async Task OnMessageReceived(string sourceHost, MessageKind kind, ReadOnlyMemory<byte> body)
@@ -434,10 +448,38 @@ public class InputRouter(
                 break;
             case MessageKind.ScreensaverSync:
                 break; // master never acts on screensaver sync messages
+            case MessageKind.ClipboardPullRequest:
+                {
+                    // only honour if cursor is currently on that slave's screen
+                    var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                    if (_commands.Writer.TryWrite(st =>
+                    {
+                        tcs.TrySetResult(st.Mouse.IsOnVirtualScreen && st.Mouse.CurrentScreen?.Host.EqualsIgnoreCase(sourceHost) == true);
+                        return ValueTask.CompletedTask;
+                    }))
+                    {
+                        if (await tcs.Task)
+                            OnClipboardPullRequest(sourceHost);
+                        else
+                            log.LogDebug("Clipboard pull request from {Host} ignored (cursor not on that screen)", sourceHost);
+                    }
+                    break;
+                }
             case MessageKind.ClipboardPullResponse:
                 var clip = body.ParseMessage<ClipboardPullResponseMessage>(log, $"ClipboardPullResponse from {sourceHost}");
                 if (clip != null)
                 {
+                    // only apply if from the slave we last pulled from
+                    if (!sourceHost.EqualsIgnoreCase(_lastPulledFrom))
+                    {
+                        log.LogDebug("Clipboard pull response from {Host} ignored (not last pulled from)", sourceHost);
+                        break;
+                    }
+                    if (clip.Unchanged == true)
+                    {
+                        log.LogDebug("Clipboard pull response from {Host}: unchanged", sourceHost);
+                        break;
+                    }
                     log.LogDebug("Clipboard pull response from {Host}: text={TextLen}, primary={PrimaryLen}, image={ImageLen}",
                         sourceHost, clip.Text?.Length, clip.PrimaryText?.Length, clip.ImagePng?.Length);
                     var validated = ClipboardUtils.ValidateFields(clip.Text, clip.PrimaryText, clip.ImagePng, log, "pull response", sourceHost);

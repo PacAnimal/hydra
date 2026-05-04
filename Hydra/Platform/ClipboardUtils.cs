@@ -1,3 +1,4 @@
+using System.IO.Hashing;
 using System.Text;
 using ByteSizeLib;
 using Microsoft.Extensions.Logging;
@@ -60,5 +61,21 @@ public static class ClipboardUtils
         hc2.Add(data.Length); // prefix with length to differentiate from hc1
         hc2.AddBytes(data);
         return ((ulong)(uint)hc1.ToHashCode() << 32) | (uint)hc2.ToHashCode();
+    }
+
+    // xxhash64 of all 3 clipboard fields; used to avoid redundant syncs between master and slave
+    public static ulong ClipboardHash(ClipboardSnapshot snap)
+    {
+        var hash = new XxHash64();
+        Append(hash, snap.Text != null ? Encoding.UTF8.GetBytes(snap.Text) : []);
+        Append(hash, snap.PrimaryText != null ? Encoding.UTF8.GetBytes(snap.PrimaryText) : []);
+        Append(hash, snap.ImagePng ?? []);
+        return BitConverter.ToUInt64(hash.GetCurrentHash().AsSpan());
+
+        static void Append(XxHash64 h, byte[] data)
+        {
+            h.Append(BitConverter.GetBytes(data.Length));
+            h.Append(data);
+        }
     }
 }

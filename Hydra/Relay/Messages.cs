@@ -35,6 +35,8 @@ public enum MessageKind : byte
     FileStreamRequest = 23,     // master → source slave: stream these files to target
     Osd = 24,                   // master → slave: display an on-screen notification
     FileTransferBusy = 27,      // slave → master: transfer already in progress, request refused
+    ClipboardHash = 28,         // master → slave: here's my clipboard hash (on screen enter)
+    ClipboardPullRequest = 29,  // slave → master: my hash differs, please push your clipboard
 }
 
 public record MouseMoveMessage(string Screen, int X, int Y);
@@ -53,9 +55,11 @@ public record MouseScrollMessage(short XDelta, short YDelta);
 public record EnterScreenMessage(string Screen, int X, int Y, int Width, int Height);
 public record ScreensaverSyncMessage(bool Active);
 public record LeaveScreenMessage;
-public record ClipboardPullMessage;
+public record ClipboardPullMessage(ulong? MasterHash = null);
 public record ClipboardPushMessage(string Text, string? PrimaryText = null, byte[]? ImagePng = null);
-public record ClipboardPullResponseMessage(string? Text, string? PrimaryText = null, byte[]? ImagePng = null);
+public record ClipboardPullResponseMessage(string? Text, string? PrimaryText = null, byte[]? ImagePng = null, bool? Unchanged = null);
+public record ClipboardHashMessage(ulong Hash);
+public record ClipboardPullRequestMessage;
 
 public record FileTransferRequestMessage(string? SourceHost = null);
 public record FileTransferStartMessage(string[] FileNames, long TotalBytes);

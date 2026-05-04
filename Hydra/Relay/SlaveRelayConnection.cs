@@ -134,6 +134,24 @@ public class SlaveRelayConnection : RelayConnection
                     else _screenSaverSync.Deactivate();
                 }
                 break;
+            case MessageKind.ClipboardHash:
+                {
+                    var hashMsg = body.ParseMessage<ClipboardHashMessage>(_log, kind.ToString());
+                    if (hashMsg != null)
+                    {
+                        var slaveClip = ClipboardUtils.ReadWithFallback(_clipboardSync, _lastPushed, _log, "hash check");
+                        if (ClipboardUtils.ClipboardHash(slaveClip) != hashMsg.Hash)
+                        {
+                            _log.LogDebug("Clipboard hash from {Host}: differs, requesting push", sourceHost);
+                            Send([sourceHost], MessageSerializer.Encode(MessageKind.ClipboardPullRequest, new ClipboardPullRequestMessage()));
+                        }
+                        else
+                        {
+                            _log.LogDebug("Clipboard hash from {Host}: matches, skipping", sourceHost);
+                        }
+                    }
+                    break;
+                }
             case MessageKind.ClipboardPush:
                 var push = body.ParseMessage<ClipboardPushMessage>(_log, kind.ToString());
                 if (push != null)
@@ -146,12 +164,20 @@ public class SlaveRelayConnection : RelayConnection
                 }
                 break;
             case MessageKind.ClipboardPull:
-                var pullClip = ClipboardUtils.ReadWithFallback(_clipboardSync, _lastPushed, _log, "pull response");
-                _log.LogDebug("Clipboard pull to {Host}: text={TextLen}, primary={PrimaryLen}, image={ImageLen}",
-                    sourceHost, pullClip.Text?.Length, pullClip.PrimaryText?.Length, pullClip.ImagePng?.Length);
-                var response = MessageSerializer.Encode(MessageKind.ClipboardPullResponse, new ClipboardPullResponseMessage(pullClip.Text, pullClip.PrimaryText, pullClip.ImagePng));
-                Send([sourceHost], response);
-                break;
+                {
+                    var pull = body.ParseMessage<ClipboardPullMessage>(_log, kind.ToString());
+                    var pullClip = ClipboardUtils.ReadWithFallback(_clipboardSync, _lastPushed, _log, "pull response");
+                    if (pull?.MasterHash.HasValue == true && ClipboardUtils.ClipboardHash(pullClip) == pull.MasterHash.Value)
+                    {
+                        _log.LogDebug("Clipboard pull to {Host}: unchanged, skipping full response", sourceHost);
+                        Send([sourceHost], MessageSerializer.Encode(MessageKind.ClipboardPullResponse, new ClipboardPullResponseMessage(null, Unchanged: true)));
+                        break;
+                    }
+                    _log.LogDebug("Clipboard pull to {Host}: text={TextLen}, primary={PrimaryLen}, image={ImageLen}",
+                        sourceHost, pullClip.Text?.Length, pullClip.PrimaryText?.Length, pullClip.ImagePng?.Length);
+                    Send([sourceHost], MessageSerializer.Encode(MessageKind.ClipboardPullResponse, new ClipboardPullResponseMessage(pullClip.Text, pullClip.PrimaryText, pullClip.ImagePng)));
+                    break;
+                }
             case MessageKind.Osd:
                 {
                     var osdMsg = body.ParseMessage<OsdMessage>(_log, kind.ToString());
