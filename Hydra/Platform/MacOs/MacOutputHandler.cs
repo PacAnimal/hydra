@@ -640,6 +640,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
     };
 
     public bool IsAccessibilityTrusted() => NativeMethods.AXIsProcessTrustedWithPrompt();
+    public Task WaitForAccessibilityTrusted(CancellationToken cancel) => NativeMethods.WaitForAccessibilityTrusted(cancel);
 
     public (int X, int Y)? GetCursorPosition()
     {

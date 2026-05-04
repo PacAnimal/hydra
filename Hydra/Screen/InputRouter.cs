@@ -63,8 +63,10 @@ public class InputRouter(
     {
         if (!platform.IsAccessibilityTrusted())
         {
-            log.LogError("Input hook permission not granted. On macOS: grant access in System Settings > Privacy & Security > Accessibility. Then restart Hydra.");
-            return;
+            log.LogWarning("Accessibility permission not granted — open System Settings › Privacy & Security › Accessibility and enable Hydra, then Hydra will continue automatically.");
+            await platform.WaitForAccessibilityTrusted(cancellationToken);
+            if (cancellationToken.IsCancellationRequested) return;
+            log.LogInformation("Accessibility permission granted");
         }
 
         log.LogInformation("Host: {Name}", profile.Name);

@@ -27,6 +27,7 @@ public interface IPlatformInput : IAsyncDisposable, ICursor
         Action<MouseScrollEvent> onMouseScroll);
     void StopEventTap();
     bool IsAccessibilityTrusted();
+    Task WaitForAccessibilityTrusted(CancellationToken cancel) => Task.CompletedTask;
     bool IsOnVirtualScreen { get; set; }
 
     KeyRepeatSettings GetKeyRepeatSettings();

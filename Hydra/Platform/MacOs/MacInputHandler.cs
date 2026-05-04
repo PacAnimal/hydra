@@ -40,6 +40,7 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
 
 
     public bool IsAccessibilityTrusted() => NativeMethods.AXIsProcessTrustedWithPrompt();
+    public Task WaitForAccessibilityTrusted(CancellationToken cancel) => NativeMethods.WaitForAccessibilityTrusted(cancel);
 
     public void WarpCursor(int x, int y)
     {

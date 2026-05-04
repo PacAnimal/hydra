@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 // ReSharper disable InconsistentNaming
@@ -92,6 +93,12 @@ internal static partial class NativeMethods
             Thread.Sleep(500);
         }
 
+        // stale TCC entry: the app can appear enabled in System Settings but still fail because
+        // the stored csreq was bound to a previous binary hash. toggling the switch on/off doesn't
+        // help — it just flips the flag on the old entry. reset it so the prompt below creates a
+        // fresh entry whose csreq matches the current binary's permissive designated requirement.
+        ResetTccAccessibilityEntry();
+
         EnsureAppKitLoaded();
         var cls = objc_getClass("NSMutableDictionary");
         var dict = objc_msgSend_noarg(objc_msgSend_noarg(cls, sel_registerName("alloc")), sel_registerName("init"));
@@ -101,6 +108,34 @@ internal static partial class NativeMethods
         var trusted = AXIsProcessTrustedWithOptions(dict);
         objc_msgSend_noarg(dict, sel_registerName("release"));
         return trusted;
+    }
+
+    internal static async Task WaitForAccessibilityTrusted(CancellationToken cancel)
+    {
+        while (!cancel.IsCancellationRequested && !AXIsProcessTrusted())
+        {
+            try { await Task.Delay(1000, cancel); }
+            catch (OperationCanceledException) { return; }
+        }
+    }
+
+    private static void ResetTccAccessibilityEntry()
+    {
+        try
+        {
+            var psi = new ProcessStartInfo("/usr/bin/tccutil")
+            {
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+            psi.ArgumentList.Add("reset");
+            psi.ArgumentList.Add("Accessibility");
+            psi.ArgumentList.Add("com.cathedral.hydra");
+            using var proc = Process.Start(psi);
+            proc?.WaitForExit(3000);
+        }
+        catch { /* best effort */ }
     }
 
     [LibraryImport(ApplicationServices)]

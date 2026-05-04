@@ -98,6 +98,8 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     protected virtual Task OnKicked(string reason) => Task.CompletedTask;
     // fires after _server and _encryption are set — guaranteed connection-ready signal
     protected virtual Task OnAuthenticated() => Task.CompletedTask;
+    // cancellation token for the current connection lifetime — valid during OnAuthenticated and OnDisconnected
+    protected CancellationToken ConnectionToken { get; private set; }
     // fires when a live connection drops (not on auth failure or clean shutdown)
     protected virtual Task OnDisconnected() => Task.CompletedTask;
 
@@ -216,6 +218,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         }
 
         log.LogInformation("Authenticated on relay as {HostName}", hostName);
+        ConnectionToken = cancel;
         await OnAuthenticated();
 
         // drain outbound queue until the connection drops

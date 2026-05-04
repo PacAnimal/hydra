@@ -10,4 +10,5 @@ public interface IPlatformOutput : IDisposable
     void InjectMouseButton(MouseButtonMessage msg);
     void InjectMouseScroll(MouseScrollMessage msg);
     bool IsAccessibilityTrusted() => true;
+    Task WaitForAccessibilityTrusted(CancellationToken cancel) => Task.CompletedTask;
 }

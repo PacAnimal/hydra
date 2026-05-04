@@ -126,6 +126,7 @@ public sealed class CoalescingOutputWrapper : IPlatformOutput
     }
 
     public bool IsAccessibilityTrusted() => _inner.IsAccessibilityTrusted();
+    public Task WaitForAccessibilityTrusted(CancellationToken cancel) => _inner.WaitForAccessibilityTrusted(cancel);
 
     public void Dispose()
     {
