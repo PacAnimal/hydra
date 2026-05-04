@@ -642,9 +642,6 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
     public bool IsAccessibilityTrusted()
     {
         if (NativeMethods.PollAccessibilityTrusted()) return true;
-#pragma warning disable CA1416 // only instantiated on macOS
-        AgentCommands.ResetTccAccessibility(_log);
-#pragma warning restore CA1416
         return NativeMethods.ShowAccessibilityPrompt();
     }
     public Task WaitForAccessibilityTrusted(CancellationToken cancel) => NativeMethods.WaitForAccessibilityTrusted(cancel);

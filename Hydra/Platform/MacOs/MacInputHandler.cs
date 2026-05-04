@@ -42,10 +42,6 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
     public bool IsAccessibilityTrusted()
     {
         if (NativeMethods.PollAccessibilityTrusted()) return true;
-        // stale TCC entry — reset before prompting so the user creates a fresh grant
-#pragma warning disable CA1416 // only instantiated on macOS
-        AgentCommands.ResetTccAccessibility(log);
-#pragma warning restore CA1416
         return NativeMethods.ShowAccessibilityPrompt();
     }
     public Task WaitForAccessibilityTrusted(CancellationToken cancel) => NativeMethods.WaitForAccessibilityTrusted(cancel);

@@ -2,7 +2,6 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Security;
-using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform.MacOs;
 
@@ -89,24 +88,6 @@ internal static partial class AgentCommands
         psi.ArgumentList.Add(path);
         using var proc = Process.Start(psi);
         proc?.WaitForExit(); // failure is non-fatal
-    }
-
-    // stale TCC entry: the app appears enabled in System Settings but the stored csreq was bound
-    // to a previous binary hash so AXIsProcessTrusted still returns false. tccutil reset is a
-    // no-op even with sudo on macOS 14+, and the system-level TCC DB is SIP-protected so sqlite3
-    // as root won't work either. only System Settings (via Apple's private tcc.manager entitlement)
-    // can remove the entry. we open Settings and log a clear one-time instruction; once the user
-    // removes and re-grants, the permissive designated requirement we sign with means future
-    // auto-updates will never break the entry again.
-    internal static void ResetTccAccessibility(ILogger log)
-    {
-        log.LogWarning("Accessibility permission has a stale code-signature requirement (csreq mismatch " +
-                       "after update). The entry in System Settings still shows Hydra as enabled, but " +
-                       "macOS is verifying against an old binary hash. Fix: open System Settings → " +
-                       "Privacy & Security → Accessibility, click the − button next to Hydra to remove " +
-                       "it, then Hydra will automatically re-prompt you to add it back. The new entry " +
-                       "will use a build-independent identifier requirement, so future updates will not " +
-                       "require this step again.");
     }
 
     private static void RemoveQuarantine(string path, bool recursive = false)
