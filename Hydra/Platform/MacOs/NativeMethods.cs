@@ -80,12 +80,13 @@ internal static partial class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool AXIsProcessTrustedWithOptions(nint options);
 
-    // polls AXIsProcessTrusted silently for up to ~4s to allow TCC to re-evaluate after a binary swap.
+    // polls for up to ~4s using CGEventTapCreate — the reliable live check, unlike AXIsProcessTrusted()
+    // which returns a cached value for a running process and won't reflect a live grant.
     internal static bool PollAccessibilityTrusted()
     {
         for (var i = 0; i < 8; i++)
         {
-            if (AXIsProcessTrusted()) return true;
+            if (CanCreateEventTap()) return true;
             Thread.Sleep(500);
         }
         return false;
