@@ -163,6 +163,7 @@ public class MasterSlaveProtocolTests
         var cursor = new FakeCursorVisibility();
         var slave = new TestableSlaveRelay(cursorHider: cursor);
 
+        await slave.SimulateConnected();
         await slave.SimulateMasterConfig("master-pc");
         Assert.That(cursor.IsHidden, Is.True, "pre-condition: cursor hidden when master connected");
 
@@ -177,10 +178,12 @@ public class MasterSlaveProtocolTests
         var cursor = new FakeCursorVisibility();
         var slave = new TestableSlaveRelay(cursorHider: cursor);
 
+        await slave.SimulateConnected();
         await slave.SimulateMasterConfig("master-pc");
         await slave.SimulateDisconnected();
 
         // master reconnects — cursor should hide again
+        await slave.SimulateConnected();
         await slave.SimulateMasterConfig("master-pc");
 
         Assert.That(cursor.IsHidden, Is.True);

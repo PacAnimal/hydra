@@ -28,6 +28,7 @@ public sealed class TestableSlaveRelay(
 {
     public readonly List<(string[] Targets, MessageKind Kind, string Json)> Sent = [];
 
+    public Task SimulateConnected() => OnAuthenticated();
     public Task SimulateMasterConfig(string host) => OnReceive(host, MessageKind.MasterConfig, "{}"u8.ToArray());
     public Task SimulateMasterConfig(string host, string json) => OnReceive(host, MessageKind.MasterConfig, Encoding.UTF8.GetBytes(json));
     public Task SimulateReceive(string host, MessageKind kind, string json) => OnReceive(host, kind, Encoding.UTF8.GetBytes(json));
