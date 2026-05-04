@@ -104,11 +104,12 @@ public class TarGzStreamerTests
 
         using var cts = new CancellationTokenSource();
         cts.Cancel();
+        var token = cts.Token;
 
         Assert.ThrowsAsync<OperationCanceledException>(async () =>
             await TarGzStreamer.StreamAsync([file],
                 (_, _, _) => Task.CompletedTask,
-                NoFileStart, cts.Token));
+                NoFileStart, token));
     }
 
     [Test]
@@ -453,7 +454,9 @@ public class TarGzExtractorTests
         using var extractor = new TarGzExtractor(extractDir, NoFileStart, CancellationToken.None);
         await extractor.WriteChunkAsync(garbage);
         // completing with corrupt data should throw (invalid gzip/tar) without hanging
-        Assert.CatchAsync<Exception>(async () => await extractor.CompleteAsync());
+        Exception? ex = null;
+        try { await extractor.CompleteAsync(); } catch (Exception e) { ex = e; }
+        Assert.That(ex, Is.Not.Null);
     }
 
     [Test]
@@ -470,7 +473,9 @@ public class TarGzExtractorTests
         using var extractor = new TarGzExtractor(extractDir, NoFileStart, CancellationToken.None);
         foreach (var chunk in half)
             await extractor.WriteChunkAsync(chunk);
-        Assert.CatchAsync<Exception>(async () => await extractor.CompleteAsync());
+        Exception? ex = null;
+        try { await extractor.CompleteAsync(); } catch (Exception e) { ex = e; }
+        Assert.That(ex, Is.Not.Null);
     }
 
     // -- helpers --

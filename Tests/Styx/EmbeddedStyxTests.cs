@@ -74,7 +74,9 @@ public class EmbeddedStyxTests
         await using var client = Client("test-host", await Blob("wrong-password"));
         await client.StartAsync(CancellationToken.None);
 
-        Assert.ThrowsAsync<TimeoutException>(() => client.WaitForReady(1500));
+        Exception? ex = null;
+        try { await client.WaitForReady(1500); } catch (TimeoutException e) { ex = e; }
+        Assert.That(ex, Is.InstanceOf<TimeoutException>());
     }
 
     // ─── messaging ───────────────────────────────────────────────────────────

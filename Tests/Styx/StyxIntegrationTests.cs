@@ -58,8 +58,9 @@ public class StyxIntegrationTests
         // hub filter calls Context.Abort() on unauthenticated calls — client sees a cancellation or error
         await using var client = new TestStyxClient();
         await client.ConnectRaw(_factory!);
-        Assert.CatchAsync(async () =>
-            await client.Server!.Send(["any-host"], [1, 2, 3]));
+        Exception? ex = null;
+        try { await client.Server!.Send(["any-host"], [1, 2, 3]); } catch (Exception e) { ex = e; }
+        Assert.That(ex, Is.Not.Null);
     }
 
     [Test]
@@ -162,7 +163,9 @@ public class StyxIntegrationTests
         // clientB targets "receiver" — should not reach receiverA (different network)
         clientB.Send(["receiver"], MessageSerializer.Encode(MessageKind.MouseMove, new MouseMoveMessage("", 7, 7)));
 
-        Assert.ThrowsAsync<TimeoutException>(() => receiverA.WaitForMessage(800));
+        Exception? ex = null;
+        try { await receiverA.WaitForMessage(800); } catch (TimeoutException e) { ex = e; }
+        Assert.That(ex, Is.InstanceOf<TimeoutException>());
     }
 
     [Test]
@@ -269,7 +272,6 @@ public class StyxIntegrationTests
         await client.WaitForReady();
 
         // send to a host that doesn't exist — should silently no-op, not throw
-        Assert.DoesNotThrow(() =>
-            client.Send(["nonexistent"], MessageSerializer.Encode(MessageKind.MouseMove, new MouseMoveMessage("", 0, 0))));
+        client.Send(["nonexistent"], MessageSerializer.Encode(MessageKind.MouseMove, new MouseMoveMessage("", 0, 0)));
     }
 }
