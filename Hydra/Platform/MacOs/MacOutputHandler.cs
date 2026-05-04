@@ -639,6 +639,8 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
         _ => 4,
     };
 
+    public bool IsAccessibilityTrusted() => NativeMethods.AXIsProcessTrustedWithPrompt();
+
     public (int X, int Y)? GetCursorPosition()
     {
         var eventRef = NativeMethods.CGEventCreate(nint.Zero);

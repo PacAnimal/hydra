@@ -125,6 +125,8 @@ public sealed class CoalescingOutputWrapper : IPlatformOutput
         catch (InvalidOperationException) { } // thrown by BlockingCollection when CompleteAdding races with enumeration start
     }
 
+    public bool IsAccessibilityTrusted() => _inner.IsAccessibilityTrusted();
+
     public void Dispose()
     {
         FlushPendingMoveToQueue(); // deliver any final pending move

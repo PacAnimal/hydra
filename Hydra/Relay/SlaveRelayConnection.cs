@@ -72,6 +72,8 @@ public class SlaveRelayConnection : RelayConnection
 
     protected override async Task OnAuthenticated()
     {
+        if (!_output.IsAccessibilityTrusted())
+            _log.LogError("Output injection permission not granted. On macOS: grant access in System Settings > Privacy & Security > Accessibility. Then restart Hydra.");
         var snapshot = await _screens.Get();
         _cachedScreens = snapshot;
         _log.LogInformation("Local screens: {Count}", snapshot.Screens.Count);

@@ -9,4 +9,5 @@ public interface IPlatformOutput : IDisposable
     void InjectKey(KeyEventMessage msg);
     void InjectMouseButton(MouseButtonMessage msg);
     void InjectMouseScroll(MouseScrollMessage msg);
+    bool IsAccessibilityTrusted() => true;
 }

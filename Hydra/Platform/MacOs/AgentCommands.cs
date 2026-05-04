@@ -25,14 +25,14 @@ internal static class AgentCommands
         Directory.CreateDirectory(agentsDir);
         Directory.CreateDirectory(logDir);
 
-        // strip quarantine and re-sign so launchd and the shield helper aren't blocked by gatekeeper
+        // strip quarantine and sign only if not already signed (re-signing rotates code identity and invalidates TCC accessibility entry)
         RemoveQuarantine(exePath);
-        Codesign(exePath);
+        if (!IsAlreadySigned(exePath)) Codesign(exePath);
         var shieldPath = Path.Combine(workingDir, "Resources", "MacShield", "hydra-shield.app");
         if (Directory.Exists(shieldPath))
         {
             RemoveQuarantine(shieldPath, recursive: true);
-            Codesign(shieldPath);
+            if (!IsAlreadySigned(shieldPath)) Codesign(shieldPath);
         }
 
         // unload any existing agent before overwriting the plist
@@ -59,6 +59,18 @@ internal static class AgentCommands
         RunLaunchctl($"unload -w \"{plistPath}\"", tolerateFailure: true);
         File.Delete(plistPath);
         Console.WriteLine("Hydra agent removed.");
+    }
+
+    private static bool IsAlreadySigned(string path)
+    {
+        using var proc = Process.Start(new ProcessStartInfo("codesign", $"--verify \"{path}\"")
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        });
+        proc?.WaitForExit();
+        return proc?.ExitCode == 0;
     }
 
     internal static void Codesign(string path)
