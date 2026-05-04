@@ -24,9 +24,41 @@ public static class ClipboardUtils
         return new ClipboardSnapshot(validText, validPrimary, validImage);
     }
 
-    // reads from sync, falling back to snapshot fields when Get* returns null (echo suppression)
+    // reads from sync, falling back to snapshot fields when Get* returns null (echo suppression).
+    //
+    // Get*() returns null for two distinct reasons that we cannot tell apart:
+    //   (a) the type is genuinely absent from the pasteboard
+    //   (b) the type is present but Hydra wrote it, so it is echo-suppressed
+    //
+    // the fallback exists solely to handle (b). we only apply it when ALL fields are null,
+    // meaning everything is echo-suppressed and the user has not copied anything new.
+    // if ANY field is non-null (fresh user copy), we skip the fallback entirely — mixing a
+    // freshly-copied type with a stale fallback field would resurrect data from an older operation.
+    //
+    // "which type did the user copy last?" is implicitly encoded in what is ABSENT from the
+    // pasteboard: every copy operation calls clearContents first, so text and image can only
+    // coexist when they came from the exact same copy action. if the user copied text after image,
+    // the image slot is empty and GetImagePng() returns null — no fallback image can sneak in
+    // because text being non-null keeps us out of the fallback block. same logic in reverse.
+    //
+    // when both text and image are genuinely present (written together by one copy action, e.g.
+    // Finder copying an image file), image wins — the text is just a fallback representation the
+    // source app added, not something the user explicitly copied as text.
     public static ClipboardSnapshot ReadWithFallback(IClipboardSync sync, ClipboardSnapshot? fallback, ILogger log, string context)
-        => TrimToFit(sync.GetText() ?? fallback?.Text, sync.GetPrimaryText() ?? fallback?.PrimaryText, sync.GetImagePng() ?? fallback?.ImagePng, log, context);
+    {
+        var text = sync.GetText();
+        var primaryText = sync.GetPrimaryText();
+        var image = sync.GetImagePng();
+        if (text == null && primaryText == null && image == null)
+        {
+            text = fallback?.Text;
+            primaryText = fallback?.PrimaryText;
+            image = fallback?.ImagePng;
+        }
+        return image != null
+            ? TrimToFit(null, null, image, log, context)
+            : TrimToFit(text, primaryText, null, log, context);
+    }
 
     // drop fields in priority order (image, primary, text) until combined size fits
     public static ClipboardSnapshot TrimToFit(string? text, string? primaryText, byte[]? image, ILogger log, string context)
