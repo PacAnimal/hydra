@@ -78,7 +78,7 @@ public class SlaveRelayConnection : RelayConnection
         _isReady = false;
         if (!_output.IsAccessibilityTrusted())
         {
-            _log.LogWarning("Output injection permission not granted — waiting. If Hydra is already in the list, REMOVE it first (click −), then re-enable it.");
+            _log.LogWarning("Output injection permission not granted — open System Settings › Privacy & Security › Accessibility and enable Hydra, then Hydra will continue automatically.");
             await _output.WaitForAccessibilityTrusted(ConnectionToken);
             if (ConnectionToken.IsCancellationRequested) return;
             _log.LogInformation("Accessibility permission granted");
