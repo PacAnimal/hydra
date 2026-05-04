@@ -75,14 +75,26 @@ internal static class AgentCommands
 
     internal static void Codesign(string path)
     {
-        // -i embeds a stable bundle identifier so TCC tracks the entry by ID rather than binary hash
-        using var proc = Process.Start(new ProcessStartInfo("codesign", $"--force --deep --sign - -i {Label} \"{path}\"")
+        // --requirements sets a permissive designated requirement: any binary with our bundle identifier
+        // is trusted, rather than the default which ties the csreq to the specific binary's CDHash.
+        // this makes the TCC accessibility entry survive auto-updates — the stored csreq matches
+        // any future binary as long as it's signed with the same identifier.
+        var psi = new ProcessStartInfo("codesign")
         {
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
-        });
-        proc?.WaitForExit(); // failure is non-fatal — app may still run without a local signature
+        };
+        psi.ArgumentList.Add("--force");
+        psi.ArgumentList.Add("--sign");
+        psi.ArgumentList.Add("-");
+        psi.ArgumentList.Add("-i");
+        psi.ArgumentList.Add(Label);
+        psi.ArgumentList.Add("--requirements");
+        psi.ArgumentList.Add($"=designated => identifier \"{Label}\"");
+        psi.ArgumentList.Add(path);
+        using var proc = Process.Start(psi);
+        proc?.WaitForExit(); // failure is non-fatal
     }
 
     internal static void ResetAccessibility()
