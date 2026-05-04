@@ -1,14 +1,21 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Security;
 
 namespace Hydra.Platform.MacOs;
 
 [SupportedOSPlatform("macos")]
-internal static class AgentCommands
+internal static partial class AgentCommands
 {
     private const string Label = "com.cathedral.hydra";
+    private const string ShieldLabel = "com.cathedral.hydra.shield";
     private const string PlistFileName = "com.cathedral.hydra.plist";
+
+    [LibraryImport("libc")]
+    private static partial uint getuid();
+
+    private static string DomainTarget() => $"gui/{getuid()}";
 
     internal static void Install()
     {
@@ -27,21 +34,20 @@ internal static class AgentCommands
 
         // strip quarantine and sign only if not already signed (re-signing rotates code identity and invalidates TCC accessibility entry)
         RemoveQuarantine(exePath);
-        if (!IsAlreadySigned(exePath)) Codesign(exePath);
+        if (!IsAlreadySigned(exePath)) Codesign(exePath, Label);
         var shieldPath = Path.Combine(workingDir, "Resources", "MacShield", "hydra-shield.app");
         if (Directory.Exists(shieldPath))
         {
             RemoveQuarantine(shieldPath, recursive: true);
-            if (!IsAlreadySigned(shieldPath)) Codesign(shieldPath);
+            if (!IsAlreadySigned(shieldPath)) Codesign(shieldPath, ShieldLabel);
         }
 
-        // unload any existing agent before overwriting the plist
-        if (File.Exists(plistPath))
-            RunLaunchctl($"unload -w \"{plistPath}\"", tolerateFailure: true);
+        // remove any running instance before overwriting the plist
+        RunLaunchctl($"bootout {DomainTarget()}/{Label}", tolerateFailure: true);
 
         File.WriteAllText(plistPath, GeneratePlist(exePath, workingDir, logDir), new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
 
-        RunLaunchctl($"load -w \"{plistPath}\"");
+        RunLaunchctl($"bootstrap {DomainTarget()} \"{plistPath}\"");
         Console.WriteLine("Hydra agent installed and started.");
     }
 
@@ -56,24 +62,29 @@ internal static class AgentCommands
             return;
         }
 
-        RunLaunchctl($"unload -w \"{plistPath}\"", tolerateFailure: true);
+        RunLaunchctl($"bootout {DomainTarget()}/{Label}", tolerateFailure: true);
         File.Delete(plistPath);
         Console.WriteLine("Hydra agent removed.");
     }
 
     internal static bool IsAlreadySigned(string path)
     {
-        using var proc = Process.Start(new ProcessStartInfo("codesign", $"--verify \"{path}\"")
+        var psi = new ProcessStartInfo("codesign")
         {
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
-        });
+        };
+        psi.ArgumentList.Add("--verify");
+        psi.ArgumentList.Add("--strict");
+        psi.ArgumentList.Add("--deep");
+        psi.ArgumentList.Add(path);
+        using var proc = Process.Start(psi);
         proc?.WaitForExit();
         return proc?.ExitCode == 0;
     }
 
-    internal static void Codesign(string path)
+    internal static void Codesign(string path, string identifier)
     {
         // --requirements sets a permissive designated requirement: any binary with our bundle identifier
         // is trusted, rather than the default which ties the csreq to the specific binary's CDHash.
@@ -89,34 +100,27 @@ internal static class AgentCommands
         psi.ArgumentList.Add("--sign");
         psi.ArgumentList.Add("-");
         psi.ArgumentList.Add("-i");
-        psi.ArgumentList.Add(Label);
+        psi.ArgumentList.Add(identifier);
         psi.ArgumentList.Add("--requirements");
-        psi.ArgumentList.Add($"=designated => identifier \"{Label}\"");
+        psi.ArgumentList.Add($"=designated => identifier {identifier}");
         psi.ArgumentList.Add(path);
         using var proc = Process.Start(psi);
         proc?.WaitForExit(); // failure is non-fatal
     }
 
-    internal static void ResetAccessibility()
-    {
-        using var proc = Process.Start(new ProcessStartInfo("tccutil", $"reset Accessibility {Label}")
-        {
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-        });
-        proc?.WaitForExit(); // best effort — failure is non-fatal
-    }
-
     private static void RemoveQuarantine(string path, bool recursive = false)
     {
-        var args = recursive ? $"-dr com.apple.quarantine \"{path}\"" : $"-d com.apple.quarantine \"{path}\"";
-        using var proc = Process.Start(new ProcessStartInfo("xattr", args)
+        var psi = new ProcessStartInfo("xattr")
         {
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
-        });
+        };
+        if (recursive) psi.ArgumentList.Add("-r");
+        psi.ArgumentList.Add("-d");
+        psi.ArgumentList.Add("com.apple.quarantine");
+        psi.ArgumentList.Add(path);
+        using var proc = Process.Start(psi);
         proc?.WaitForExit(); // failure is fine — attribute may not exist
     }
 

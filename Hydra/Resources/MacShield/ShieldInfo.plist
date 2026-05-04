@@ -2,17 +2,23 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
     <key>CFBundleIdentifier</key>
-    <string>com.cathedral.hydra</string>
+    <string>com.cathedral.hydra.shield</string>
     <key>CFBundleExecutable</key>
     <string>hydra-shield</string>
     <key>CFBundleName</key>
-    <string>Hydra</string>
+    <string>Hydra Shield</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
     <key>NSLocationUsageDescription</key>
     <string>Hydra uses your location to identify the Wi-Fi network, enabling automatic configuration switching between home and office.</string>
     <key>NSLocationWhenInUseUsageDescription</key>
-    <string>Hydra uses your location to identify the Wi-Fi network, enabling automatic configuration switching between home and office.</string>
-    <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
     <string>Hydra uses your location to identify the Wi-Fi network, enabling automatic configuration switching between home and office.</string>
 </dict>
 </plist>

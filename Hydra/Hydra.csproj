@@ -71,7 +71,7 @@
         <MakeDir Directories="$(MSBuildProjectDirectory)/Resources/MacShield/hydra-shield.app/Contents/MacOS" />
         <Copy SourceFiles="$(MSBuildProjectDirectory)/Resources/MacShield/ShieldInfo.plist" DestinationFiles="$(MSBuildProjectDirectory)/Resources/MacShield/hydra-shield.app/Contents/Info.plist" />
         <Exec Command="xcrun swiftc -O -framework Network -framework CoreWLAN -framework CoreLocation -o &quot;$(MSBuildProjectDirectory)/Resources/MacShield/hydra-shield.app/Contents/MacOS/hydra-shield&quot; &quot;$(MSBuildProjectDirectory)/Resources/MacShield/main.swift&quot;" />
-        <Exec Command="codesign --force --sign - &quot;$(MSBuildProjectDirectory)/Resources/MacShield/hydra-shield.app&quot;" />
+        <Exec Command="codesign --force --sign - -i com.cathedral.hydra.shield --requirements &quot;=designated =&gt; identifier com.cathedral.hydra.shield&quot; &quot;$(MSBuildProjectDirectory)/Resources/MacShield/hydra-shield.app&quot;" />
         <Touch Files="$(MSBuildProjectDirectory)/Resources/MacShield/.shield-stamp" AlwaysCreate="true" />
     </Target>
 
