@@ -107,59 +107,28 @@ internal static partial class NativeMethods
 
     internal static async Task WaitForAccessibilityTrusted(CancellationToken cancel)
     {
-        if (AXIsProcessTrusted()) return;
-
-        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var reg = cancel.Register(() => tcs.TrySetResult());
-
-        // AXIsProcessTrusted() doesn't update for a running process on macOS 14+ until the process
-        // restarts — but macOS fires com.apple.accessibility.api on the distributed notification
-        // center whenever TCC state changes. spin a dedicated run loop thread to receive it.
-        CFNotificationCallback? callback = null; // field reference keeps the delegate alive across await
-        nint watcherRunLoop = nint.Zero;
-        var watcherReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        var watcherThread = new Thread(() =>
+        // AXIsProcessTrusted() returns a cached value for a running process and won't update after
+        // a live grant. CGEventTapCreate() tests the actual kernel capability and is not cached —
+        // it's the reliable detection method used by production macOS accessibility tools.
+        // com.apple.accessibility.api distributed notification also doesn't fire for processes that
+        // weren't trusted at startup, so polling is the only option.
+        while (!cancel.IsCancellationRequested)
         {
-            watcherRunLoop = CFRunLoopGetCurrent();
-            var center = CFNotificationCenterGetDistributedCenter();
-            var notifName = MakeNsString("com.apple.accessibility.api");
+            try { await Task.Delay(500, cancel); }
+            catch (OperationCanceledException) { return; }
+            if (CanCreateEventTap()) return;
+        }
+    }
 
-            callback = (_, _, _, _, _) =>
-            {
-                if (AXIsProcessTrusted()) tcs.TrySetResult();
-            };
-
-            CFNotificationCenterAddObserver(center, nint.Zero, callback, notifName, nint.Zero,
-                CFNotificationSuspensionBehaviorDeliverImmediately);
-            watcherReady.TrySetResult();
-
-            CFRunLoopRun();
-
-            CFNotificationCenterRemoveObserver(center, nint.Zero, notifName, nint.Zero);
-            CFRelease(notifName);
-        })
-        { IsBackground = true, Name = "HydraAccessibilityWatcher" };
-
-        watcherThread.Start();
-        await watcherReady.Task;
-
-        // fallback poll every 2s in case the notification is missed
-        _ = Task.Run(async () =>
-        {
-            while (!tcs.Task.IsCompleted)
-            {
-                try { await Task.Delay(2000, cancel); }
-                catch (OperationCanceledException) { break; }
-                if (AXIsProcessTrusted()) tcs.TrySetResult();
-            }
-        }, cancel);
-
-        await tcs.Task;
-
-        if (watcherRunLoop != nint.Zero) CFRunLoopStop(watcherRunLoop);
-        GC.KeepAlive(callback);
-        watcherThread.Join(1000);
+    private static bool CanCreateEventTap()
+    {
+        CGEventTapCallBack probe = (_, _, eventRef, _) => eventRef;
+        var tap = CGEventTapCreate(KCGHidEventTap, KCGHeadInsertEventTap, KCGEventTapOptionDefault,
+            KCGEventMaskForAllEvents, probe, nint.Zero);
+        if (tap == nint.Zero) return false;
+        CFRelease(tap);
+        GC.KeepAlive(probe);
+        return true;
     }
 
     [LibraryImport(ApplicationServices)]
