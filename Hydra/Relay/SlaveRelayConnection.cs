@@ -35,6 +35,9 @@ public class SlaveRelayConnection : RelayConnection
     // cached screen layout for synchronous mouse move handling (avoids async overhead on the relay hot path)
     private volatile LocalScreenSnapshot? _cachedScreens;
 
+    // set true only after OnAuthenticated completes — guards cursor hide until the slave is fully ready
+    private volatile bool _isReady;
+
     // masters whose cursor is currently on this slave's screen
     private readonly HashSet<string> _onScreenMasters = new(StringComparer.OrdinalIgnoreCase);
 
@@ -72,9 +75,10 @@ public class SlaveRelayConnection : RelayConnection
 
     protected override async Task OnAuthenticated()
     {
+        _isReady = false;
         if (!_output.IsAccessibilityTrusted())
         {
-            _log.LogWarning("Output injection permission not granted — open System Settings › Privacy & Security › Accessibility and enable Hydra, then Hydra will continue automatically.");
+            _log.LogWarning("Output injection permission not granted — waiting. If Hydra is already in the list, REMOVE it first (click −), then re-enable it.");
             await _output.WaitForAccessibilityTrusted(ConnectionToken);
             if (ConnectionToken.IsCancellationRequested) return;
             _log.LogInformation("Accessibility permission granted");
@@ -82,6 +86,7 @@ public class SlaveRelayConnection : RelayConnection
         var snapshot = await _screens.Get();
         _cachedScreens = snapshot;
         _log.LogInformation("Local screens: {Count}", snapshot.Screens.Count);
+        _isReady = true;
     }
 
     protected override async Task OnReceive(string sourceHost, MessageKind kind, ReadOnlyMemory<byte> body)
@@ -129,7 +134,7 @@ public class SlaveRelayConnection : RelayConnection
                 CancelAllRepeatTimers();
                 ReleaseAllKeys();
                 _onScreenMasters.Remove(sourceHost);
-                if (_onScreenMasters.Count == 0)
+                if (_onScreenMasters.Count == 0 && _isReady)
                     _cursorHider.Hide();
                 break;
             case MessageKind.ScreensaverSync:
@@ -239,7 +244,7 @@ public class SlaveRelayConnection : RelayConnection
         {
             if (after.Length == 0)
                 _cursorHider.Show();
-            else if (_onScreenMasters.Count == 0)
+            else if (_onScreenMasters.Count == 0 && _isReady)
                 _cursorHider.Hide();
             if (after.Length == 0)
                 _screensaverSuppressor.Restore();
@@ -371,7 +376,7 @@ public class SlaveRelayConnection : RelayConnection
         var after = await _peerState.GetMasters();
         if (after.Length > before.Length)
         {
-            if (after.Length == 1)
+            if (after.Length == 1 && _isReady)
                 _cursorHider.Hide();
             _screensaverSuppressor.Suppress();
         }

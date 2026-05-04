@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Security;
+using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform.MacOs;
 
@@ -106,6 +107,45 @@ internal static partial class AgentCommands
         psi.ArgumentList.Add(path);
         using var proc = Process.Start(psi);
         proc?.WaitForExit(); // failure is non-fatal
+    }
+
+    // stale TCC entry: the app can appear enabled in System Settings but still fail because
+    // the stored csreq was bound to a previous binary hash. toggling the switch on/off doesn't
+    // help — it just flips the flag on the old entry. reset it so the prompt creates a fresh
+    // entry whose csreq matches the current binary's permissive designated requirement.
+    internal static void ResetTccAccessibility(ILogger log)
+    {
+        // try both the code-signing identifier and the executable path — TCC stores entries
+        // under either form depending on how the permission was originally granted
+        var clients = new List<string> { Label };
+        if (Environment.ProcessPath is { } exePath)
+            clients.Add(exePath);
+
+        foreach (var client in clients)
+        {
+            try
+            {
+                var psi = new ProcessStartInfo("/usr/bin/tccutil")
+                {
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                };
+                psi.ArgumentList.Add("reset");
+                psi.ArgumentList.Add("Accessibility");
+                psi.ArgumentList.Add(client);
+                using var proc = Process.Start(psi);
+                if (proc == null) continue;
+                var stdout = proc.StandardOutput.ReadToEnd();
+                var stderr = proc.StandardError.ReadToEnd();
+                proc.WaitForExit(3000);
+                log.LogInformation("tccutil reset Accessibility {Client}: exit={Exit} stdout={Stdout} stderr={Stderr}",
+                    client, proc.ExitCode,
+                    string.IsNullOrWhiteSpace(stdout) ? "(empty)" : stdout.Trim(),
+                    string.IsNullOrWhiteSpace(stderr) ? "(empty)" : stderr.Trim());
+            }
+            catch (Exception ex) { log.LogWarning(ex, "tccutil reset Accessibility {Client} failed", client); }
+        }
     }
 
     private static void RemoveQuarantine(string path, bool recursive = false)
