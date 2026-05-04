@@ -69,7 +69,7 @@ internal static partial class AgentCommands
 
     internal static bool IsAlreadySigned(string path)
     {
-        var psi = new ProcessStartInfo("codesign")
+        var psi = new ProcessStartInfo("/usr/bin/codesign")
         {
             UseShellExecute = false,
             RedirectStandardOutput = true,
@@ -90,7 +90,7 @@ internal static partial class AgentCommands
         // is trusted, rather than the default which ties the csreq to the specific binary's CDHash.
         // this makes the TCC accessibility entry survive auto-updates — the stored csreq matches
         // any future binary as long as it's signed with the same identifier.
-        var psi = new ProcessStartInfo("codesign")
+        var psi = new ProcessStartInfo("/usr/bin/codesign")
         {
             UseShellExecute = false,
             RedirectStandardOutput = true,
@@ -110,23 +110,26 @@ internal static partial class AgentCommands
 
     private static void RemoveQuarantine(string path, bool recursive = false)
     {
-        var psi = new ProcessStartInfo("xattr")
+        foreach (var attr in new[] { "com.apple.quarantine", "com.apple.provenance" })
         {
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-        };
-        if (recursive) psi.ArgumentList.Add("-r");
-        psi.ArgumentList.Add("-d");
-        psi.ArgumentList.Add("com.apple.quarantine");
-        psi.ArgumentList.Add(path);
-        using var proc = Process.Start(psi);
-        proc?.WaitForExit(); // failure is fine — attribute may not exist
+            var psi = new ProcessStartInfo("/usr/bin/xattr")
+            {
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+            if (recursive) psi.ArgumentList.Add("-r");
+            psi.ArgumentList.Add("-d");
+            psi.ArgumentList.Add(attr);
+            psi.ArgumentList.Add(path);
+            using var proc = Process.Start(psi);
+            proc?.WaitForExit(); // failure is fine — attribute may not exist
+        }
     }
 
     private static void RunLaunchctl(string args, bool tolerateFailure = false)
     {
-        using var proc = Process.Start(new ProcessStartInfo("launchctl", args)
+        using var proc = Process.Start(new ProcessStartInfo("/bin/launchctl", args)
         {
             UseShellExecute = false,
             RedirectStandardOutput = true,
