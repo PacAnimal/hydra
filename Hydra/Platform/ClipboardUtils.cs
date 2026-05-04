@@ -5,6 +5,17 @@ using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform;
 
+internal struct ClipboardEchoFilter
+{
+    private string? _lastText;
+    private ulong? _lastImageHash;
+
+    public void TrackText(string text) => _lastText = text;
+    public void TrackImage(byte[] png) => _lastImageHash = ClipboardUtils.QuickHash(png);
+    public readonly string? FilterText(string? text) => text == _lastText ? null : text;
+    public readonly bool IsDuplicateImage(byte[] png) => _lastImageHash.HasValue && ClipboardUtils.QuickHash(png) == _lastImageHash.Value;
+}
+
 public static class ClipboardUtils
 {
     public static readonly long MaxClipboardBytes = (long)ByteSize.FromMebiBytes(16).Bytes;

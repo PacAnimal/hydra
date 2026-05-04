@@ -13,8 +13,7 @@ public sealed class WindowsClipboardSync(ILogger<WindowsClipboardSync> log) : IC
     private static readonly uint CfPng = NativeMethods.RegisterClipboardFormat("PNG");
 
     private readonly ILogger<WindowsClipboardSync> _log = log;
-    private string? _lastSetText;
-    private ulong? _lastSetImageHash;
+    private ClipboardEchoFilter _echo;
     private string? _storedPrimaryText;
 
     public string? GetText()
@@ -30,7 +29,7 @@ public sealed class WindowsClipboardSync(ILogger<WindowsClipboardSync> log) : IC
             try
             {
                 var text = Marshal.PtrToStringUni(ptr);
-                return text == _lastSetText ? null : text;
+                return _echo.FilterText(text);
             }
             finally
             {
@@ -45,7 +44,7 @@ public sealed class WindowsClipboardSync(ILogger<WindowsClipboardSync> log) : IC
 
     public void SetText(string text)
     {
-        _lastSetText = text;
+        _echo.TrackText(text);
 
         if (!OpenClipboard()) return;
         try
@@ -74,8 +73,7 @@ public sealed class WindowsClipboardSync(ILogger<WindowsClipboardSync> log) : IC
                 var png = ReadGlobalMemory(NativeMethods.GetClipboardData(CfPng));
                 if (png != null)
                 {
-                    if (_lastSetImageHash.HasValue && ClipboardUtils.QuickHash(png) == _lastSetImageHash.Value)
-                        return null;
+                    if (_echo.IsDuplicateImage(png)) return null;
                     return png;
                 }
             }
@@ -95,7 +93,7 @@ public sealed class WindowsClipboardSync(ILogger<WindowsClipboardSync> log) : IC
 
     public void SetImagePng(byte[] pngData)
     {
-        _lastSetImageHash = ClipboardUtils.QuickHash(pngData);
+        _echo.TrackImage(pngData);
 
         if (!OpenClipboard()) return;
         try
@@ -113,9 +111,9 @@ public sealed class WindowsClipboardSync(ILogger<WindowsClipboardSync> log) : IC
     {
         if (text == null && primaryText == null && imagePng == null) return;
 
-        if (text != null) _lastSetText = text;
+        if (text != null) _echo.TrackText(text);
         if (primaryText != null) _storedPrimaryText = primaryText;
-        if (imagePng != null) _lastSetImageHash = ClipboardUtils.QuickHash(imagePng);
+        if (imagePng != null) _echo.TrackImage(imagePng);
 
         if (!OpenClipboard()) return;
         try

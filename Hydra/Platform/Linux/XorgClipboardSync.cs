@@ -27,9 +27,8 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
     private string? _ownedText;
     private string? _ownedPrimaryText;
     private byte[]? _ownedImagePng;
-    private string? _lastSetText;
+    private ClipboardEchoFilter _echo;
     private string? _lastSetPrimaryText;
-    private ulong? _lastSetImageHash;
 
     // GetText/GetImagePng synchronization — only one read in flight at a time
     private readonly Lock _getLock = new();
@@ -84,7 +83,7 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
         var bytes = ReadSelectionBytes(_atomClipboard, _atomHydraClipboard, _atomUtf8String);
         if (bytes == null) return null;
         var text = Encoding.UTF8.GetString(bytes);
-        return text == _lastSetText ? null : text;
+        return _echo.FilterText(text);
     }
 
     public string? GetPrimaryText()
@@ -103,14 +102,13 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
             return null;
         var bytes = ReadSelectionBytes(_atomClipboard, _atomHydraImageClip, _atomImagePng);
         if (bytes == null) return null;
-        if (_lastSetImageHash.HasValue && ClipboardUtils.QuickHash(bytes) == _lastSetImageHash.Value)
-            return null;
+        if (_echo.IsDuplicateImage(bytes)) return null;
         return bytes;
     }
 
     public void SetText(string text)
     {
-        _lastSetText = text;
+        _echo.TrackText(text);
         lock (_dataLock)
         {
             _ownedText = text;
@@ -131,7 +129,7 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
 
     public void SetImagePng(byte[] pngData)
     {
-        _lastSetImageHash = ClipboardUtils.QuickHash(pngData);
+        _echo.TrackImage(pngData);
         lock (_dataLock)
         {
             _ownedImagePng = pngData;
@@ -145,8 +143,8 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
     {
         if (text == null && primaryText == null && imagePng == null) return;
 
-        if (text != null) _lastSetText = text;
-        if (imagePng != null) _lastSetImageHash = ClipboardUtils.QuickHash(imagePng);
+        if (text != null) _echo.TrackText(text);
+        if (imagePng != null) _echo.TrackImage(imagePng);
 
         lock (_dataLock)
         {

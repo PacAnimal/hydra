@@ -9,8 +9,7 @@ public sealed class MacClipboardSync : IClipboardSync
     private const string PasteboardTypePng = "public.png";
 
     private readonly ILogger<MacClipboardSync> _log;
-    private string? _lastSetText;
-    private ulong? _lastSetImageHash;
+    private ClipboardEchoFilter _echo;
     private string? _storedPrimaryText;
 
     public MacClipboardSync(ILogger<MacClipboardSync> log)
@@ -47,12 +46,12 @@ public sealed class MacClipboardSync : IClipboardSync
 
         if (result == nint.Zero) return null;
         var text = NativeMethods.CfStringToManaged(result);
-        return text == _lastSetText ? null : text;
+        return _echo.FilterText(text);
     }
 
     public void SetText(string text)
     {
-        _lastSetText = text;
+        _echo.TrackText(text);
 
         using var pool = new ObjcAutoreleasePool();
         var pasteboard = GetGeneralPasteboard();
@@ -102,16 +101,14 @@ public sealed class MacClipboardSync : IClipboardSync
         var bytes = new byte[(int)length];
         Marshal.Copy(ptr, bytes, 0, (int)length);
 
-        // suppress echo: don't return data we just wrote
-        if (_lastSetImageHash.HasValue && ClipboardUtils.QuickHash(bytes) == _lastSetImageHash.Value)
-            return null;
+        if (_echo.IsDuplicateImage(bytes)) return null;
 
         return bytes;
     }
 
     public void SetImagePng(byte[] pngData)
     {
-        _lastSetImageHash = ClipboardUtils.QuickHash(pngData);
+        _echo.TrackImage(pngData);
 
         using var pool = new ObjcAutoreleasePool();
         var pasteboard = GetGeneralPasteboard();
@@ -129,9 +126,9 @@ public sealed class MacClipboardSync : IClipboardSync
         {
             if (text == null && primaryText == null && imagePng == null) return;
 
-            if (text != null) _lastSetText = text;
+            if (text != null) _echo.TrackText(text);
             if (primaryText != null) _storedPrimaryText = primaryText;
-            if (imagePng != null) _lastSetImageHash = ClipboardUtils.QuickHash(imagePng);
+            if (imagePng != null) _echo.TrackImage(imagePng);
 
             var pasteboard = GetGeneralPasteboard();
             if (pasteboard == nint.Zero) return;
