@@ -48,6 +48,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
                 NativeMethods.CFNotificationSuspensionBehaviorDeliverImmediately);
             NativeMethods.CFRelease(name);
         }
+        GetHidConnection();
     }
 #pragma warning restore IDE0290
 
