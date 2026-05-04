@@ -62,6 +62,7 @@ public class HydraConfig
     public EmbeddedStyxConfig? EmbeddedStyx { get; init; }         // connect to embedded Styx (plain-text alternative to base64 networkConfig)
     public EmbeddedStyxServerConfig? EmbeddedStyxServer { get; init; }  // run an embedded Styx server on this machine
 
+    public bool HideCursor { get; init; } = false;  // master only — hide cursor on inactivity
     public bool RemoteOnly { get; init; } = false;
     public bool SyncScreensaver { get; init; } = true;
     public bool AccelerateMouseWheel { get; init; } = true;
@@ -220,6 +221,8 @@ public class HydraConfig
             if (dupHost != null)
                 throw new InvalidOperationException($"hydra.conf has duplicate host name '{dupHost.Key}' in profile '{cfg.ProfileName ?? "(default)"}'.");
 
+            if (cfg.Mode == Mode.Slave && cfg.HideCursor)
+                throw new InvalidOperationException("hideCursor is master-only. Remove it from slave profiles.");
             if (cfg.Mode == Mode.Master && cfg.MouseScale != null)
                 throw new InvalidOperationException("mouseScale is slave-only. Remove it from master profiles.");
             if (cfg.Mode == Mode.Master && cfg.ScreenDefinitions.Count > 0)

@@ -120,6 +120,8 @@ public class InputRouter(
         _screenSaverSync.StartWatching(OnScreensaverActivated, OnScreensaverDeactivated);
 
         _ = RefreshKeyRepeatAsync(_pollCts.Token);
+        if (profile.HideCursor)
+            cursorHider.Hide();
     }
 
     public async Task StopAsync(CancellationToken cancellationToken)
@@ -249,7 +251,7 @@ public class InputRouter(
         {
             _fileTransfer.Abort(relay, $"peer '{disconnectedHost}' disconnected");
             ReturnToLocalScreen(warpX, warpY);
-            cursorHider.Show();
+            ShowCursorOnReturn();
             log.LogInformation("Remote peer '{Name}' disconnected — returned to local screen", disconnectedHost);
         }
 
@@ -296,7 +298,7 @@ public class InputRouter(
         {
             _fileTransfer.Abort(relay, "relay disconnected");
             ReturnToLocalScreen(warpX, warpY);
-            cursorHider.Show();
+            ShowCursorOnReturn();
             log.LogWarning("Relay disconnected — returned to local screen from '{Host}'", disconnectedHost);
         }
     }
@@ -320,7 +322,7 @@ public class InputRouter(
                     _fileTransfer.Abort(relay, "screensaver activated");
                     LeaveRemoteScreen(disconnectedHost);
                     ReturnToLocalScreen(warpX, warpY);
-                    cursorHider.Show();
+                    ShowCursorOnReturn();
                 }
             }
 
@@ -691,7 +693,7 @@ public class InputRouter(
                                 FlushMouseDelta(st);
                                 st.Mouse.LeaveScreen();
                                 platform.IsOnVirtualScreen = false;
-                                cursorHider.Show();
+                                ShowCursorOnReturn();
                                 LeaveRemoteScreen(leavingHost);
                             }
                         }
@@ -1016,7 +1018,7 @@ public class InputRouter(
                         var leavingScreen = st.Mouse.CurrentScreen;
                         st.Mouse.LeaveScreen();
                         ReturnToLocalScreen(globalX, globalY);
-                        cursorHider.Show();
+                        ShowCursorOnReturn();
                         st.ActiveLocalScreen = targetScreen;
                         UpdateWarpPoint(st, targetScreen);
                         log.LogInformation("Returned to local screen ← ({X}, {Y})", globalX, globalY);
@@ -1055,6 +1057,14 @@ public class InputRouter(
     {
         platform.IsOnVirtualScreen = false;
         platform.WarpCursor(x, y);
+    }
+
+    // hides or shows the cursor when control returns to the local screen:
+    // with hideCursor, restart the inactivity timer instead of showing unconditionally
+    private void ShowCursorOnReturn()
+    {
+        if (profile.HideCursor) cursorHider.Hide();
+        else cursorHider.Show();
     }
 
     // shared in-consumer cleanup for peer-disconnect / relay-disconnect / screensaver snap-back.
@@ -1131,7 +1141,7 @@ public class InputRouter(
                     var globalY = targetScreen.Y + hit.EntryY;
                     st.Mouse.LeaveScreen();
                     ReturnToLocalScreen(globalX, globalY);
-                    cursorHider.Show();
+                    ShowCursorOnReturn();
                     st.ActiveLocalScreen = targetScreen;
                     UpdateWarpPoint(st, targetScreen);
                     log.LogInformation("Returned to local screen ← ({X}, {Y})", globalX, globalY);

@@ -128,7 +128,7 @@ public sealed class CursorHiderService(ICursor cursor, ILogger<CursorHiderServic
         _pendingHide = false;
         _pendingShow = true;
         Trigger();
-        log.LogDebug("Slave cursor visible (local activity)");
+        log.LogDebug("Cursor visible (local activity)");
         StartLocalTimeout();
     }
 
@@ -139,6 +139,6 @@ public sealed class CursorHiderService(ICursor cursor, ILogger<CursorHiderServic
         _pendingShow = false;
         _pendingHide = true;
         Trigger();
-        log.LogDebug("Slave cursor hidden (local inactivity)");
+        log.LogDebug("Cursor hidden (local inactivity)");
     }
 }

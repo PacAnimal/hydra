@@ -20,6 +20,7 @@ public interface IHydraProfile
     decimal? MouseScale { get; }
     decimal? RelativeMouseScale { get; }
     string? NetworkConfig { get; }
+    bool HideCursor { get; }
     bool RemoteOnly { get; }
     bool SyncScreensaver { get; }
     bool AccelerateMouseWheel { get; }
@@ -47,6 +48,7 @@ public class HydraProfile(HydraConfigFile configFile, HydraConfig? activeProfile
     public decimal? MouseScale => _activeProfile?.MouseScale;
     public decimal? RelativeMouseScale => _activeProfile?.RelativeMouseScale;
     public string? NetworkConfig => networkConfigOverride ?? _activeProfile?.NetworkConfig;
+    public bool HideCursor => _activeProfile?.HideCursor ?? false;
     public bool RemoteOnly => _activeProfile?.RemoteOnly ?? false;
     public bool SyncScreensaver => _activeProfile?.SyncScreensaver ?? true;
     public bool AccelerateMouseWheel => _activeProfile?.AccelerateMouseWheel ?? true;
