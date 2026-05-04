@@ -139,6 +139,8 @@ if (logFileSetting is { } logFile)
     var logPath = Path.IsPathRooted(logFile)
         ? logFile
         : Path.GetFullPath(logFile, Path.GetDirectoryName(configPath)!);
+    if (configFile.LogTruncate && File.Exists(logPath))
+        new FileStream(logPath, FileMode.Truncate).Dispose();
     services.AddSereneFileLogging(logPath, c => c.MinLogLevel = profile.LogLevel);
 }
 

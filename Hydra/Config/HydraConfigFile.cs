@@ -22,6 +22,9 @@ public class HydraConfigFile
     // optional — if set, the session child writes log output to this file (service mode only)
     public string? SessionLogFile { get; init; }
 
+    // if true, truncate logFile/sessionLogFile to 0 bytes on startup
+    public bool LogTruncate { get; init; } = false;
+
     // optional — defaults to machine hostname without domain
     public string? Name { get; init; }
 

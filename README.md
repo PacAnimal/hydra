@@ -63,6 +63,8 @@ Neighbours are **mirrored by default** — declaring that `laptop` has `desktop`
 
 - `name` — this machine's name on the network. Optional — defaults to the machine's hostname without domain. Must match one of the host names for the master to identify its own screen.
 - `logLevel` — `trce`, `dbug`, `info`, `warn`, `fail`, or `crit`
+- `logFile` — path to a file where log output is also written (in addition to the console); relative paths are resolved from the config file's directory (default: none)
+- `logTruncate` — if `true`, truncate `logFile` to 0 bytes on each startup so it doesn't grow unbounded (default: `false`)
 - `autoUpdate` — `false` to disable automatic updates
 - `lockFile` — path to a lock file to prevent multiple instances (default: none)
 - `profiles` — array of profile objects (see below); at least one required
