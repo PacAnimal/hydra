@@ -33,14 +33,13 @@ internal static partial class AgentCommands
         Directory.CreateDirectory(agentsDir);
         Directory.CreateDirectory(logDir);
 
-        // strip quarantine and sign only if not already signed (re-signing rotates code identity and invalidates TCC accessibility entry)
         RemoveQuarantine(exePath);
-        if (!IsAlreadySigned(exePath)) Codesign(exePath, Label);
+        Codesign(exePath, Label);
         var shieldPath = Path.Combine(workingDir, "Resources", "MacShield", "hydra-shield.app");
         if (Directory.Exists(shieldPath))
         {
             RemoveQuarantine(shieldPath, recursive: true);
-            if (!IsAlreadySigned(shieldPath)) Codesign(shieldPath, ShieldLabel);
+            Codesign(shieldPath, ShieldLabel);
         }
 
         // remove any running instance before overwriting the plist
@@ -68,23 +67,6 @@ internal static partial class AgentCommands
         Console.WriteLine("Hydra agent removed.");
     }
 
-    internal static bool IsAlreadySigned(string path)
-    {
-        var psi = new ProcessStartInfo("/usr/bin/codesign")
-        {
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-        };
-        psi.ArgumentList.Add("--verify");
-        psi.ArgumentList.Add("--strict");
-        psi.ArgumentList.Add("--deep");
-        psi.ArgumentList.Add(path);
-        using var proc = Process.Start(psi);
-        proc?.WaitForExit();
-        return proc?.ExitCode == 0;
-    }
-
     internal static void Codesign(string path, string identifier)
     {
         // --requirements sets a permissive designated requirement: any binary with our bundle identifier
@@ -109,43 +91,22 @@ internal static partial class AgentCommands
         proc?.WaitForExit(); // failure is non-fatal
     }
 
-    // stale TCC entry: the app can appear enabled in System Settings but still fail because
-    // the stored csreq was bound to a previous binary hash. toggling the switch on/off doesn't
-    // help — it just flips the flag on the old entry. reset it so the prompt creates a fresh
-    // entry whose csreq matches the current binary's permissive designated requirement.
+    // stale TCC entry: the app appears enabled in System Settings but the stored csreq was bound
+    // to a previous binary hash so AXIsProcessTrusted still returns false. tccutil reset is a
+    // no-op even with sudo on macOS 14+, and the system-level TCC DB is SIP-protected so sqlite3
+    // as root won't work either. only System Settings (via Apple's private tcc.manager entitlement)
+    // can remove the entry. we open Settings and log a clear one-time instruction; once the user
+    // removes and re-grants, the permissive designated requirement we sign with means future
+    // auto-updates will never break the entry again.
     internal static void ResetTccAccessibility(ILogger log)
     {
-        // try both the code-signing identifier and the executable path — TCC stores entries
-        // under either form depending on how the permission was originally granted
-        var clients = new List<string> { Label };
-        if (Environment.ProcessPath is { } exePath)
-            clients.Add(exePath);
-
-        foreach (var client in clients)
-        {
-            try
-            {
-                var psi = new ProcessStartInfo("/usr/bin/tccutil")
-                {
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                };
-                psi.ArgumentList.Add("reset");
-                psi.ArgumentList.Add("Accessibility");
-                psi.ArgumentList.Add(client);
-                using var proc = Process.Start(psi);
-                if (proc == null) continue;
-                var stdout = proc.StandardOutput.ReadToEnd();
-                var stderr = proc.StandardError.ReadToEnd();
-                proc.WaitForExit(3000);
-                log.LogInformation("tccutil reset Accessibility {Client}: exit={Exit} stdout={Stdout} stderr={Stderr}",
-                    client, proc.ExitCode,
-                    string.IsNullOrWhiteSpace(stdout) ? "(empty)" : stdout.Trim(),
-                    string.IsNullOrWhiteSpace(stderr) ? "(empty)" : stderr.Trim());
-            }
-            catch (Exception ex) { log.LogWarning(ex, "tccutil reset Accessibility {Client} failed", client); }
-        }
+        log.LogWarning("Accessibility permission has a stale code-signature requirement (csreq mismatch " +
+                       "after update). The entry in System Settings still shows Hydra as enabled, but " +
+                       "macOS is verifying against an old binary hash. Fix: open System Settings → " +
+                       "Privacy & Security → Accessibility, click the − button next to Hydra to remove " +
+                       "it, then Hydra will automatically re-prompt you to add it back. The new entry " +
+                       "will use a build-independent identifier requirement, so future updates will not " +
+                       "require this step again.");
     }
 
     private static void RemoveQuarantine(string path, bool recursive = false)

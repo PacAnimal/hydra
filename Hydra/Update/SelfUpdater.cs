@@ -151,12 +151,9 @@ internal sealed class SelfUpdater(IHydraProfile profile, ILogger<SelfUpdater> lo
 
             if (OperatingSystem.IsMacOS())
             {
-                // only sign if unsigned — re-signing rotates code identity and invalidates TCC accessibility entry.
-                // if the binary was already carrying a permissive-DR signature, TCC survives the swap without a reset.
-                if (!Platform.MacOs.AgentCommands.IsAlreadySigned(exePath))
-                    Platform.MacOs.AgentCommands.Codesign(exePath, "com.cathedral.hydra");
+                Platform.MacOs.AgentCommands.Codesign(exePath, "com.cathedral.hydra");
                 var shieldPath = Path.Combine(appDir, "Resources", "MacShield", "hydra-shield.app");
-                if (Directory.Exists(shieldPath) && !Platform.MacOs.AgentCommands.IsAlreadySigned(shieldPath))
+                if (Directory.Exists(shieldPath))
                     Platform.MacOs.AgentCommands.Codesign(shieldPath, "com.cathedral.hydra.shield");
             }
         }
