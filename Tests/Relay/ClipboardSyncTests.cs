@@ -365,8 +365,9 @@ public class ClipboardSyncTests
     }
 
     [Test]
-    public async Task OnEnterRemoteScreen_ImageAndText_BothInSamePush()
+    public async Task OnEnterRemoteScreen_ImageAndText_ImageWins()
     {
+        // when both text and image are on the clipboard, image wins — text is just a fallback representation
         var png = MakeFakePng();
         var clipboard = new FakeClipboardSync();
         clipboard.SetText("alt text");
@@ -384,7 +385,7 @@ public class ClipboardSyncTests
         var msg = JsonSerializer.Deserialize<ClipboardPushMessage>(push[0].Json, SaneJson.Options);
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(msg?.Text, Is.EqualTo("alt text"));
+            Assert.That(msg?.Text, Is.Empty);
             Assert.That(msg?.ImagePng, Is.EqualTo(png));
         }
 
