@@ -44,6 +44,12 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, bool d
         NativeMethods.SetCursorPos(x, y);
     }
 
+    public (int X, int Y)? GetCursorPosition()
+    {
+        if (!NativeMethods.GetCursorPos(out var p)) return null;
+        return (p.x, p.y);
+    }
+
     public ValueTask HideCursor()
     {
         // hide cursor immediately — fast counter op, safe inside hook callback

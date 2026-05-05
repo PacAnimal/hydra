@@ -64,6 +64,7 @@ public sealed class CursorHiderService(ICursor cursor, ILogger<CursorHiderServic
         {
             _pendingHide = false;
             cursor.WarpCursor(_warpX, _warpY);
+            _lastPosition = (_warpX, _warpY);  // don't detect this warp as user movement
             await cursor.HideCursor();
         }
         else if (_pendingShow)
@@ -71,9 +72,11 @@ public sealed class CursorHiderService(ICursor cursor, ILogger<CursorHiderServic
             _pendingShow = false;
             await cursor.ShowCursor();
         }
-        else if (_hideIntent)
+        else if (_hideIntent && !_localActive)
         {
+            // keep cursor pinned at warp point while hidden — don't warp when temporarily shown
             cursor.WarpCursor(_warpX, _warpY);
+            _lastPosition = (_warpX, _warpY);
         }
     }
 
