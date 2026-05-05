@@ -52,15 +52,6 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
         _ = NativeMethods.CGWarpMouseCursorPosition(new CGPoint { X = x, Y = y });
     }
 
-    public (int X, int Y)? GetCursorPosition()
-    {
-        var eventRef = NativeMethods.CGEventCreate(nint.Zero);
-        if (eventRef == nint.Zero) return null;
-        var pos = NativeMethods.CGEventGetLocation(eventRef);
-        NativeMethods.CFRelease(eventRef);
-        return ((int)pos.X, (int)pos.Y);
-    }
-
     public async ValueTask HideCursor()
     {
         using var guard = await _cursorLock.WaitForDisposable();
