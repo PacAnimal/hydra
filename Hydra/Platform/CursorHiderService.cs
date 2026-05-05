@@ -18,7 +18,7 @@ public interface ICursorHider
     void UpdateWarpPoint(int x, int y) { }
 }
 
-public sealed class CursorHiderService(ICursor cursor, ILogger<CursorHiderService> log)
+public sealed class CursorHiderService(ICursor cursor, ILogger<CursorHiderService> log, IPlatformInput platform)
     : SimpleHostedService(log, TimeSpan.FromSeconds(1)), ICursorHider
 {
     private const int LocalPollMs = 100;
@@ -30,7 +30,6 @@ public sealed class CursorHiderService(ICursor cursor, ILogger<CursorHiderServic
     private volatile bool _pendingShow;
     private volatile int _warpX;
     private volatile int _warpY;
-    private bool _trackLocal;  // true only on master (set when UpdateWarpPoint is called)
 
     private (int X, int Y)? _lastPosition;
     private Timer? _pollTimer;
@@ -57,18 +56,13 @@ public sealed class CursorHiderService(ICursor cursor, ILogger<CursorHiderServic
         Trigger();
     }
 
-    public void UpdateWarpPoint(int x, int y) { _warpX = x; _warpY = y; _trackLocal = true; }
+    public void UpdateWarpPoint(int x, int y) { _warpX = x; _warpY = y; }
 
     protected override async Task Execute(CancellationToken cancel)
     {
         if (_pendingHide)
         {
             _pendingHide = false;
-            if (_trackLocal)
-            {
-                cursor.WarpCursor(_warpX, _warpY);
-                _lastPosition = (_warpX, _warpY);
-            }
             await cursor.HideCursor();
         }
         else if (_pendingShow)
@@ -76,7 +70,7 @@ public sealed class CursorHiderService(ICursor cursor, ILogger<CursorHiderServic
             _pendingShow = false;
             await cursor.ShowCursor();
         }
-        else if (_hideIntent && !_localActive && _trackLocal)
+        else if (_hideIntent && !_localActive)
         {
             // keep cursor pinned at warp point while hidden — don't warp when temporarily shown
             cursor.WarpCursor(_warpX, _warpY);
@@ -93,7 +87,6 @@ public sealed class CursorHiderService(ICursor cursor, ILogger<CursorHiderServic
     private void StartPoll()
     {
         StopPoll();
-        if (!_trackLocal) return;
         if (cursor.GetCursorPosition() == null) return;
         _lastPosition = null;  // first poll establishes baseline after any pending warps settle
         _pollTimer = new Timer(OnPoll, null, LocalPollMs, LocalPollMs);
@@ -121,6 +114,7 @@ public sealed class CursorHiderService(ICursor cursor, ILogger<CursorHiderServic
     private void OnPoll(object? _)
     {
         if (!_hideIntent) return;
+        if (platform.IsOnVirtualScreen) return;
         var current = cursor.GetCursorPosition();
         if (current == null) return;
         var last = _lastPosition;

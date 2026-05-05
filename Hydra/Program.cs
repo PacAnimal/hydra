@@ -250,6 +250,8 @@ if (config != null)
         else
             throw new PlatformNotSupportedException($"Unsupported OS: {Environment.OSVersion}");
 
+        services.AddSingleton<IPlatformInput, SlavePlatformInput>();
+
         services.AddHostedService<ICursorHider, CursorHiderService>();
 
         // forwarder buffers log entries; SlaveLogSender drains them to masters
