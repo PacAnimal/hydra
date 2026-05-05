@@ -62,6 +62,9 @@ internal sealed class WindowsOsdNotification : IOsdNotification, IDisposable
 
     private void CreateWindow()
     {
+        // prime GDI+ font + rendering pipeline so the first real Show() is instant
+        try { using var warm = RenderText(" ", 1080, out _, out _); } catch { /* ignore */ }
+
         _wndProc = WndProcImpl;
         var hInstance = NativeMethods.GetModuleHandleW(nint.Zero);
         var className = Marshal.StringToHGlobalUni("HydraOsd");

@@ -515,6 +515,11 @@ class OsdPanel: NSObject {
     private var osdView: OsdView?
     private var dismissTimer: Timer?
 
+    override init() {
+        super.init()
+        buildWindowIfNeeded()
+    }
+
     func show(_ message: String) {
         buildWindowIfNeeded()
         guard let w = window else { return }
