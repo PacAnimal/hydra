@@ -216,7 +216,6 @@ if (config != null)
         else
             throw new PlatformNotSupportedException($"Unsupported OS: {Environment.OSVersion}");
 
-        services.AddSingleton<ICursor>(sp => sp.GetRequiredService<IPlatformInput>());
         services.AddHostedService<ICursorHider, CursorHiderService>();
         services.AddHostedService<InputRouter>();
     }

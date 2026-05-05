@@ -18,7 +18,7 @@ public interface ICursorHider
     void UpdateWarpPoint(int x, int y) { }
 }
 
-public sealed class CursorHiderService(ICursor cursor, ILogger<CursorHiderService> log, IPlatformInput platform)
+public sealed class CursorHiderService(ILogger<CursorHiderService> log, IPlatformInput platform)
     : SimpleHostedService(log, TimeSpan.FromSeconds(1)), ICursorHider
 {
     private const int LocalPollMs = 100;
@@ -63,17 +63,17 @@ public sealed class CursorHiderService(ICursor cursor, ILogger<CursorHiderServic
         if (_pendingHide)
         {
             _pendingHide = false;
-            await cursor.HideCursor();
+            await platform.HideCursor();
         }
         else if (_pendingShow)
         {
             _pendingShow = false;
-            await cursor.ShowCursor();
+            await platform.ShowCursor();
         }
         else if (_hideIntent && !_localActive)
         {
             // keep cursor pinned at warp point while hidden — don't warp when temporarily shown
-            cursor.WarpCursor(_warpX, _warpY);
+            platform.WarpCursor(_warpX, _warpY);
             _lastPosition = (_warpX, _warpY);
         }
     }
@@ -81,13 +81,13 @@ public sealed class CursorHiderService(ICursor cursor, ILogger<CursorHiderServic
     protected override async Task OnShutdown(CancellationToken cancel)
     {
         StopPoll();
-        await cursor.ShowCursor();
+        await platform.ShowCursor();
     }
 
     private void StartPoll()
     {
         StopPoll();
-        if (cursor.GetCursorPosition() == null) return;
+        if (platform.GetCursorPosition() == null) return;
         _lastPosition = null;  // first poll establishes baseline after any pending warps settle
         _pollTimer = new Timer(OnPoll, null, LocalPollMs, LocalPollMs);
     }
@@ -115,7 +115,7 @@ public sealed class CursorHiderService(ICursor cursor, ILogger<CursorHiderServic
     {
         if (!_hideIntent) return;
         if (platform.IsOnVirtualScreen) return;
-        var current = cursor.GetCursorPosition();
+        var current = platform.GetCursorPosition();
         if (current == null) return;
         var last = _lastPosition;
         _lastPosition = current;
