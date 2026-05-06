@@ -92,7 +92,12 @@ public sealed class XorgInputHandler : IPlatformInput
             });
 
         _pointer = new XGrabSession("Pointer", _grabLock, log,
-            preGrab: null,
+            preGrab: () =>
+            {
+                _ = NativeMethods.XMapWindow(_display, _inputSink);
+                _ = NativeMethods.XRaiseWindow(_display, _inputSink);
+                _ = NativeMethods.XFlush(_display);
+            },
             grab: () =>
             {
                 var r = NativeMethods.XGrabPointer(_display, _inputSink, false,
