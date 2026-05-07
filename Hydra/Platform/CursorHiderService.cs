@@ -28,6 +28,7 @@ public sealed class CursorHiderService(ILogger<CursorHiderService> log, IPlatfor
     private volatile bool _localActive;
     private volatile bool _pendingHide;
     private volatile bool _pendingShow;
+    private volatile bool _hasWarpPoint;
     private volatile int _warpX;
     private volatile int _warpY;
 
@@ -56,7 +57,7 @@ public sealed class CursorHiderService(ILogger<CursorHiderService> log, IPlatfor
         Trigger();
     }
 
-    public void UpdateWarpPoint(int x, int y) { _warpX = x; _warpY = y; }
+    public void UpdateWarpPoint(int x, int y) { _warpX = x; _warpY = y; _hasWarpPoint = true; }
 
     protected override async Task Execute(CancellationToken cancel)
     {
@@ -70,7 +71,7 @@ public sealed class CursorHiderService(ILogger<CursorHiderService> log, IPlatfor
             _pendingShow = false;
             await platform.ShowCursor();
         }
-        else if (_hideIntent && !_localActive)
+        else if (_hideIntent && !_localActive && _hasWarpPoint)
         {
             // keep cursor pinned at warp point while hidden — don't warp when temporarily shown
             platform.WarpCursor(_warpX, _warpY);
