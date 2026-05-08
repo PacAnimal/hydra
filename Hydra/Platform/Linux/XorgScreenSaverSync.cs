@@ -16,7 +16,7 @@ public sealed class XorgScreenSaverSync : PollingScreenSaverSync, IDisposable
 
         _rootWindow = NativeMethods.XDefaultRootWindow(_display);
         _hasSs = NativeMethods.XScreenSaverQueryExtension(_display, out _, out _);
-        _hasDpms = NativeMethods.DPMSQueryExtension(_display, out _, out _);
+        _hasDpms = NativeMethods.DPMSQueryExtension(_display, out _, out _) && NativeMethods.DPMSCapable(_display);
 
         if (_hasSs)
             _ssInfo = NativeMethods.XScreenSaverAllocInfo();
@@ -54,7 +54,7 @@ public sealed class XorgScreenSaverSync : PollingScreenSaverSync, IDisposable
 
     public override void Restore() { }
 
-    // DPMSForceLevel fails with BadMatch if DPMS is present but not enabled
+    // DPMSForceLevel fails with BadMatch if DPMS is not enabled on the server
     private bool DpmsEnabled()
     {
         if (!_hasDpms) return false;

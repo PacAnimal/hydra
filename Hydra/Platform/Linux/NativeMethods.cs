@@ -407,6 +407,11 @@ internal static partial class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool DPMSQueryExtension(nint display, out int eventBase, out int errorBase);
 
+    [LibraryImport(XExt)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool DPMSCapable(nint display);
+
     // power_level: DPMSModeOn=0, DPMSModeStandby=1, DPMSModeSuspend=2, DPMSModeOff=3
     // state: true=DPMS enabled, false=disabled
     [LibraryImport(XExt)]
