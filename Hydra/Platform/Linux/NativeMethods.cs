@@ -317,6 +317,13 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial int XSync(nint display, [MarshalAs(UnmanagedType.Bool)] bool discard);
 
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    internal delegate int XErrorHandlerDelegate(nint display, nint errorEvent);
+
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint XSetErrorHandler(nint handler);
+
     // XkbUseCoreKbd = 0x0100 (use the core keyboard device)
     internal const uint XkbUseCoreKbd = 0x0100;
 

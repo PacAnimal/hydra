@@ -1,3 +1,5 @@
+using System.Runtime.InteropServices;
+
 namespace Hydra.Platform.Linux;
 
 public sealed class XorgScreenSaverSync : PollingScreenSaverSync, IDisposable
@@ -5,7 +7,7 @@ public sealed class XorgScreenSaverSync : PollingScreenSaverSync, IDisposable
     private readonly nint _display;
     private readonly nint _rootWindow;
     private readonly bool _hasSs;    // XScreenSaver extension available
-    private readonly bool _hasDpms;  // DPMS extension available
+    private readonly bool _hasDpms;           // DPMS extension available and functional
     private readonly nint _ssInfo;   // heap-allocated XScreenSaverInfo*
 
     public XorgScreenSaverSync()
@@ -20,6 +22,9 @@ public sealed class XorgScreenSaverSync : PollingScreenSaverSync, IDisposable
 
         if (_hasSs)
             _ssInfo = NativeMethods.XScreenSaverAllocInfo();
+
+        if (_hasDpms)
+            _hasDpms = ProbeDpmsForceLevel();
     }
 
     public override void StartWatching(Action onActivated, Action onDeactivated)
@@ -32,7 +37,7 @@ public sealed class XorgScreenSaverSync : PollingScreenSaverSync, IDisposable
     {
         if (_display == nint.Zero) return;
         _ = NativeMethods.XForceScreenSaver(_display, NativeMethods.ScreenSaverActive);
-        if (DpmsEnabled()) _ = NativeMethods.DPMSForceLevel(_display, NativeMethods.DPMSModeStandby);
+        if (_hasDpms) _ = NativeMethods.DPMSForceLevel(_display, NativeMethods.DPMSModeStandby);
         _ = NativeMethods.XFlush(_display);
     }
 
@@ -40,7 +45,7 @@ public sealed class XorgScreenSaverSync : PollingScreenSaverSync, IDisposable
     {
         if (_display == nint.Zero) return;
         _ = NativeMethods.XForceScreenSaver(_display, NativeMethods.ScreenSaverReset);
-        if (DpmsEnabled()) _ = NativeMethods.DPMSForceLevel(_display, NativeMethods.DPMSModeOn);
+        if (_hasDpms) _ = NativeMethods.DPMSForceLevel(_display, NativeMethods.DPMSModeOn);
         _ = NativeMethods.XFlush(_display);
     }
 
@@ -48,19 +53,11 @@ public sealed class XorgScreenSaverSync : PollingScreenSaverSync, IDisposable
     {
         if (_display == nint.Zero) return;
         _ = NativeMethods.XResetScreenSaver(_display);
-        if (DpmsEnabled()) _ = NativeMethods.DPMSForceLevel(_display, NativeMethods.DPMSModeOn);
+        if (_hasDpms) _ = NativeMethods.DPMSForceLevel(_display, NativeMethods.DPMSModeOn);
         _ = NativeMethods.XFlush(_display);
     }
 
     public override void Restore() { }
-
-    // DPMSForceLevel fails with BadMatch if DPMS is not enabled on the server
-    private bool DpmsEnabled()
-    {
-        if (!_hasDpms) return false;
-        NativeMethods.DPMSInfo(_display, out _, out var enabled);
-        return enabled;
-    }
 
     protected override bool IsScreensaverOn()
     {
@@ -70,7 +67,7 @@ public sealed class XorgScreenSaverSync : PollingScreenSaverSync, IDisposable
             if (result != 0)
             {
                 // XScreenSaverInfo.state is the first int after the Window field (offset 8 on 64-bit)
-                var state = System.Runtime.InteropServices.Marshal.ReadInt32(_ssInfo, 8);
+                var state = Marshal.ReadInt32(_ssInfo, 8);
                 return state == NativeMethods.ScreenSaverOn;
             }
         }
@@ -82,6 +79,27 @@ public sealed class XorgScreenSaverSync : PollingScreenSaverSync, IDisposable
         }
 
         return false;
+    }
+
+    // Probes DPMSForceLevel with a temporary error handler to detect servers (e.g. XWayland)
+    // that report DPMS as capable/enabled but fail ForceLevel with BadMatch.
+    private bool ProbeDpmsForceLevel()
+    {
+        var gotError = false;
+        NativeMethods.XErrorHandlerDelegate handler = (_, _) => { gotError = true; return 0; };
+        var gcHandle = GCHandle.Alloc(handler);
+        try
+        {
+            var prev = NativeMethods.XSetErrorHandler(Marshal.GetFunctionPointerForDelegate(handler));
+            _ = NativeMethods.DPMSForceLevel(_display, NativeMethods.DPMSModeOn);
+            _ = NativeMethods.XSync(_display, false);
+            _ = NativeMethods.XSetErrorHandler(prev);
+            return !gotError;
+        }
+        finally
+        {
+            gcHandle.Free();
+        }
     }
 
     public void Dispose()
