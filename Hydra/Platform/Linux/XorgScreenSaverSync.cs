@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform.Linux;
 
@@ -7,10 +8,10 @@ public sealed class XorgScreenSaverSync : PollingScreenSaverSync, IDisposable
     private readonly nint _display;
     private readonly nint _rootWindow;
     private readonly bool _hasSs;    // XScreenSaver extension available
-    private readonly bool _hasDpms;           // DPMS extension available and functional
+    private readonly bool _hasDpms;  // DPMS available and functional
     private readonly nint _ssInfo;   // heap-allocated XScreenSaverInfo*
 
-    public XorgScreenSaverSync()
+    public XorgScreenSaverSync(ILogger<XorgScreenSaverSync> log) : base(log)
     {
         _ = NativeMethods.XInitThreads();
         _display = NativeMethods.XOpenDisplay(null);
@@ -25,6 +26,11 @@ public sealed class XorgScreenSaverSync : PollingScreenSaverSync, IDisposable
 
         if (_hasDpms)
             _hasDpms = ProbeDpmsForceLevel();
+
+        if (_hasDpms)
+            log.LogInformation("DPMS available");
+        else
+            log.LogInformation("DPMS not available — display power control disabled");
     }
 
     public override void StartWatching(Action onActivated, Action onDeactivated)
@@ -81,8 +87,8 @@ public sealed class XorgScreenSaverSync : PollingScreenSaverSync, IDisposable
         return false;
     }
 
-    // Probes DPMSForceLevel with a temporary error handler to detect servers (e.g. XWayland)
-    // that report DPMS as capable/enabled but fail ForceLevel with BadMatch.
+    // Probes DPMSForceLevel with a temporary error handler to detect servers that report DPMS
+    // as capable/enabled but fail ForceLevel with BadMatch (e.g. DPMS disabled via xset -dpms).
     private bool ProbeDpmsForceLevel()
     {
         var gotError = false;
