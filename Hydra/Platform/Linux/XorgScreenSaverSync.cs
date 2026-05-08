@@ -32,7 +32,7 @@ public sealed class XorgScreenSaverSync : PollingScreenSaverSync, IDisposable
     {
         if (_display == nint.Zero) return;
         _ = NativeMethods.XForceScreenSaver(_display, NativeMethods.ScreenSaverActive);
-        if (_hasDpms) _ = NativeMethods.DPMSForceLevel(_display, NativeMethods.DPMSModeStandby);
+        if (DpmsEnabled()) _ = NativeMethods.DPMSForceLevel(_display, NativeMethods.DPMSModeStandby);
         _ = NativeMethods.XFlush(_display);
     }
 
@@ -40,7 +40,7 @@ public sealed class XorgScreenSaverSync : PollingScreenSaverSync, IDisposable
     {
         if (_display == nint.Zero) return;
         _ = NativeMethods.XForceScreenSaver(_display, NativeMethods.ScreenSaverReset);
-        if (_hasDpms) _ = NativeMethods.DPMSForceLevel(_display, NativeMethods.DPMSModeOn);
+        if (DpmsEnabled()) _ = NativeMethods.DPMSForceLevel(_display, NativeMethods.DPMSModeOn);
         _ = NativeMethods.XFlush(_display);
     }
 
@@ -48,11 +48,19 @@ public sealed class XorgScreenSaverSync : PollingScreenSaverSync, IDisposable
     {
         if (_display == nint.Zero) return;
         _ = NativeMethods.XResetScreenSaver(_display);
-        if (_hasDpms) _ = NativeMethods.DPMSForceLevel(_display, NativeMethods.DPMSModeOn);
+        if (DpmsEnabled()) _ = NativeMethods.DPMSForceLevel(_display, NativeMethods.DPMSModeOn);
         _ = NativeMethods.XFlush(_display);
     }
 
     public override void Restore() { }
+
+    // DPMSForceLevel fails with BadMatch if DPMS is present but not enabled
+    private bool DpmsEnabled()
+    {
+        if (!_hasDpms) return false;
+        NativeMethods.DPMSInfo(_display, out _, out var enabled);
+        return enabled;
+    }
 
     protected override bool IsScreensaverOn()
     {
