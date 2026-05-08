@@ -121,4 +121,11 @@ public sealed class MacScreenSaverSync(ILogger<MacScreenSaverSync> log) : IScree
         _assertionId = 0;
     }
 
+    public void ResetIdleTimer()
+    {
+        var nameStr = NativeMethods.MakeNsString("Hydra: user active on remote screen");
+        _ = NativeMethods.IOPMAssertionDeclareUserActivity(nameStr, 0, out _);
+        NativeMethods.CFRelease(nameStr);
+    }
+
 }

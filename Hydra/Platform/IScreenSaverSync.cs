@@ -13,4 +13,7 @@ public interface IScreenSaverSync
     // slave-side: suppress/restore idle timer (called periodically by ScreensaverSuppressor)
     void Suppress();
     void Restore();
+
+    // master-side: one-shot reset of the local idle timer (called on input activity while cursor is on a slave)
+    void ResetIdleTimer();
 }

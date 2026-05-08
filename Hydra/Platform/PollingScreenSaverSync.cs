@@ -29,6 +29,7 @@ public abstract class PollingScreenSaverSync(ILogger? log = null) : IScreenSaver
     public abstract void Deactivate();
     public abstract void Suppress();
     public abstract void Restore();
+    public virtual void ResetIdleTimer() => Suppress();
 
     private async Task PollAsync(Action onActivated, Action onDeactivated, CancellationToken ct)
     {

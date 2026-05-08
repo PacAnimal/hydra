@@ -8,4 +8,5 @@ public class NullScreenSaverSync : IScreenSaverSync
     public void Deactivate() { }
     public void Suppress() { }
     public void Restore() { }
+    public void ResetIdleTimer() { }
 }

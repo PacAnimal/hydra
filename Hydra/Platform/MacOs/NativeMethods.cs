@@ -537,6 +537,11 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial int IOPMAssertionRelease(uint assertionID);
 
+    // kIOPMUserActiveLocal = 0
+    [LibraryImport(IOKit)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int IOPMAssertionDeclareUserActivity(nint assertionName, uint userType, out uint assertionID);
+
     // -- SystemConfiguration: dynamic store (SSID detection without Location Services) --
 
     private const string SystemConfiguration = "/System/Library/Frameworks/SystemConfiguration.framework/SystemConfiguration";
