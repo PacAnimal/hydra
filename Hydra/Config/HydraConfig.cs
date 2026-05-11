@@ -3,7 +3,7 @@ using Hydra.Screen;
 
 namespace Hydra.Config;
 
-public record ConditionState(List<string> ActiveSsids, int ScreenCount);
+public record ConditionState(List<string> ActiveSsids, int ScreenCount, bool? IsPluggedIn = null);
 
 public class HostConfig
 {
@@ -84,6 +84,9 @@ public class HydraConfig
     // true if any profile matches on screen count — determines whether screen count detection is needed
     public static bool HasScreenCountConditions(List<HydraConfig> profiles) => profiles.Any(c => c.Conditions?.ScreenCount != null);
 
+    // true if any profile matches on AC power state — determines whether power detection is needed
+    public static bool HasPluggedInConditions(List<HydraConfig> profiles) => profiles.Any(c => c.Conditions?.IsPluggedIn != null);
+
     // resolves the active profile from the list based on current condition state.
     // if profileOverride is set, that profile is returned unconditionally (ignores conditions).
     // returns null if no profile matches (hydra should idle until conditions change)
@@ -106,6 +109,8 @@ public class HydraConfig
             if (cfg.Conditions.Ssid != null && !state.ActiveSsids.Any(s => s.EqualsIgnoreCase(cfg.Conditions.Ssid)))
                 continue;
             if (cfg.Conditions.ScreenCount != null && state.ScreenCount != cfg.Conditions.ScreenCount)
+                continue;
+            if (cfg.Conditions.IsPluggedIn != null && state.IsPluggedIn != cfg.Conditions.IsPluggedIn)
                 continue;
 
             return cfg;
@@ -200,14 +205,14 @@ public class HydraConfig
                 throw new InvalidOperationException("screenCount condition must be >= 1.");
         }
 
-        // no two conditional profiles may have identical (ssid, screenCount) tuples
+        // no two conditional profiles may have identical (ssid, screenCount, isPluggedIn) tuples
         var conditionKeys = profiles
             .Where(c => c.Conditions?.IsEmpty == false)
-            .Select(c => (Ssid: c.Conditions!.Ssid?.ToLowerInvariant(), c.Conditions.ScreenCount))
+            .Select(c => (Ssid: c.Conditions!.Ssid?.ToLowerInvariant(), c.Conditions.ScreenCount, c.Conditions.IsPluggedIn))
             .ToList();
         var duplicate = conditionKeys.GroupBy(k => k).FirstOrDefault(g => g.Count() > 1);
         if (duplicate != null)
-            throw new InvalidOperationException($"hydra.conf has duplicate conditions for ssid='{duplicate.Key.Ssid}' screenCount='{duplicate.Key.ScreenCount}'.");
+            throw new InvalidOperationException($"hydra.conf has duplicate conditions for ssid='{duplicate.Key.Ssid}' screenCount='{duplicate.Key.ScreenCount}' isPluggedIn='{duplicate.Key.IsPluggedIn}'.");
 
         foreach (var cfg in profiles)
         {

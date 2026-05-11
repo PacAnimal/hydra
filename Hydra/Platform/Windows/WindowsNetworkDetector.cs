@@ -9,6 +9,14 @@ internal sealed partial class WindowsNetworkDetector : INetworkDetector
     public Task<List<string>> GetActiveSsids(CancellationToken cancel = default) =>
         Task.FromResult(GetWifiSsids());
 
+    public Task<bool?> GetIsPluggedIn(CancellationToken cancel = default)
+    {
+        bool? result = null;
+        if (GetSystemPowerStatus(out var status))
+            result = status.AcLineStatus switch { 0 => false, 1 => true, _ => null };
+        return Task.FromResult(result);
+    }
+
     private static List<string> GetWifiSsids()
     {
         var results = new List<string>();
@@ -103,4 +111,20 @@ internal sealed partial class WindowsNetworkDetector : INetworkDetector
     [LibraryImport("wlanapi.dll")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     private static partial void WlanFreeMemory(nint pMemory);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct SystemPowerStatus
+    {
+        public byte AcLineStatus;   // 0=battery, 1=ac, 255=unknown
+        public byte BatteryFlag;
+        public byte BatteryLifePercent;
+        public byte SystemStatusFlag;
+        public uint BatteryLifeTime;
+        public uint BatteryFullLifeTime;
+    }
+
+    [LibraryImport("kernel32.dll")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetSystemPowerStatus(out SystemPowerStatus lpSystemPowerStatus);
 }

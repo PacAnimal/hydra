@@ -50,6 +50,9 @@ function optNum(v: unknown): number | undefined {
 function optBool(v: unknown): boolean | undefined {
   return v !== undefined ? Boolean(v) : undefined
 }
+function strictBool(v: unknown): boolean | undefined {
+  return typeof v === 'boolean' ? v : undefined
+}
 function optStr(v: unknown): string | undefined {
   return typeof v === 'string' ? v : undefined
 }
@@ -90,6 +93,7 @@ function parseConditions(obj: Record<string, unknown>): ConfigConditions {
   return {
     ssid: optStr(obj.ssid),
     screenCount: optNum(obj.screenCount),
+    isPluggedIn: strictBool(obj.isPluggedIn),
   }
 }
 

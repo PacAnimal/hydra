@@ -39,6 +39,7 @@ function serializeConditions(c: ConfigConditions): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   if (c.ssid) out.ssid = c.ssid
   if (c.screenCount !== undefined) out.screenCount = c.screenCount
+  if (c.isPluggedIn !== undefined) out.isPluggedIn = c.isPluggedIn
   return out
 }
 

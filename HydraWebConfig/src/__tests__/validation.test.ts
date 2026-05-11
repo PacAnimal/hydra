@@ -62,6 +62,31 @@ describe('validate', () => {
     expect(validate(profiles)).toHaveLength(0)
   })
 
+  it('errors on duplicate isPluggedIn conditions', () => {
+    const profiles: HydraProfile[] = [
+      p({ profileName: 'A', conditions: { isPluggedIn: true } }),
+      p({ profileName: 'B', mode: 'Slave', conditions: { isPluggedIn: true } }),
+    ]
+    const errors = validate(profiles)
+    expect(errors.some(e => e.message.includes('duplicate condition'))).toBe(true)
+  })
+
+  it('passes conditions with same ssid but different isPluggedIn', () => {
+    const profiles: HydraProfile[] = [
+      p({ profileName: 'A', conditions: { ssid: 'home', isPluggedIn: true } }),
+      p({ profileName: 'B', mode: 'Slave', conditions: { ssid: 'home', isPluggedIn: false } }),
+    ]
+    expect(validate(profiles)).toHaveLength(0)
+  })
+
+  it('treats isPluggedIn-only condition as conditional (not fallback)', () => {
+    const profiles: HydraProfile[] = [
+      p({ profileName: 'A', conditions: { isPluggedIn: true } }),
+      p({ profileName: 'B', mode: 'Slave' }),
+    ]
+    expect(validate(profiles)).toHaveLength(0)
+  })
+
   it('errors when screenCount < 1', () => {
     const errors = validate([p({ conditions: { screenCount: 0 } })])
     expect(errors.some(e => e.message.includes('screenCount'))).toBe(true)

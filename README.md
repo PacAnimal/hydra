@@ -85,6 +85,7 @@ Neighbours are **mirrored by default** — declaring that `laptop` has `desktop`
 - `conditions` — optional object; if set, this profile only activates when **all** specified conditions are met (see [Network-aware config](#network-aware-config))
   - `ssid` — activates when connected to this WiFi network name (case-insensitive)
   - `screenCount` — activates when exactly this many screens are connected (integer ≥ 1)
+  - `isPluggedIn` — `true` activates when on AC power; `false` activates when on battery
 
 ### Screen layout
 
@@ -215,6 +216,7 @@ Each profile has a `profileName` — logged at startup so you always know which 
 
 - `conditions: { "ssid": "..." }` — activates when connected to the named WiFi network (case-insensitive)
 - `conditions: { "screenCount": 2 }` — activates when exactly 2 screens are connected
+- `conditions: { "isPluggedIn": true }` — activates when on AC power; `false` for battery-only
 - Conditions are **AND-ed** — `{ "ssid": "Office", "screenCount": 2 }` requires both to match simultaneously
 - No `conditions` (or `{}`) — fallback, activates when no other profile matches
 
@@ -222,7 +224,7 @@ A fallback profile is optional. Without one, Hydra idles when no profile matches
 
 Rules: at most one fallback, no two profiles with identical condition tuples, no duplicate profile names — validated at startup.
 
-Hydra re-evaluates conditions automatically when the network changes or screens are connected/disconnected, and restarts with the appropriate profile if needed.
+Hydra re-evaluates conditions automatically when the network changes, screens are connected/disconnected, or the power source changes, and restarts with the appropriate profile if needed.
 
 **Example — laptop as slave at home, master at work:**
 

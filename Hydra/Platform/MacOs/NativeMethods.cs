@@ -542,6 +542,16 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial int IOPMAssertionDeclareUserActivity(nint assertionName, uint userType, out uint assertionID);
 
+    // -- IOKit: power sources (AC/battery state) --
+
+    [LibraryImport(IOKit)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint IOPSCopyPowerSourcesInfo();
+
+    [LibraryImport(IOKit)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint IOPSGetProvidingPowerSourceType(nint snapshot);
+
     // -- SystemConfiguration: dynamic store (SSID detection without Location Services) --
 
     private const string SystemConfiguration = "/System/Library/Frameworks/SystemConfiguration.framework/SystemConfiguration";

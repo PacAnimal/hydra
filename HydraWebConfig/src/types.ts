@@ -35,6 +35,7 @@ export interface ScreenDefinition {
 export interface ConfigConditions {
   ssid?: string
   screenCount?: number
+  isPluggedIn?: boolean
 }
 
 export interface EmbeddedStyxConfig {

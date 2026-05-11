@@ -16,9 +16,10 @@ public class HydraConfigTests
     private static ConfigConditions SsidCondition(string ssid) => new() { Ssid = ssid };
     private static ConfigConditions ScreenCountCondition(int count) => new() { ScreenCount = count };
     private static ConfigConditions SsidAndScreenCount(string ssid, int count) => new() { Ssid = ssid, ScreenCount = count };
+    private static ConfigConditions PluggedInCondition(bool pluggedIn) => new() { IsPluggedIn = pluggedIn };
 
-    private static ConditionState State(List<string>? ssids = null, int screenCount = 1) =>
-        new(ssids ?? [], screenCount);
+    private static ConditionState State(List<string>? ssids = null, int screenCount = 1, bool? isPluggedIn = null) =>
+        new(ssids ?? [], screenCount, isPluggedIn);
 
     // minimum relay config — injected into profile JSON objects that need it
     private const string Relay = ",\"embeddedStyx\":{\"server\":\"http://localhost:5000\",\"password\":\"test\"}";
@@ -284,6 +285,47 @@ public class HydraConfigTests
         Assert.That(HydraConfig.Resolve(configs, State(["Home"], screenCount: 2)), Is.SameAs(fallback));
     }
 
+    [Test]
+    public void Resolve_IsPluggedIn_MatchesWhenTrue()
+    {
+        var cfg = MakeConfig(conditions: PluggedInCondition(true));
+        var configs = new List<HydraConfig> { cfg };
+        Assert.That(HydraConfig.Resolve(configs, State(isPluggedIn: true)), Is.SameAs(cfg));
+    }
+
+    [Test]
+    public void Resolve_IsPluggedIn_MatchesWhenFalse()
+    {
+        var cfg = MakeConfig(conditions: PluggedInCondition(false));
+        var configs = new List<HydraConfig> { cfg };
+        Assert.That(HydraConfig.Resolve(configs, State(isPluggedIn: false)), Is.SameAs(cfg));
+    }
+
+    [Test]
+    public void Resolve_IsPluggedIn_DoesNotMatchWhenDifferent()
+    {
+        var cfg = MakeConfig(conditions: PluggedInCondition(true));
+        var configs = new List<HydraConfig> { cfg };
+        Assert.That(HydraConfig.Resolve(configs, State(isPluggedIn: false)), Is.Null);
+    }
+
+    [Test]
+    public void Resolve_IsPluggedIn_UnknownState_DoesNotMatch()
+    {
+        var cfg = MakeConfig(conditions: PluggedInCondition(true));
+        var configs = new List<HydraConfig> { cfg };
+        Assert.That(HydraConfig.Resolve(configs, State(isPluggedIn: null)), Is.Null);
+    }
+
+    [Test]
+    public void Resolve_IsPluggedIn_FallsBackToUnconditional_WhenNoMatch()
+    {
+        var ac = MakeConfig(conditions: PluggedInCondition(true));
+        var fallback = MakeConfig(Mode.Slave);
+        var configs = new List<HydraConfig> { ac, fallback };
+        Assert.That(HydraConfig.Resolve(configs, State(isPluggedIn: false)), Is.SameAs(fallback));
+    }
+
     // Validate
 
     [Test]
@@ -326,6 +368,44 @@ public class HydraConfigTests
             """);
         Assert.That(() => HydraConfig.ParseAndValidate(json),
             Throws.InvalidOperationException.With.Message.Contains("duplicate conditions"));
+    }
+
+    [Test]
+    public void Validate_Throws_OnDuplicateIsPluggedInCondition()
+    {
+        var json = AsFile("""
+            [
+              {"mode":"Master","conditions":{"isPluggedIn":true}},
+              {"mode":"Slave","conditions":{"isPluggedIn":true}}
+            ]
+            """);
+        Assert.That(() => HydraConfig.ParseAndValidate(json),
+            Throws.InvalidOperationException.With.Message.Contains("duplicate conditions"));
+    }
+
+    [Test]
+    public void Validate_DifferentIsPluggedIn_IsAllowed()
+    {
+        var json = AsFile($$"""
+            [
+              {"mode":"Master","conditions":{"isPluggedIn":true}{{Relay}}},
+              {"mode":"Slave","conditions":{"isPluggedIn":false}{{Relay}}}
+            ]
+            """);
+        Assert.That(() => HydraConfig.ParseAndValidate(json), Throws.Nothing);
+    }
+
+    [Test]
+    public void Validate_SameSSID_DifferentIsPluggedIn_IsAllowed()
+    {
+        var json = AsFile($$"""
+            [
+              {"mode":"Master","conditions":{"ssid":"Office","isPluggedIn":true}{{Relay}}},
+              {"mode":"Master","conditions":{"ssid":"Office","isPluggedIn":false}{{Relay}}},
+              {"mode":"Slave"{{Relay}}}
+            ]
+            """);
+        Assert.That(() => HydraConfig.ParseAndValidate(json), Throws.Nothing);
     }
 
     [Test]

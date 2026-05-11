@@ -118,7 +118,8 @@ else
 {
     var activeSsids = HydraConfig.HasSsidConditions(profiles) ? await detector.GetActiveSsids() : [];
     var screenCount = HydraConfig.HasScreenCountConditions(profiles) ? GetScreenCount() : 1;
-    config = HydraConfig.Resolve(profiles, new ConditionState(activeSsids, screenCount));
+    var isPluggedIn = HydraConfig.HasPluggedInConditions(profiles) ? await detector.GetIsPluggedIn() : null;
+    config = HydraConfig.Resolve(profiles, new ConditionState(activeSsids, screenCount, isPluggedIn));
 }
 
 // derive network config blob from embeddedStyx (explicit) or embeddedStyxServer (auto-localhost)

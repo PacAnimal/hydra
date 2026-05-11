@@ -94,6 +94,24 @@ describe('deserialize', () => {
     expect(state.profiles[0].conditions?.screenCount).toBe(2)
   })
 
+  it('parses isPluggedIn: true', () => {
+    const json = asFile(JSON.stringify([{ mode: 'Master', conditions: { isPluggedIn: true } }]))
+    const state = deserialize(json)
+    expect(state.profiles[0].conditions?.isPluggedIn).toBe(true)
+  })
+
+  it('parses isPluggedIn: false', () => {
+    const json = asFile(JSON.stringify([{ mode: 'Master', conditions: { isPluggedIn: false } }]))
+    const state = deserialize(json)
+    expect(state.profiles[0].conditions?.isPluggedIn).toBe(false)
+  })
+
+  it('leaves isPluggedIn undefined when absent', () => {
+    const json = asFile(JSON.stringify([{ mode: 'Master', conditions: { ssid: 'home' } }]))
+    const state = deserialize(json)
+    expect(state.profiles[0].conditions?.isPluggedIn).toBeUndefined()
+  })
+
   it('preserves undefined for omitted optional profile fields', () => {
     const state = deserialize(asFile('[{"mode":"Slave"}]'))
     expect(state.name).toBeUndefined()

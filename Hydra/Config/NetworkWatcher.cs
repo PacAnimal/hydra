@@ -18,6 +18,7 @@ internal sealed class NetworkWatcher : SimpleHostedService
     // tracks last known state for transition logging
     private List<string>? _lastSsids;
     private int? _lastScreenCount;
+    private bool? _lastIsPluggedIn;
 
     // debounce: ignore rapid re-triggers within this window
     private DateTime _lastCheck = DateTime.MinValue;
@@ -78,13 +79,26 @@ internal sealed class NetworkWatcher : SimpleHostedService
 
         var screenCount = _screenCountProvider();
 
+        bool? isPluggedIn;
+        try
+        {
+            isPluggedIn = await _detector.GetIsPluggedIn(cancel);
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            _log.LogWarning(e, "power detection failed");
+            return;
+        }
+
         // log transitions (null on first check = startup)
         LogSsidTransition(_lastSsids, ssids);
         LogScreenCountTransition(_lastScreenCount, screenCount);
+        LogIsPluggedInTransition(_lastIsPluggedIn, isPluggedIn);
         _lastSsids = ssids;
         _lastScreenCount = screenCount;
+        _lastIsPluggedIn = isPluggedIn;
 
-        var resolved = HydraConfig.Resolve(_configs, new ConditionState(ssids, screenCount));
+        var resolved = HydraConfig.Resolve(_configs, new ConditionState(ssids, screenCount, isPluggedIn));
         if (resolved == _activeConfig) return;
 
         var from = _activeConfig != null ? $"{_activeConfig.Mode}" : "idle";
@@ -105,6 +119,19 @@ internal sealed class NetworkWatcher : SimpleHostedService
     {
         if (previous == null || previous == current) return;
         _log.LogInformation("Screens: {Previous} → {Current}", previous, current);
+    }
+
+    private void LogIsPluggedInTransition(bool? previous, bool? current)
+    {
+        static string Format(bool? v) => v == null ? "unknown" : v.Value ? "AC" : "battery";
+        if (previous == null)
+        {
+            // startup: log current state unless detection is unavailable
+            if (current != null) _log.LogInformation("Power: {Current}", Format(current));
+            return;
+        }
+        if (previous == current) return;
+        _log.LogInformation("Power: {Previous} → {Current}", Format(previous), Format(current));
     }
 
     private static string FormatSsids(List<string>? ssids)

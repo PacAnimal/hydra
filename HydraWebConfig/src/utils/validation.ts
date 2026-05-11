@@ -8,8 +8,8 @@ export interface ValidationError {
 
 function isUnconditional(p: HydraProfile): boolean {
   if (!p.conditions) return true
-  const { ssid, screenCount } = p.conditions
-  return !ssid && screenCount === undefined
+  const { ssid, screenCount, isPluggedIn } = p.conditions
+  return !ssid && screenCount === undefined && isPluggedIn === undefined
 }
 
 // returns the effective hosts for a profile (from layout or explicit)
@@ -32,7 +32,7 @@ export function validate(profiles: HydraProfile[]): ValidationError[] {
   const seen = new Set<string>()
   profiles.forEach((p, i) => {
     if (isUnconditional(p)) return
-    const key = `${p.conditions?.ssid ?? ''}|${p.conditions?.screenCount ?? ''}`
+    const key = `${p.conditions?.ssid ?? ''}|${p.conditions?.screenCount ?? ''}|${p.conditions?.isPluggedIn ?? ''}`
     if (seen.has(key)) {
       errors.push({ path: `profiles[${i}].conditions`, message: 'duplicate condition combination' })
     }

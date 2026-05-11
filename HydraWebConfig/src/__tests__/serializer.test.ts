@@ -97,6 +97,21 @@ describe('serialize', () => {
     expect(result.profiles).toHaveLength(2)
   })
 
+  it('serializes isPluggedIn: true', () => {
+    const json = JSON.parse(serialize(state({ conditions: { isPluggedIn: true } })))
+    expect(json.profiles[0].conditions.isPluggedIn).toBe(true)
+  })
+
+  it('serializes isPluggedIn: false', () => {
+    const json = JSON.parse(serialize(state({ conditions: { isPluggedIn: false } })))
+    expect(json.profiles[0].conditions.isPluggedIn).toBe(false)
+  })
+
+  it('omits isPluggedIn when undefined', () => {
+    const json = JSON.parse(serialize(state({ conditions: { ssid: 'home' } })))
+    expect(json.profiles[0].conditions.isPluggedIn).toBeUndefined()
+  })
+
   it('serializes embeddedStyx when networkType is embeddedStyx', () => {
     const json = JSON.parse(serialize(state({
       mode: 'Master',

@@ -12,6 +12,29 @@ internal sealed class LinuxNetworkDetector(ICmdRunner cmd, ILogger<LinuxNetworkD
         return ssid != null ? [ssid] : [];
     }
 
+    public Task<bool?> GetIsPluggedIn(CancellationToken cancel = default) =>
+        Task.FromResult(ReadIsPluggedIn());
+
+    // reads /sys/class/power_supply/ to find the first Mains adapter and its online state
+    private bool? ReadIsPluggedIn()
+    {
+        const string basePath = "/sys/class/power_supply";
+        try
+        {
+            if (!Directory.Exists(basePath)) return null;
+            foreach (var dir in Directory.GetDirectories(basePath))
+            {
+                var typePath = Path.Combine(dir, "type");
+                if (!File.Exists(typePath) || File.ReadAllText(typePath).Trim() != "Mains") continue;
+                var onlinePath = Path.Combine(dir, "online");
+                if (!File.Exists(onlinePath)) continue;
+                return File.ReadAllText(onlinePath).Trim() switch { "1" => true, "0" => false, _ => null };
+            }
+        }
+        catch (Exception e) { log.LogWarning("Failed to get power state: {Message}", e.Message); }
+        return null;
+    }
+
     // iwgetid -r outputs raw SSID on stdout, empty if not connected
     private async Task<string?> GetSsid(CancellationToken cancel)
     {
