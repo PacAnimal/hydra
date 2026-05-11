@@ -25,7 +25,7 @@ internal sealed class NetworkWatcher : SimpleHostedService
     private static readonly TimeSpan Debounce = TimeSpan.FromSeconds(2);
 
     public NetworkWatcher(INetworkDetector detector, Func<int> screenCountProvider, List<HydraConfig> configs, HydraConfig? activeConfig, string? profileOverride, ILogger<NetworkWatcher> log)
-        : base(log, TimeSpan.FromSeconds(60))
+        : base(log, TimeSpan.FromSeconds(10))
     {
         _detector = detector;
         _screenCountProvider = screenCountProvider;
