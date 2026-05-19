@@ -65,7 +65,7 @@ public class HydraConfig
     public bool HideCursor { get; init; } = false;  // master only — hide cursor on inactivity
     public bool RemoteOnly { get; init; } = false;
     public bool SyncScreensaver { get; init; } = true;
-    public bool PropagateLocking { get; init; } = false;  // master only (Mac/Windows) — propagate machine lock to connected slaves
+    public bool ScreenLockPropagation { get; init; } = false;  // master only (Mac/Windows) — propagate machine lock to connected slaves
     public bool AccelerateMouseWheel { get; init; } = true;
     public int? DeadCorners { get; init; }  // pixel dead zone at screen corners; scaled by screen scale; per-host setting overrides this
 
@@ -229,8 +229,8 @@ public class HydraConfig
 
             if (cfg.Mode == Mode.Slave && cfg.HideCursor)
                 throw new InvalidOperationException("hideCursor is master-only. Remove it from slave profiles.");
-            if (cfg.Mode == Mode.Slave && cfg.PropagateLocking)
-                throw new InvalidOperationException("propagateLocking is master-only. Remove it from slave profiles.");
+            if (cfg.Mode == Mode.Slave && cfg.ScreenLockPropagation)
+                throw new InvalidOperationException("screenLockPropagation is master-only. Remove it from slave profiles.");
             if (cfg.Mode == Mode.Master && cfg.MouseScale != null)
                 throw new InvalidOperationException("mouseScale is slave-only. Remove it from master profiles.");
             if (cfg.Mode == Mode.Master && cfg.ScreenDefinitions.Count > 0)

@@ -142,7 +142,7 @@ function parseProfile(obj: Record<string, unknown>): HydraProfile {
     embeddedStyxServer: obj.embeddedStyxServer ? parseEmbeddedStyxServer(obj.embeddedStyxServer as Record<string, unknown>) : undefined,
     remoteOnly: optBool(obj.remoteOnly),
     syncScreensaver: optBool(obj.syncScreensaver),
-    propagateLocking: optBool(obj.propagateLocking),
+    screenLockPropagation: optBool(obj.screenLockPropagation),
     debugShield: optBool(obj.debugShield),
     deadCorners: optNum(obj.deadCorners),
     conditions: obj.conditions ? parseConditions(obj.conditions as Record<string, unknown>) : undefined,

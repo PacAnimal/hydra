@@ -23,7 +23,7 @@ public interface IHydraProfile
     bool HideCursor { get; }
     bool RemoteOnly { get; }
     bool SyncScreensaver { get; }
-    bool PropagateLocking { get; }
+    bool ScreenLockPropagation { get; }
     bool AccelerateMouseWheel { get; }
     int? DeadCorners { get; }
 
@@ -52,7 +52,7 @@ public class HydraProfile(HydraConfigFile configFile, HydraConfig? activeProfile
     public bool HideCursor => _activeProfile?.HideCursor ?? false;
     public bool RemoteOnly => _activeProfile?.RemoteOnly ?? false;
     public bool SyncScreensaver => _activeProfile?.SyncScreensaver ?? true;
-    public bool PropagateLocking => _activeProfile?.PropagateLocking ?? false;
+    public bool ScreenLockPropagation => _activeProfile?.ScreenLockPropagation ?? false;
     public bool AccelerateMouseWheel => _activeProfile?.AccelerateMouseWheel ?? true;
     public int? DeadCorners => _activeProfile?.DeadCorners;
 

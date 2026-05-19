@@ -381,7 +381,7 @@ public class InputRouter(
 
     private void OnLockDetected()
     {
-        if (!profile.PropagateLocking) return;
+        if (!profile.ScreenLockPropagation) return;
         _ = _commands.Writer.TryWrite(async _ =>
         {
             log.LogInformation("Machine locked — propagating to slaves");

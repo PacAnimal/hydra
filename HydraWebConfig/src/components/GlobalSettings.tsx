@@ -90,10 +90,10 @@ export function GlobalSettings({ config, onChange }: Props) {
               <label className="checkbox-label" title="Propagate machine lock to connected Mac and Windows slaves (Mac: ctrl+cmd+q, Windows: LockWorkStation)">
                 <input
                   type="checkbox"
-                  checked={config.propagateLocking === true}
-                  onChange={e => onChange({ propagateLocking: e.target.checked ? true : undefined })}
+                  checked={config.screenLockPropagation === true}
+                  onChange={e => onChange({ screenLockPropagation: e.target.checked ? true : undefined })}
                 />
-                Propagate Locking
+                Screen Lock Propagation
               </label>
             </>
           )}

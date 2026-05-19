@@ -79,7 +79,7 @@ export interface HydraProfile {
   embeddedStyxServer?: EmbeddedStyxServerConfig
   remoteOnly?: boolean
   syncScreensaver?: boolean
-  propagateLocking?: boolean
+  screenLockPropagation?: boolean
   accelerateMouseWheel?: boolean
   debugShield?: boolean
   deadCorners?: number
