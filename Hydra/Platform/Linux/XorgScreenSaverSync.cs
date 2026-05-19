@@ -3,7 +3,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform.Linux;
 
-public sealed class XorgScreenSaverSync : PollingScreenSaverSync, IDisposable
+public sealed class XorgScreenSaverSync : PollingScreenSaverSync
 {
     private readonly nint _display;
     private readonly nint _rootWindow;
@@ -31,12 +31,6 @@ public sealed class XorgScreenSaverSync : PollingScreenSaverSync, IDisposable
             log.LogInformation("DPMS available");
         else
             log.LogInformation("DPMS not available — display power control disabled");
-    }
-
-    public override void StartWatching(Action onActivated, Action onDeactivated)
-    {
-        if (_display == nint.Zero) return;
-        base.StartWatching(onActivated, onDeactivated);
     }
 
     public override void Activate()
@@ -108,10 +102,10 @@ public sealed class XorgScreenSaverSync : PollingScreenSaverSync, IDisposable
         }
     }
 
-    public void Dispose()
+    protected override Task OnShutdown(CancellationToken cancel)
     {
-        StopWatching();
         if (_ssInfo != nint.Zero) _ = NativeMethods.XFree(_ssInfo);
         if (_display != nint.Zero) _ = NativeMethods.XCloseDisplay(_display);
+        return Task.CompletedTask;
     }
 }

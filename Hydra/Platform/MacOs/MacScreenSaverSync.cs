@@ -1,9 +1,11 @@
 using System.Diagnostics;
+using Cathedral.Utils;
 using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform.MacOs;
 
-public sealed class MacScreenSaverSync(ILogger<MacScreenSaverSync> log) : IScreenSaverSync
+// always running as a hosted service; fires events when screensaver/lock state changes.
+public sealed class MacScreenSaverSync : SimpleHostedService, IScreenSaverSync
 {
     // distributed notification names posted by ScreenSaverEngine
     private const string DidStart = "com.apple.screensaver.didstart";
@@ -12,21 +14,32 @@ public sealed class MacScreenSaverSync(ILogger<MacScreenSaverSync> log) : IScree
     private const string AssertionType = "PreventUserIdleDisplaySleep";
     private const string AssertionReason = "Hydra screensaver sync: controlled by master";
 
+    private readonly ILogger<MacScreenSaverSync> _log;
     private CFNotificationCallback? _callback;  // keep-alive to prevent GC
     private nint _center;
     private uint _assertionId;
-    private CancellationTokenSource? _lockCts;
+    private bool _wasLocked;
 
-    public void StartWatching(Action onActivated, Action onDeactivated)
+    public event Action? ScreensaverActivated;
+    public event Action? ScreensaverDeactivated;
+    public event Action? ScreenLocked;
+
+    public MacScreenSaverSync(ILogger<MacScreenSaverSync> log) : base(log, TimeSpan.FromSeconds(1))
+    {
+        _log = log;
+        RegisterScreensaverNotifications();
+    }
+
+    private void RegisterScreensaverNotifications()
     {
         _center = NativeMethods.CFNotificationCenterGetDistributedCenter();
         if (_center == nint.Zero)
         {
-            log.LogWarning("Failed to get CFNotificationCenter — screensaver watching disabled");
+            _log.LogWarning("Failed to get CFNotificationCenter — screensaver watching disabled");
             return;
         }
 
-        log.LogInformation("Watching for screensaver notifications");
+        _log.LogInformation("Watching for screensaver notifications");
 
         _callback = (_, _, name, _, _) =>
         {
@@ -34,13 +47,13 @@ public sealed class MacScreenSaverSync(ILogger<MacScreenSaverSync> log) : IScree
             var str = NativeMethods.CfStringToManaged(name) ?? "";
             if (str == DidStart)
             {
-                log.LogInformation("Screensaver started (notification received)");
-                onActivated();
+                _log.LogInformation("Screensaver started (notification received)");
+                ScreensaverActivated?.Invoke();
             }
             else if (str == DidStop)
             {
-                log.LogInformation("Screensaver stopped (notification received)");
-                onDeactivated();
+                _log.LogInformation("Screensaver stopped (notification received)");
+                ScreensaverDeactivated?.Invoke();
             }
         };
 
@@ -57,14 +70,10 @@ public sealed class MacScreenSaverSync(ILogger<MacScreenSaverSync> log) : IScree
         NativeMethods.CFRelease(nameStop);
     }
 
-    public void StopWatching()
+    protected override Task OnShutdown(CancellationToken cancel)
     {
-        _lockCts?.Cancel();
-        _lockCts?.Dispose();
-        _lockCts = null;
-
-        if (_center == nint.Zero) return;
-        log.LogInformation("Stopped watching for screensaver notifications");
+        if (_center == nint.Zero) return Task.CompletedTask;
+        _log.LogInformation("Stopped watching for screensaver notifications");
 
         var nameStart = NativeMethods.MakeNsString(DidStart);
         var nameStop = NativeMethods.MakeNsString(DidStop);
@@ -75,35 +84,7 @@ public sealed class MacScreenSaverSync(ILogger<MacScreenSaverSync> log) : IScree
 
         _callback = null;
         _center = nint.Zero;
-    }
-
-    public void StartWatchingLock(Action onLocked)
-    {
-        log.LogInformation("Watching for screen lock (IORegistry polling)");
-        _lockCts = new CancellationTokenSource();
-        var ct = _lockCts.Token;
-        _ = Task.Run(async () => await PollLockAsync(onLocked, ct), ct);
-    }
-
-    private async Task PollLockAsync(Action onLocked, CancellationToken ct)
-    {
-        var wasLocked = false;
-        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
-        try
-        {
-            while (await timer.WaitForNextTickAsync(ct))
-            {
-                var isLocked = IsScreenLocked();
-                if (isLocked && !wasLocked)
-                {
-                    log.LogInformation("Screen locked (IORegistry detected)");
-                    onLocked();
-                }
-                wasLocked = isLocked;
-            }
-        }
-        catch (OperationCanceledException) { }
-        catch (Exception ex) { log.LogWarning(ex, "Screen lock poll error"); }
+        return Task.CompletedTask;
     }
 
     // reads IOConsoleUsers[0].CGSSessionScreenIsLocked from the IORegistry root entry.
@@ -146,7 +127,7 @@ public sealed class MacScreenSaverSync(ILogger<MacScreenSaverSync> log) : IScree
 
     public void LockScreen()
     {
-        log.LogInformation("Locking screen (ctrl+cmd+q)");
+        _log.LogInformation("Locking screen (ctrl+cmd+q)");
         var src = NativeMethods.CGEventSourceCreate(NativeMethods.KCGEventSourceStateCombinedSessionState);
         const ulong flags = NativeMethods.KCGEventFlagMaskControl | NativeMethods.KCGEventFlagMaskCommand;
         const ushort qKeyCode = 12;  // Q key
@@ -169,15 +150,15 @@ public sealed class MacScreenSaverSync(ILogger<MacScreenSaverSync> log) : IScree
 
     public void Activate()
     {
-        log.LogInformation("Activating screensaver");
+        _log.LogInformation("Activating screensaver");
         // launch ScreenSaverEngine directly
         try { Process.Start("open", ["-a", "ScreenSaverEngine"]); }
-        catch (Exception ex) { log.LogWarning(ex, "Failed to launch ScreenSaverEngine"); }
+        catch (Exception ex) { _log.LogWarning(ex, "Failed to launch ScreenSaverEngine"); }
     }
 
     public void Deactivate()
     {
-        log.LogInformation("Deactivating screensaver");
+        _log.LogInformation("Deactivating screensaver");
         // a synthetic mouse move dismisses the screensaver reliably
         var src = NativeMethods.CGEventSourceCreate(NativeMethods.KCGEventSourceStateCombinedSessionState);
         var evt = NativeMethods.CGEventCreateMouseEvent(src, NativeMethods.KCGEventMouseMoved,
@@ -194,7 +175,7 @@ public sealed class MacScreenSaverSync(ILogger<MacScreenSaverSync> log) : IScree
     {
         if (_assertionId != 0)
         {
-            log.LogDebug("IOPMAssertion already active (id={Id})", _assertionId);
+            _log.LogDebug("IOPMAssertion already active (id={Id})", _assertionId);
             return;
         }
         var typeStr = NativeMethods.MakeNsString(AssertionType);
@@ -203,16 +184,16 @@ public sealed class MacScreenSaverSync(ILogger<MacScreenSaverSync> log) : IScree
         NativeMethods.CFRelease(typeStr);
         NativeMethods.CFRelease(nameStr);
         if (result == 0)
-            log.LogDebug("IOPMAssertion created (id={Id})", _assertionId);
+            _log.LogDebug("IOPMAssertion created (id={Id})", _assertionId);
         else
-            log.LogWarning("IOPMAssertionCreateWithName failed (result={Result})", result);
+            _log.LogWarning("IOPMAssertionCreateWithName failed (result={Result})", result);
     }
 
     public void Restore()
     {
         if (_assertionId == 0) return;
         var result = NativeMethods.IOPMAssertionRelease(_assertionId);
-        log.LogDebug("IOPMAssertion released (id={Id}, result={Result})", _assertionId, result);
+        _log.LogDebug("IOPMAssertion released (id={Id}, result={Result})", _assertionId, result);
         _assertionId = 0;
     }
 
@@ -221,6 +202,18 @@ public sealed class MacScreenSaverSync(ILogger<MacScreenSaverSync> log) : IScree
         var nameStr = NativeMethods.MakeNsString("Hydra: user active on remote screen");
         _ = NativeMethods.IOPMAssertionDeclareUserActivity(nameStr, 0, out _);
         NativeMethods.CFRelease(nameStr);
+    }
+
+    protected override Task Execute(CancellationToken cancel)
+    {
+        var isLocked = IsScreenLocked();
+        if (isLocked && !_wasLocked)
+        {
+            _log.LogInformation("Screen locked (IORegistry detected)");
+            ScreenLocked?.Invoke();
+        }
+        _wasLocked = isLocked;
+        return Task.CompletedTask;
     }
 
 }

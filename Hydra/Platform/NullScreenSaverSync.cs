@@ -2,9 +2,10 @@ namespace Hydra.Platform;
 
 public class NullScreenSaverSync : IScreenSaverSync
 {
-    public void StartWatching(Action onActivated, Action onDeactivated) { }
-    public void StopWatching() { }
-    public void StartWatchingLock(Action onLocked) { }
+    public event Action? ScreensaverActivated { add { } remove { } }
+    public event Action? ScreensaverDeactivated { add { } remove { } }
+    public event Action? ScreenLocked { add { } remove { } }
+
     public void Activate() { }
     public void Deactivate() { }
     public void LockScreen() { }

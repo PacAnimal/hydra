@@ -2,12 +2,12 @@ namespace Hydra.Platform;
 
 public interface IScreenSaverSync
 {
-    // master-side: watch for local screensaver activation/deactivation
-    void StartWatching(Action onActivated, Action onDeactivated);
-    void StopWatching();
+    // master-side: fired when screensaver activates/deactivates on this machine
+    event Action? ScreensaverActivated;
+    event Action? ScreensaverDeactivated;
 
-    // master-side: watch for local machine lock (Mac and Windows only; no-op elsewhere)
-    void StartWatchingLock(Action onLocked);
+    // master-side: fired when this machine's screen is locked (Mac and Windows only)
+    event Action? ScreenLocked;
 
     // slave-side: activate/deactivate local screensaver on command
     void Activate();

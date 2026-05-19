@@ -264,13 +264,13 @@ if (config != null)
     }
 
     if (OperatingSystem.IsMacOS())
-        services.AddSingleton<IScreenSaverSync, MacScreenSaverSync>();
+        services.AddHostedService<IScreenSaverSync, MacScreenSaverSync>();
     else if (OperatingSystem.IsWindows())
-        services.AddSingleton<IScreenSaverSync, WindowsScreenSaverSync>();
+        services.AddHostedService<IScreenSaverSync, WindowsScreenSaverSync>();
     else if (linuxConsoleMode)
         services.AddSingleton<IScreenSaverSync, NullScreenSaverSync>();
     else if (OperatingSystem.IsLinux())
-        services.AddSingleton<IScreenSaverSync, XorgScreenSaverSync>();
+        services.AddHostedService<IScreenSaverSync, XorgScreenSaverSync>();
     else
         services.AddSingleton<IScreenSaverSync, NullScreenSaverSync>();
 

@@ -7,24 +7,30 @@ namespace Hydra.Platform.Windows;
 [SupportedOSPlatform("windows")]
 public sealed class WindowsScreenSaverSync(ILogger<WindowsScreenSaverSync> log) : PollingScreenSaverSync(log)
 {
+    private readonly ILogger<WindowsScreenSaverSync> _log = log;
     private StaMessageLoop? _lockLoop;
     private WndProc? _lockWndProc;  // keep-alive to prevent GC
+    private bool _lockLoopStarted;
 
-    public override void StartWatching(Action onActivated, Action onDeactivated)
+    protected override Task Execute(CancellationToken cancel)
     {
-        log.LogInformation("Watching for screensaver state changes (polling)");
-        base.StartWatching(onActivated, onDeactivated);
+        if (!_lockLoopStarted)
+        {
+            _lockLoopStarted = true;
+            StartLockWatcher();
+        }
+        return base.Execute(cancel);
     }
 
-    public override void StopWatching()
+    protected override Task OnShutdown(CancellationToken cancel)
     {
-        base.StopWatching();
         var loop = Interlocked.Exchange(ref _lockLoop, null);
         loop?.Dispose();
         _lockWndProc = null;
+        return Task.CompletedTask;
     }
 
-    public override void StartWatchingLock(Action onLocked)
+    private void StartLockWatcher()
     {
         var hwnd = nint.Zero;
         var className = Marshal.StringToHGlobalUni("HydraLockWatcher");
@@ -32,7 +38,7 @@ public sealed class WindowsScreenSaverSync(ILogger<WindowsScreenSaverSync> log) 
         _lockWndProc = (h, msg, wParam, lParam) =>
         {
             if (msg == NativeMethods.WM_WTSSESSION_CHANGE && wParam == NativeMethods.WTS_SESSION_LOCK)
-                onLocked();
+                OnScreenLocked();
             return NativeMethods.DefWindowProcW(h, msg, wParam, lParam);
         };
 
@@ -52,20 +58,20 @@ public sealed class WindowsScreenSaverSync(ILogger<WindowsScreenSaverSync> log) 
                     var atom = NativeMethods.RegisterClassExW(in wc);
                     if (atom == 0)
                     {
-                        log.LogWarning("RegisterClassExW failed for lock watcher (error {Error})", Marshal.GetLastWin32Error());
+                        _log.LogWarning("RegisterClassExW failed for lock watcher (error {Error})", Marshal.GetLastWin32Error());
                         return;
                     }
                     hwnd = NativeMethods.CreateWindowExW(0, atom, nint.Zero, 0,
                         0, 0, 0, 0, NativeMethods.HWND_MESSAGE, nint.Zero, hInst, nint.Zero);
                     if (hwnd == nint.Zero)
                     {
-                        log.LogWarning("CreateWindowExW failed for lock watcher (error {Error})", Marshal.GetLastWin32Error());
+                        _log.LogWarning("CreateWindowExW failed for lock watcher (error {Error})", Marshal.GetLastWin32Error());
                         return;
                     }
                     if (!NativeMethods.WTSRegisterSessionNotification(hwnd, NativeMethods.NOTIFY_FOR_THIS_SESSION))
-                        log.LogWarning("WTSRegisterSessionNotification failed (error {Error})", Marshal.GetLastWin32Error());
+                        _log.LogWarning("WTSRegisterSessionNotification failed (error {Error})", Marshal.GetLastWin32Error());
                     else
-                        log.LogInformation("Watching for session lock notifications");
+                        _log.LogInformation("Watching for session lock notifications");
                 },
                 onExit: () =>
                 {
@@ -79,26 +85,26 @@ public sealed class WindowsScreenSaverSync(ILogger<WindowsScreenSaverSync> log) 
         }
         catch (Exception ex)
         {
-            log.LogWarning(ex, "Failed to start lock watcher");
+            _log.LogWarning(ex, "Failed to start lock watcher");
             Marshal.FreeHGlobal(className);
         }
     }
 
     public override void LockScreen()
     {
-        log.LogInformation("Locking screen (LockWorkStation)");
+        _log.LogInformation("Locking screen (LockWorkStation)");
         NativeMethods.LockWorkStation();
     }
 
     public override void Activate()
     {
-        log.LogInformation("Activating screensaver");
+        _log.LogInformation("Activating screensaver");
         NativeMethods.PostMessage(NativeMethods.GetDesktopWindow(), NativeMethods.WM_SYSCOMMAND, NativeMethods.SC_SCREENSAVE, nint.Zero);
     }
 
     public override void Deactivate()
     {
-        log.LogInformation("Deactivating screensaver");
+        _log.LogInformation("Deactivating screensaver");
         // close the foreground window (screensaver) then reset the idle timer
         var hwnd = NativeMethods.GetForegroundWindow();
         if (hwnd != nint.Zero)
@@ -111,7 +117,7 @@ public sealed class WindowsScreenSaverSync(ILogger<WindowsScreenSaverSync> log) 
 
     public override void Suppress()
     {
-        log.LogDebug("Refreshing screensaver suppression (SetThreadExecutionState)");
+        _log.LogDebug("Refreshing screensaver suppression (SetThreadExecutionState)");
         _ = NativeMethods.SetThreadExecutionState(NativeMethods.ES_DISPLAY_REQUIRED);
     }
 

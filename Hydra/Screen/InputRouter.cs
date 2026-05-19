@@ -117,9 +117,9 @@ public class InputRouter(
 
         await platform.StartEventTap((x, y) => OnMouseMove(x, y), OnMouseDelta, OnKeyEvent, OnMouseButton, OnMouseScroll);
 
-        _screenSaverSync.StartWatching(OnScreensaverActivated, OnScreensaverDeactivated);
-        if (profile.PropagateLocking)
-            _screenSaverSync.StartWatchingLock(OnLockDetected);
+        _screenSaverSync.ScreensaverActivated += OnScreensaverActivated;
+        _screenSaverSync.ScreensaverDeactivated += OnScreensaverDeactivated;
+        _screenSaverSync.ScreenLocked += OnLockDetected;
 
         _ = RefreshKeyRepeatAsync(_pollCts.Token);
         if (profile.HideCursor)
@@ -135,7 +135,9 @@ public class InputRouter(
         relay.Disconnected -= OnRelayDisconnected;
         screens.ScreensChanged -= OnScreensChanged;
 
-        _screenSaverSync.StopWatching();
+        _screenSaverSync.ScreensaverActivated -= OnScreensaverActivated;
+        _screenSaverSync.ScreensaverDeactivated -= OnScreensaverDeactivated;
+        _screenSaverSync.ScreenLocked -= OnLockDetected;
         platform.StopEventTap();
 
         // drain remaining commands, then stop consumer
@@ -379,6 +381,7 @@ public class InputRouter(
 
     private void OnLockDetected()
     {
+        if (!profile.PropagateLocking) return;
         _ = _commands.Writer.TryWrite(async _ =>
         {
             log.LogInformation("Machine locked — propagating to slaves");

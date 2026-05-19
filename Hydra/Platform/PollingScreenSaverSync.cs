@@ -1,30 +1,19 @@
+using Cathedral.Utils;
 using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform;
 
 // shared polling loop for screensaver detection.
 // subclasses implement IsScreensaverOn() and the activation/suppression methods.
-public abstract class PollingScreenSaverSync(ILogger? log = null) : IScreenSaverSync
+// always running as a hosted service; fires ScreensaverActivated/Deactivated events on state changes.
+public abstract class PollingScreenSaverSync(ILogger log) : SimpleHostedService(log, TimeSpan.FromSeconds(1)), IScreenSaverSync
 {
-    private CancellationTokenSource? _watchCts;
+    private readonly ILogger _log = log;
+    private bool _wasOn;
 
-    public virtual void StartWatching(Action onActivated, Action onDeactivated)
-    {
-        log?.LogInformation("Watching for screensaver state changes (polling)");
-        _watchCts = new CancellationTokenSource();
-        var ct = _watchCts.Token;
-        _ = Task.Run(async () => await PollAsync(onActivated, onDeactivated, ct), ct);
-    }
-
-    public virtual void StartWatchingLock(Action onLocked) { }
-
-    public virtual void StopWatching()
-    {
-        log?.LogInformation("Stopped watching for screensaver state changes");
-        _watchCts?.Cancel();
-        _watchCts?.Dispose();
-        _watchCts = null;
-    }
+    public event Action? ScreensaverActivated;
+    public event Action? ScreensaverDeactivated;
+    public event Action? ScreenLocked;
 
     protected abstract bool IsScreensaverOn();
     public abstract void Activate();
@@ -34,29 +23,22 @@ public abstract class PollingScreenSaverSync(ILogger? log = null) : IScreenSaver
     public virtual void LockScreen() { }
     public virtual void ResetIdleTimer() => Suppress();
 
-    private async Task PollAsync(Action onActivated, Action onDeactivated, CancellationToken ct)
+    protected void OnScreenLocked() => ScreenLocked?.Invoke();
+
+    protected override Task Execute(CancellationToken cancel)
     {
-        var wasOn = false;
-        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
-        try
+        var isOn = IsScreensaverOn();
+        if (isOn && !_wasOn)
         {
-            while (await timer.WaitForNextTickAsync(ct))
-            {
-                var isOn = IsScreensaverOn();
-                if (isOn && !wasOn)
-                {
-                    log?.LogInformation("Screensaver started (poll detected)");
-                    onActivated();
-                }
-                else if (!isOn && wasOn)
-                {
-                    log?.LogInformation("Screensaver stopped (poll detected)");
-                    onDeactivated();
-                }
-                wasOn = isOn;
-            }
+            _log.LogInformation("Screensaver started (poll detected)");
+            ScreensaverActivated?.Invoke();
         }
-        catch (OperationCanceledException) { }
-        catch (Exception ex) { log?.LogWarning(ex, "Screensaver poll error"); }
+        else if (!isOn && _wasOn)
+        {
+            _log.LogInformation("Screensaver stopped (poll detected)");
+            ScreensaverDeactivated?.Invoke();
+        }
+        _wasOn = isOn;
+        return Task.CompletedTask;
     }
 }
