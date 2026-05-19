@@ -26,7 +26,7 @@ public sealed class WindowsScreenSaverSync(ILogger<WindowsScreenSaverSync> log) 
 
     public override void StartWatchingLock(Action onLocked)
     {
-        nint hwnd = nint.Zero;
+        var hwnd = nint.Zero;
         var className = Marshal.StringToHGlobalUni("HydraLockWatcher");
 
         _lockWndProc = (h, msg, wParam, lParam) =>
@@ -55,7 +55,7 @@ public sealed class WindowsScreenSaverSync(ILogger<WindowsScreenSaverSync> log) 
                         log.LogWarning("RegisterClassExW failed for lock watcher (error {Error})", Marshal.GetLastWin32Error());
                         return;
                     }
-                    hwnd = NativeMethods.CreateWindowExW(0, (nint)atom, nint.Zero, 0,
+                    hwnd = NativeMethods.CreateWindowExW(0, atom, nint.Zero, 0,
                         0, 0, 0, 0, NativeMethods.HWND_MESSAGE, nint.Zero, hInst, nint.Zero);
                     if (hwnd == nint.Zero)
                     {

@@ -5,19 +5,17 @@ namespace Hydra.Platform.MacOs;
 
 public sealed class MacScreenSaverSync(ILogger<MacScreenSaverSync> log) : IScreenSaverSync
 {
-    // distributed notification names posted by ScreenSaverEngine and loginwindow
+    // distributed notification names posted by ScreenSaverEngine
     private const string DidStart = "com.apple.screensaver.didstart";
     private const string DidStop = "com.apple.screensaver.didstop";
-    private const string ScreenIsLocked = "com.apple.screenIsLocked";
 
     private const string AssertionType = "PreventUserIdleDisplaySleep";
     private const string AssertionReason = "Hydra screensaver sync: controlled by master";
 
-    private CFNotificationCallback? _callback;       // keep-alive to prevent GC
-    private CFNotificationCallback? _lockCallback;   // keep-alive to prevent GC
+    private CFNotificationCallback? _callback;  // keep-alive to prevent GC
     private nint _center;
     private uint _assertionId;
-    private bool _watchingLock;
+    private CancellationTokenSource? _lockCts;
 
     public void StartWatching(Action onActivated, Action onDeactivated)
     {
@@ -61,8 +59,12 @@ public sealed class MacScreenSaverSync(ILogger<MacScreenSaverSync> log) : IScree
 
     public void StopWatching()
     {
+        _lockCts?.Cancel();
+        _lockCts?.Dispose();
+        _lockCts = null;
+
         if (_center == nint.Zero) return;
-        log.LogInformation("Stopped watching for screensaver/lock notifications");
+        log.LogInformation("Stopped watching for screensaver notifications");
 
         var nameStart = NativeMethods.MakeNsString(DidStart);
         var nameStop = NativeMethods.MakeNsString(DidStop);
@@ -71,39 +73,75 @@ public sealed class MacScreenSaverSync(ILogger<MacScreenSaverSync> log) : IScree
         NativeMethods.CFRelease(nameStart);
         NativeMethods.CFRelease(nameStop);
 
-        if (_watchingLock)
-        {
-            var nameLock = NativeMethods.MakeNsString(ScreenIsLocked);
-            NativeMethods.CFNotificationCenterRemoveObserver(_center, 3, nameLock, nint.Zero);
-            NativeMethods.CFRelease(nameLock);
-            _watchingLock = false;
-        }
-
         _callback = null;
-        _lockCallback = null;
         _center = nint.Zero;
     }
 
     public void StartWatchingLock(Action onLocked)
     {
-        if (_center == nint.Zero)
+        log.LogInformation("Watching for screen lock (IORegistry polling)");
+        _lockCts = new CancellationTokenSource();
+        var ct = _lockCts.Token;
+        _ = Task.Run(async () => await PollLockAsync(onLocked, ct), ct);
+    }
+
+    private async Task PollLockAsync(Action onLocked, CancellationToken ct)
+    {
+        var wasLocked = false;
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+        try
         {
-            _center = NativeMethods.CFNotificationCenterGetDistributedCenter();
-            if (_center == nint.Zero)
+            while (await timer.WaitForNextTickAsync(ct))
             {
-                log.LogWarning("Failed to get CFNotificationCenter — lock watching disabled");
-                return;
+                var isLocked = IsScreenLocked();
+                if (isLocked && !wasLocked)
+                {
+                    log.LogInformation("Screen locked (IORegistry detected)");
+                    onLocked();
+                }
+                wasLocked = isLocked;
             }
         }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { log.LogWarning(ex, "Screen lock poll error"); }
+    }
 
-        log.LogInformation("Watching for screen lock notifications");
+    // reads IOConsoleUsers[0].CGSSessionScreenIsLocked from the IORegistry root entry.
+    // this reflects actual password-required lock state, not just screensaver activation.
+    private static bool IsScreenLocked()
+    {
+        uint rootEntry = 0;
+        nint consoleUsersKey = nint.Zero;
+        nint consoleUsersArray = nint.Zero;
+        nint screenLockedKey = nint.Zero;
 
-        _lockCallback = (_, _, _, _, _) => onLocked();
-        var nameLock = NativeMethods.MakeNsString(ScreenIsLocked);
-        NativeMethods.CFNotificationCenterAddObserver(_center, 3, _lockCallback, nameLock, nint.Zero,
-            NativeMethods.CFNotificationSuspensionBehaviorDeliverImmediately);
-        NativeMethods.CFRelease(nameLock);
-        _watchingLock = true;
+        try
+        {
+            rootEntry = NativeMethods.IORegistryGetRootEntry(0);
+            if (rootEntry == 0) return false;
+
+            consoleUsersKey = NativeMethods.MakeNsString("IOConsoleUsers");
+            consoleUsersArray = NativeMethods.IORegistryEntryCreateCFProperty(rootEntry, consoleUsersKey, nint.Zero, 0);
+            if (consoleUsersArray == nint.Zero) return false;
+
+            if (NativeMethods.CFArrayGetCount(consoleUsersArray) == 0) return false;
+
+            var userDict = NativeMethods.CFArrayGetValueAtIndex(consoleUsersArray, 0);
+            if (userDict == nint.Zero) return false;
+
+            screenLockedKey = NativeMethods.MakeNsString("CGSSessionScreenIsLocked");
+            var lockedRef = NativeMethods.CFDictionaryGetValue(userDict, screenLockedKey);
+            if (lockedRef == nint.Zero) return false;
+
+            return NativeMethods.CFBooleanGetValue(lockedRef) != 0;
+        }
+        finally
+        {
+            if (consoleUsersKey != nint.Zero) NativeMethods.CFRelease(consoleUsersKey);
+            if (screenLockedKey != nint.Zero) NativeMethods.CFRelease(screenLockedKey);
+            if (consoleUsersArray != nint.Zero) NativeMethods.CFRelease(consoleUsersArray);
+            if (rootEntry != 0) _ = NativeMethods.IOObjectRelease(rootEntry);
+        }
     }
 
     public void LockScreen()

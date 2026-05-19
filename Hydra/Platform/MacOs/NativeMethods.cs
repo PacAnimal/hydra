@@ -524,6 +524,18 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial int IOHIDPostEvent(uint connect, uint eventType, IOGPoint location, in NXEventData eventData, uint eventDataVersion, uint eventFlags, uint options);
 
+    // -- IOKit: IORegistry (screen lock detection) --
+
+    // kIOMasterPortDefault = 0 (MACH_PORT_NULL); kIOMainPortDefault on macOS 12+, same value
+    [LibraryImport(IOKit)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial uint IORegistryGetRootEntry(uint masterPort);
+
+    // returns CFTypeRef (caller owns; must CFRelease); returns 0 on failure
+    [LibraryImport(IOKit)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint IORegistryEntryCreateCFProperty(uint entry, nint key, nint allocator, uint options);
+
     // -- IOKit: power management assertions (used for screensaver suppression) --
 
     // kIOPMAssertionLevelOn = 255
@@ -563,6 +575,23 @@ internal static partial class NativeMethods
     [LibraryImport(SystemConfiguration)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial nint SCDynamicStoreCopyValue(nint store, nint key);
+
+    // -- CoreFoundation: array --
+
+    [LibraryImport(CoreFoundation)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint CFArrayGetCount(nint theArray);
+
+    [LibraryImport(CoreFoundation)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint CFArrayGetValueAtIndex(nint theArray, nint idx);
+
+    // -- CoreFoundation: boolean --
+
+    // returns unsigned char (Boolean); use != 0 to get a managed bool
+    [LibraryImport(CoreFoundation)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial byte CFBooleanGetValue(nint boolean);
 
     // -- CoreFoundation: dictionary --
 
