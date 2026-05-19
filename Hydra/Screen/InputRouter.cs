@@ -118,6 +118,8 @@ public class InputRouter(
         await platform.StartEventTap((x, y) => OnMouseMove(x, y), OnMouseDelta, OnKeyEvent, OnMouseButton, OnMouseScroll);
 
         _screenSaverSync.StartWatching(OnScreensaverActivated, OnScreensaverDeactivated);
+        if (profile.PropagateLocking)
+            _screenSaverSync.StartWatchingLock(OnLockDetected);
 
         _ = RefreshKeyRepeatAsync(_pollCts.Token);
         if (profile.HideCursor)
@@ -372,6 +374,24 @@ public class InputRouter(
         var hosts = peerScreens.Keys.ToArray();
         if (hosts.Length == 0) return;
         var payload = MessageSerializer.Encode(MessageKind.ScreensaverSync, new ScreensaverSyncMessage(active));
+        relay.Send(hosts, payload);
+    }
+
+    private void OnLockDetected()
+    {
+        _ = _commands.Writer.TryWrite(async _ =>
+        {
+            log.LogInformation("Machine locked — propagating to slaves");
+            await BroadcastLockScreen();
+        });
+    }
+
+    private async ValueTask BroadcastLockScreen()
+    {
+        var peerScreens = await _peerState.GetPeerScreensSnapshot();
+        var hosts = peerScreens.Keys.ToArray();
+        if (hosts.Length == 0) return;
+        var payload = MessageSerializer.Encode(MessageKind.LockScreen, new LockScreenMessage());
         relay.Send(hosts, payload);
     }
 

@@ -16,7 +16,9 @@ public abstract class PollingScreenSaverSync(ILogger? log = null) : IScreenSaver
         _ = Task.Run(async () => await PollAsync(onActivated, onDeactivated, ct), ct);
     }
 
-    public void StopWatching()
+    public virtual void StartWatchingLock(Action onLocked) { }
+
+    public virtual void StopWatching()
     {
         log?.LogInformation("Stopped watching for screensaver state changes");
         _watchCts?.Cancel();
@@ -29,6 +31,7 @@ public abstract class PollingScreenSaverSync(ILogger? log = null) : IScreenSaver
     public abstract void Deactivate();
     public abstract void Suppress();
     public abstract void Restore();
+    public virtual void LockScreen() { }
     public virtual void ResetIdleTimer() => Suppress();
 
     private async Task PollAsync(Action onActivated, Action onDeactivated, CancellationToken ct)

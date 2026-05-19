@@ -5,16 +5,19 @@ namespace Hydra.Platform.MacOs;
 
 public sealed class MacScreenSaverSync(ILogger<MacScreenSaverSync> log) : IScreenSaverSync
 {
-    // distributed notification names posted by ScreenSaverEngine
+    // distributed notification names posted by ScreenSaverEngine and loginwindow
     private const string DidStart = "com.apple.screensaver.didstart";
     private const string DidStop = "com.apple.screensaver.didstop";
+    private const string ScreenIsLocked = "com.apple.screenIsLocked";
 
     private const string AssertionType = "PreventUserIdleDisplaySleep";
     private const string AssertionReason = "Hydra screensaver sync: controlled by master";
 
-    private CFNotificationCallback? _callback;  // keep-alive to prevent GC
+    private CFNotificationCallback? _callback;       // keep-alive to prevent GC
+    private CFNotificationCallback? _lockCallback;   // keep-alive to prevent GC
     private nint _center;
     private uint _assertionId;
+    private bool _watchingLock;
 
     public void StartWatching(Action onActivated, Action onDeactivated)
     {
@@ -59,7 +62,7 @@ public sealed class MacScreenSaverSync(ILogger<MacScreenSaverSync> log) : IScree
     public void StopWatching()
     {
         if (_center == nint.Zero) return;
-        log.LogInformation("Stopped watching for screensaver notifications");
+        log.LogInformation("Stopped watching for screensaver/lock notifications");
 
         var nameStart = NativeMethods.MakeNsString(DidStart);
         var nameStop = NativeMethods.MakeNsString(DidStop);
@@ -68,8 +71,62 @@ public sealed class MacScreenSaverSync(ILogger<MacScreenSaverSync> log) : IScree
         NativeMethods.CFRelease(nameStart);
         NativeMethods.CFRelease(nameStop);
 
+        if (_watchingLock)
+        {
+            var nameLock = NativeMethods.MakeNsString(ScreenIsLocked);
+            NativeMethods.CFNotificationCenterRemoveObserver(_center, 3, nameLock, nint.Zero);
+            NativeMethods.CFRelease(nameLock);
+            _watchingLock = false;
+        }
+
         _callback = null;
+        _lockCallback = null;
         _center = nint.Zero;
+    }
+
+    public void StartWatchingLock(Action onLocked)
+    {
+        if (_center == nint.Zero)
+        {
+            _center = NativeMethods.CFNotificationCenterGetDistributedCenter();
+            if (_center == nint.Zero)
+            {
+                log.LogWarning("Failed to get CFNotificationCenter — lock watching disabled");
+                return;
+            }
+        }
+
+        log.LogInformation("Watching for screen lock notifications");
+
+        _lockCallback = (_, _, _, _, _) => onLocked();
+        var nameLock = NativeMethods.MakeNsString(ScreenIsLocked);
+        NativeMethods.CFNotificationCenterAddObserver(_center, 3, _lockCallback, nameLock, nint.Zero,
+            NativeMethods.CFNotificationSuspensionBehaviorDeliverImmediately);
+        NativeMethods.CFRelease(nameLock);
+        _watchingLock = true;
+    }
+
+    public void LockScreen()
+    {
+        log.LogInformation("Locking screen (ctrl+cmd+q)");
+        var src = NativeMethods.CGEventSourceCreate(NativeMethods.KCGEventSourceStateCombinedSessionState);
+        const ulong flags = NativeMethods.KCGEventFlagMaskControl | NativeMethods.KCGEventFlagMaskCommand;
+        const ushort qKeyCode = 12;  // Q key
+        var down = NativeMethods.CGEventCreateKeyboardEvent(src, qKeyCode, true);
+        var up = NativeMethods.CGEventCreateKeyboardEvent(src, qKeyCode, false);
+        if (down != nint.Zero)
+        {
+            NativeMethods.CGEventSetFlags(down, flags);
+            NativeMethods.CGEventPost(NativeMethods.KCGHidEventTap, down);
+            NativeMethods.CFRelease(down);
+        }
+        if (up != nint.Zero)
+        {
+            NativeMethods.CGEventSetFlags(up, flags);
+            NativeMethods.CGEventPost(NativeMethods.KCGHidEventTap, up);
+            NativeMethods.CFRelease(up);
+        }
+        if (src != nint.Zero) NativeMethods.CFRelease(src);
     }
 
     public void Activate()

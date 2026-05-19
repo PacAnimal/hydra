@@ -87,6 +87,14 @@ export function GlobalSettings({ config, onChange }: Props) {
                 />
                 Accelerate Mouse Wheel
               </label>
+              <label className="checkbox-label" title="Propagate machine lock to connected Mac and Windows slaves (Mac: ctrl+cmd+q, Windows: LockWorkStation)">
+                <input
+                  type="checkbox"
+                  checked={config.propagateLocking === true}
+                  onChange={e => onChange({ propagateLocking: e.target.checked ? true : undefined })}
+                />
+                Propagate Locking
+              </label>
             </>
           )}
         </div>

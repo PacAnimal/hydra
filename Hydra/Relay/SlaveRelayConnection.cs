@@ -146,6 +146,10 @@ public class SlaveRelayConnection : RelayConnection
                     else _screenSaverSync.Deactivate();
                 }
                 break;
+            case MessageKind.LockScreen:
+                _log.LogInformation("Lock screen request from {Host}", sourceHost);
+                _screenSaverSync.LockScreen();
+                break;
             case MessageKind.ClipboardHash:
                 {
                     var hashMsg = body.ParseMessage<ClipboardHashMessage>(_log, kind.ToString());

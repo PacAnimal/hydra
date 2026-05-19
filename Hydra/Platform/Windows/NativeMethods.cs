@@ -462,6 +462,26 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     internal static partial short GetKeyState(int nVirtKey);
 
+    // -- session lock detection --
+
+    internal static readonly nint HWND_MESSAGE = new(-3);
+
+    internal const uint WM_WTSSESSION_CHANGE = 0x02B1;
+    internal const nint WTS_SESSION_LOCK = 0x7;
+    internal const uint NOTIFY_FOR_THIS_SESSION = 0;
+
+    private const string WtsApi32 = "wtsapi32.dll";
+
+    [LibraryImport(WtsApi32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool WTSRegisterSessionNotification(nint hWnd, uint dwFlags);
+
+    [LibraryImport(WtsApi32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool WTSUnRegisterSessionNotification(nint hWnd);
+
     // -- screensaver sync --
 
     // SPI_GETSCREENSAVERRUNNING: pvParam receives BOOL (1 if screensaver is running)

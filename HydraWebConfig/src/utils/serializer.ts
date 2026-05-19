@@ -60,6 +60,7 @@ function serializeProfile(p: HydraProfile): Record<string, unknown> {
   // booleans — omit when equal to default
   if (p.remoteOnly === true) out.remoteOnly = true
   if (p.syncScreensaver === false) out.syncScreensaver = false
+  if (p.propagateLocking === true) out.propagateLocking = true
   if (p.debugShield === true) out.debugShield = true
   if (p.accelerateMouseWheel === false) out.accelerateMouseWheel = false
 
