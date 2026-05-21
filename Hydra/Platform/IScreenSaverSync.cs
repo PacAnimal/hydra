@@ -6,8 +6,9 @@ public interface IScreenSaverSync
     event Action? ScreensaverActivated;
     event Action? ScreensaverDeactivated;
 
-    // master-side: fired when this machine's screen is locked (Mac and Windows only)
+    // master-side: fired when this machine's screen is locked/unlocked (Mac and Windows only)
     event Action? ScreenLocked;
+    event Action? ScreenUnlocked;
 
     // slave-side: activate/deactivate local screensaver on command
     void Activate();

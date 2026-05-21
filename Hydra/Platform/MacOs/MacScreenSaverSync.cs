@@ -23,6 +23,7 @@ public sealed class MacScreenSaverSync : SimpleHostedService, IScreenSaverSync
     public event Action? ScreensaverActivated;
     public event Action? ScreensaverDeactivated;
     public event Action? ScreenLocked;
+    public event Action? ScreenUnlocked;
 
     public MacScreenSaverSync(ILogger<MacScreenSaverSync> log) : base(log, TimeSpan.FromSeconds(1))
     {
@@ -211,6 +212,11 @@ public sealed class MacScreenSaverSync : SimpleHostedService, IScreenSaverSync
         {
             _log.LogInformation("Screen locked (IORegistry detected)");
             ScreenLocked?.Invoke();
+        }
+        else if (!isLocked && _wasLocked)
+        {
+            _log.LogInformation("Screen unlocked (IORegistry detected)");
+            ScreenUnlocked?.Invoke();
         }
         _wasLocked = isLocked;
         return Task.CompletedTask;

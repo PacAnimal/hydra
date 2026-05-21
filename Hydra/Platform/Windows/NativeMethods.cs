@@ -468,6 +468,7 @@ internal static partial class NativeMethods
 
     internal const uint WM_WTSSESSION_CHANGE = 0x02B1;
     internal const nint WTS_SESSION_LOCK = 0x7;
+    internal const nint WTS_SESSION_UNLOCK = 0x8;
     internal const uint NOTIFY_FOR_THIS_SESSION = 0;
 
     private const string WtsApi32 = "wtsapi32.dll";

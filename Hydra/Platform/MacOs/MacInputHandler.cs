@@ -100,10 +100,22 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
         _onKeyEvent = onKeyEvent;
         _onMouseButton = onMouseButton;
         _onMouseScroll = onMouseScroll;
+        _tapCallback = TapCallback;  // stored as field -- will crash if collected
+        await CreateTapThread();
+    }
 
-        // callback must be stored as field -- will crash if collected
-        _tapCallback = TapCallback;
+    public async Task RestartEventTap()
+    {
+        log.LogInformation("Restarting event tap");
+        if (_runLoop != nint.Zero)
+            NativeMethods.CFRunLoopStop(_runLoop);
+        _tapThread?.Join(TimeSpan.FromSeconds(2));
+        _keyResolver.Reset();
+        await CreateTapThread();
+    }
 
+    private Task CreateTapThread()
+    {
         var ready = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         _tapThread = new Thread(() =>
@@ -115,7 +127,7 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
                 NativeMethods.KCGHeadInsertEventTap,
                 NativeMethods.KCGEventTapOptionDefault,
                 NativeMethods.KCGEventMaskForAllEvents,
-                _tapCallback,
+                _tapCallback!,
                 nint.Zero);
 
             if (_tapPort == nint.Zero)
@@ -140,7 +152,7 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
         { IsBackground = true, Name = "HydraEventTap" };
 
         _tapThread.Start();
-        await ready.Task;
+        return ready.Task;
     }
 
     public KeyRepeatSettings GetKeyRepeatSettings()

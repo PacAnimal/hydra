@@ -39,6 +39,8 @@ public sealed class WindowsScreenSaverSync(ILogger<WindowsScreenSaverSync> log) 
         {
             if (msg == NativeMethods.WM_WTSSESSION_CHANGE && wParam == NativeMethods.WTS_SESSION_LOCK)
                 OnScreenLocked();
+            else if (msg == NativeMethods.WM_WTSSESSION_CHANGE && wParam == NativeMethods.WTS_SESSION_UNLOCK)
+                OnScreenUnlocked();
             return NativeMethods.DefWindowProcW(h, msg, wParam, lParam);
         };
 

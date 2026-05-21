@@ -14,6 +14,7 @@ public abstract class PollingScreenSaverSync(ILogger log) : SimpleHostedService(
     public event Action? ScreensaverActivated;
     public event Action? ScreensaverDeactivated;
     public event Action? ScreenLocked;
+    public event Action? ScreenUnlocked;
 
     protected abstract bool IsScreensaverOn();
     public abstract void Activate();
@@ -24,6 +25,7 @@ public abstract class PollingScreenSaverSync(ILogger log) : SimpleHostedService(
     public virtual void ResetIdleTimer() => Suppress();
 
     protected void OnScreenLocked() => ScreenLocked?.Invoke();
+    protected void OnScreenUnlocked() => ScreenUnlocked?.Invoke();
 
     protected override Task Execute(CancellationToken cancel)
     {

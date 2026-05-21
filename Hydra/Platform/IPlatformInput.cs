@@ -26,6 +26,7 @@ public interface IPlatformInput : IAsyncDisposable, ICursor
         Action<MouseButtonEvent> onMouseButton,
         Action<MouseScrollEvent> onMouseScroll);
     void StopEventTap();
+    Task RestartEventTap() => Task.CompletedTask;
     bool IsAccessibilityTrusted();
     Task WaitForAccessibilityTrusted(CancellationToken cancel) => Task.CompletedTask;
     bool IsOnVirtualScreen { get; set; }

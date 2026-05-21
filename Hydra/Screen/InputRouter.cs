@@ -120,6 +120,7 @@ public class InputRouter(
         _screenSaverSync.ScreensaverActivated += OnScreensaverActivated;
         _screenSaverSync.ScreensaverDeactivated += OnScreensaverDeactivated;
         _screenSaverSync.ScreenLocked += OnLockDetected;
+        _screenSaverSync.ScreenUnlocked += OnScreenUnlocked;
 
         _ = RefreshKeyRepeatAsync(_pollCts.Token);
         if (profile.HideCursor)
@@ -138,6 +139,7 @@ public class InputRouter(
         _screenSaverSync.ScreensaverActivated -= OnScreensaverActivated;
         _screenSaverSync.ScreensaverDeactivated -= OnScreensaverDeactivated;
         _screenSaverSync.ScreenLocked -= OnLockDetected;
+        _screenSaverSync.ScreenUnlocked -= OnScreenUnlocked;
         platform.StopEventTap();
 
         // drain remaining commands, then stop consumer
@@ -386,6 +388,15 @@ public class InputRouter(
         {
             log.LogInformation("Machine locked — propagating to slaves");
             await BroadcastLockScreen();
+        });
+    }
+
+    private void OnScreenUnlocked()
+    {
+        _ = _commands.Writer.TryWrite(async _ =>
+        {
+            log.LogInformation("Screen unlocked — restarting event tap");
+            await platform.RestartEventTap();
         });
     }
 
