@@ -157,13 +157,17 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
     private void Stop()
     {
         _stopping.TrySet();
-        if (_process is null || _process.HasExited) return;
+        var proc = _process;
+        if (proc is null) return;
         try
         {
-            _process.Kill();
-            _process.WaitForExit(2000);
+            if (!proc.HasExited)
+            {
+                proc.Kill();
+                proc.WaitForExit(2000);
+            }
         }
-        catch (Exception) { /* already dead */ }
+        catch (Exception) { /* already dead or not associated */ }
     }
 
     // sends a command and holds the send lock until the shield echoes the command back
