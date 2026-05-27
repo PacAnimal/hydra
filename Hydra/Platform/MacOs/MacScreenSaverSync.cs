@@ -205,6 +205,12 @@ public sealed class MacScreenSaverSync : SimpleHostedService, IScreenSaverSync
         NativeMethods.CFRelease(nameStr);
     }
 
+    public TimeSpan? GetIdleTime()
+    {
+        var secs = NativeMethods.CGEventSourceSecondsSinceLastEventType(NativeMethods.KCGEventSourceStateCombinedSessionState, NativeMethods.KCGAnyInputEventType);
+        return TimeSpan.FromSeconds(secs);
+    }
+
     protected override Task Execute(CancellationToken cancel)
     {
         var isLocked = IsScreenLocked();

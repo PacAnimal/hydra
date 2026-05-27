@@ -235,9 +235,16 @@ internal static partial class NativeMethods
     // tracking, which is what [NSEvent modifierFlags] (class method) reads.
     internal const int KCGEventSourceStateCombinedSessionState = 0;
 
+    // kCGAnyInputEventType: wildcard for CGEventSourceSecondsSinceLastEventType — matches any input event
+    internal const uint KCGAnyInputEventType = unchecked((uint)-1);
+
     [LibraryImport(CoreGraphics)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial nint CGEventSourceCreate(int stateID);
+
+    [LibraryImport(CoreGraphics)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial double CGEventSourceSecondsSinceLastEventType(int stateID, uint eventType);
 
     // -- CoreGraphics: event creation and injection --
 

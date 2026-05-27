@@ -23,6 +23,7 @@ public abstract class PollingScreenSaverSync(ILogger log) : SimpleHostedService(
     public abstract void Restore();
     public virtual void LockScreen() { }
     public virtual void ResetIdleTimer() => Suppress();
+    public virtual TimeSpan? GetIdleTime() => null;
 
     protected void OnScreenLocked() => ScreenLocked?.Invoke();
     protected void OnScreenUnlocked() => ScreenUnlocked?.Invoke();

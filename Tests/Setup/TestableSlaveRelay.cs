@@ -14,14 +14,15 @@ namespace Tests.Setup;
 public sealed class TestableSlaveRelay(
     IWorldState? worldState = null,
     IClipboardSync? clipboard = null,
-    ICursorHider? cursorHider = null) : SlaveRelayConnection(
+    ICursorHider? cursorHider = null,
+    IScreenSaverSync? screenSaverSync = null) : SlaveRelayConnection(
         TransitionTestHelper.Profile("slave", new HydraConfig { Mode = Mode.Slave }),
         NullLogger<RelayConnection>.Instance,
         new NullPlatformOutput(),
         new FakeScreenDetector(),
         worldState ?? new WorldState(),
         cursorHider ?? new FakeCursorVisibility(),
-        new NullScreenSaverSync(),
+        screenSaverSync ?? new NullScreenSaverSync(),
         new NullScreensaverSuppressor(),
         clipboard ?? new NullClipboardSync(),
         FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification())

@@ -384,10 +384,10 @@ public class InputRouter(
     private void OnLockDetected()
     {
         if (!profile.ScreenLockPropagation) return;
-        _ = _commands.Writer.TryWrite(async _ =>
+        _ = _commands.Writer.TryWrite(async st =>
         {
             log.LogInformation("Machine locked — propagating to slaves");
-            await BroadcastLockScreen();
+            await BroadcastLockScreen(st);
         });
     }
 
@@ -400,12 +400,13 @@ public class InputRouter(
         });
     }
 
-    private async ValueTask BroadcastLockScreen()
+    private async ValueTask BroadcastLockScreen(LocalMasterState st)
     {
         var peerScreens = await _peerState.GetPeerScreensSnapshot();
         var hosts = peerScreens.Keys.ToArray();
         if (hosts.Length == 0) return;
-        var payload = MessageSerializer.Encode(MessageKind.LockScreen, new LockScreenMessage());
+        var msSinceInput = _getTickCount() - st.LastInputTick;
+        var payload = MessageSerializer.Encode(MessageKind.LockScreen, new LockScreenMessage(msSinceInput));
         relay.Send(hosts, payload);
     }
 
@@ -700,6 +701,7 @@ public class InputRouter(
 
         _ = _commands.Writer.TryWrite(async st =>
         {
+            st.LastInputTick = _getTickCount();
             if (st.Mouse.IsOnVirtualScreen)
             {
                 log.LogDebug("Key: {Type}{Label} mods={Modifiers}", keyEvent.Type, label, keyEvent.Modifiers);
@@ -850,6 +852,7 @@ public class InputRouter(
     {
         _ = _commands.Writer.TryWrite(st =>
         {
+            st.LastInputTick = _getTickCount();
             if (st.Mouse.IsOnVirtualScreen)
             {
                 TryResetLocalIdle(st);
@@ -867,6 +870,7 @@ public class InputRouter(
     {
         _ = _commands.Writer.TryWrite(st =>
         {
+            st.LastInputTick = _getTickCount();
             if (st.Mouse.IsOnVirtualScreen)
             {
                 TryResetLocalIdle(st);
@@ -945,6 +949,7 @@ public class InputRouter(
     {
         _ = _commands.Writer.TryWrite(async st =>
         {
+            st.LastInputTick = _getTickCount();
             if (st.Layout is null || st.ActiveLocalScreen is null) return;
             if (!st.Mouse.IsOnVirtualScreen)
                 await HandleRealScreenMove(st, x, y);
@@ -1168,6 +1173,7 @@ public class InputRouter(
     {
         _ = _commands.Writer.TryWrite(async st =>
         {
+            st.LastInputTick = _getTickCount();
             if (!st.Mouse.IsOnVirtualScreen) return;
 
             TryResetLocalIdle(st);
@@ -1318,6 +1324,9 @@ public class InputRouter(
 
         // master-side idle reset: last time we called ResetIdleTimer while on a slave screen
         public long LastIdleResetTick;
+
+        // last time any input event was processed, regardless of destination (local or remote)
+        public long LastInputTick;
     }
 
     private record RemoteScreenInfo(List<ScreenRect> Screens, Dictionary<string, decimal> ScaleMap, Dictionary<string, decimal?> RelativeScaleMap);

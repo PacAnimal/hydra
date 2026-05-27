@@ -517,6 +517,18 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     internal static partial uint SetThreadExecutionState(uint esFlags);
 
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct LASTINPUTINFO
+    {
+        internal uint cbSize;
+        internal uint dwTime;
+    }
+
+    [LibraryImport(User32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool GetLastInputInfo(ref LASTINPUTINFO plii);
+
     // -- clipboard --
 
     internal const uint CF_UNICODETEXT = 13;

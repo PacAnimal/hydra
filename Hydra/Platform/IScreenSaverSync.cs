@@ -23,4 +23,7 @@ public interface IScreenSaverSync
 
     // master-side: one-shot reset of the local idle timer (called on input activity while cursor is on a slave)
     void ResetIdleTimer();
+
+    // time since last input event on this machine; null if not supported by the platform
+    TimeSpan? GetIdleTime();
 }

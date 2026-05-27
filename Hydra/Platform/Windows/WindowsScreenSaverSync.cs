@@ -125,6 +125,13 @@ public sealed class WindowsScreenSaverSync(ILogger<WindowsScreenSaverSync> log) 
 
     public override void Restore() { }
 
+    public override TimeSpan? GetIdleTime()
+    {
+        var info = new NativeMethods.LASTINPUTINFO { cbSize = (uint)Marshal.SizeOf<NativeMethods.LASTINPUTINFO>() };
+        if (!NativeMethods.GetLastInputInfo(ref info)) return null;
+        return TimeSpan.FromMilliseconds((uint)Environment.TickCount - info.dwTime);
+    }
+
     protected override bool IsScreensaverOn()
     {
         var ptr = Marshal.AllocHGlobal(4);

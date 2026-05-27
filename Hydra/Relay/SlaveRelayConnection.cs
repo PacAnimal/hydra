@@ -147,9 +147,19 @@ public class SlaveRelayConnection : RelayConnection
                 }
                 break;
             case MessageKind.LockScreen:
-                _log.LogInformation("Lock screen request from {Host}", sourceHost);
-                _screenSaverSync.LockScreen();
-                break;
+                {
+                    var lockMsg = body.ParseMessage<LockScreenMessage>(_log, kind.ToString());
+                    if (lockMsg == null) break;
+                    _log.LogInformation("Lock screen request from {Host} (master idle {Ms}ms)", sourceHost, lockMsg.MillisecondsSinceLastInput);
+                    var idleTime = _screenSaverSync.GetIdleTime();
+                    if (idleTime.HasValue && idleTime.Value < TimeSpan.FromMilliseconds(lockMsg.MillisecondsSinceLastInput))
+                    {
+                        _log.LogInformation("Skipping lock — local input detected ({Idle:F1}s idle < {Gap:F1}s since master input)", idleTime.Value.TotalSeconds, lockMsg.MillisecondsSinceLastInput / 1000.0);
+                        break;
+                    }
+                    _screenSaverSync.LockScreen();
+                    break;
+                }
             case MessageKind.ClipboardHash:
                 {
                     var hashMsg = body.ParseMessage<ClipboardHashMessage>(_log, kind.ToString());

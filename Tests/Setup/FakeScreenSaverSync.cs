@@ -1,7 +1,12 @@
-namespace Hydra.Platform;
+using Hydra.Platform;
 
-public class NullScreenSaverSync : IScreenSaverSync
+namespace Tests.Setup;
+
+public sealed class FakeScreenSaverSync : IScreenSaverSync
 {
+    public bool LockScreenCalled;
+    public TimeSpan? IdleTime;
+
     public event Action? ScreensaverActivated { add { } remove { } }
     public event Action? ScreensaverDeactivated { add { } remove { } }
     public event Action? ScreenLocked { add { } remove { } }
@@ -9,9 +14,9 @@ public class NullScreenSaverSync : IScreenSaverSync
 
     public void Activate() { }
     public void Deactivate() { }
-    public void LockScreen() { }
+    public void LockScreen() => LockScreenCalled = true;
     public void Suppress() { }
     public void Restore() { }
     public void ResetIdleTimer() { }
-    public TimeSpan? GetIdleTime() => null;
+    public TimeSpan? GetIdleTime() => IdleTime;
 }

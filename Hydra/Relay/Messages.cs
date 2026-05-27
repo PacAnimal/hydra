@@ -61,7 +61,7 @@ public record ClipboardPushMessage(string Text, string? PrimaryText = null, byte
 public record ClipboardPullResponseMessage(string? Text, string? PrimaryText = null, byte[]? ImagePng = null, bool? Unchanged = null);
 public record ClipboardHashMessage(ulong Hash);
 public record ClipboardPullRequestMessage;
-public record LockScreenMessage;
+public record LockScreenMessage(long MillisecondsSinceLastInput);
 
 public record FileTransferRequestMessage(string? SourceHost = null);
 public record FileTransferStartMessage(string[] FileNames, long TotalBytes);
