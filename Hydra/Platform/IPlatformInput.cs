@@ -27,7 +27,8 @@ public interface ILocalEventTap
         Action<double, double>? onMouseDelta,
         Action<KeyEvent> onKeyEvent,
         Action<MouseButtonEvent> onMouseButton,
-        Action<MouseScrollEvent> onMouseScroll);
+        Action<MouseScrollEvent> onMouseScroll,
+        Action? onLocalActivity = null);
     void StopEventTap();
     Task RestartEventTap() => Task.CompletedTask;
 }

@@ -46,7 +46,8 @@ public sealed class FakePlatform : IPlatformInput, ICursorHider
         Action<double, double>? onMouseDelta,
         Action<KeyEvent> onKeyEvent,
         Action<MouseButtonEvent> onMouseButton,
-        Action<MouseScrollEvent> onMouseScroll)
+        Action<MouseScrollEvent> onMouseScroll,
+        Action? onLocalActivity = null)
     {
         _onMouseMove = onMouseMove;
         _onMouseDelta = onMouseDelta;

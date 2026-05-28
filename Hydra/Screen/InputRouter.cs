@@ -116,7 +116,8 @@ public class InputRouter(
         // start consumer before event tap so early events are processed
         _consumerTask = Task.Run(ProcessCommands, cancellationToken);
 
-        await platform.StartEventTap((x, y) => OnMouseMove(x, y), OnMouseDelta, OnKeyEvent, OnMouseButton, OnMouseScroll);
+        await platform.StartEventTap((x, y) => OnMouseMove(x, y), OnMouseDelta, OnKeyEvent, OnMouseButton, OnMouseScroll,
+            onLocalActivity: () => _ = _commands.Writer.TryWrite(_ => activityTracker.LocalActivity()));
 
         _screenSaverSync.ScreensaverActivated += OnScreensaverActivated;
         _screenSaverSync.ScreensaverDeactivated += OnScreensaverDeactivated;

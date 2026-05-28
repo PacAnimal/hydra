@@ -58,7 +58,8 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
         Action<double, double>? onMouseDelta,
         Action<KeyEvent> onKeyEvent,
         Action<MouseButtonEvent> onMouseButton,
-        Action<MouseScrollEvent> onMouseScroll)
+        Action<MouseScrollEvent> onMouseScroll,
+        Action? onLocalActivity = null)
     {
         _onMouseDelta = onMouseDelta;
         _onKeyEvent = onKeyEvent;

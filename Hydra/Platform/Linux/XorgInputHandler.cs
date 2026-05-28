@@ -23,18 +23,19 @@ public sealed class XorgInputHandler : IPlatformInput
     private Action<KeyEvent>? _onKeyEvent;
     private Action<MouseButtonEvent>? _onMouseButton;
     private Action<MouseScrollEvent>? _onMouseScroll;
+    private Action? _onLocalActivity;
     private bool _cursorHidden;
     private readonly Toggle _isOnVirtualScreen = new();
     private readonly Lock _grabLock = new();
     private readonly XGrabSession _keyboard;
     private readonly XGrabSession _pointer;
 
-    // XI2 event mask for key press/release (2, 3), raw button press/release (15, 16) and raw motion (17).
+    // XI2 event mask for raw key press (13), raw button press/release (15, 16) and raw motion (17).
     // XISetMask(mask, n) = mask[n>>3] |= 1 << (n&7)
     private static readonly byte[] Xi2Mask =
     [
-        (1 << (NativeMethods.XI_KeyPress & 7)) | (1 << (NativeMethods.XI_KeyRelease & 7)),  // byte 0: bits 2+3 (events 2, 3)
-        (1 << (NativeMethods.XI_RawButtonPress & 7)),   // byte 1: bit 7 (event 15)
+        0,
+        (1 << (NativeMethods.XI_RawKeyPress & 7)) | (1 << (NativeMethods.XI_RawButtonPress & 7)),  // byte 1: bits 5+7 (events 13, 15)
         (1 << (NativeMethods.XI_RawButtonRelease & 7)) | (1 << (NativeMethods.XI_RawMotion & 7)),  // byte 2: bits 0+1 (events 16, 17)
         0,
     ];
@@ -179,13 +180,15 @@ public sealed class XorgInputHandler : IPlatformInput
         Action<double, double>? onMouseDelta,
         Action<KeyEvent> onKeyEvent,
         Action<MouseButtonEvent> onMouseButton,
-        Action<MouseScrollEvent> onMouseScroll)
+        Action<MouseScrollEvent> onMouseScroll,
+        Action? onLocalActivity = null)
     {
         _onMouseMove = onMouseMove;
         _onMouseDelta = onMouseDelta;
         _onKeyEvent = onKeyEvent;
         _onMouseButton = onMouseButton;
         _onMouseScroll = onMouseScroll;
+        _onLocalActivity = onLocalActivity;
 
         var ready = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -268,25 +271,18 @@ public sealed class XorgInputHandler : IPlatformInput
             return;
         }
 
-        // XI2 raw events (motion only)
+        // XI2 raw events
         if (ev.Type != NativeMethods.GenericEvent) return;
         if (ev.XCookieExtension != _xiOpcode) return;
         if (!NativeMethods.XGetEventData(_display, ref ev)) return;
 
         try
         {
-            // XI_KeyPress/XI_KeyRelease are only delivered when no XGrabKeyboard is active (i.e. cursor is local).
-            // when on virtual screen the grab takes precedence and delivers standard KeyPress/KeyRelease instead.
-            if (ev.XCookieEvType is NativeMethods.XI_KeyPress or NativeMethods.XI_KeyRelease && !_isOnVirtualScreen)
+            if (ev.XCookieEvType == NativeMethods.XI_RawKeyPress && !_isOnVirtualScreen)
             {
-                var dev = Marshal.PtrToStructure<XIDeviceEvent>(ev.XCookieData);
-                // skip auto-repeat presses — hotkeys should fire once per physical down
-                if ((dev.Flags & NativeMethods.XIKeyRepeat) != 0) return;
-                var type = ev.XCookieEvType == NativeMethods.XI_KeyPress ? NativeMethods.KeyPress : NativeMethods.KeyRelease;
-                var keyEvents = _keyResolver.Resolve(type, (uint)dev.Detail, (uint)dev.ModsEffective, _display);
-                if (keyEvents is not null)
-                    foreach (var keyEvent in keyEvents)
-                        if (keyEvent is not null) _onKeyEvent?.Invoke(keyEvent);
+                // grab-based KeyPress/KeyRelease only arrive when cursor is on a slave; raw key presses
+                // cover the local case so activity is tracked and slaves receive pings
+                _onLocalActivity?.Invoke();
                 return;
             }
 

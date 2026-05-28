@@ -100,7 +100,8 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
         Action<double, double>? onMouseDelta,
         Action<KeyEvent> onKeyEvent,
         Action<MouseButtonEvent> onMouseButton,
-        Action<MouseScrollEvent> onMouseScroll)
+        Action<MouseScrollEvent> onMouseScroll,
+        Action? onLocalActivity = null)
     {
         _onMouseMove = onMouseMove;
         _onKeyEvent = onKeyEvent;

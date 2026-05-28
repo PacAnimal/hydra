@@ -74,7 +74,8 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
         Action<double, double>? onMouseDelta,
         Action<KeyEvent> onKeyEvent,
         Action<MouseButtonEvent> onMouseButton,
-        Action<MouseScrollEvent> onMouseScroll)
+        Action<MouseScrollEvent> onMouseScroll,
+        Action? onLocalActivity = null)
     {
         _onMouseMove = onMouseMove;
         _onKeyEvent = onKeyEvent;

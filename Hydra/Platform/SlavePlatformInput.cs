@@ -14,7 +14,8 @@ internal sealed class SlavePlatformInput(ICursor cursor) : IPlatformInput
     public (int X, int Y)? GetCursorPosition() => cursor.GetCursorPosition();
 
     public Task StartEventTap(Action<double, double> onMouseMove, Action<double, double>? onMouseDelta,
-        Action<KeyEvent> onKeyEvent, Action<MouseButtonEvent> onMouseButton, Action<MouseScrollEvent> onMouseScroll)
+        Action<KeyEvent> onKeyEvent, Action<MouseButtonEvent> onMouseButton, Action<MouseScrollEvent> onMouseScroll,
+        Action? onLocalActivity = null)
         => Task.CompletedTask;
     public void StopEventTap() { }
     public bool IsAccessibilityTrusted() => true;

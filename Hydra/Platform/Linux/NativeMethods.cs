@@ -36,14 +36,10 @@ internal static partial class NativeMethods
 
     // -- XI2 event type constants --
 
-    internal const int XI_KeyPress = 2;
-    internal const int XI_KeyRelease = 3;
+    internal const int XI_RawKeyPress = 13;
     internal const int XI_RawButtonPress = 15;
     internal const int XI_RawButtonRelease = 16;
     internal const int XI_RawMotion = 17;
-
-    // set in XIDeviceEvent.Flags for auto-repeated key presses
-    internal const int XIKeyRepeat = 0x10000;
 
     // -- XI2 device constants --
 
@@ -607,15 +603,4 @@ internal struct XIRawEvent
     [FieldOffset(72)] internal nint ValuatorsMask;    // unsigned char*
     [FieldOffset(80)] internal nint ValuatorValues;   // double* — post-acceleration deltas
     [FieldOffset(88)] internal nint RawValues;        // double* — pre-acceleration deltas
-}
-
-// XIDeviceEvent layout (64-bit LP64) for XI_KeyPress / XI_KeyRelease:
-// detail (keycode) at offset 56; flags at 120; XIModifierState.effective at 180
-// XIModifierState fields: base[168] latched[172] locked[176] effective[180]
-[StructLayout(LayoutKind.Explicit)]
-internal struct XIDeviceEvent
-{
-    [FieldOffset(56)] internal int Detail;          // hardware keycode
-    [FieldOffset(120)] internal int Flags;          // XIKeyRepeat flag
-    [FieldOffset(180)] internal int ModsEffective;  // effective modifier state (same bitmask as XKeyEvent.state)
 }
