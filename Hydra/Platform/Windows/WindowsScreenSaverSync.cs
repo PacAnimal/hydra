@@ -117,7 +117,15 @@ public sealed class WindowsScreenSaverSync(ILogger<WindowsScreenSaverSync> log) 
         NativeMethods.SystemParametersInfo(NativeMethods.SPI_SETSCREENSAVEACTIVE, 1, nint.Zero, 0);
     }
 
-    public override void ResetIdleTimer() => _ = NativeMethods.SetThreadExecutionState(NativeMethods.ES_DISPLAY_REQUIRED);
+    public override void ResetIdleTimer()
+    {
+        // SetThreadExecutionState doesn't update GetLastInputInfo() which the screensaver polls; SendInput does
+        unsafe
+        {
+            var input = new INPUT { type = NativeMethods.INPUT_MOUSE, mi = new MOUSEINPUT { dwFlags = NativeMethods.MOUSEEVENTF_MOVE } };
+            _ = NativeMethods.SendInput(1, &input, sizeof(INPUT));
+        }
+    }
 
     protected override bool IsScreensaverOn()
     {

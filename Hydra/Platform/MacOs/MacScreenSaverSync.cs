@@ -170,9 +170,20 @@ public sealed class MacScreenSaverSync : SimpleHostedService, IScreenSaverSync
 
     public void ResetIdleTimer()
     {
-        var nameStr = NativeMethods.MakeNsString("Hydra: user active on remote screen");
-        _ = NativeMethods.IOPMAssertionDeclareUserActivity(nameStr, 0, out _);
-        NativeMethods.CFRelease(nameStr);
+        // IOPMAssertionDeclareUserActivity doesn't reset the HID idle timer; only a real CGEvent through KCGHidEventTap does
+        var src = NativeMethods.CGEventSourceCreate(NativeMethods.KCGEventSourceStateCombinedSessionState);
+        var nullEvt = NativeMethods.CGEventCreate(nint.Zero);
+        var pos = nullEvt != nint.Zero ? NativeMethods.CGEventGetLocation(nullEvt) : new CGPoint();
+        if (nullEvt != nint.Zero) NativeMethods.CFRelease(nullEvt);
+        var evt = NativeMethods.CGEventCreateMouseEvent(src, NativeMethods.KCGEventMouseMoved, pos, 0);
+        if (evt != nint.Zero)
+        {
+            NativeMethods.CGEventSetIntegerValueField(evt, NativeMethods.KCGMouseEventDeltaX, 0);
+            NativeMethods.CGEventSetIntegerValueField(evt, NativeMethods.KCGMouseEventDeltaY, 0);
+            NativeMethods.CGEventPost(NativeMethods.KCGHidEventTap, evt);
+            NativeMethods.CFRelease(evt);
+        }
+        if (src != nint.Zero) NativeMethods.CFRelease(src);
     }
 
     protected override Task Execute(CancellationToken cancel)
