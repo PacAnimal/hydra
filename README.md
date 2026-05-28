@@ -35,7 +35,7 @@
 
 **Typing foreign characters across layouts.** Norwegian master, US slave — type `å` on the master and `å` arrives correctly on the slave, even though the slave's keyboard has no key for it. Hydra resolves characters to Unicode on the master before transmission; dead-key composition (`' + a` → `á`) works the same way. No "force all machines to use the same layout" workarounds needed.
 
-**Two offices, different networks.** Drop a Styx container on a $5/month VPS. Paste the relay config into both machines' `hydra.conf`. The cursor crosses between buildings — end-to-end encrypted, no VPN to set up, no port forwarding on either router.
+**The VPN problem, solved.** Your work laptop is on the corporate VPN; it can't see your personal machine sitting right next to it on the LAN. Drop a Styx container on a cheap VPS, paste the relay config into both machines' `hydra.conf`, and they connect through the relay as if they were on the same network — end-to-end encrypted, no port forwarding, no changes to the VPN.
 
 ---
 
@@ -44,13 +44,17 @@
 **macOS (Apple Silicon):**
 ```bash
 curl -L https://github.com/PacAnimal/hydra/releases/latest/download/hydra-osx-arm64.tar.gz | tar xz
-xattr -dr com.apple.quarantine hydra   # allow unsigned binary
-./hydra
+./hydra --install   # installs as a login item, auto-starts on login
 ```
+`--install` registers a LaunchAgent, clears the quarantine flag, and starts Hydra immediately. Grant Accessibility permission when prompted: System Settings → Privacy & Security → Accessibility → enable Hydra. To remove: `./hydra --uninstall`.
 
 **Windows (x64):**
 
-Download [hydra-win-x64.zip](https://github.com/PacAnimal/hydra/releases/latest/download/hydra-win-x64.zip), extract, and run `hydra.exe`. On first launch Windows SmartScreen may warn — click **More info → Run anyway**.
+Download [hydra-win-x64.zip](https://github.com/PacAnimal/hydra/releases/latest/download/hydra-win-x64.zip), extract, then run:
+```
+hydra.exe --install
+```
+This installs Hydra as a Windows service (auto-start, survives logout). A UAC prompt will appear. To remove: `hydra.exe --uninstall`.
 
 **Linux (x64):**
 ```bash
@@ -67,8 +71,6 @@ chmod +x hydra
 ```
 
 All releases are [self-contained](https://github.com/PacAnimal/hydra/releases) — no .NET runtime installation required.
-
-> **macOS:** Grant Accessibility permission after first launch: System Settings → Privacy & Security → Accessibility → enable Hydra.
 
 > **Linux with display:** Requires X11 with XInput2. Wayland is not yet supported.
 

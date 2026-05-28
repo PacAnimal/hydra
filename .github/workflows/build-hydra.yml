@@ -25,12 +25,8 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" == "push" ]; then
             latest=$(gh release list --limit 1 --json tagName --jq '.[0].tagName // empty')
-            if [ -z "$latest" ] || echo "$latest" | grep -qE '^v?0\.0\.'; then
-              echo "version=0.1.0" >> "$GITHUB_OUTPUT"
-            else
-              patch=$(echo "$latest" | sed 's/^v\?0\.1\.//')
-              echo "version=0.1.$((patch + 1))" >> "$GITHUB_OUTPUT"
-            fi
+            patch=$(echo "$latest" | sed 's/^v\?0\.1\.//')
+            echo "version=0.1.$((patch + 1))" >> "$GITHUB_OUTPUT"
           else
             echo "version=0.1.0" >> "$GITHUB_OUTPUT"
           fi
