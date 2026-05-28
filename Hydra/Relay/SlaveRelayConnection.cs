@@ -17,7 +17,6 @@ public class SlaveRelayConnection : RelayConnection
     private readonly IWorldState _peerState;
     private readonly ICursorHider _cursorHider;
     private readonly IScreenSaverSync _screenSaverSync;
-    private readonly IScreensaverSuppressor _screensaverSuppressor;
     private readonly IClipboardSync _clipboardSync;
     private readonly FileTransferService _fileTransfer;
     private readonly IFileSelectionDetector _selectionDetector;
@@ -41,9 +40,11 @@ public class SlaveRelayConnection : RelayConnection
     // masters whose cursor is currently on this slave's screen
     private readonly HashSet<string> _onScreenMasters = new(StringComparer.OrdinalIgnoreCase);
 
+    private readonly IActivityTracker _activityTracker;
+
     // ReSharper disable once ConvertToPrimaryConstructor
 #pragma warning disable IDE0290
-    public SlaveRelayConnection(IHydraProfile profile, ILogger<RelayConnection> log, IPlatformOutput output, IScreenDetector screens, IWorldState peerState, ICursorHider cursorHider, IScreenSaverSync screenSaverSync, IScreensaverSuppressor screensaverSuppressor, IClipboardSync clipboardSync, FileTransferService fileTransfer, IFileSelectionDetector selectionDetector, IOsdNotification osd)
+    public SlaveRelayConnection(IHydraProfile profile, ILogger<RelayConnection> log, IPlatformOutput output, IScreenDetector screens, IWorldState peerState, ICursorHider cursorHider, IScreenSaverSync screenSaverSync, IClipboardSync clipboardSync, FileTransferService fileTransfer, IFileSelectionDetector selectionDetector, IOsdNotification osd, IActivityTracker activityTracker)
         : base(profile, log, peerState)
     {
         _output = output;
@@ -53,11 +54,11 @@ public class SlaveRelayConnection : RelayConnection
         _peerState = peerState;
         _cursorHider = cursorHider;
         _screenSaverSync = screenSaverSync;
-        _screensaverSuppressor = screensaverSuppressor;
         _clipboardSync = clipboardSync;
         _fileTransfer = fileTransfer;
         _selectionDetector = selectionDetector;
         _osd = osd;
+        _activityTracker = activityTracker;
 
         _screens.ScreensChanged += async snapshot =>
         {
@@ -146,15 +147,19 @@ public class SlaveRelayConnection : RelayConnection
                     else _screenSaverSync.Deactivate();
                 }
                 break;
+            case MessageKind.ActivityPing:
+                _log.LogDebug("Activity ping from {Host} — poking local idle timer", sourceHost);
+                await _activityTracker.IncomingPing();
+                break;
             case MessageKind.LockScreen:
                 {
                     var lockMsg = body.ParseMessage<LockScreenMessage>(_log, kind.ToString());
                     if (lockMsg == null) break;
                     _log.LogInformation("Lock screen request from {Host} (master idle {Ms}ms)", sourceHost, lockMsg.MillisecondsSinceLastInput);
-                    var idleTime = _screenSaverSync.GetIdleTime();
-                    if (idleTime.HasValue && idleTime.Value < TimeSpan.FromMilliseconds(lockMsg.MillisecondsSinceLastInput))
+                    var msSinceLocalActivity = _activityTracker.MsSinceLocalActivity;
+                    if (msSinceLocalActivity < lockMsg.MillisecondsSinceLastInput)
                     {
-                        _log.LogInformation("Skipping lock — local input detected ({Idle:F1}s idle < {Gap:F1}s since master input)", idleTime.Value.TotalSeconds, lockMsg.MillisecondsSinceLastInput / 1000.0);
+                        _log.LogInformation("Skipping lock — local input detected ({Ms:F0}ms ago < {Gap}ms since master input)", msSinceLocalActivity, lockMsg.MillisecondsSinceLastInput);
                         break;
                     }
                     _screenSaverSync.LockScreen();
@@ -233,10 +238,7 @@ public class SlaveRelayConnection : RelayConnection
         CancelAllRepeatTimers();
         ReleaseAllKeys();
         if (masters.Length > 0)
-        {
             _cursorHider.Show();
-            _screensaverSuppressor.Restore();
-        }
         await _peerState.PruneMasters([]);
         _log.LogWarning("Relay connection lost — cursor restored on slave");
     }
@@ -260,8 +262,6 @@ public class SlaveRelayConnection : RelayConnection
                 _cursorHider.Show();
             else if (_onScreenMasters.Count == 0 && _isReady)
                 _cursorHider.Hide();
-            if (after.Length == 0)
-                _screensaverSuppressor.Restore();
         }
         await base.OnPeers(hostNames);
     }
@@ -388,12 +388,8 @@ public class SlaveRelayConnection : RelayConnection
         var before = await _peerState.GetMasters();
         await _peerState.AddMaster(masterHost, config);
         var after = await _peerState.GetMasters();
-        if (after.Length > before.Length)
-        {
-            if (after.Length == 1 && _isReady)
-                _cursorHider.Hide();
-            _screensaverSuppressor.Suppress();
-        }
+        if (after.Length > before.Length && after.Length == 1 && _isReady)
+            _cursorHider.Hide();
         var snapshot = await _screens.Get();
         SendScreenInfo(masterHost, snapshot.Entries);
     }

@@ -25,6 +25,7 @@ public class InputRouter(
     FileTransferService fileTransfer,
     IFileSelectionDetector selectionDetector,
     IOsdNotification osd,
+    IActivityTracker activityTracker,
     IWorldState? peerState = null,
     Func<long>? getTickCount = null)
     : IHostedService
@@ -487,6 +488,9 @@ public class InputRouter(
                 break;
             case MessageKind.ScreensaverSync:
                 break; // master never acts on screensaver sync messages
+            case MessageKind.ActivityPing:
+                _ = _commands.Writer.TryWrite(_ => activityTracker.RemoteActivity(sourceHost));
+                break;
             case MessageKind.ClipboardPullRequest:
                 {
                     // only honour if cursor is currently on that slave's screen
@@ -702,11 +706,9 @@ public class InputRouter(
         _ = _commands.Writer.TryWrite(async st =>
         {
             st.LastInputTick = _getTickCount();
+            await activityTracker.LocalActivity();
             if (st.Mouse.IsOnVirtualScreen)
-            {
                 log.LogDebug("Key: {Type}{Label} mods={Modifiers}", keyEvent.Type, label, keyEvent.Modifiers);
-                TryResetLocalIdle(st);
-            }
 
             // consume both KeyDown and KeyUp for hotkeys so the slave never sees either half
             var hotkeyConsumed = (keyEvent.Modifiers & LockHotkey) == LockHotkey && keyEvent.Character is 'l' or 'm' or 'c' or 'v' or 'z';
@@ -850,37 +852,29 @@ public class InputRouter(
 
     private void OnMouseButton(MouseButtonEvent e)
     {
-        _ = _commands.Writer.TryWrite(st =>
+        _ = _commands.Writer.TryWrite(async st =>
         {
             st.LastInputTick = _getTickCount();
-            if (st.Mouse.IsOnVirtualScreen)
+            await activityTracker.LocalActivity();
+            if (st.Mouse.IsOnVirtualScreen && relay.IsConnected)
             {
-                TryResetLocalIdle(st);
-                if (relay.IsConnected)
-                {
-                    log.LogDebug("Mouse: {Type} {Button}", e.IsPressed ? "down" : "up", e.Button);
-                    ForwardToVirtualScreen(st, MessageKind.MouseButton, new MouseButtonMessage(e.Button, e.IsPressed));
-                }
+                log.LogDebug("Mouse: {Type} {Button}", e.IsPressed ? "down" : "up", e.Button);
+                ForwardToVirtualScreen(st, MessageKind.MouseButton, new MouseButtonMessage(e.Button, e.IsPressed));
             }
-            return ValueTask.CompletedTask;
         });
     }
 
     private void OnMouseScroll(MouseScrollEvent e)
     {
-        _ = _commands.Writer.TryWrite(st =>
+        _ = _commands.Writer.TryWrite(async st =>
         {
             st.LastInputTick = _getTickCount();
-            if (st.Mouse.IsOnVirtualScreen)
+            await activityTracker.LocalActivity();
+            if (st.Mouse.IsOnVirtualScreen && relay.IsConnected)
             {
-                TryResetLocalIdle(st);
-                if (relay.IsConnected)
-                {
-                    log.LogDebug("Scroll: x={X} y={Y}", e.XDelta, e.YDelta);
-                    ForwardToVirtualScreen(st, MessageKind.MouseScroll, new MouseScrollMessage(e.XDelta, e.YDelta));
-                }
+                log.LogDebug("Scroll: x={X} y={Y}", e.XDelta, e.YDelta);
+                ForwardToVirtualScreen(st, MessageKind.MouseScroll, new MouseScrollMessage(e.XDelta, e.YDelta));
             }
-            return ValueTask.CompletedTask;
         });
     }
 
@@ -950,6 +944,7 @@ public class InputRouter(
         _ = _commands.Writer.TryWrite(async st =>
         {
             st.LastInputTick = _getTickCount();
+            await activityTracker.LocalActivity();
             if (st.Layout is null || st.ActiveLocalScreen is null) return;
             if (!st.Mouse.IsOnVirtualScreen)
                 await HandleRealScreenMove(st, x, y);
@@ -1003,8 +998,6 @@ public class InputRouter(
 
         // bogus filter: drop delta that looks like a warp-displacement artifact
         if (Math.Abs(dx) > st.HalfW - 10 || Math.Abs(dy) > st.HalfH - 10) return;
-
-        TryResetLocalIdle(st);
 
         var prevScreen = st.Mouse.ApplyDelta(dx, dy);
         if (prevScreen != null)
@@ -1134,16 +1127,6 @@ public class InputRouter(
         return host;
     }
 
-    // resets the master's local screensaver idle timer when there is genuine input while on a slave screen.
-    // throttled to once per 5 seconds so the screensaver can still kick in if the user walks away.
-    private void TryResetLocalIdle(LocalMasterState st)
-    {
-        var now = _getTickCount();
-        if (now - st.LastIdleResetTick < 5000) return;
-        st.LastIdleResetTick = now;
-        _screenSaverSync.ResetIdleTimer();
-    }
-
     // enters remote-only mode targeting the first remote screen with known dimensions.
     // must be called from consumer. no-op if already on virtual screen or no screen ready yet.
     private async ValueTask TryEnterRemoteOnly(LocalMasterState st)
@@ -1174,9 +1157,8 @@ public class InputRouter(
         _ = _commands.Writer.TryWrite(async st =>
         {
             st.LastInputTick = _getTickCount();
+            await activityTracker.LocalActivity();
             if (!st.Mouse.IsOnVirtualScreen) return;
-
-            TryResetLocalIdle(st);
 
             var leavingScreen = st.Mouse.CurrentScreen!;
             var prevScreen = st.Mouse.ApplyDelta(dx, dy);
@@ -1321,9 +1303,6 @@ public class InputRouter(
         public long LastMouseSendTick;
         public double PendingDx;
         public double PendingDy;
-
-        // master-side idle reset: last time we called ResetIdleTimer while on a slave screen
-        public long LastIdleResetTick;
 
         // last time any input event was processed, regardless of destination (local or remote)
         public long LastInputTick;

@@ -39,8 +39,9 @@ public static class TransitionTestHelper
         var platform = new FakePlatform();
         var relay = new FakeRelay();
         var screens = new FakeScreenDetector();
+        var tracker = new ActivityTracker(TestConfig, new Lazy<IRelaySender>(() => relay), new WorldState(), new NullScreenSaverSync(), NullLogger<ActivityTracker>.Instance);
         var service = new InputRouter(platform, platform, TestConfig, relay, screens, NullLoggerFactory.Instance, NullLogger<InputRouter>.Instance, new NullScreenSaverSync(), new NullClipboardSync(),
-            FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification(), getTickCount: getTickCount);
+            FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification(), tracker, getTickCount: getTickCount);
         platform.AfterFireCallback = service.FlushAsync;
         return new TestServiceBundle(platform, relay, service);
     }
@@ -65,8 +66,10 @@ public static class TransitionTestHelper
         var platform = new FakePlatform();
         var relay = new FakeRelay();
         var screens = new FakeScreenDetector();
-        var service = new InputRouter(platform, platform, config ?? RemoteOnlyConfig, relay, screens, NullLoggerFactory.Instance, NullLogger<InputRouter>.Instance, new NullScreenSaverSync(), new NullClipboardSync(),
-            FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification());
+        var profile = config ?? RemoteOnlyConfig;
+        var tracker = new ActivityTracker(profile, new Lazy<IRelaySender>(() => relay), new WorldState(), new NullScreenSaverSync(), NullLogger<ActivityTracker>.Instance);
+        var service = new InputRouter(platform, platform, profile, relay, screens, NullLoggerFactory.Instance, NullLogger<InputRouter>.Instance, new NullScreenSaverSync(), new NullClipboardSync(),
+            FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification(), tracker);
         platform.AfterFireCallback = service.FlushAsync;
         return new TestServiceBundle(platform, relay, service);
     }
@@ -85,6 +88,13 @@ public static class TransitionTestHelper
             await relay.FireMessageReceived(host, MessageKind.ScreenInfo, info);
         }
     }
+
+    public static ActivityTracker TestActivityTracker(IHydraProfile? profile = null) => new(
+        profile ?? TestConfig,
+        new Lazy<IRelaySender>(() => new NullRelaySender()),
+        new WorldState(),
+        new NullScreenSaverSync(),
+        NullLogger<ActivityTracker>.Instance);
 }
 
 public record TestServiceBundle(FakePlatform Platform, FakeRelay Relay, InputRouter Service);

@@ -49,15 +49,13 @@ public sealed class XorgScreenSaverSync : PollingScreenSaverSync
         _ = NativeMethods.XFlush(_display);
     }
 
-    public override void Suppress()
+    public override void ResetIdleTimer()
     {
         if (_display == nint.Zero) return;
         _ = NativeMethods.XResetScreenSaver(_display);
         if (_hasDpms) _ = NativeMethods.DPMSForceLevel(_display, NativeMethods.DPMSModeOn);
         _ = NativeMethods.XFlush(_display);
     }
-
-    public override void Restore() { }
 
     protected override bool IsScreensaverOn()
     {

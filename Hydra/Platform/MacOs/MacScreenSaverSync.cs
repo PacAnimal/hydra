@@ -11,13 +11,9 @@ public sealed class MacScreenSaverSync : SimpleHostedService, IScreenSaverSync
     private const string DidStart = "com.apple.screensaver.didstart";
     private const string DidStop = "com.apple.screensaver.didstop";
 
-    private const string AssertionType = "PreventUserIdleDisplaySleep";
-    private const string AssertionReason = "Hydra screensaver sync: controlled by master";
-
     private readonly ILogger<MacScreenSaverSync> _log;
     private CFNotificationCallback? _callback;  // keep-alive to prevent GC
     private nint _center;
-    private uint _assertionId;
     private bool _wasLocked;
 
     public event Action? ScreensaverActivated;
@@ -172,43 +168,11 @@ public sealed class MacScreenSaverSync : SimpleHostedService, IScreenSaverSync
         if (src != nint.Zero) NativeMethods.CFRelease(src);
     }
 
-    public void Suppress()
-    {
-        if (_assertionId != 0)
-        {
-            _log.LogDebug("IOPMAssertion already active (id={Id})", _assertionId);
-            return;
-        }
-        var typeStr = NativeMethods.MakeNsString(AssertionType);
-        var nameStr = NativeMethods.MakeNsString(AssertionReason);
-        var result = NativeMethods.IOPMAssertionCreateWithName(typeStr, NativeMethods.KIOPMAssertionLevelOn, nameStr, out _assertionId);
-        NativeMethods.CFRelease(typeStr);
-        NativeMethods.CFRelease(nameStr);
-        if (result == 0)
-            _log.LogDebug("IOPMAssertion created (id={Id})", _assertionId);
-        else
-            _log.LogWarning("IOPMAssertionCreateWithName failed (result={Result})", result);
-    }
-
-    public void Restore()
-    {
-        if (_assertionId == 0) return;
-        var result = NativeMethods.IOPMAssertionRelease(_assertionId);
-        _log.LogDebug("IOPMAssertion released (id={Id}, result={Result})", _assertionId, result);
-        _assertionId = 0;
-    }
-
     public void ResetIdleTimer()
     {
         var nameStr = NativeMethods.MakeNsString("Hydra: user active on remote screen");
         _ = NativeMethods.IOPMAssertionDeclareUserActivity(nameStr, 0, out _);
         NativeMethods.CFRelease(nameStr);
-    }
-
-    public TimeSpan? GetIdleTime()
-    {
-        var secs = NativeMethods.CGEventSourceSecondsSinceLastEventType(NativeMethods.KCGEventSourceStateCombinedSessionState, NativeMethods.KCGAnyInputEventType);
-        return TimeSpan.FromSeconds(secs);
     }
 
     protected override Task Execute(CancellationToken cancel)

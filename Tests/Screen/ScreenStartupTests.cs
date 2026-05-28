@@ -30,7 +30,7 @@ public class ScreenStartupTests
         var service = new InputRouter(
             platform, platform, profile, new NullRelaySender(),
             new FakeScreenDetector(), NullLoggerFactory.Instance, logs.CreateLogger(), new NullScreenSaverSync(), new NullClipboardSync(),
-            FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification());
+            FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification(), TransitionTestHelper.TestActivityTracker(profile));
 
         // must not throw
         await service.StartAsync(CancellationToken.None);

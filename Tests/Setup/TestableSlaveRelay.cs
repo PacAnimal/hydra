@@ -11,23 +11,40 @@ namespace Tests.Setup;
 /// Consolidated testable subclass of SlaveRelayConnection.
 /// All parameters are optional — pass only what the test needs to customise.
 /// </summary>
-public sealed class TestableSlaveRelay(
-    IWorldState? worldState = null,
-    IClipboardSync? clipboard = null,
-    ICursorHider? cursorHider = null,
-    IScreenSaverSync? screenSaverSync = null) : SlaveRelayConnection(
-        TransitionTestHelper.Profile("slave", new HydraConfig { Mode = Mode.Slave }),
-        NullLogger<RelayConnection>.Instance,
-        new NullPlatformOutput(),
-        new FakeScreenDetector(),
-        worldState ?? new WorldState(),
-        cursorHider ?? new FakeCursorVisibility(),
-        screenSaverSync ?? new NullScreenSaverSync(),
-        new NullScreensaverSuppressor(),
-        clipboard ?? new NullClipboardSync(),
-        FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification())
+public sealed class TestableSlaveRelay : SlaveRelayConnection
 {
     public readonly List<(string[] Targets, MessageKind Kind, string Json)> Sent = [];
+    public IActivityTracker Tracker { get; }
+
+    public TestableSlaveRelay(
+        IWorldState? worldState = null,
+        IClipboardSync? clipboard = null,
+        ICursorHider? cursorHider = null,
+        IScreenSaverSync? screenSaverSync = null,
+        Func<long>? trackerClock = null)
+        : this(MakeShared(worldState, screenSaverSync, trackerClock), clipboard, cursorHider, screenSaverSync)
+    { }
+
+    // ActivityTracker and SlaveRelayConnection must share the same WorldState — chaining lets us build it once
+    private TestableSlaveRelay(
+        SharedDeps deps,
+        IClipboardSync? clipboard,
+        ICursorHider? cursorHider,
+        IScreenSaverSync? screenSaverSync)
+        : base(
+            TransitionTestHelper.Profile("slave", new HydraConfig { Mode = Mode.Slave }),
+            NullLogger<RelayConnection>.Instance,
+            new NullPlatformOutput(),
+            new FakeScreenDetector(),
+            deps.WorldState,
+            cursorHider ?? new FakeCursorVisibility(),
+            screenSaverSync ?? new NullScreenSaverSync(),
+            clipboard ?? new NullClipboardSync(),
+            FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification(),
+            deps.Tracker)
+    {
+        Tracker = deps.Tracker;
+    }
 
     public Task SimulateConnected() => OnAuthenticated();
     public Task SimulateMasterConfig(string host) => OnReceive(host, MessageKind.MasterConfig, "{}"u8.ToArray());
@@ -40,4 +57,19 @@ public sealed class TestableSlaveRelay(
         var decoded = MessageSerializer.Decode(payload);
         Sent.Add((targetHosts, decoded.Kind, decoded.Json));
     }
+
+    private static SharedDeps MakeShared(IWorldState? worldState, IScreenSaverSync? screenSaverSync, Func<long>? clock = null)
+    {
+        var ws = worldState ?? new WorldState();
+        var tracker = new ActivityTracker(
+            TransitionTestHelper.Profile("slave", new HydraConfig { Mode = Mode.Slave }),
+            new Lazy<IRelaySender>(() => new NullRelaySender()),
+            ws,
+            screenSaverSync ?? new NullScreenSaverSync(),
+            NullLogger<ActivityTracker>.Instance,
+            clock);
+        return new SharedDeps(ws, tracker);
+    }
+
+    private record SharedDeps(IWorldState WorldState, IActivityTracker Tracker);
 }

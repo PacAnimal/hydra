@@ -159,6 +159,7 @@ services.AddSingleton(profiles);
 services.AddSingleton<ICmdRunner, CmdRunner>();
 services.AddSingleton<INetworkDetector>(_ => detector);
 services.AddSingleton<IWorldState, WorldState>();
+services.AddLazyResolvers(); // enables Lazy<T> injection — used to break circular deps (e.g. ActivityTracker ↔ IRelaySender)
 
 // shield always runs on macOS — handles cursor shielding + network state detection
 if (OperatingSystem.IsMacOS() && macShield != null && macNetworkState != null)
@@ -201,8 +202,7 @@ if (config != null)
         if (OperatingSystem.IsMacOS())
             services.AddSingleton<IPlatformInput, MacInputHandler>();
         else if (OperatingSystem.IsWindows())
-            services.AddSingleton<IPlatformInput>(sp =>
-                new WindowsInputHandler(sp.GetRequiredService<ILogger<WindowsInputHandler>>(), profile.DebugShield));
+            services.AddSingleton<IPlatformInput, WindowsInputHandler>();
         else if (linuxConsoleMode)
         {
             if (!profile.RemoteOnly)
@@ -252,7 +252,18 @@ if (config != null)
 
         services.AddSingleton<IPlatformInput, SlavePlatformInput>();
 
+        // real event tap for local keyboard/mouse activity tracking (events pass through — nothing is consumed)
+        if (OperatingSystem.IsMacOS())
+            services.AddSingleton<ILocalEventTap, MacInputHandler>();
+        else if (OperatingSystem.IsWindows())
+            services.AddSingleton<ILocalEventTap, WindowsInputHandler>();
+        else if (!linuxConsoleMode)
+            services.AddSingleton<ILocalEventTap, XorgInputHandler>();
+        else
+            services.AddSingleton<ILocalEventTap>(sp => sp.GetRequiredService<IPlatformInput>()); // no-op on console
+
         services.AddHostedService<ICursorHider, CursorHiderService>();
+        services.AddHostedService<SlaveLocalInputWatcher>();
 
         // forwarder buffers log entries; SlaveLogSender drains them to masters
         var forwarder = new SlaveLogForwarder();
@@ -260,7 +271,6 @@ if (config != null)
         services.AddSereneCustomLogging(e => forwarder.ForwardAsync(e).AsTask(), c => c.MinLogLevel = LogLevel.Debug);
         services.AddHostedService<SlaveLogSender>();
 
-        services.AddHostedService<IScreensaverSuppressor, ScreensaverSuppressor>();
     }
 
     if (OperatingSystem.IsMacOS())
@@ -327,6 +337,7 @@ if (config != null)
         services.AddHostedService<IRelaySender, SlaveRelayConnection>();
     else
         services.AddHostedService<IRelaySender, MasterRelayConnection>();
+    services.AddSingleton<IActivityTracker, ActivityTracker>();
 }
 
 if (OperatingSystem.IsWindows() && RunMode.IsSessionChild)

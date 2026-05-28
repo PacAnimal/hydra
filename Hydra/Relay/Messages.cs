@@ -38,6 +38,7 @@ public enum MessageKind : byte
     ClipboardHash = 28,         // master → slave: here's my clipboard hash (on screen enter)
     ClipboardPullRequest = 29,  // slave → master: my hash differs, please push your clipboard
     LockScreen = 30,            // master → slave: lock the screen
+    ActivityPing = 31,          // either direction: poke idle timer; master re-broadcasts to other slaves if syncScreensaver
 }
 
 public record MouseMoveMessage(string Screen, int X, int Y);
@@ -74,6 +75,7 @@ public record FileSelectionResponseMessage(string[]? Paths, string? NotFocusedMe
 public record FileStreamRequestMessage(string[] Paths, string TargetHost);
 public record OsdMessage(string Text);
 public record FileTransferBusyMessage;
+public record ActivityPingMessage;
 
 public static class MessageSerializer
 {

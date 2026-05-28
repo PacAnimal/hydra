@@ -61,16 +61,16 @@ export function GlobalSettings({ config, onChange }: Props) {
         </div>
 
         <div className="checkbox-group">
-          <label className="checkbox-label">
-            <input
-              type="checkbox"
-              checked={config.syncScreensaver !== false}
-              onChange={e => onChange({ syncScreensaver: e.target.checked ? undefined : false })}
-            />
-            Sync Screensaver
-          </label>
           {isMaster && (
             <>
+              <label className="checkbox-label" title="Send activity pings to slaves to prevent their screensavers from activating, and re-broadcast pings from slaves to other slaves">
+                <input
+                  type="checkbox"
+                  checked={config.syncScreensaver !== false}
+                  onChange={e => onChange({ syncScreensaver: e.target.checked ? undefined : false })}
+                />
+                Sync Screensaver
+              </label>
               <label className="checkbox-label">
                 <input
                   type="checkbox"

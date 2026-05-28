@@ -63,6 +63,10 @@ export function validate(profiles: HydraProfile[]): ValidationError[] {
       errors.push({ path: `profiles[${i}].remoteOnly`, message: 'remoteOnly requires Master mode' })
     }
 
+    if (p.syncScreensaver === false && p.mode !== 'Master') {
+      errors.push({ path: `profiles[${i}].syncScreensaver`, message: 'syncScreensaver requires Master mode' })
+    }
+
     const hosts = effectiveHosts(p)
     if (p.remoteOnly && hosts.filter(h => h.name.trim()).length === 0) {
       errors.push({ path: `profiles[${i}].remoteOnly`, message: 'remoteOnly requires at least one remote host' })

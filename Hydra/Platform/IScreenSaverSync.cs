@@ -17,13 +17,6 @@ public interface IScreenSaverSync
     // slave-side: lock the local machine (Mac: ctrl+cmd+q, Windows: LockWorkStation; no-op elsewhere)
     void LockScreen();
 
-    // slave-side: suppress/restore idle timer (called periodically by ScreensaverSuppressor)
-    void Suppress();
-    void Restore();
-
-    // master-side: one-shot reset of the local idle timer (called on input activity while cursor is on a slave)
+    // poke the local idle timer — called on activity to prevent screensaver from activating
     void ResetIdleTimer();
-
-    // time since last input event on this machine; null if not supported by the platform
-    TimeSpan? GetIdleTime();
 }

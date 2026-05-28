@@ -66,7 +66,7 @@ public class MasterSlaveProtocolTests
         var logs = new LogCapture();
         var platform = new FakePlatform();
         var service = new InputRouter(platform, platform, config, relay, new FakeScreenDetector(), logs, NullLogger<InputRouter>.Instance, new NullScreenSaverSync(), new NullClipboardSync(),
-            FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification());
+            FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification(), TransitionTestHelper.TestActivityTracker(config));
         await service.StartAsync(CancellationToken.None);
 
         var msg = new SlaveLogMessage((int)LogLevel.Warning, "MyService", "something went wrong", null);
@@ -91,7 +91,7 @@ public class MasterSlaveProtocolTests
         var logs = new LogCapture();
         var platform = new FakePlatform();
         var service = new InputRouter(platform, platform, config, relay, new FakeScreenDetector(), logs, NullLogger<InputRouter>.Instance, new NullScreenSaverSync(), new NullClipboardSync(),
-            FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification());
+            FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification(), TransitionTestHelper.TestActivityTracker(config));
         await service.StartAsync(CancellationToken.None);
 
         var msg = new SlaveLogMessage((int)LogLevel.Error, "Crasher", "boom", "System.Exception: kaboom");
@@ -270,7 +270,7 @@ public class MasterSlaveProtocolTests
     {
         var p = new FakePlatform();
         return new(p, p, profile, relay, new FakeScreenDetector(), NullLoggerFactory.Instance, NullLogger<InputRouter>.Instance, new NullScreenSaverSync(), new NullClipboardSync(),
-            FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification());
+            FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification(), TransitionTestHelper.TestActivityTracker(profile));
     }
 
     private static List<string> MasterConfigTargets(FakeRelay relay) =>

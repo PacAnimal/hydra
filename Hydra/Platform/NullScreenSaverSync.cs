@@ -10,8 +10,5 @@ public class NullScreenSaverSync : IScreenSaverSync
     public void Activate() { }
     public void Deactivate() { }
     public void LockScreen() { }
-    public void Suppress() { }
-    public void Restore() { }
     public void ResetIdleTimer() { }
-    public TimeSpan? GetIdleTime() => null;
 }

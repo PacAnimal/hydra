@@ -117,20 +117,7 @@ public sealed class WindowsScreenSaverSync(ILogger<WindowsScreenSaverSync> log) 
         NativeMethods.SystemParametersInfo(NativeMethods.SPI_SETSCREENSAVEACTIVE, 1, nint.Zero, 0);
     }
 
-    public override void Suppress()
-    {
-        _log.LogDebug("Refreshing screensaver suppression (SetThreadExecutionState)");
-        _ = NativeMethods.SetThreadExecutionState(NativeMethods.ES_DISPLAY_REQUIRED);
-    }
-
-    public override void Restore() { }
-
-    public override TimeSpan? GetIdleTime()
-    {
-        var info = new NativeMethods.LASTINPUTINFO { cbSize = (uint)Marshal.SizeOf<NativeMethods.LASTINPUTINFO>() };
-        if (!NativeMethods.GetLastInputInfo(ref info)) return null;
-        return TimeSpan.FromMilliseconds((uint)Environment.TickCount - info.dwTime);
-    }
+    public override void ResetIdleTimer() => _ = NativeMethods.SetThreadExecutionState(NativeMethods.ES_DISPLAY_REQUIRED);
 
     protected override bool IsScreensaverOn()
     {

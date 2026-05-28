@@ -17,8 +17,11 @@ public record DetectedScreen(
 
 public record KeyRepeatSettings(int DelayMs, int RateMs);
 
-public interface IPlatformInput : IAsyncDisposable, ICursor
+// event tap interface — implemented by platform input handlers; used by slaves to passively observe local input for activity tracking
+public interface ILocalEventTap
 {
+    bool IsAccessibilityTrusted() => true;
+    Task WaitForAccessibilityTrusted(CancellationToken cancel) => Task.CompletedTask;
     Task StartEventTap(
         Action<double, double> onMouseMove,
         Action<double, double>? onMouseDelta,
@@ -27,8 +30,10 @@ public interface IPlatformInput : IAsyncDisposable, ICursor
         Action<MouseScrollEvent> onMouseScroll);
     void StopEventTap();
     Task RestartEventTap() => Task.CompletedTask;
-    bool IsAccessibilityTrusted();
-    Task WaitForAccessibilityTrusted(CancellationToken cancel) => Task.CompletedTask;
+}
+
+public interface IPlatformInput : IAsyncDisposable, ICursor, ILocalEventTap
+{
     bool IsOnVirtualScreen { get; set; }
 
     KeyRepeatSettings GetKeyRepeatSettings();

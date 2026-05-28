@@ -654,7 +654,7 @@ public class ClipboardSyncTests
             _platform, _platform, TransitionTestHelper.TestConfig, relay,
             new FakeScreenDetector(), NullLoggerFactory.Instance, NullLogger<InputRouter>.Instance,
             new NullScreenSaverSync(), clipboard,
-            FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification());
+            FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification(), TransitionTestHelper.TestActivityTracker());
         _platform.AfterFireCallback = _service.FlushAsync;
         return (_platform, relay, _service);
     }

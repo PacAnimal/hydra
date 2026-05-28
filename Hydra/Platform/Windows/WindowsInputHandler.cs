@@ -1,12 +1,13 @@
 using System.Runtime.InteropServices;
 using Cathedral.Utils;
+using Hydra.Config;
 using Hydra.Keyboard;
 using Hydra.Mouse;
 using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform.Windows;
 
-public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, bool debugShield) : IPlatformInput
+public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydraProfile profile) : IPlatformInput
 {
     // stored as fields to prevent GC collection while hooks are active
     private HookProc? _mouseHookProc;
@@ -101,7 +102,7 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, bool d
             }
 
             _currentDesktop = NativeMethods.GetThreadDesktop(_hookThreadId);
-            _shield.Create(debugShield);
+            _shield.Create(profile.DebugShield);
             ready.TrySetResult(true);
 
             // message pump — hooks fire during GetMessage
@@ -200,7 +201,7 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, bool d
 
         // recreate shield on new desktop; re-show if we were on a virtual screen
         _shield.Destroy();
-        _shield.Create(debugShield);
+        _shield.Create(profile.DebugShield);
         if (IsOnVirtualScreen)
             _shield.Show();
     }

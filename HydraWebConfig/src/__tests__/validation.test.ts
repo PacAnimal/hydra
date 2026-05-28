@@ -110,6 +110,15 @@ describe('validate', () => {
     expect(errors.some(e => e.message.includes('Master'))).toBe(true)
   })
 
+  it('errors when syncScreensaver is set on Slave mode', () => {
+    const errors = validate([p({ mode: 'Slave', syncScreensaver: false })])
+    expect(errors.some(e => e.message.includes('syncScreensaver'))).toBe(true)
+  })
+
+  it('passes when syncScreensaver is set on Master mode', () => {
+    expect(validate([p({ mode: 'Master', syncScreensaver: false })])).toHaveLength(0)
+  })
+
   it('errors when remoteOnly with no hosts', () => {
     const errors = validate([p({ remoteOnly: true, hosts: [] })])
     expect(errors.some(e => e.message.includes('remote host'))).toBe(true)
