@@ -71,7 +71,10 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
         NativeMethods.EnableBackgroundCursorManipulation();
 
         if (!_shield.DebugShield)
-            _ = NativeMethods.CGDisplayHideCursor(_display);
+        {
+            var err = NativeMethods.CGDisplayHideCursor(_display);
+            if (err != 0) log.LogWarning("CGDisplayHideCursor failed (error {Error})", err);
+        }
         _ = NativeMethods.CGAssociateMouseAndMouseCursorPosition(true);
         // near-zero suppression interval prevents CGWarpMouseCursorPosition from resetting acceleration
         NativeMethods.CGSetLocalEventsSuppressionInterval(0.0001);
@@ -83,6 +86,9 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
         if (!_cursorHidden) return;
         _cursorHidden = false; // set before await so racing HideCursor sees correct state
         await _shield.Hide();
+        // matches Synergy pattern: call EnableBackgroundCursorManipulation in both hide and show
+        // so the CGS connection property is warmed up before the next HideCursor attempt
+        NativeMethods.EnableBackgroundCursorManipulation();
         if (!_shield.DebugShield)
             _ = NativeMethods.CGDisplayShowCursor(_display);
         _ = NativeMethods.CGAssociateMouseAndMouseCursorPosition(true);
