@@ -41,9 +41,12 @@
 
 ## Install
 
+Run the binary directly to try Hydra out, or use `--install` to set it up as a service / LaunchAgent that auto-starts on login and survives reboots.
+
 **macOS (Apple Silicon):**
 ```bash
 curl -L https://github.com/PacAnimal/hydra/releases/latest/download/hydra-osx-arm64.tar.gz | tar xz
+./hydra             # run directly — good for testing, no install needed
 ./hydra --install   # installs as a login item, auto-starts on login
 ```
 `--install` registers a LaunchAgent, clears the quarantine flag, and starts Hydra immediately. Grant Accessibility permission when prompted: System Settings → Privacy & Security → Accessibility → enable Hydra. To remove: `./hydra --uninstall`.
@@ -52,9 +55,10 @@ curl -L https://github.com/PacAnimal/hydra/releases/latest/download/hydra-osx-ar
 
 Download [hydra-win-x64.zip](https://github.com/PacAnimal/hydra/releases/latest/download/hydra-win-x64.zip), extract, then run:
 ```
-hydra.exe --install
+hydra.exe             # run directly — good for testing, no install needed
+hydra.exe --install   # install as a Windows service (auto-start, survives logout)
 ```
-This installs Hydra as a Windows service (auto-start, survives logout). A UAC prompt will appear. To remove: `hydra.exe --uninstall`.
+A UAC prompt will appear for `--install`. Because Hydra installs as a `LocalSystem` service, it stays active on the Windows login and lock screens — mouse and keyboard control works even before you sign in. To remove: `hydra.exe --uninstall`.
 
 **Linux (x64):**
 ```bash
@@ -131,6 +135,7 @@ The easiest way to set up multi-machine layouts, Styx relay configs, and network
 - **File transfer** — cross-machine copy/paste of files and folders via hotkey (macOS and Windows)
 - **Media key forwarding** — volume, playback, brightness keys forwarded to the active machine
 - **Screensaver sync** — activating the screensaver on the master locks all connected slaves
+- **Windows login screen support** — installed as a system service, Hydra stays active on the lock and login screens
 - End-to-end encrypted relay via **Styx** for machines on different networks
 - **Remote-only mode** — use a headless Linux machine (e.g. Raspberry Pi) as a dedicated input forwarder with no local screen
 
