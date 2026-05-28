@@ -8,12 +8,13 @@
 
 import { createCanvas, Path2D } from '@napi-rs/canvas';
 import GIFEncoder from 'gif-encoder-2';
-import { writeFileSync } from 'fs';
+import { writeFileSync, mkdirSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { join, dirname } from 'path';
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 const OUT = join(__dir, '../../docs/assets/hero.gif');
+mkdirSync(dirname(OUT), { recursive: true });
 
 const W = 960, H = 480, FPS = 20;
 
