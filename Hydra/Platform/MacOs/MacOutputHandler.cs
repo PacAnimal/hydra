@@ -660,7 +660,8 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
     {
         if (_cursorHidden) return ValueTask.CompletedTask;
         NativeMethods.EnableBackgroundCursorManipulation();
-        _ = NativeMethods.CGDisplayHideCursor(_display);
+        var err = NativeMethods.CGDisplayHideCursor(_display);
+        if (err != 0) _log.LogWarning("CGDisplayHideCursor failed (error {Error})", err);
         _cursorHidden = true;
         return ValueTask.CompletedTask;
     }
@@ -668,6 +669,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
     public ValueTask ShowCursor()
     {
         if (!_cursorHidden) return ValueTask.CompletedTask;
+        NativeMethods.EnableBackgroundCursorManipulation();
         _ = NativeMethods.CGDisplayShowCursor(_display);
         _cursorHidden = false;
         return ValueTask.CompletedTask;
