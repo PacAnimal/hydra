@@ -7,7 +7,7 @@
 [![Downloads](https://img.shields.io/github/downloads/PacAnimal/hydra/total)](https://github.com/PacAnimal/hydra/releases)
 [![Build](https://github.com/PacAnimal/hydra/actions/workflows/build-hydra.yml/badge.svg)](https://github.com/PacAnimal/hydra/actions/workflows/build-hydra.yml)
 
-<!-- TODO: replace with demo GIF — record cursor crossing screens + file transfer toast -->
+![Hydra — cursor crossing from Windows to macOS](https://raw.githubusercontent.com/PacAnimal/hydra/assets/hero.gif)
 
 ---
 

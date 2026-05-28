@@ -1,0 +1,44 @@
+name: Generate Hero GIF
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/gen-hero/**'
+
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tools/gen-hero/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: tools/gen-hero
+
+      - name: Generate hero GIF
+        run: node generate.mjs
+        working-directory: tools/gen-hero
+
+      - name: Publish GIF to assets branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          cp docs/assets/hero.gif /tmp/hero.gif
+          git checkout --orphan assets
+          git rm -rf . > /dev/null
+          cp /tmp/hero.gif hero.gif
+          git add hero.gif
+          git commit -m "Update hero.gif"
+          git push --force origin assets

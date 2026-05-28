@@ -1,0 +1,13 @@
+{
+  "name": "gen-hero",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "generate": "node generate.mjs"
+  },
+  "dependencies": {
+    "@napi-rs/canvas": "^0.1.68",
+    "gif-encoder-2": "^1.0.5"
+  }
+}
