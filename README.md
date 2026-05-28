@@ -90,12 +90,13 @@ Create `hydra.conf` next to the binary on **each machine**.
 
 ```json
 {
-  "name": "laptop",
+  "name": "desktop",
   "profiles": [{
     "mode": "Master",
+    "embeddedStyxServer": { "port": 5000, "password": "secret" },
     "hosts": [
-      { "name": "laptop", "neighbours": [{ "direction": "right", "name": "desktop" }] },
-      { "name": "desktop" }
+      { "name": "desktop", "neighbours": [{ "direction": "right", "name": "laptop" }] },
+      { "name": "laptop" }
     ]
   }]
 }
@@ -105,14 +106,17 @@ Create `hydra.conf` next to the binary on **each machine**.
 
 ```json
 {
-  "name": "desktop",
-  "profiles": [{ "mode": "Slave" }]
+  "name": "laptop",
+  "profiles": [{
+    "mode": "Slave",
+    "embeddedStyx": { "server": "http://192.168.1.10:5000", "password": "secret" }
+  }]
 }
 ```
 
-Run `./hydra` on both machines. Move the cursor past the right edge of the master's screen — it appears on the slave.
+Replace `192.168.1.10` with the master's IP address. Run `./hydra` on both machines. Move the cursor past the right edge of the master's screen — it appears on the slave.
 
-For cross-network setups (different LANs), see [Networking with Styx](docs/CONFIGURATION.md#networking-with-styx). The easiest approach is adding `embeddedStyxServer` to the master's config — no separate server needed.
+For cross-network setups (different LANs or over a VPN), see [Networking with Styx](docs/CONFIGURATION.md#networking-with-styx).
 
 ---
 
