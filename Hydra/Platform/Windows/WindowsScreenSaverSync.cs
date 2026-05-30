@@ -119,10 +119,12 @@ public sealed class WindowsScreenSaverSync(ILogger<WindowsScreenSaverSync> log) 
 
     public override void ResetIdleTimer()
     {
-        // SetThreadExecutionState doesn't update GetLastInputInfo() which the screensaver polls; SendInput does
+        // SetThreadExecutionState doesn't update GetLastInputInfo() which the screensaver polls; SendInput does.
+        // use a keyboard event (VK_NONAME key-up) rather than a mouse move so apps that hide the cursor
+        // during typing (e.g. WezTerm) don't see it flash back.
         unsafe
         {
-            var input = new INPUT { type = NativeMethods.INPUT_MOUSE, mi = new MOUSEINPUT { dwFlags = NativeMethods.MOUSEEVENTF_MOVE } };
+            var input = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = NativeMethods.VK_NONAME, dwFlags = NativeMethods.KEYEVENTF_KEYUP } };
             _ = NativeMethods.SendInput(1, &input, sizeof(INPUT));
         }
     }

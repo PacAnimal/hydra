@@ -223,6 +223,8 @@ internal static partial class NativeMethods
     internal const uint KEYEVENTF_KEYUP = 0x02;
     internal const uint KEYEVENTF_UNICODE = 0x04;
 
+    internal const ushort VK_NONAME = 0xFC;  // reserved, no hardware key — safe as a no-op idle poke
+
     internal const uint MOUSEEVENTF_MOVE = 0x0001;
     internal const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
     internal const uint MOUSEEVENTF_LEFTUP = 0x0004;

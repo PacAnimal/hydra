@@ -170,16 +170,16 @@ public sealed class MacScreenSaverSync : SimpleHostedService, IScreenSaverSync
 
     public void ResetIdleTimer()
     {
-        // IOPMAssertionDeclareUserActivity doesn't reset the HID idle timer; only a real CGEvent through KCGHidEventTap does
+        // IOPMAssertionDeclareUserActivity doesn't reset the HID idle timer; only a real CGEvent through KCGHidEventTap does.
+        // use KCGEventFlagsChanged (a keyboard event) instead of a mouse move so apps that hide the cursor
+        // (e.g. WezTerm during typing) don't see it flash back. carry current modifier flags so it's a no-op to keyboard state.
         var src = NativeMethods.CGEventSourceCreate(NativeMethods.KCGEventSourceStateCombinedSessionState);
-        var nullEvt = NativeMethods.CGEventCreate(nint.Zero);
-        var pos = nullEvt != nint.Zero ? NativeMethods.CGEventGetLocation(nullEvt) : new CGPoint();
-        if (nullEvt != nint.Zero) NativeMethods.CFRelease(nullEvt);
-        var evt = NativeMethods.CGEventCreateMouseEvent(src, NativeMethods.KCGEventMouseMoved, pos, 0);
+        var flags = NativeMethods.CGEventSourceFlagsState(NativeMethods.KCGEventSourceStateCombinedSessionState);
+        var evt = NativeMethods.CGEventCreateKeyboardEvent(src, 0, false);
         if (evt != nint.Zero)
         {
-            NativeMethods.CGEventSetIntegerValueField(evt, NativeMethods.KCGMouseEventDeltaX, 0);
-            NativeMethods.CGEventSetIntegerValueField(evt, NativeMethods.KCGMouseEventDeltaY, 0);
+            NativeMethods.CGEventSetType(evt, NativeMethods.KCGEventFlagsChanged);
+            NativeMethods.CGEventSetFlags(evt, flags);
             NativeMethods.CGEventPost(NativeMethods.KCGHidEventTap, evt);
             NativeMethods.CFRelease(evt);
         }

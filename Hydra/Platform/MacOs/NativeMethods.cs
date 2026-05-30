@@ -239,6 +239,10 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial nint CGEventSourceCreate(int stateID);
 
+    [LibraryImport(CoreGraphics)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial ulong CGEventSourceFlagsState(int stateID);
+
     // -- CoreGraphics: event creation and injection --
 
     [LibraryImport(CoreGraphics)]
