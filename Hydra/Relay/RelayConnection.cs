@@ -10,6 +10,7 @@ using Microsoft.Extensions.Logging;
 using System.Net.Sockets;
 using System.Threading.Channels;
 using TypedSignalR.Client;
+using StyxConstants = Styx.Constants;
 
 namespace Hydra.Relay;
 
@@ -181,6 +182,8 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
 
         await using var con = new HubConnectionBuilder()
             .WithUrl($"{netConfig.StyxServer}/relay", ConfigureHubUrl)
+            .WithKeepAliveInterval(TimeSpan.FromSeconds(StyxConstants.KeepAliveSeconds))
+            .WithServerTimeout(TimeSpan.FromSeconds(StyxConstants.ClientTimeoutSeconds))
             .AddMessagePackProtocol()
             .Build();
 
