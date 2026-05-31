@@ -22,7 +22,16 @@ var builder = WebApplication.CreateBuilder(args);
 var services = builder.Services;
 
 builder.DisableEventLog();
-services.AddSereneConsoleLogging();
+services.AddSereneConsoleLogging(logging =>
+{
+    logging.TimestampFormat = "yyyy-MM-dd HH:mm:ss";
+    logging.TimestampUtc = true;
+    logging.FilterMicrosoftSpam = true;
+});
+services.ConfigureSereneHttpLogging(opts =>
+{
+    opts.ServerRequestStartingLogLevel = LogLevel.Debug;
+});
 
 services.ConfigureHttpJsonOptions(options => SaneJson.Configure(options.SerializerOptions));
 services.AddDataProtection().PersistKeysToNowhere();
