@@ -5,7 +5,7 @@ namespace Styx.Services;
 
 public interface IClientRegistry
 {
-    ValueTask Register(string connectionId, Guid networkId, string hostName);
+    ValueTask Register(string connectionId, Guid networkId, string hostName, string remoteIp);
     ValueTask Unregister(string connectionId);
     ValueTask<string?> GetConnectionId(Guid networkId, string hostName);
     ValueTask<ClientIdentity?> GetIdentity(string connectionId);
@@ -15,24 +15,24 @@ public interface IClientRegistry
     ValueTask<IReadOnlyList<(string ConnectionId, string HostName)>> GetNetworkClients(Guid networkId, string? excludeConnectionId = null);
 }
 
-public record ClientIdentity(Guid NetworkId, string HostName);
+public record ClientIdentity(Guid NetworkId, string HostName, string RemoteIp);
 
 public class ClientRegistry(ILogger<ClientRegistry> log) : IClientRegistry
 {
     private readonly SemaphoreSlimValue<Dictionary<string, ClientIdentity>> _clients = new([]);
 
-    public async ValueTask Register(string connectionId, Guid networkId, string hostName)
+    public async ValueTask Register(string connectionId, Guid networkId, string hostName, string remoteIp)
     {
         using var clients = await _clients.WaitForDisposable();
-        clients.Value[connectionId] = new ClientIdentity(networkId, hostName);
-        log.LogInformation("Registered {HostName} ({NetworkId}) on {ConnectionId}", hostName, networkId, connectionId);
+        clients.Value[connectionId] = new ClientIdentity(networkId, hostName, remoteIp);
+        log.LogInformation("Registered {HostName} ({NetworkId}) from {RemoteIp} on {ConnectionId}", hostName, networkId, remoteIp, connectionId);
     }
 
     public async ValueTask Unregister(string connectionId)
     {
         using var clients = await _clients.WaitForDisposable();
         if (clients.Value.Remove(connectionId, out var identity))
-            log.LogInformation("Unregistered {HostName} on {ConnectionId}", identity.HostName, connectionId);
+            log.LogInformation("Unregistered {HostName} from {RemoteIp} on {ConnectionId}", identity.HostName, identity.RemoteIp, connectionId);
     }
 
     public async ValueTask<string?> GetConnectionId(Guid networkId, string hostName)
@@ -64,8 +64,9 @@ public class ClientRegistry(ILogger<ClientRegistry> log) : IClientRegistry
             .ToList();
         foreach (var connectionId in found)
         {
+            clients.Value.TryGetValue(connectionId, out var identity);
             clients.Value.Remove(connectionId);
-            log.LogInformation("Kicked duplicate {HostName} ({NetworkId}) on {ConnectionId}", hostName, networkId, connectionId);
+            log.LogInformation("Kicked duplicate {HostName} ({NetworkId}) from {RemoteIp} on {ConnectionId}", hostName, networkId, identity?.RemoteIp, connectionId);
         }
         return found;
     }
