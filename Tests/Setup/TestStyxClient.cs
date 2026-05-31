@@ -22,7 +22,7 @@ public sealed class TestStyxClient : IStyxClient, IAsyncDisposable
 
     public IStyxServer? Server { get; private set; }
     public string[] LastPeers { get; private set; } = [];
-    public (string Source, byte[] Payload)? LastReceived { get; private set; }
+    public (string Source, string SourceIp, byte[] Payload)? LastReceived { get; private set; }
     public string? KickReason { get; private set; }
 
     // connect and authenticate — returns the auth response for the caller to inspect
@@ -56,7 +56,7 @@ public sealed class TestStyxClient : IStyxClient, IAsyncDisposable
         return LastPeers;
     }
 
-    public async Task<(string Source, byte[] Payload)> WaitForReceive(int timeoutMs = 5000)
+    public async Task<(string Source, string SourceIp, byte[] Payload)> WaitForReceive(int timeoutMs = 5000)
     {
         if (!await _receiveSignal.WaitAsync(timeoutMs))
             throw new TimeoutException("Timed out waiting for message");
@@ -71,9 +71,9 @@ public sealed class TestStyxClient : IStyxClient, IAsyncDisposable
     }
 
     // IStyxClient
-    public Task Receive(string sourceHost, byte[] payload)
+    public Task Receive(string sourceHost, string sourceIp, byte[] payload)
     {
-        LastReceived = (sourceHost, payload);
+        LastReceived = (sourceHost, sourceIp, payload);
         _receiveSignal.Release();
         return Task.CompletedTask;
     }

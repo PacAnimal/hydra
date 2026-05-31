@@ -43,7 +43,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     protected virtual void OnSent(string[] targetHosts, byte[] payload) { }
 
     // IStyxClient
-    public async Task Receive(string sourceHost, byte[] payload)
+    public async Task Receive(string sourceHost, string sourceIp, byte[] payload)
     {
         if (_encryption == null) return;
 

@@ -88,7 +88,7 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, IStyxPass
                 continue;
             }
 
-            await Clients.Client(targetConnectionId).Receive(identity.HostName, payload);
+            await Clients.Client(targetConnectionId).Receive(identity.HostName, identity.RemoteIp, payload);
         }
     }
 
