@@ -25,14 +25,14 @@ public class ClientRegistry(ILogger<ClientRegistry> log) : IClientRegistry
     {
         using var clients = await _clients.WaitForDisposable();
         clients.Value[connectionId] = new ClientIdentity(networkId, hostName, remoteIp);
-        log.LogInformation("Registered {HostName} ({NetworkId}) from {RemoteIp} on {ConnectionId}", hostName, networkId, remoteIp, connectionId);
+        log.LogDebug("Registered client \"{HostName}\" from {RemoteIp} on network {NetworkId}", hostName, remoteIp, networkId);
     }
 
     public async ValueTask Unregister(string connectionId)
     {
         using var clients = await _clients.WaitForDisposable();
         if (clients.Value.Remove(connectionId, out var identity))
-            log.LogInformation("Unregistered {HostName} from {RemoteIp} on {ConnectionId}", identity.HostName, identity.RemoteIp, connectionId);
+            log.LogInformation("Unregistered client \"{HostName}\" from network {NetworkId}", identity.HostName, identity.NetworkId);
     }
 
     public async ValueTask<string?> GetConnectionId(Guid networkId, string hostName)
@@ -64,9 +64,8 @@ public class ClientRegistry(ILogger<ClientRegistry> log) : IClientRegistry
             .ToList();
         foreach (var connectionId in found)
         {
-            clients.Value.TryGetValue(connectionId, out var identity);
             clients.Value.Remove(connectionId);
-            log.LogInformation("Kicked duplicate {HostName} ({NetworkId}) from {RemoteIp} on {ConnectionId}", hostName, networkId, identity?.RemoteIp, connectionId);
+            log.LogInformation("Kicked duplicate \"{HostName}\" from network {NetworkId}", hostName, networkId);
         }
         return found;
     }

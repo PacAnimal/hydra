@@ -27,6 +27,8 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, IStyxPass
             return new RelayLoginResponse { Authenticated = false, Message = "Server misconfigured" };
         }
 
+        var remoteIp = Context.GetHttpContext()?.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+
         Guid networkId;
         try
         {
@@ -34,12 +36,10 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, IStyxPass
         }
         catch (Exception ex)
         {
-            log.LogWarning(ex, "Authentication failed for {HostName}", login.HostName);
+            log.LogWarning(ex, "Authentication failed for \"{HostName}\" from {RemoteIp}", login.HostName, remoteIp);
             await throttle;
             return new RelayLoginResponse { Authenticated = false, Message = "Invalid authorization" };
         }
-
-        var remoteIp = Context.GetHttpContext()!.Connection.RemoteIpAddress!.ToString();
 
         // kick any existing connections with the same network+hostname (stale entries can accumulate on unclean disconnect)
         var kicked = await registry.KickDuplicates(networkId, login.HostName, Context.ConnectionId);
@@ -47,7 +47,7 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, IStyxPass
             await Clients.Client(connectionId).Kicked("duplicate hostname");
 
         await registry.Register(Context.ConnectionId, networkId, login.HostName, remoteIp);
-        log.LogInformation("Authenticated {HostName} from {RemoteIp} on network {NetworkId}", login.HostName, remoteIp, networkId);
+        log.LogInformation("Authentication accepted for \"{HostName}\" (connectionId:{ConnectionId}) from {RemoteIp} on network {NetworkId}", login.HostName, Context.ConnectionId, remoteIp, networkId);
         await throttle;
 
         // queue after throttle so Authenticated=true is sent to the caller before Peers arrives
@@ -62,7 +62,7 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, IStyxPass
     {
         if (targetHosts.Length == 0)
         {
-            log.LogError("Send called with empty targetHosts array");
+            log.LogError("Send with empty targetHosts from (connectionId:{ConnectionId})", Context.ConnectionId);
             return;
         }
 
@@ -77,7 +77,7 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, IStyxPass
         {
             if (string.IsNullOrEmpty(targetHost))
             {
-                log.LogError("Send called with empty hostname in targetHosts");
+                log.LogError("Send from \"{HostName}\" on network {NetworkId} had empty hostname in targetHosts", identity.HostName, identity.NetworkId);
                 continue;
             }
 

@@ -48,7 +48,9 @@ public class PeerBroadcastService(IClientRegistry registry, IHubContext<StyxHub,
         try
         {
             var clients = await registry.GetNetworkClients(networkId);
-            var allHostNames = clients.Select(c => c.HostName).ToArray();
+            var allHostNames = clients.Select(c => c.HostName).OrderBy(h => h, StringComparer.OrdinalIgnoreCase).ToArray();
+            var peerList = allHostNames.Length > 0 ? string.Join(", ", allHostNames) : "<none>";
+            log.LogInformation("Network {NetworkId} peers: {Peers}", networkId, peerList);
             foreach (var (connectionId, hostName) in clients)
             {
                 var peers = allHostNames.Where(h => !h.EqualsIgnoreCase(hostName)).ToArray();
