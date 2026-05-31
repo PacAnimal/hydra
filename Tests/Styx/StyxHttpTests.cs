@@ -121,4 +121,49 @@ public class StyxHttpTests
 
         Assert.That(client.IsConnected, Is.True);
     }
+
+    [Test]
+    public async Task Status_InvalidAuthorization_Returns401()
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/status");
+        request.Headers.TryAddWithoutValidation("Authorization", "Bearer not-valid-base64!!!");
+        var response = await _http!.SendAsync(request);
+        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.Unauthorized));
+    }
+
+    [Test]
+    public async Task Status_ValidAuthorization_NoPeers_ReturnsEmptyArray()
+    {
+        var auth = await StyxTestServer.GenerateAuthorization(Guid.NewGuid());
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/status");
+        request.Headers.TryAddWithoutValidation("Authorization", $"Bearer {auth}");
+        var response = await _http!.SendAsync(request);
+        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var peers = body.GetProperty("peers").EnumerateArray().Select(e => e.GetString()).ToArray();
+        Assert.That(peers, Is.Empty);
+    }
+
+    [Test]
+    public async Task Status_ValidAuthorization_WithConnectedPeers_ReturnsPeerNames()
+    {
+        var networkId = Guid.NewGuid();
+        var auth = await StyxTestServer.GenerateAuthorization(networkId);
+
+        await using var clientA = new TestStyxClient();
+        await using var clientB = new TestStyxClient();
+        await clientA.Connect(_factory!, auth, "machine-alpha");
+        await clientB.Connect(_factory!, auth, "machine-beta");
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/status");
+        request.Headers.TryAddWithoutValidation("Authorization", $"Bearer {auth}");
+        var response = await _http!.SendAsync(request);
+        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var peers = body.GetProperty("peers").EnumerateArray().Select(e => e.GetString()).ToArray();
+        Assert.That(peers, Is.EquivalentTo(["machine-alpha", "machine-beta"]));
+    }
 }

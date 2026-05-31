@@ -79,6 +79,29 @@ app.UseStaticFiles();
 
 app.MapHub<StyxHub>("/relay");
 
+app.MapGet("/api/status", async (HttpContext http, IStyxPasswordProvider passwordProvider, IClientRegistry registry, CancellationToken ct) =>
+{
+    var throttle = Task.Delay(TimeSpan.FromSeconds(Constants.StatusThrottleSeconds), ct);
+
+    var bearer = http.Request.Headers.Authorization.ToString();
+    var token = bearer.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) ? bearer["Bearer ".Length..] : null;
+
+    Guid networkId;
+    try
+    {
+        var password = passwordProvider.Password;
+        networkId = await new SimpleAes(password).DecryptBase64<Guid>(token!, true, ct);
+    }
+    catch
+    {
+        await throttle;
+        return Results.Unauthorized();
+    }
+
+    var clients = await registry.GetNetworkClients(networkId);
+    return Results.Ok(new StatusResponse([.. clients.Select(c => c.HostName)]));
+});
+
 app.MapPost("/api/network-config", async (NetworkConfigRequest request, IStyxPasswordProvider passwordProvider, CancellationToken ct) =>
 {
     var throttle = Task.Delay(TimeSpan.FromSeconds(Constants.NetworkConfigThrottleSeconds), ct);
@@ -104,6 +127,8 @@ app.Logger.LogInformation("Styx listening on port {Port}{LocalOnly}", port, loca
 if (debugMessages) app.Logger.LogInformation("Message debug logging enabled");
 app.Run();
 return 0;
+
+internal record StatusResponse(string[] Peers);
 
 internal record NetworkConfigRequest(string Password);
 internal record NetworkConfigResponse(string Authorization);

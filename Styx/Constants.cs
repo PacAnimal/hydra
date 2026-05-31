@@ -15,4 +15,5 @@ public static class Constants
     // throttle delays
     public const int AuthThrottleSeconds = 1;
     public const int NetworkConfigThrottleSeconds = 5;
+    public const int StatusThrottleSeconds = 2;
 }
