@@ -31,7 +31,7 @@ jobs:
             echo "version=0.1.0" >> "$GITHUB_OUTPUT"
           fi
 
-  test:
+  test-linux:
     runs-on: ubuntu-latest
 
     steps:
@@ -100,7 +100,7 @@ jobs:
           path: hydra-${{ matrix.rid }}.*
 
   release:
-    needs: [build, test, test-windows, version]
+    needs: [build, test-linux, test-windows, version]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
