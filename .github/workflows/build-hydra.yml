@@ -48,6 +48,23 @@ jobs:
       - name: Test
         run: dotnet test Hydra.sln --no-restore
 
+  test-windows:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Restore
+        run: dotnet restore Hydra.sln
+
+      - name: Test
+        run: dotnet test Hydra.sln --no-restore
+
   build:
     runs-on: macos-latest
     needs: [version]
@@ -83,7 +100,7 @@ jobs:
           path: hydra-${{ matrix.rid }}.*
 
   release:
-    needs: [build, test, version]
+    needs: [build, test, test-windows, version]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
