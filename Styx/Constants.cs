@@ -4,6 +4,7 @@ public static class Constants
 {
     public const string RelayPasswordEnvVar = "RELAY_PASSWORD";
     public const string DebugMessagesEnvVar = "DEBUG_MESSAGES";
+    public const string LocalOnlyEnvVar = "LOCAL_ONLY";
 
     // SignalR hub tuning
     public const int KeepAliveSeconds = 30;

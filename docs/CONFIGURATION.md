@@ -443,6 +443,12 @@ Styx listens on port `5000` by default. Override with `LOCAL_PORT`:
 docker run -e RELAY_PASSWORD=<secret> -e LOCAL_PORT=8080 -p 8080:8080 ghcr.io/pacanimal/styx:latest
 ```
 
+Set `LOCAL_ONLY=true` to bind only to `127.0.0.1` and `::1` — useful when running behind a reverse proxy (HAProxy, nginx, Caddy, etc.) that terminates TLS and forwards to localhost:
+
+```bash
+docker run -e RELAY_PASSWORD=<secret> -e LOCAL_ONLY=true -p 127.0.0.1:5000:5000 ghcr.io/pacanimal/styx:latest
+```
+
 Or build from source:
 
 ```bash

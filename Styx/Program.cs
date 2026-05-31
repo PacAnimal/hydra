@@ -48,9 +48,10 @@ services.Configure<HubOptions>(options => options.AddFilter<AuthenticationHubFil
 services.AddCathedralForwardedHeaders();
 
 var port = int.Parse(config.GetString("LOCAL_PORT", "5000"));
+var localOnly = Environment.GetEnvironmentVariable(Constants.LocalOnlyEnvVar)?.EqualsIgnoreCase("true") ?? false;
 builder.WebHost.ConfigureKestrel(options =>
 {
-    options.Listen(IPAddress.IPv6Any, port, listenOptions =>
+    void ConfigureListener(IPAddress address) => options.Listen(address, port, listenOptions =>
     {
         listenOptions.Use(next => ctx =>
         {
@@ -59,6 +60,16 @@ builder.WebHost.ConfigureKestrel(options =>
             return next(ctx);
         });
     });
+
+    if (localOnly)
+    {
+        ConfigureListener(IPAddress.Loopback);
+        ConfigureListener(IPAddress.IPv6Loopback);
+    }
+    else
+    {
+        ConfigureListener(IPAddress.IPv6Any);
+    }
 });
 
 var app = builder.Build();
@@ -89,7 +100,7 @@ app.MapPost("/api/network-config", async (NetworkConfigRequest request, IStyxPas
 });
 
 
-app.Logger.LogInformation("Styx listening on port {Port}", port);
+app.Logger.LogInformation("Styx listening on port {Port}{LocalOnly}", port, localOnly ? " (localhost only)" : "");
 if (debugMessages) app.Logger.LogInformation("Message debug logging enabled");
 app.Run();
 return 0;
