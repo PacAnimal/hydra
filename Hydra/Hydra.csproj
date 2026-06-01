@@ -31,12 +31,12 @@
     </PropertyGroup>
 
     <ItemGroup>
-        <PackageReference Include="Cathedral" Version="0.0.433" />
-        <PackageReference Include="System.IO.Hashing" Version="10.0.7" />
-        <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.7" />
-        <PackageReference Include="Microsoft.AspNetCore.SignalR.Protocols.MessagePack" Version="10.0.7" />
-        <PackageReference Include="System.Drawing.Common" Version="10.0.7" />
-        <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.7" />
+        <PackageReference Include="Cathedral" Version="0.0.434" />
+        <PackageReference Include="System.IO.Hashing" Version="10.0.8" />
+        <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.8" />
+        <PackageReference Include="Microsoft.AspNetCore.SignalR.Protocols.MessagePack" Version="10.0.8" />
+        <PackageReference Include="System.Drawing.Common" Version="10.0.8" />
+        <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.8" />
         <PackageReference Include="TypedSignalR.Client" Version="3.6.0">
             <PrivateAssets>all</PrivateAssets>
             <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>

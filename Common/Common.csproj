@@ -16,7 +16,7 @@
     </PropertyGroup>
 
     <ItemGroup>
-        <PackageReference Include="Cathedral" Version="0.0.433" />
+        <PackageReference Include="Cathedral" Version="0.0.434" />
     </ItemGroup>
 
 </Project>

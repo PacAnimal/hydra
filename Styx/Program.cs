@@ -28,11 +28,6 @@ services.AddSereneConsoleLogging(logging =>
     logging.TimestampUtc = true;
     logging.FilterMicrosoftSpam = true;
 });
-services.ConfigureSereneHttpLogging(opts =>
-{
-    opts.ServerRequestStartingLogLevel = LogLevel.Debug;
-});
-
 services.ConfigureHttpJsonOptions(options => SaneJson.Configure(options.SerializerOptions));
 services.AddDataProtection().PersistKeysToNowhere();
 
