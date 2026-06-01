@@ -40,7 +40,7 @@ public class ClientRegistry(ILogger<ClientRegistry> log) : IClientRegistry
         using var clients = await _clients.WaitForDisposable();
         foreach (var (connectionId, identity) in clients.Value)
         {
-            if (identity.NetworkId == networkId && identity.HostName.EqualsIgnoreCase(hostName))
+            if (identity.NetworkId == networkId && identity.HostName.EqualsOrdinal(hostName))
                 return connectionId;
         }
         return null;
@@ -58,7 +58,7 @@ public class ClientRegistry(ILogger<ClientRegistry> log) : IClientRegistry
         using var clients = await _clients.WaitForDisposable();
         var found = clients.Value
             .Where(kv => kv.Value.NetworkId == networkId
-                && kv.Value.HostName.EqualsIgnoreCase(hostName)
+                && kv.Value.HostName.EqualsOrdinal(hostName)
                 && kv.Key != newConnectionId)
             .Select(kv => kv.Key)
             .ToList();

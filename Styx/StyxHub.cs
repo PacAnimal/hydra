@@ -36,18 +36,20 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, IStyxPass
         }
         catch (Exception ex)
         {
-            log.LogWarning(ex, "Authentication failed for \"{HostName}\" from {RemoteIp}", login.HostName, remoteIp);
+            log.LogWarning(ex, "Authentication failed for \"{HostName}\" from {RemoteIp}", login.HostName.ToLowerInvariant(), remoteIp);
             await throttle;
             return new RelayLoginResponse { Authenticated = false, Message = "Invalid authorization" };
         }
 
+        var hostName = login.HostName.ToLowerInvariant();
+
         // kick any existing connections with the same network+hostname (stale entries can accumulate on unclean disconnect)
-        var kicked = await registry.KickDuplicates(networkId, login.HostName, Context.ConnectionId);
+        var kicked = await registry.KickDuplicates(networkId, hostName, Context.ConnectionId);
         foreach (var connectionId in kicked)
             await Clients.Client(connectionId).Kicked("duplicate hostname");
 
-        await registry.Register(Context.ConnectionId, networkId, login.HostName, remoteIp);
-        log.LogInformation("Authentication accepted for \"{HostName}\" (connectionId:{ConnectionId}) from {RemoteIp} on network {NetworkId}", login.HostName, Context.ConnectionId, remoteIp, networkId);
+        await registry.Register(Context.ConnectionId, networkId, hostName, remoteIp);
+        log.LogInformation("Authentication accepted for \"{HostName}\" (connectionId:{ConnectionId}) from {RemoteIp} on network {NetworkId}", hostName, Context.ConnectionId, remoteIp, networkId);
         await throttle;
 
         // queue after throttle so Authenticated=true is sent to the caller before Peers arrives
@@ -81,7 +83,7 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, IStyxPass
                 continue;
             }
 
-            var targetConnectionId = await registry.GetConnectionId(identity.NetworkId, targetHost);
+            var targetConnectionId = await registry.GetConnectionId(identity.NetworkId, targetHost.ToLowerInvariant());
             if (targetConnectionId == null)
             {
                 log.LogDebug("Target {TargetHost} not found on network {NetworkId}", targetHost, identity.NetworkId);
