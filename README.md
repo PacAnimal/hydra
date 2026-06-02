@@ -35,6 +35,8 @@
 
 **Typing foreign characters across layouts.** Norwegian master, US slave — type `å` on the master and `å` arrives correctly on the slave, even though the slave's keyboard has no key for it. Hydra resolves characters to Unicode on the master before transmission; dead-key composition (`' + a` → `á`) works the same way. No "force all machines to use the same layout" workarounds needed.
 
+**The shared office screen.** A 98-inch display on the conference room wall runs as a slave. Any of the five people around the table can slide their cursor onto it — whoever gets there first takes control. Put up a diagram, hand off to a colleague, pass it back — no cables, no HDMI switches, no "can you share your screen?" interruptions.
+
 **The VPN problem, solved.** Your work laptop is on the corporate VPN; it can't see your personal machine sitting right next to it on the LAN. Drop a Styx container on a cheap VPS, paste the relay config into both machines' `hydra.conf`, and they connect through the relay as if they were on the same network — end-to-end encrypted, no port forwarding, no changes to the VPN.
 
 ---
@@ -141,6 +143,7 @@ The easiest way to set up multi-machine layouts, Styx relay configs, and network
 - **Screensaver sync** — activating the screensaver on the master locks all connected slaves
 - **Windows login screen support** — installed as a system service, Hydra stays active on the lock and login screens
 - End-to-end encrypted relay via **Styx** for machines on different networks
+- **Multiple masters per slave** — several machines can share a single slave display; whoever moves their cursor onto it takes control
 - **Remote-only mode** — use a headless Linux machine (e.g. Raspberry Pi) as a dedicated input forwarder with no local screen
 
 ---
