@@ -118,6 +118,17 @@ Create `hydra.conf` next to the binary on **each machine**.
 
 Replace `192.168.1.10` with the master's IP address. Run `./hydra` on both machines. Move the cursor past the right edge of the master's screen — it appears on the slave.
 
+### Hotkeys
+
+All hotkeys use **Ctrl+Alt+Super** (Super = ⌘ on macOS, Win key on Windows):
+
+| Hotkey | Action |
+|--------|--------|
+| `Ctrl+Alt+Super+L` | Toggle cursor lock — pin to current screen, or release to roam freely |
+| `Ctrl+Alt+Super+M` | Toggle relative mouse mode on the current remote screen (useful for games) |
+| `Ctrl+Alt+Super+C` | Copy selected files/folders to Hydra's cross-machine clipboard (macOS, Windows) |
+| `Ctrl+Alt+Super+V` | Paste previously copied files to the current machine |
+
 For cross-network setups (different LANs or over a VPN), see [Networking with Styx](docs/CONFIGURATION.md#networking-with-styx).
 
 ---
