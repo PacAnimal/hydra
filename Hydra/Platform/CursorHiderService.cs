@@ -9,6 +9,7 @@ public interface ICursor
     ValueTask ShowCursor();
     void WarpCursor(int x, int y) { }
     (int X, int Y)? GetCursorPosition() => null;
+    bool CursorIsVisible => false;
 }
 
 public interface ICursorHider
@@ -76,6 +77,11 @@ public sealed class CursorHiderService(ILogger<CursorHiderService> log, IPlatfor
             // keep cursor pinned at warp point while hidden — don't warp when temporarily shown
             platform.WarpCursor(_warpX, _warpY);
             _lastPosition = (_warpX, _warpY);
+            // re-hide if cursor became visible — on macOS CGDisplayHideCursor is reference-counted
+            // and can be decremented externally; CursorIsVisible detects that so we only re-hide
+            // when actually needed rather than every tick
+            if (platform.CursorIsVisible)
+                await platform.HideCursor();
         }
     }
 

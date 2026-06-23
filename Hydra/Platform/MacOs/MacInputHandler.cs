@@ -25,6 +25,7 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
     private Action<MouseButtonEvent>? _onMouseButton;
     private Action<MouseScrollEvent>? _onMouseScroll;
     private bool _cursorHidden;
+    private int _cgHideCursorCount;
     private readonly SemaphoreSlim _cursorLock = new(1, 1);
     private readonly Toggle _isOnVirtualScreen = new();
     public bool IsOnVirtualScreen { get => _isOnVirtualScreen; set => _isOnVirtualScreen.TrySet(value); }
@@ -52,6 +53,8 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
         _ = NativeMethods.CGWarpMouseCursorPosition(new CGPoint { X = x, Y = y });
     }
 
+    public bool CursorIsVisible => NativeMethods.CGCursorIsVisible();
+
     public (int X, int Y)? GetCursorPosition()
     {
         var eventRef = NativeMethods.CGEventCreate(nint.Zero);
@@ -64,33 +67,41 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
     public async ValueTask HideCursor()
     {
         using var guard = await _cursorLock.WaitForDisposable();
-        if (_cursorHidden) return;
-        _cursorHidden = true; // set before await so racing ShowCursor sees correct state
-        await _shield.Show();
-
-        NativeMethods.EnableBackgroundCursorManipulation();
-
+        if (!_cursorHidden)
+        {
+            _cursorHidden = true;
+            await _shield.Show();
+            NativeMethods.EnableBackgroundCursorManipulation();
+            _ = NativeMethods.CGAssociateMouseAndMouseCursorPosition(true);
+            // near-zero suppression interval prevents CGWarpMouseCursorPosition from resetting acceleration
+            NativeMethods.CGSetLocalEventsSuppressionInterval(0.0001);
+        }
+        // CGDisplayHideCursor is reference-counted — call it every time so we can detect if macOS
+        // decremented the count externally (which would make the cursor reappear). ShowCursor balances.
         if (!_shield.DebugShield)
         {
             var err = NativeMethods.CGDisplayHideCursor(_display);
             if (err != 0) log.LogWarning("CGDisplayHideCursor failed (error {Error})", err);
+            else Interlocked.Increment(ref _cgHideCursorCount);
         }
-        _ = NativeMethods.CGAssociateMouseAndMouseCursorPosition(true);
-        // near-zero suppression interval prevents CGWarpMouseCursorPosition from resetting acceleration
-        NativeMethods.CGSetLocalEventsSuppressionInterval(0.0001);
     }
 
     public async ValueTask ShowCursor()
     {
         using var guard = await _cursorLock.WaitForDisposable();
         if (!_cursorHidden) return;
-        _cursorHidden = false; // set before await so racing HideCursor sees correct state
+        _cursorHidden = false;
         await _shield.Hide();
         // matches Synergy pattern: call EnableBackgroundCursorManipulation in both hide and show
         // so the CGS connection property is warmed up before the next HideCursor attempt
         NativeMethods.EnableBackgroundCursorManipulation();
         if (!_shield.DebugShield)
-            _ = NativeMethods.CGDisplayShowCursor(_display);
+        {
+            // balance every CGDisplayHideCursor call made during this hide session
+            var count = Interlocked.Exchange(ref _cgHideCursorCount, 0);
+            for (var i = 0; i < count; i++)
+                _ = NativeMethods.CGDisplayShowCursor(_display);
+        }
         _ = NativeMethods.CGAssociateMouseAndMouseCursorPosition(true);
         NativeMethods.CGSetLocalEventsSuppressionInterval(0.0);
     }
