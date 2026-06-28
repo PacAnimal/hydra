@@ -6,5 +6,6 @@ public interface IStyxServer
 {
     Task<RelayLoginResponse> Authenticate(RelayLogin login);
     Task<bool> Ping();
+    Task<string> GetMyIp();
     Task Send(string[] targetHosts, byte[] payload);
 }

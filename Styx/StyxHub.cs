@@ -27,7 +27,7 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, IStyxPass
             return new RelayLoginResponse { Authenticated = false, Message = "Server misconfigured" };
         }
 
-        var remoteIp = Context.GetHttpContext()?.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        var remoteIp = RemoteIp;
 
         Guid networkId;
         try
@@ -59,6 +59,8 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, IStyxPass
 
     [AllowAnonymousHub]
     public Task<bool> Ping() => Task.FromResult(true);
+
+    public Task<string> GetMyIp() => Task.FromResult(RemoteIp);
 
     public async Task Send(string[] targetHosts, byte[] payload)
     {
@@ -93,6 +95,8 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, IStyxPass
             await Clients.Client(targetConnectionId).Receive(identity.HostName, identity.RemoteIp, payload);
         }
     }
+
+    private string RemoteIp => Context.GetHttpContext()?.Connection.RemoteIpAddress?.ToString() ?? "unknown";
 
     public override async Task OnDisconnectedAsync(Exception? exception)
     {
