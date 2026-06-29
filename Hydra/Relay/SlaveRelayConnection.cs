@@ -28,7 +28,7 @@ public class SlaveRelayConnection : RelayConnection
     // keys currently held down on the slave (for release-all on screen leave).
     // accessed from both the SignalR dispatch thread and timer Task.Run threads — always access under _keyEventLock.
     private readonly HashSet<(char?, SpecialKey?)> _heldKeys = [];
-    private readonly Lock _keyEventLock = new();
+    private readonly SemaphoreSlim _keyEventLock = new(1, 1);
 
     // fallback clipboard when Get* returns null because we own the selection (echo suppression)
     private ClipboardSnapshot? _lastPushed;
@@ -108,8 +108,16 @@ public class SlaveRelayConnection : RelayConnection
                 });
                 break;
             case MessageKind.KeyEvent:
-                HandleInputMessage<KeyEventMessage>(body, kind, sourceHost, HandleKeyEvent);
-                break;
+                {
+                    var keyMsg = body.ParseMessage<KeyEventMessage>(_log, kind.ToString());
+                    if (keyMsg != null)
+                    {
+                        if (_onScreenMasters.Contains(sourceHost))
+                            _cursorHider.Show();
+                        await HandleKeyEvent(keyMsg);
+                    }
+                    break;
+                }
             case MessageKind.MouseMoveDelta:
                 HandleInputMessage<MouseMoveDeltaMessage>(body, kind, sourceHost, delta =>
                 {
@@ -134,7 +142,7 @@ public class SlaveRelayConnection : RelayConnection
                 }
                 break;
             case MessageKind.LeaveScreen:
-                ReleaseAll();
+                await ReleaseAll();
                 _onScreenMasters.Remove(sourceHost);
                 if (_onScreenMasters.Count == 0 && _isReady)
                     _cursorHider.Hide();
@@ -236,7 +244,7 @@ public class SlaveRelayConnection : RelayConnection
         _fileTransfer.Abort(this, "relay disconnected");
         var masters = await _peerState.GetMasters();
         _onScreenMasters.Clear();
-        ReleaseAll();
+        await ReleaseAll();
         if (masters.Length > 0)
             _cursorHider.Show();
         await _peerState.PruneMasters([]);
@@ -259,7 +267,7 @@ public class SlaveRelayConnection : RelayConnection
             anyMasterLeft = true;
         }
         if (anyOnScreenMasterLeft)
-            ReleaseAll();
+            await ReleaseAll();
         if (anyMasterLeft)
         {
             if (after.Length == 0)
@@ -280,7 +288,7 @@ public class SlaveRelayConnection : RelayConnection
         handler(msg);
     }
 
-    private void HandleKeyEvent(KeyEventMessage msg)
+    private async Task HandleKeyEvent(KeyEventMessage msg)
     {
         var label = msg.Character.HasValue ? $" '{msg.Character}'" : msg.Key.HasValue ? $" {msg.Key}" : "";
         _log.LogDebug("Key: {Type}{Label} mods={Modifiers}", msg.Type, label, msg.Modifiers);
@@ -291,7 +299,7 @@ public class SlaveRelayConnection : RelayConnection
         {
             // cancel timer and remove from held set before injecting, so the timer loop (if mid-tick)
             // sees the key gone and does not inject a key-down after this key-up.
-            lock (_keyEventLock)
+            using (await _keyEventLock.WaitForDisposable())
             {
                 if (_repeatTimers.Remove(repeatKey, out var cts))
                     cts.Cancel();
@@ -306,7 +314,7 @@ public class SlaveRelayConnection : RelayConnection
         CancellationTokenSource? repeatCts = null;
         int delayMs = 0, rateMs = 0;
 
-        lock (_keyEventLock)
+        using (await _keyEventLock.WaitForDisposable())
         {
             _heldKeys.Add(repeatKey);
             _output.InjectKey(msg);
@@ -338,7 +346,7 @@ public class SlaveRelayConnection : RelayConnection
                 while (true)
                 {
                     // check + inject under lock so a concurrent key-up cannot inject a key-down after the key-up
-                    lock (_keyEventLock)
+                    using (await _keyEventLock.WaitForDisposable())
                     {
                         if (ct.IsCancellationRequested || !_heldKeys.Contains(repeatKey)) break;
                         _output.InjectKey(repeatMsg);
@@ -393,30 +401,26 @@ public class SlaveRelayConnection : RelayConnection
         return Task.CompletedTask;
     }
 
-    private void ReleaseAll()
+    private async Task ReleaseAll()
     {
-        CancelAllRepeatTimers();
-        ReleaseAllKeys();
+        await CancelAllRepeatTimers();
+        await ReleaseAllKeys();
     }
 
-    private void ReleaseAllKeys()
+    private async Task ReleaseAllKeys()
     {
-        lock (_keyEventLock)
-        {
-            foreach (var (ch, key) in _heldKeys)
-                _output.InjectKey(new KeyEventMessage(KeyEventType.KeyUp, KeyModifiers.None, ch, key));
-            _heldKeys.Clear();
-        }
+        using var _ = await _keyEventLock.WaitForDisposable();
+        foreach (var (ch, key) in _heldKeys)
+            _output.InjectKey(new KeyEventMessage(KeyEventType.KeyUp, KeyModifiers.None, ch, key));
+        _heldKeys.Clear();
     }
 
-    private void CancelAllRepeatTimers()
+    private async Task CancelAllRepeatTimers()
     {
-        lock (_keyEventLock)
-        {
-            foreach (var cts in _repeatTimers.Values)
-                cts.Cancel(); // don't dispose — timer tasks may be mid-flight; let GC handle cleanup
-            _repeatTimers.Clear();
-        }
+        using var _ = await _keyEventLock.WaitForDisposable();
+        foreach (var cts in _repeatTimers.Values)
+            cts.Cancel(); // don't dispose — timer tasks may be mid-flight; let GC handle cleanup
+        _repeatTimers.Clear();
     }
 
     private async Task HandleMasterConfig(string masterHost, ReadOnlyMemory<byte> body)

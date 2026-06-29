@@ -337,21 +337,22 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
         return kr == 0;
     }
 
+    private static readonly nint NsEventClass = NativeMethods.objc_getClass("NSEvent");
+    private static readonly nint SelOtherEvent = NativeMethods.sel_registerName("otherEventWithType:location:modifierFlags:timestamp:windowNumber:context:subtype:data1:data2:");
+    private static readonly nint SelCgEvent = NativeMethods.sel_registerName("CGEvent");
+
     // inject a media key via [NSEvent otherEventWithType:NSSystemDefined subtype:8 ...] → CGEventPost.
     // mirrors barrier/deskflow's fakeNativeMediaKey(): NX_SYSDEFINED is the only reliable path for
     // volume, brightness, eject, play/next/prev — regular NX_KEYDOWN with the VK code misroutes.
     private static void PostNsMediaKey(uint keyType, bool isDown, bool isRepeat = false)
     {
         NativeMethods.EnsureAppKitLoaded();
-        var cls = NativeMethods.objc_getClass("NSEvent");
-        var sel = NativeMethods.sel_registerName("otherEventWithType:location:modifierFlags:timestamp:windowNumber:context:subtype:data1:data2:");
-        var selCgEvent = NativeMethods.sel_registerName("CGEvent");
 
         // data1: high 16 bits = NX_KEYTYPE, bits 8–15 = 0x0a (down) or 0x0b (up), bit 0 = repeat flag
         var data1 = (nint)((keyType << 16) | (isDown ? 0x0a00u : 0x0b00u) | (isRepeat ? 1u : 0u));
 
         var nsEvent = NativeMethods.objc_msgSend_NSEvent_otherEvent(
-            cls, sel,
+            NsEventClass, SelOtherEvent,
             14,       // NSSystemDefined
             default,  // NSPoint(0, 0)
             0xa00,    // modifierFlags (empirical — matches barrier/deskflow)
@@ -363,7 +364,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
             -1);      // data2
 
         if (nsEvent == nint.Zero) return;
-        var cgEventRef = NativeMethods.objc_msgSend_noarg(nsEvent, selCgEvent);
+        var cgEventRef = NativeMethods.objc_msgSend_noarg(nsEvent, SelCgEvent);
         if (cgEventRef == nint.Zero) return;
         NativeMethods.CGEventPost(NativeMethods.KCGHidEventTap, cgEventRef);
     }
