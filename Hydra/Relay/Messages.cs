@@ -51,7 +51,7 @@ public enum PeerPlatform : byte { Unknown = 0, Linux = 1, MacOS = 2, Windows = 3
 public record ScreenInfoMessage(List<ScreenInfoEntry> Screens, PeerPlatform? Platform = null);
 public record MasterConfigMessage(LogLevel? LogLevel);
 public record SlaveLogMessage(int Level, string Category, string Message, string? Exception);
-public record KeyEventMessage(KeyEventType Type, KeyModifiers Modifiers, char? Character, SpecialKey? Key, int? RepeatDelayMs = null, int? RepeatRateMs = null);
+public record KeyEventMessage(KeyEventType Type, KeyModifiers Modifiers, char? Character, SpecialKey? Key, int? RepeatDelayMs = null, int? RepeatRateMs = null, bool IsRepeat = false);
 public record MouseButtonMessage(MouseButton Button, bool IsPressed);
 public record MouseScrollMessage(short XDelta, short YDelta);
 public record EnterScreenMessage(string Screen, int X, int Y, int Width, int Height);
