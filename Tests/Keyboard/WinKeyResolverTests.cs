@@ -142,6 +142,39 @@ public class WinKeyResolverTests
     }
 }
 
+// character-resolution tests require ToUnicodeEx (Windows only)
+[TestFixture]
+[Platform("Win")]
+public class WinKeyResolverCharTests
+{
+    private static KBDLLHOOKSTRUCT Hook(uint vk, uint flags = 0) =>
+        new() { vkCode = vk, scanCode = 0, flags = flags, time = 1, dwExtraInfo = 0 };
+
+    private static KeyEvent[]? Down(WinKeyResolver r, uint vk, uint flags = 0) =>
+        r.Resolve(NativeMethods.WM_KEYDOWN, Hook(vk, flags));
+
+    [Test]
+    public void ShiftedKey_ProducesShiftedCharacter()
+    {
+        // Shift+key (without Ctrl) must produce the shifted character, not the base character.
+        // e.g. on a Norwegian layout, Shift+' produces '*' — not "'".
+        // This was broken when Shift was stripped unconditionally rather than only under Ctrl.
+        const uint VkA = 0x41;
+        var r = new WinKeyResolver();
+        Down(r, WinVirtualKey.LShift);
+        var events = Down(r, VkA);
+        Assert.That(events, Is.Not.Null, "Shift+A must produce events");
+        var charEvent = events!.FirstOrDefault(e => e.Character != null);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(charEvent, Is.Not.Null, "Shift+A must produce a character event");
+            // 'A' (uppercase) is the shifted form; base is 'a'
+            Assert.That(char.IsUpper(charEvent!.Character!.Value), Is.True,
+                "Shift+A must produce an uppercase character, not the base character");
+        }
+    }
+}
+
 // dead-key + shortcut-flush tests require ToUnicodeEx (Windows only) to produce dead key state.
 [TestFixture]
 [Platform("Win")]

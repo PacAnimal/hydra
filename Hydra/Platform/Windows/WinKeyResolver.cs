@@ -220,14 +220,18 @@ internal sealed class WinKeyResolver
         else
         {
             // strip ctrl so ToUnicodeEx produces letters, not control codes
+            bool ctrlWasHeld = (_resolveState[WinVirtualKey.LControl] | _resolveState[WinVirtualKey.RControl]) != 0;
             _resolveState[WinVirtualKey.LControl] = 0;
             _resolveState[WinVirtualKey.RControl] = 0;
             _resolveState[WinVirtualKey.Control] = 0;
             // strip Shift when Ctrl is held — Ctrl+Shift+key should send the base char (same as Win+Shift).
             // without this, Ctrl+Shift+4 on Norwegian sends '¤' (shifted 4) instead of '4'.
-            _resolveState[WinVirtualKey.LShift] = 0;
-            _resolveState[WinVirtualKey.RShift] = 0;
-            _resolveState[WinVirtualKey.Shift] = 0;
+            if (ctrlWasHeld)
+            {
+                _resolveState[WinVirtualKey.LShift] = 0;
+                _resolveState[WinVirtualKey.RShift] = 0;
+                _resolveState[WinVirtualKey.Shift] = 0;
+            }
         }
 
         // strip Win and, when Win is held, also Shift — so shortcut keys return their base character
