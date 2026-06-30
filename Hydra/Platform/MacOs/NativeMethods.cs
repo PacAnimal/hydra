@@ -214,7 +214,6 @@ internal static partial class NativeMethods
     internal const int KCGEventFlagsChanged = 12;
 
     internal const int KCGKeyboardEventKeycode = 9;
-    internal const int KCGKeyboardEventAutorepeat = 8;
 
     // CGEventFlags modifier mask bits
     internal const ulong KCGEventFlagMaskAlphaShift = 0x00010000; // caps lock
@@ -655,8 +654,6 @@ internal struct IOGPoint
 [StructLayout(LayoutKind.Explicit, Size = 48)]
 internal struct NXEventData
 {
-    [FieldOffset(2)]
-    internal ushort Repeat;    // key.repeat: 1 for autorepeat events
     [FieldOffset(8)]
     internal ushort KeyCode;
 }

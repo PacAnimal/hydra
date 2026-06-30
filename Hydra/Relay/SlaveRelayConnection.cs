@@ -333,7 +333,10 @@ public class SlaveRelayConnection : RelayConnection
 
         var ct = repeatCts.Token;
 
-        // strip repeat settings; mark as repeat so the platform handler sets kCGKeyboardEventAutorepeat etc.
+        // strip repeat settings and flag as a repeat. the Mac output handler injects repeats of printable
+        // characters via a keycode-less unicode insertion rather than re-pressing the physical key —
+        // re-pressing a held accent key (e.g. 'e') triggers the macOS press-and-hold accent popup instead
+        // of repeating the character. the initial physical key-down stays held (holdable for games/shortcuts).
         var repeatMsg = msg with { RepeatDelayMs = null, RepeatRateMs = null, IsRepeat = true };
 
         // CancellationToken.None: passing ct here would skip the lambda (including finally) if ct is already
