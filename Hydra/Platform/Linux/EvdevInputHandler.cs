@@ -41,18 +41,6 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
     // evdev is headless/remote-only — no local screen, no OS window snapping to worry about
     public bool AnyMouseButtonHeld() => false;
 
-    public KeyRepeatSettings GetKeyRepeatSettings()
-    {
-        // try reading repeat settings from the first keyboard device
-        foreach (var fd in _keyboardFds)
-        {
-            var rep = new EvdevRepeatSettings();
-            if (EvdevNativeMethods.ioctl_rep(fd, EvdevNativeMethods.EVIOCGREP, ref rep) == 0 && rep.DelayMs > 0)
-                return new KeyRepeatSettings((int)rep.DelayMs, (int)rep.RateMs);
-        }
-        return new KeyRepeatSettings(500, 33);
-    }
-
     public Task StartEventTap(
         Action<double, double> onMouseMove,
         Action<double, double>? onMouseDelta,

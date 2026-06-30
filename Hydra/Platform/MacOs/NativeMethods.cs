@@ -214,6 +214,7 @@ internal static partial class NativeMethods
     internal const int KCGEventFlagsChanged = 12;
 
     internal const int KCGKeyboardEventKeycode = 9;
+    internal const int KCGKeyboardEventAutorepeat = 8;  // 1 on OS auto-repeat key-down events
 
     // CGEventFlags modifier mask bits
     internal const ulong KCGEventFlagMaskAlphaShift = 0x00010000; // caps lock

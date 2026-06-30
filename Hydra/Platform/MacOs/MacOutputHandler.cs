@@ -118,7 +118,9 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
     public void InjectKey(KeyEventMessage msg)
     {
         var isDown = msg.Type == KeyEventType.KeyDown;
-        var isRepeat = msg.IsRepeat;
+        // unicode repeat routing applies only when the master opts in (UnicodeKeyRepeat). when disabled,
+        // a repeat falls through to the physical-key path below — the legacy re-press behaviour.
+        var isRepeat = msg.IsRepeat && msg.UnicodeKeyRepeat;
         var flags = MapModifiersToFlags(msg.Modifiers);
 
         if (msg.Key is { } key && key.IsModifier())

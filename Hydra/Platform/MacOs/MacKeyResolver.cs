@@ -65,8 +65,13 @@ internal sealed class MacKeyResolver
         if (eventType == NativeMethods.KCGEventKeyUp)
             return [KeyResolver.ReplayKeyUp(_keyDownId, vkCode, mods)];
 
-        // suppress auto-repeat: if vkCode already in _keyDownId, this is an OS repeat — drop it
-        if (_keyDownId.ContainsKey(vkCode)) return null;
+        // auto-repeat: re-resolve the held key with current modifier state and forward as a repeat.
+        // dead-key state is already consumed, so a composed key (´+e → é) repeats its base char (e); a
+        // modifier change mid-hold (Shift) re-resolves the case live (e → E). char resolution stays on the master.
+        // detect via the OS autorepeat flag OR our held-key tracking (mirrors input-leap's testAutoRepeat:
+        // the flag is authoritative ground truth, tracking is the fallback for repeats the flag doesn't mark).
+        var isAutoRepeat = NativeMethods.CGEventGetIntegerValueField(eventRef, NativeMethods.KCGKeyboardEventAutorepeat) == 1;
+        if (isAutoRepeat || _keyDownId.ContainsKey(vkCode)) return ResolveRepeat(vkCode, cgFlags, mods);
 
         // keypad decimal/separator: use UCKeyTranslate for locale-correct char ('.' or ',')
         if ((ulong)vkCode == MacVirtualKey.KeypadDecimal)
@@ -75,7 +80,7 @@ internal sealed class MacKeyResolver
             if (_deadKeyState != 0)
                 decDeadFlush = DeadFlushPair();
             _deadKeyState = 0;
-            var decEvent = ResolveCharacter(vkCode, cgFlags, mods);
+            var decEvent = ResolveCharacter(vkCode, cgFlags, mods, ref _deadKeyState);
             if (decEvent is not null)
                 _keyDownId[vkCode] = new CharClassification(decEvent.Character, decEvent.Key);
             else
@@ -118,7 +123,7 @@ internal sealed class MacKeyResolver
             charDeadFlush = DeadFlushPair();
             _deadKeyState = 0;
         }
-        var ev = ResolveCharacter(vkCode, cgFlags, mods);
+        var ev = ResolveCharacter(vkCode, cgFlags, mods, ref _deadKeyState);
         if (ev is not null)
         {
             _keyDownId[vkCode] = new CharClassification(ev.Character, ev.Key);
@@ -140,16 +145,32 @@ internal sealed class MacKeyResolver
         return ev is not null ? [ev] : null;
     }
 
+    // re-resolves a held key for an OS auto-repeat and emits it marked as a repeat. non-modifier special
+    // keys repeat as-is; characters are re-resolved with current modifiers against a throwaway dead-key state
+    // (a repeat never composes — the instance _deadKeyState must stay untouched). modifiers don't repeat-type.
+    private KeyEvent?[]? ResolveRepeat(int vkCode, ulong cgFlags, KeyModifiers mods)
+    {
+        if (MacSpecialKeyMap.Instance.TryGet((ulong)vkCode, out var specialKey))
+        {
+            if (specialKey.IsModifier()) return null;
+            return [KeyEvent.Special(KeyEventType.KeyDown, specialKey, mods) with { IsRepeat = true }];
+        }
+
+        uint scratchDeadKeyState = 0;
+        var ev = ResolveCharacter(vkCode, cgFlags, mods, ref scratchDeadKeyState);
+        return ev is not null ? [ev with { IsRepeat = true }] : null;
+    }
+
     // emit current dead key state as [down, up] pair by resolving with Space, then synthesizing the up.
     // the dead key slave has no physical key-up for a flush event, so a standalone down would stick.
     private KeyEvent?[]? DeadFlushPair()
     {
-        var downEvent = ResolveCharacter((int)MacVirtualKey.Space, 0, KeyModifiers.None);
+        var downEvent = ResolveCharacter((int)MacVirtualKey.Space, 0, KeyModifiers.None, ref _deadKeyState);
         if (downEvent?.Character is not { } ch) return null;
         return [downEvent, KeyEvent.Char(KeyEventType.KeyUp, ch, KeyModifiers.None)];
     }
 
-    private KeyEvent? ResolveCharacter(int vkCode, ulong cgFlags, KeyModifiers mods)
+    private KeyEvent? ResolveCharacter(int vkCode, ulong cgFlags, KeyModifiers mods, ref uint deadKeyState)
     {
         var layoutSource = NativeMethods.TISCopyCurrentKeyboardLayoutInputSource();
         if (layoutSource == nint.Zero) return null;
@@ -165,7 +186,7 @@ internal sealed class MacKeyResolver
             // is this a command (ctrl or cmd held)? used for AltGr detection
             bool isCommand = (cgFlags & (NativeMethods.KCGEventFlagMaskCommand | NativeMethods.KCGEventFlagMaskControl)) != 0;
             // shortcut context: discard any pending dead key — it would otherwise compose with the shortcut character
-            if (isCommand) _deadKeyState = 0;
+            if (isCommand) deadKeyState = 0;
 
             // include Shift, CapsLock, and Option (when not a Cmd/Ctrl shortcut) in UCKeyTranslate.
             // Hydra resolves the final character server-side, so Option must be included to get
@@ -191,7 +212,7 @@ internal sealed class MacKeyResolver
                     ucMods,
                     NativeMethods.LMGetKbdType(),
                     isCommand ? 1u : 0u,
-                    ref _deadKeyState,
+                    ref deadKeyState,
                     2,
                     out var count,
                     chars);
@@ -199,10 +220,10 @@ internal sealed class MacKeyResolver
                 if (status != 0) return null;
 
                 // count=0 with non-zero dead state means a dead key was consumed; next keypress will compose.
-                // _deadKeyState intentionally not cleared here — xkb needs it for composition on the next keypress.
-                if (count == 0 && _deadKeyState != 0) return null;
+                // deadKeyState intentionally not cleared here — it's needed for composition on the next keypress.
+                if (count == 0 && deadKeyState != 0) return null;
 
-                _deadKeyState = 0;
+                deadKeyState = 0;
                 if (count == 0) return null;
 
                 classified = KeyResolver.ClassifyChar((char)chars[0]);

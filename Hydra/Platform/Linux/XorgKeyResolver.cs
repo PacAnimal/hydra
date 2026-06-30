@@ -67,8 +67,11 @@ internal sealed class XorgKeyResolver
         if (evType == NativeMethods.KeyRelease)
             return [KeyResolver.ReplayKeyUp(_keyDownId, keycode, mods)];
 
-        // suppress auto-repeat: if keycode already in _keyDownId, this is an OS repeat — drop it
-        if (_keyDownId.ContainsKey(keycode)) return null;
+        // auto-repeat: re-resolve the held key with current group/level/modifier state and forward as a
+        // repeat. dead-key state is already consumed on the first press, so a composed key (¨+e → ë) repeats
+        // its base char (e); a modifier change mid-hold (Shift) re-resolves the case live (e → E). emitting
+        // a repeat (rather than suppressing) lets the slave inject each — char resolution stays on the master.
+        if (_keyDownId.ContainsKey(keycode)) return BuildRepeat(keysym, mods);
 
         // shortcut context (Ctrl/Super held): if the base key is a dead key, clear any pending dead
         // state and emit the spacing form (e.g. Ctrl+` → `) so the shortcut fires with the correct base char.
@@ -104,6 +107,20 @@ internal sealed class XorgKeyResolver
         if (flush is not null && ev is not null) return [.. flush, .. ev];
         if (flush is not null) return flush;
         return ev;
+    }
+
+    // builds a repeat event for a held key from its current keysym and modifiers, mirroring the special-then-char
+    // order of ResolveKeysym but without touching dead-key state (a repeat never composes). returns null if the
+    // keysym maps to neither (e.g. a held dead key, which does not repeat-compose). shared with EvdevKeyResolver.
+    internal static KeyEvent?[]? BuildRepeat(ulong keysym, KeyModifiers mods)
+    {
+        var special = KeySymToSpecialKey(keysym);
+        if (special.HasValue)
+            return [KeyEvent.Special(KeyEventType.KeyDown, special.Value, mods) with { IsRepeat = true }];
+        var ch = KeySymToChar(keysym);
+        if (ch.HasValue)
+            return [KeyEvent.Char(KeyEventType.KeyDown, ch.Value, mods) with { IsRepeat = true }];
+        return null;
     }
 
     // flushes a pending dead key as its spacing form when a non-modifier special key interrupts composition.

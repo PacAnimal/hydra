@@ -61,7 +61,6 @@ public sealed class FakePlatform : IPlatformInput, ICursorHider
 
     public bool AnyMouseButtonHeld { get; set; }
     bool IPlatformInput.AnyMouseButtonHeld() => AnyMouseButtonHeld;
-    public KeyRepeatSettings GetKeyRepeatSettings() => new(500, 33);
     public void StopEventTap() { }
     public void WarpCursor(int x, int y) { WarpX = x; WarpY = y; }
     // ICursorHider — what InputRouter calls

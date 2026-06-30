@@ -69,6 +69,11 @@ public class HydraConfig
     public bool AccelerateMouseWheel { get; init; } = true;
     public int? DeadCorners { get; init; }  // pixel dead zone at screen corners; scaled by screen scale; per-host setting overrides this
 
+    // master only — sent with each keypress so per-master preferences are honoured on shared slaves.
+    // true (default): held printable keys repeat via keycode-less unicode insertion on Mac slaves, avoiding
+    // the macOS press-and-hold accent popup. false: repeat by re-pressing the physical key (legacy behaviour).
+    public bool UnicodeKeyRepeat { get; init; } = true;
+
     // optional — if set, this config only activates when all specified conditions are met
     public ConfigConditions? Conditions { get; init; }
 

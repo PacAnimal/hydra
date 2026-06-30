@@ -67,10 +67,14 @@ internal sealed class EvdevKeyResolver : IDisposable
     // value=1 → KeyDown, value=0 → KeyUp, value=2 → repeat (ignored — auto-repeat handled by slave)
     internal KeyEvent?[]? Resolve(uint evdevCode, int value)
     {
-        if (value == 2) return null;   // evdev auto-repeat: slave handles locally
-
         // evdev keycode + 8 = xkb keycode (X11 convention used by libxkbcommon)
         var xkbKey = evdevCode + 8;
+
+        // auto-repeat: re-resolve the held key with current modifier state and forward as a repeat.
+        // dead-key state is already consumed, so a composed key (¨+e → ë) repeats its base char (e); a
+        // modifier change mid-hold re-resolves the case live (e → E). char resolution stays on the master.
+        if (value == 2) return ResolveRepeat(xkbKey);
+
         var isDown = value == 1;
 
         // key-up: update xkb state FIRST, then read modifiers.
@@ -93,12 +97,9 @@ internal sealed class EvdevKeyResolver : IDisposable
 
         // when Super or Control is held (shortcut context), override to the base keysym (level 0) so
         // shortcut keys send their unshifted character (e.g. '4' not '¤' on Norwegian for Super+Shift+4).
+        keysym = ShortcutBaseKeysym(xkbKey, keysym);
         if (IsModActive("Mod4") || IsModActive("Control"))
         {
-            var layout = EvdevNativeMethods.xkb_state_serialize_layout(_state, EvdevNativeMethods.XKB_STATE_LAYOUT_EFFECTIVE);
-            var count = EvdevNativeMethods.xkb_keymap_key_get_syms_by_level(_keymap, xkbKey, layout, 0, out var symsPtr);
-            if (count > 0 && symsPtr != nint.Zero)
-                keysym = (uint)Marshal.ReadInt32(symsPtr);
             // if the base key is a dead key, emit its spacing form (e.g. Ctrl+` → `) so the shortcut
             // fires with the correct base char. dead keys with no spacing form are dropped.
             if (XorgKeyResolver.DeadKeyLookup(keysym) is { Combining: not '\0' } deadShortcut)
@@ -114,9 +115,58 @@ internal sealed class EvdevKeyResolver : IDisposable
             }
         }
 
-        // keypad dual-purpose keys: normalize based on numlock state.
-        // xkbcommon applies KEYPAD XOR semantics (numlock XOR shift → level), but we want
-        // simple numlock-on=chars, numlock-off=navigation regardless of shift.
+        keysym = NormalizeKeypadKeysym(xkbKey, keysym);
+
+        var downMods = GetModifiers();
+        var type = KeyEventType.KeyDown;
+
+        // flush pending dead key before any shortcut character (mirrors Windows/Mac behaviour).
+        // the shortcut-dead-key branch above handles Ctrl/Super+dead_key; this handles Ctrl/Super+normal_char.
+        var shortcutFlush = (_pendingDeadKey != '\0' && (IsModActive("Mod4") || IsModActive("Control")))
+            ? XorgKeyResolver.TakeDeadKeySpacing(ref _pendingDeadKey, ref _pendingDeadSpacing) : null;
+
+        // pre-flush: non-modifier special key while dead key pending — emit spacing form before the special key
+        var deadFlush = XorgKeyResolver.FlushDeadKeyBeforeSpecial(keysym, ref _pendingDeadKey, ref _pendingDeadSpacing);
+
+        // evdev needs a placeholder _keyDownId entry for dead keys to support key-up replay
+        var ev = XorgKeyResolver.ResolveKeysym(keysym, evdevCode, _keyDownId,
+            ref _pendingDeadKey, ref _pendingDeadSpacing, downMods, type, trackDeadKey: true);
+        // shortcutFlush ?? deadFlush: if shortcutFlush fired it already cleared _pendingDeadKey, so
+        // FlushDeadKeyBeforeSpecial (above) would have seen '\0' and returned null — ?? never resolves to deadFlush.
+        var flush = shortcutFlush ?? deadFlush;
+        if (flush is not null && ev is not null) return [.. flush, .. ev];
+        if (flush is not null) return flush;
+        return ev;
+    }
+
+    // re-resolves the held key's current keysym (without updating xkb state) and emits a repeat event.
+    // applies the same shortcut-base and keypad normalization as the initial press so the repeated char
+    // tracks live modifier state; dead-key state is untouched (a repeat uses the key's base char).
+    private KeyEvent?[]? ResolveRepeat(uint xkbKey)
+    {
+        var keysym = (ulong)EvdevNativeMethods.xkb_state_key_get_one_sym(_state, xkbKey);
+        if (keysym == 0) return null;
+        keysym = ShortcutBaseKeysym(xkbKey, keysym);
+        keysym = NormalizeKeypadKeysym(xkbKey, keysym);
+        return XorgKeyResolver.BuildRepeat(keysym, GetModifiers());
+    }
+
+    // when Super or Control is held, override to the level-0 base keysym so shortcuts use the unshifted char.
+    private ulong ShortcutBaseKeysym(uint xkbKey, ulong keysym)
+    {
+        if (!IsModActive("Mod4") && !IsModActive("Control")) return keysym;
+        var layout = EvdevNativeMethods.xkb_state_serialize_layout(_state, EvdevNativeMethods.XKB_STATE_LAYOUT_EFFECTIVE);
+        var count = EvdevNativeMethods.xkb_keymap_key_get_syms_by_level(_keymap, xkbKey, layout, 0, out var symsPtr);
+        if (count > 0 && symsPtr != nint.Zero)
+            keysym = (uint)Marshal.ReadInt32(symsPtr);
+        return keysym;
+    }
+
+    // keypad dual-purpose keys: normalize based on numlock state.
+    // xkbcommon applies KEYPAD XOR semantics (numlock XOR shift → level), but we want
+    // simple numlock-on=chars, numlock-off=navigation regardless of shift.
+    private ulong NormalizeKeypadKeysym(uint xkbKey, ulong keysym)
+    {
         if (IsModActive("Mod2"))
         {
             // numlock on: ensure we have the numeric keysym.
@@ -141,27 +191,7 @@ internal sealed class EvdevKeyResolver : IDisposable
                 keysym = XorgKeyResolver.KpNumericToNav(keysym);  // shift+numlock-off XOR gave numeric; remap to nav
             keysym = XorgKeyResolver.MapKpNavToStandard(keysym);
         }
-
-        var downMods = GetModifiers();
-        var type = KeyEventType.KeyDown;
-
-        // flush pending dead key before any shortcut character (mirrors Windows/Mac behaviour).
-        // the shortcut-dead-key branch above handles Ctrl/Super+dead_key; this handles Ctrl/Super+normal_char.
-        var shortcutFlush = (_pendingDeadKey != '\0' && (IsModActive("Mod4") || IsModActive("Control")))
-            ? XorgKeyResolver.TakeDeadKeySpacing(ref _pendingDeadKey, ref _pendingDeadSpacing) : null;
-
-        // pre-flush: non-modifier special key while dead key pending — emit spacing form before the special key
-        var deadFlush = XorgKeyResolver.FlushDeadKeyBeforeSpecial(keysym, ref _pendingDeadKey, ref _pendingDeadSpacing);
-
-        // evdev needs a placeholder _keyDownId entry for dead keys to support key-up replay
-        var ev = XorgKeyResolver.ResolveKeysym(keysym, evdevCode, _keyDownId,
-            ref _pendingDeadKey, ref _pendingDeadSpacing, downMods, type, trackDeadKey: true);
-        // shortcutFlush ?? deadFlush: if shortcutFlush fired it already cleared _pendingDeadKey, so
-        // FlushDeadKeyBeforeSpecial (above) would have seen '\0' and returned null — ?? never resolves to deadFlush.
-        var flush = shortcutFlush ?? deadFlush;
-        if (flush is not null && ev is not null) return [.. flush, .. ev];
-        if (flush is not null) return flush;
-        return ev;
+        return keysym;
     }
 
     private KeyModifiers GetModifiers()

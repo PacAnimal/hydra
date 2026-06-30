@@ -15,6 +15,14 @@ public class MacKeyResolverTests
         return ev;
     }
 
+    // creates a CGKeyDown event with the OS autorepeat field set (as the OS marks genuine repeats)
+    private static nint AutoRepeatKeyDownEvent(ulong vk)
+    {
+        var ev = NativeMethods.CGEventCreateKeyboardEvent(nint.Zero, (ushort)vk, true);
+        NativeMethods.CGEventSetIntegerValueField(ev, NativeMethods.KCGKeyboardEventAutorepeat, 1);
+        return ev;
+    }
+
     // creates a CGFlagsChanged event for a modifier key press.
     // CGEventCreateKeyboardEvent creates a kCGEventKeyDown internally; Resolve() trusts the
     // eventType argument passed at call-site, not the event's internal type field.
@@ -110,5 +118,54 @@ public class MacKeyResolverTests
                 "second F14 press after Reset() toggles ScrollLock off");
         }
         finally { NativeMethods.CFRelease(f14B); }
+    }
+
+    // -- master-driven auto-repeat --
+
+    [Test]
+    public void Character_AutoRepeat_EmitsRepeatWithSameChar()
+    {
+        var r = new MacKeyResolver();
+
+        // keycode 0 (kVK_ANSI_A) produces a layout-dependent character; assert against whatever it resolves to.
+        char? first;
+        var ev1 = KeyDownEvent(0);
+        try
+        {
+            var e1 = r.Resolve(NativeMethods.KCGEventKeyDown, ev1);
+            Assume.That(e1?.FirstOrDefault()?.Character, Is.Not.Null, "key 0 must produce a character on this layout");
+            first = e1!.First()!.Character;
+        }
+        finally { NativeMethods.CFRelease(ev1); }
+
+        // a second key-down for the held key is an OS auto-repeat: emitted (not suppressed) and marked IsRepeat
+        var ev2 = KeyDownEvent(0);
+        try
+        {
+            var e2 = r.Resolve(NativeMethods.KCGEventKeyDown, ev2);
+            Assert.That(e2, Is.Not.Null);
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(e2!.Single()!.IsRepeat, Is.True, "auto-repeat must be forwarded as a repeat");
+                Assert.That(e2.Single()!.Character, Is.EqualTo(first), "repeat re-resolves to the same character");
+            }
+        }
+        finally { NativeMethods.CFRelease(ev2); }
+    }
+
+    [Test]
+    public void Character_OsAutorepeatFlag_TreatedAsRepeat()
+    {
+        var r = new MacKeyResolver();
+
+        // an event the OS marks with kCGKeyboardEventAutorepeat is a repeat even with no tracked prior press
+        var ev = AutoRepeatKeyDownEvent(0);
+        try
+        {
+            var e = r.Resolve(NativeMethods.KCGEventKeyDown, ev);
+            Assume.That(e?.FirstOrDefault()?.Character, Is.Not.Null, "key 0 must produce a character on this layout");
+            Assert.That(e!.Single()!.IsRepeat, Is.True, "the OS autorepeat flag alone marks the event a repeat");
+        }
+        finally { NativeMethods.CFRelease(ev); }
     }
 }

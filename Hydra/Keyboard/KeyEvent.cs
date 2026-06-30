@@ -8,6 +8,10 @@ public sealed record KeyEvent(KeyEventType Type, KeyModifiers Modifiers)
     public char? Character { get; init; }
     public SpecialKey? Key { get; init; }
 
+    // true when this is an OS auto-repeat re-resolved with current modifier/dead-key state.
+    // repeats are not initial presses: the slave injects them without tracking a new held key.
+    public bool IsRepeat { get; init; }
+
     public static KeyEvent Char(KeyEventType type, char ch, KeyModifiers mods) =>
         new(type, mods) { Character = ch };
 

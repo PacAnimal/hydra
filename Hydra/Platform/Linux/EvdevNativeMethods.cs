@@ -20,8 +20,6 @@ internal static partial class EvdevNativeMethods
 
     // EVIOCGRAB: exclusive device grab — _IOW('E', 0x90, int) = 0x40044590
     internal const int EVIOCGRAB = unchecked((int)0x40044590);
-    // EVIOCGREP: get repeat settings — _IOR('E', 0x03, uint[2]) = 0x80084503
-    internal const int EVIOCGREP = unchecked((int)0x80084503);
     // EVIOCGBIT(0, 1): which event types device supports — 0x80014520
     internal const int EVIOCGBIT_EV = unchecked((int)0x80014520);
     // EVIOCGBIT(EV_KEY=1, 96): key capabilities (96 bytes = 768 bits, covers KEY_MAX=0x2FF) — 0x80604521
@@ -77,10 +75,6 @@ internal static partial class EvdevNativeMethods
     [LibraryImport(Libc, EntryPoint = "ioctl")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial int ioctl_grab(int fd, int request, int arg);
-
-    [LibraryImport(Libc, EntryPoint = "ioctl")]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    internal static partial int ioctl_rep(int fd, int request, ref EvdevRepeatSettings arg);
 
     [LibraryImport(Libc, EntryPoint = "ioctl")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
@@ -159,13 +153,6 @@ internal struct InputEvent
     public ushort Type;
     public ushort Code;
     public int Value;
-}
-
-[StructLayout(LayoutKind.Sequential)]
-internal struct EvdevRepeatSettings
-{
-    public uint DelayMs;
-    public uint RateMs;
 }
 
 // libxkbcommon xkb_rule_names — all fields are const char* (native strings, nint)

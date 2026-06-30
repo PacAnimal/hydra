@@ -123,7 +123,7 @@ public class MouseThrottleTests
     }
 
     [Test]
-    public void KeyDown_IncludesRepeatSettings()
+    public void KeyDown_ForwardsRepeatPreference_NotMarkedRepeat()
     {
         // enter virtual screen
         _platform.FireMouseMove(2559, 720);
@@ -138,32 +138,27 @@ public class MouseThrottleTests
         Assert.That(msg, Is.Not.Null);
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(msg!.RepeatDelayMs, Is.Not.Null, "RepeatDelayMs should be set on KeyDown");
-            Assert.That(msg.RepeatRateMs, Is.Not.Null, "RepeatRateMs should be set on KeyDown");
-            Assert.That(msg.RepeatDelayMs, Is.EqualTo(500)); // FakePlatform returns (500, 33)
-            Assert.That(msg.RepeatRateMs, Is.EqualTo(33));
+            Assert.That(msg!.IsRepeat, Is.False, "an initial press is not a repeat");
+            Assert.That(msg.UnicodeKeyRepeat, Is.True, "default config enables unicode key repeat");
         }
     }
 
     [Test]
-    public void KeyUp_DoesNotIncludeRepeatSettings()
+    public void RepeatKeyEvent_ForwardedMarkedRepeat()
     {
         // enter virtual screen
         _platform.FireMouseMove(2559, 720);
         _relay.Sent.Clear();
 
-        _platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyUp, 'w', KeyModifiers.None));
+        // an OS auto-repeat is re-resolved on the master and surfaces as a KeyEvent flagged IsRepeat
+        _platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyDown, 'w', KeyModifiers.None) with { IsRepeat = true });
 
         var keySends = _relay.Sent.Where(s => s.Kind == MessageKind.KeyEvent).ToList();
         Assert.That(keySends, Has.Count.GreaterThanOrEqualTo(1));
 
         var msg = JsonSerializer.Deserialize<KeyEventMessage>(keySends[0].Json, Cathedral.Config.SaneJson.Options);
         Assert.That(msg, Is.Not.Null);
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(msg!.RepeatDelayMs, Is.Null, "RepeatDelayMs should be null on KeyUp");
-            Assert.That(msg.RepeatRateMs, Is.Null, "RepeatRateMs should be null on KeyUp");
-        }
+        Assert.That(msg!.IsRepeat, Is.True, "a repeat key event is forwarded marked as a repeat");
     }
 
     // -- helpers --

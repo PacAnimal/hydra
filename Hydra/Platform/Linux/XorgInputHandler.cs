@@ -219,13 +219,6 @@ public sealed class XorgInputHandler : IPlatformInput
         await ready.Task;
     }
 
-    public KeyRepeatSettings GetKeyRepeatSettings()
-    {
-        if (NativeMethods.XkbGetAutoRepeatRate(_display, NativeMethods.XkbUseCoreKbd, out var delay, out var interval))
-            return new KeyRepeatSettings((int)delay, (int)interval);
-        return new KeyRepeatSettings(500, 33);
-    }
-
     public bool AnyMouseButtonHeld()
     {
         // XQueryPointer mask_return bits 8-12 = Button1Mask through Button5Mask

@@ -22,11 +22,8 @@ public class SlaveRelayConnection : RelayConnection
     private readonly IFileSelectionDetector _selectionDetector;
     private readonly IOsdNotification _osd;
 
-    // active key repeat timers keyed by (char?, SpecialKey?) — always access under _keyEventLock
-    private readonly Dictionary<(char?, SpecialKey?), CancellationTokenSource> _repeatTimers = [];
-
-    // keys currently held down on the slave (for release-all on screen leave).
-    // accessed from both the SignalR dispatch thread and timer Task.Run threads — always access under _keyEventLock.
+    // keys currently held down on the slave (for release-all on screen leave). access under _keyEventLock,
+    // which serialises key handling against the release-all paths run by disconnect/screen-leave handlers.
     private readonly HashSet<(char?, SpecialKey?)> _heldKeys = [];
     private readonly SemaphoreSlim _keyEventLock = new(1, 1);
 
@@ -142,7 +139,7 @@ public class SlaveRelayConnection : RelayConnection
                 }
                 break;
             case MessageKind.LeaveScreen:
-                await ReleaseAll();
+                await ReleaseAllKeys();
                 _onScreenMasters.Remove(sourceHost);
                 if (_onScreenMasters.Count == 0 && _isReady)
                     _cursorHider.Hide();
@@ -244,7 +241,7 @@ public class SlaveRelayConnection : RelayConnection
         _fileTransfer.Abort(this, "relay disconnected");
         var masters = await _peerState.GetMasters();
         _onScreenMasters.Clear();
-        await ReleaseAll();
+        await ReleaseAllKeys();
         if (masters.Length > 0)
             _cursorHider.Show();
         await _peerState.PruneMasters([]);
@@ -267,7 +264,7 @@ public class SlaveRelayConnection : RelayConnection
             anyMasterLeft = true;
         }
         if (anyOnScreenMasterLeft)
-            await ReleaseAll();
+            await ReleaseAllKeys();
         if (anyMasterLeft)
         {
             if (after.Length == 0)
@@ -293,74 +290,20 @@ public class SlaveRelayConnection : RelayConnection
         var label = msg.Character.HasValue ? $" '{msg.Character}'" : msg.Key.HasValue ? $" {msg.Key}" : "";
         _log.LogDebug("Key: {Type}{Label} mods={Modifiers}", msg.Type, label, msg.Modifiers);
 
-        var repeatKey = (msg.Character, msg.Key);
-
-        if (msg.Type == KeyEventType.KeyUp)
-        {
-            // cancel timer and remove from held set before injecting, so the timer loop (if mid-tick)
-            // sees the key gone and does not inject a key-down after this key-up.
-            using (await _keyEventLock.WaitForDisposable())
-            {
-                if (_repeatTimers.Remove(repeatKey, out var cts))
-                    cts.Cancel();
-                _heldKeys.Remove(repeatKey);
-                _output.InjectKey(msg);
-            }
-            return;
-        }
-
-        // KeyDown: add to held set, inject, and register repeat timer atomically — prevents a racing
-        // KeyUp from orphaning a stale disposed CTS in _repeatTimers (ObjectDisposedException on next keydown).
-        CancellationTokenSource? repeatCts = null;
-        int delayMs = 0, rateMs = 0;
-
+        // repeats are master-driven: each OS auto-repeat is re-resolved with live modifier/dead-key state on
+        // the master and injected here as-is. a repeat implies the key is held on the master, so track it too
+        // (Add is idempotent) — this covers a master entering the screen mid-hold, where the slave never saw
+        // the initial press and the legacy physical re-press path would otherwise leave the key untracked and
+        // stuck on screen leave. injection runs under the lock so it serialises with release-all.
+        var heldKey = (msg.Character, msg.Key);
         using (await _keyEventLock.WaitForDisposable())
         {
-            _heldKeys.Add(repeatKey);
+            if (msg.Type == KeyEventType.KeyUp)
+                _heldKeys.Remove(heldKey);
+            else
+                _heldKeys.Add(heldKey);
             _output.InjectKey(msg);
-            if (msg.RepeatDelayMs is { } d && msg.RepeatRateMs is { } r)
-            {
-                delayMs = d;
-                rateMs = r;
-                if (_repeatTimers.Remove(repeatKey, out var existingCts))
-                    existingCts.Cancel();
-                repeatCts = new CancellationTokenSource();
-                _repeatTimers[repeatKey] = repeatCts;
-            }
         }
-
-        if (repeatCts == null) return;
-
-        var ct = repeatCts.Token;
-
-        // strip repeat settings and flag as a repeat. the Mac output handler injects repeats of printable
-        // characters via a keycode-less unicode insertion rather than re-pressing the physical key —
-        // re-pressing a held accent key (e.g. 'e') triggers the macOS press-and-hold accent popup instead
-        // of repeating the character. the initial physical key-down stays held (holdable for games/shortcuts).
-        var repeatMsg = msg with { RepeatDelayMs = null, RepeatRateMs = null, IsRepeat = true };
-
-        // CancellationToken.None: passing ct here would skip the lambda (including finally) if ct is already
-        // cancelled by the time the task is scheduled, leaking repeatCts. cancellation is handled inside.
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                await Task.Delay(delayMs, ct);
-                while (true)
-                {
-                    // check + inject under lock so a concurrent key-up cannot inject a key-down after the key-up
-                    using (await _keyEventLock.WaitForDisposable())
-                    {
-                        if (ct.IsCancellationRequested || !_heldKeys.Contains(repeatKey)) break;
-                        _output.InjectKey(repeatMsg);
-                    }
-                    await Task.Delay(rateMs, ct);
-                }
-            }
-            catch (OperationCanceledException) { }
-            catch (Exception ex) { _log.LogWarning(ex, "Key repeat timer error for {Key}", repeatKey); }
-            finally { repeatCts.Dispose(); }
-        }, CancellationToken.None);
     }
 
     private void HandleFileSelectionQuery(string sourceHost)
@@ -404,26 +347,14 @@ public class SlaveRelayConnection : RelayConnection
         return Task.CompletedTask;
     }
 
-    private async Task ReleaseAll()
-    {
-        await CancelAllRepeatTimers();
-        await ReleaseAllKeys();
-    }
-
+    // releases every key currently held on the slave — called when a master leaves the screen or disconnects
+    // so a key held at that moment does not stay stuck down.
     private async Task ReleaseAllKeys()
     {
         using var _ = await _keyEventLock.WaitForDisposable();
         foreach (var (ch, key) in _heldKeys)
             _output.InjectKey(new KeyEventMessage(KeyEventType.KeyUp, KeyModifiers.None, ch, key));
         _heldKeys.Clear();
-    }
-
-    private async Task CancelAllRepeatTimers()
-    {
-        using var _ = await _keyEventLock.WaitForDisposable();
-        foreach (var cts in _repeatTimers.Values)
-            cts.Cancel(); // don't dispose — timer tasks may be mid-flight; let GC handle cleanup
-        _repeatTimers.Clear();
     }
 
     private async Task HandleMasterConfig(string masterHost, ReadOnlyMemory<byte> body)

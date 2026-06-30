@@ -143,19 +143,6 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
             null, 200, 200);
     }
 
-    public unsafe KeyRepeatSettings GetKeyRepeatSettings()
-    {
-        uint delay = 1, speed = 15;
-        NativeMethods.SystemParametersInfo(NativeMethods.SPI_GETKEYBOARDDELAY, 0, (nint)(&delay), 0);
-        NativeMethods.SystemParametersInfo(NativeMethods.SPI_GETKEYBOARDSPEED, 0, (nint)(&speed), 0);
-
-        // delay: 0=250ms, 1=500ms, 2=750ms, 3=1000ms
-        var delayMs = (int)((delay + 1) * 250);
-        // speed: 0=slowest (~500ms), 31=fastest (~33ms); linear interpolation
-        var rateMs = (int)(500 - (speed * (500 - 33) / 31));
-        return new KeyRepeatSettings(delayMs, rateMs);
-    }
-
     public void StopEventTap()
     {
         _healthTimer?.Dispose();

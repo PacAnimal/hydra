@@ -91,15 +91,17 @@ internal sealed class WinKeyResolver
         // emit as KP_0-KP_9 SpecialKey events so the slave injects the physical numpad key.
         if (vk is >= WinVirtualKey.Numpad0 and <= WinVirtualKey.Numpad9)
         {
-            if (_keyDownId.ContainsKey(vk)) return Events(flushed, null);
             var kpKey = (SpecialKey)((uint)SpecialKey.KP_0 + (vk - WinVirtualKey.Numpad0));
+            if (_keyDownId.ContainsKey(vk))
+                return Combine(flushed, null, KeyEvent.Special(KeyEventType.KeyDown, kpKey, mods) with { IsRepeat = true });
             _keyDownId[vk] = new CharClassification(null, kpKey);
             return Combine(flushed, FlushPendingDeadKey(), KeyEvent.Special(KeyEventType.KeyDown, kpKey, mods));
         }
         // numpad decimal/separator: use ToUnicodeEx for locale-correct char ('.' on US, ',' on European layouts)
         if (vk == WinVirtualKey.Decimal)
         {
-            if (_keyDownId.ContainsKey(vk)) return Events(flushed, null);
+            if (_keyDownId.ContainsKey(vk))
+                return Combine(flushed, null, ResolveRepeatChar(vk, info.scanCode, info.flags, mods));
             var decEvent = ResolveCharacter(vk, info.scanCode, info.flags, mods);
             // always store (even sentinel) so auto-repeat is suppressed on subsequent events
             _keyDownId[vk] = decEvent is not null
@@ -111,7 +113,8 @@ internal sealed class WinKeyResolver
         // numpad Enter: VK_RETURN with extended-key flag — distinct from regular Enter
         if (vk == WinVirtualKey.Return && (info.flags & NativeMethods.LLKHF_EXTENDED) != 0)
         {
-            if (_keyDownId.ContainsKey(KpEnterTrackingVk)) return Events(flushed, null);
+            if (_keyDownId.ContainsKey(KpEnterTrackingVk))
+                return Combine(flushed, null, KeyEvent.Special(KeyEventType.KeyDown, SpecialKey.KP_Enter, mods) with { IsRepeat = true });
             _keyDownId[KpEnterTrackingVk] = new CharClassification(null, SpecialKey.KP_Enter);
             return Combine(flushed, FlushPendingDeadKey(), KeyEvent.Special(KeyEventType.KeyDown, SpecialKey.KP_Enter, mods));
         }
@@ -122,7 +125,12 @@ internal sealed class WinKeyResolver
             // key type check guards against cross-type collision (e.g. KP_Enter vs Return sharing VK_RETURN).
             // note: KP_Enter hits the vk==Return && LLKHF_EXTENDED branch above before reaching here,
             // so the tracked.Key == specialKey guard never needs a KP_Enter carve-out.
-            if (_keyDownId.TryGetValue(vk, out var tracked) && tracked.Key == specialKey) return Events(flushed, null);
+            if (_keyDownId.TryGetValue(vk, out var tracked) && tracked.Key == specialKey)
+            {
+                // modifiers don't repeat-type; other held specials (arrows, F-keys) forward a repeat
+                if (specialKey.IsModifier()) return Events(flushed, null);
+                return Combine(flushed, null, KeyEvent.Special(KeyEventType.KeyDown, specialKey, mods) with { IsRepeat = true });
+            }
             // modifier keys are transparent to dead key composition (Shift while dead key pending stays armed).
             // non-modifier special keys (Tab, Escape, arrows, F-keys, etc.) abort composition: flush spacing form.
             var flushedDead = specialKey.IsModifier() ? null : FlushPendingDeadKey();
@@ -138,8 +146,9 @@ internal sealed class WinKeyResolver
             return Combine(flushed, flushedDead, KeyEvent.Special(KeyEventType.KeyDown, specialKey, mods));
         }
 
-        // suppress character key auto-repeat
-        if (_keyDownId.ContainsKey(vk)) return Events(flushed, null);
+        // character key auto-repeat: re-resolve with current modifier state and forward as a repeat
+        if (_keyDownId.ContainsKey(vk))
+            return Combine(flushed, null, ResolveRepeatChar(vk, info.scanCode, info.flags, mods));
 
         // dead key pending + Ctrl/Super shortcut: flush spacing form first, then send the shortcut.
         // without this, dead_grave + Ctrl+A would compose to 'à' with Ctrl — wrong on every slave.
@@ -204,14 +213,17 @@ internal sealed class WinKeyResolver
         return mods;
     }
 
-    private KeyEvent[]? ResolveCharacter(int vk, uint scanCode, uint hookFlags, KeyModifiers mods)
+    // copies the live key state into _resolveState and strips ctrl/win/shift per the shortcut rules so
+    // ToUnicodeEx resolves the intended base/AltGr character. altGrActive reports whether the AltGr layer
+    // is active (so callers can apply the Ctrl+Alt → bare retry fallback).
+    private void PrepareResolveState(out bool altGrActive)
     {
         Array.Copy(_keyState, _resolveState, 256);
 
         // AltGr: pressing the AltGr key synthesizes an injected LCtrl, which UpdateKeyState strips
         // to avoid phantom Ctrl in modifier reporting. Restore it here so ToUnicodeEx sees the
         // full Ctrl+RMenu state it needs to resolve the AltGr character layer.
-        bool altGrActive = (_resolveState[WinVirtualKey.RMenu] & 0x80) != 0;
+        altGrActive = (_resolveState[WinVirtualKey.RMenu] & 0x80) != 0;
         if (altGrActive)
         {
             _resolveState[WinVirtualKey.LControl] = 0x80;
@@ -245,6 +257,59 @@ internal sealed class WinKeyResolver
             _resolveState[WinVirtualKey.RShift] = 0;
             _resolveState[WinVirtualKey.Shift] = 0;
         }
+    }
+
+    // re-resolves a held character key for an OS auto-repeat with current modifier state, marked as a repeat.
+    // dead-key state is already consumed on first press, so a composed key (´+e → é) repeats its base char (e),
+    // and a modifier change mid-hold re-resolves the case live (e → E). does NOT mutate dead-key or _keyDownId
+    // state: a repeat never composes, and key-up replay must still match the original key-down's stored char.
+    private KeyEvent[]? ResolveRepeatChar(int vk, uint scanCode, uint hookFlags, KeyModifiers mods)
+    {
+        PrepareResolveState(out var altGrActive);
+        var hkl = GetForegroundKeyboardLayout();
+        uint uFlags = hookFlags & NativeMethods.LLKHF_EXTENDED;
+
+        char rawChar;
+        unsafe
+        {
+            char* buff = stackalloc char[4];
+            fixed (byte* pState = _resolveState)
+            {
+                var count = NativeMethods.ToUnicodeEx((uint)vk, scanCode, pState, buff, 4, uFlags, hkl);
+                if (count == 0 && altGrActive)
+                {
+                    _resolveState[WinVirtualKey.LControl] = 0;
+                    _resolveState[WinVirtualKey.RControl] = 0;
+                    _resolveState[WinVirtualKey.Control] = 0;
+                    _resolveState[WinVirtualKey.LMenu] = 0;
+                    _resolveState[WinVirtualKey.RMenu] = 0;
+                    _resolveState[WinVirtualKey.Menu] = 0;
+                    count = NativeMethods.ToUnicodeEx((uint)vk, scanCode, pState, buff, 4, uFlags, hkl);
+                }
+
+                // count < 0 (held dead key): flush the system dead-key state so the next real key starts
+                // clean, then drop — a held dead key does not repeat. count == 0: nothing to repeat.
+                if (count < 0)
+                {
+                    char flush;
+                    _ = NativeMethods.ToUnicodeEx(NativeMethods.VK_SPACE, 0, pState, &flush, 1, 0, hkl);
+                }
+                if (count <= 0) return null;
+                rawChar = buff[0];
+            }
+        }
+
+        var classified = KeyResolver.ClassifyChar(rawChar);
+        if (classified.Ch.HasValue)
+            return [KeyEvent.Char(KeyEventType.KeyDown, classified.Ch.Value, mods) with { IsRepeat = true }];
+        if (classified.Key.HasValue)
+            return [KeyEvent.Special(KeyEventType.KeyDown, classified.Key.Value, mods) with { IsRepeat = true }];
+        return null;
+    }
+
+    private KeyEvent[]? ResolveCharacter(int vk, uint scanCode, uint hookFlags, KeyModifiers mods)
+    {
+        PrepareResolveState(out var altGrActive);
 
         // get keyboard layout of the foreground window's thread for correct character mapping
         var hkl = GetForegroundKeyboardLayout();

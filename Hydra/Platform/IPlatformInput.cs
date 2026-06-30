@@ -15,8 +15,6 @@ public record DetectedScreen(
     public ScreenBounds Bounds => new(X, Y, Width, Height);
 }
 
-public record KeyRepeatSettings(int DelayMs, int RateMs);
-
 // event tap interface — implemented by platform input handlers; used by slaves to passively observe local input for activity tracking
 public interface ILocalEventTap
 {
@@ -37,6 +35,5 @@ public interface IPlatformInput : IAsyncDisposable, ICursor, ILocalEventTap
 {
     bool IsOnVirtualScreen { get; set; }
 
-    KeyRepeatSettings GetKeyRepeatSettings();
     bool AnyMouseButtonHeld();
 }

@@ -30,10 +30,8 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
     private readonly Toggle _isOnVirtualScreen = new();
     public bool IsOnVirtualScreen { get => _isOnVirtualScreen; set => _isOnVirtualScreen.TrySet(value); }
 
-    // cached ObjC selectors for NX_SYSDEFINED media key decoding and repeat settings
+    // cached ObjC selectors for NX_SYSDEFINED media key decoding
     private static readonly nint NsEventClass = NativeMethods.objc_getClass("NSEvent");
-    private static readonly nint SelKeyRepeatDelay = NativeMethods.sel_registerName("keyRepeatDelay");
-    private static readonly nint SelKeyRepeatInterval = NativeMethods.sel_registerName("keyRepeatInterval");
     private static readonly nint SelPressedMouseButtons = NativeMethods.sel_registerName("pressedMouseButtons");
     private static readonly nint SelEventWithCgEvent = NativeMethods.sel_registerName("eventWithCGEvent:");
     private static readonly nint SelSubtype = NativeMethods.sel_registerName("subtype");
@@ -171,14 +169,6 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
 
         _tapThread.Start();
         return ready.Task;
-    }
-
-    public KeyRepeatSettings GetKeyRepeatSettings()
-    {
-        if (NsEventClass == nint.Zero) return new KeyRepeatSettings(500, 33);
-        var delaySeconds = NativeMethods.objc_msgSend_double(NsEventClass, SelKeyRepeatDelay);
-        var rateSeconds = NativeMethods.objc_msgSend_double(NsEventClass, SelKeyRepeatInterval);
-        return new KeyRepeatSettings((int)(delaySeconds * 1000), (int)(rateSeconds * 1000));
     }
 
     public bool AnyMouseButtonHeld()

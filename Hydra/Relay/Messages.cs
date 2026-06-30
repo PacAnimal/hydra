@@ -51,7 +51,12 @@ public enum PeerPlatform : byte { Unknown = 0, Linux = 1, MacOS = 2, Windows = 3
 public record ScreenInfoMessage(List<ScreenInfoEntry> Screens, PeerPlatform? Platform = null);
 public record MasterConfigMessage(LogLevel? LogLevel);
 public record SlaveLogMessage(int Level, string Category, string Message, string? Exception);
-public record KeyEventMessage(KeyEventType Type, KeyModifiers Modifiers, char? Character, SpecialKey? Key, int? RepeatDelayMs = null, int? RepeatRateMs = null, bool IsRepeat = false);
+// IsRepeat marks an OS auto-repeat the master re-resolved (with live modifier/dead-key state) and forwarded;
+// the slave injects it without tracking a new held key. UnicodeKeyRepeat is the master's per-keypress repeat
+// preference: when set, Mac slaves inject repeated characters via keycode-less unicode (avoiding the
+// press-and-hold accent popup) rather than re-pressing the physical key. travelling per-keypress lets a
+// shared slave honour each master's own preference.
+public record KeyEventMessage(KeyEventType Type, KeyModifiers Modifiers, char? Character, SpecialKey? Key, bool IsRepeat = false, bool UnicodeKeyRepeat = true);
 public record MouseButtonMessage(MouseButton Button, bool IsPressed);
 public record MouseScrollMessage(short XDelta, short YDelta);
 public record EnterScreenMessage(string Screen, int X, int Y, int Width, int Height);

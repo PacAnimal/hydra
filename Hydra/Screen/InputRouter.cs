@@ -35,11 +35,6 @@ public class InputRouter(
     private const int MaxMouseHz = 125; // should divide evenly by 1000
     private const int MinMouseIntervalMs = 1000 / MaxMouseHz;
 
-    // cached key repeat settings from OS; refreshed periodically in the poll loop.
-    // volatile: written on poll timer thread, read on event tap thread.
-    private volatile int _repeatDelayMs = 500;
-    private volatile int _repeatRateMs = 33;
-
     private readonly IWorldState _peerState = peerState ?? new WorldState();
     private readonly Func<long> _getTickCount = getTickCount ?? (() => Environment.TickCount64);
 
@@ -102,10 +97,6 @@ public class InputRouter(
         foreach (var remote in st.Screens.Where(r => !r.IsLocal))
             log.LogInformation("Remote screen '{Name}': waiting for peer", remote.Name);
 
-        var (delayMs, rateMs) = platform.GetKeyRepeatSettings();
-        _repeatDelayMs = delayMs;
-        _repeatRateMs = rateMs;
-
         relay.PeersChanged += OnPeersChanged;
         relay.MessageReceived += OnMessageReceived;
         relay.Disconnected += OnRelayDisconnected;
@@ -123,8 +114,6 @@ public class InputRouter(
         _screenSaverSync.ScreensaverDeactivated += OnScreensaverDeactivated;
         _screenSaverSync.ScreenLocked += OnLockDetected;
         _screenSaverSync.ScreenUnlocked += OnScreenUnlocked;
-
-        _ = RefreshKeyRepeatAsync(_pollCts.Token);
         if (profile.HideCursor)
             cursorHider.Hide();
     }
@@ -210,21 +199,6 @@ public class InputRouter(
         }
 
         await tcs.Task;
-    }
-
-    private async Task RefreshKeyRepeatAsync(CancellationToken ct)
-    {
-        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(30));
-        try
-        {
-            while (await timer.WaitForNextTickAsync(ct))
-            {
-                var (delayMs, rateMs) = platform.GetKeyRepeatSettings();
-                _repeatDelayMs = delayMs;
-                _repeatRateMs = rateMs;
-            }
-        }
-        catch (OperationCanceledException) { }
     }
 
     private async Task OnPeersChanged(string[] hostNames)
@@ -713,7 +687,8 @@ public class InputRouter(
 
             // consume both KeyDown and KeyUp for hotkeys so the slave never sees either half
             var hotkeyConsumed = (keyEvent.Modifiers & LockHotkey) == LockHotkey && keyEvent.Character is 'l' or 'm' or 'c' or 'v' or 'z';
-            if (hotkeyConsumed && keyEvent.Type == KeyEventType.KeyDown)
+            // !IsRepeat: an auto-repeat of a held hotkey must not re-fire the toggle every tick
+            if (hotkeyConsumed && keyEvent.Type == KeyEventType.KeyDown && !keyEvent.IsRepeat)
             {
                 if (keyEvent.Character == 'l')
                 {
@@ -839,14 +814,9 @@ public class InputRouter(
 
             if (!hotkeyConsumed && st.Mouse.IsOnVirtualScreen && relay.IsConnected)
             {
-                // include repeat settings on the first KeyDown so the slave can generate local repeats
-                int? repeatDelay = null, repeatRate = null;
-                if (keyEvent.Type == KeyEventType.KeyDown)
-                {
-                    repeatDelay = _repeatDelayMs;
-                    repeatRate = _repeatRateMs;
-                }
-                ForwardToVirtualScreen(st, MessageKind.KeyEvent, new KeyEventMessage(keyEvent.Type, keyEvent.Modifiers, keyEvent.Character, RemapKey(keyEvent.Key), repeatDelay, repeatRate));
+                // repeats are master-driven: each OS auto-repeat is re-resolved (live modifier/dead-key state)
+                // and forwarded with IsRepeat set, so the slave injects the correct character every tick.
+                ForwardToVirtualScreen(st, MessageKind.KeyEvent, new KeyEventMessage(keyEvent.Type, keyEvent.Modifiers, keyEvent.Character, RemapKey(keyEvent.Key), IsRepeat: keyEvent.IsRepeat, UnicodeKeyRepeat: profile.UnicodeKeyRepeat));
             }
         });
     }

@@ -328,11 +328,6 @@ internal static partial class NativeMethods
     // XkbUseCoreKbd = 0x0100 (use the core keyboard device)
     internal const uint XkbUseCoreKbd = 0x0100;
 
-    [LibraryImport(X11)]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    internal static partial bool XkbGetAutoRepeatRate(nint display, uint deviceSpec, out uint delay, out uint interval);
-
     // returns 0 on success; fills stateReturn.Group with the effective keyboard group (layout index)
     [LibraryImport(X11)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]

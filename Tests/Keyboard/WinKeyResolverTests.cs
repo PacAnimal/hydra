@@ -49,12 +49,18 @@ public class WinKeyResolverTests
     }
 
     [Test]
-    public void NumpadDigit_AutoRepeat_Suppressed()
+    public void NumpadDigit_AutoRepeat_EmitsRepeat()
     {
         var r = new WinKeyResolver();
         Down(r, WinVirtualKey.Numpad7);
+        // master-driven repeats: a held key's OS auto-repeat is forwarded marked IsRepeat
         var repeat = Down(r, WinVirtualKey.Numpad7);
-        Assert.That(repeat, Is.Null);
+        Assert.That(repeat, Has.Length.EqualTo(1));
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(repeat![0].Key, Is.EqualTo(SpecialKey.KP_7));
+            Assert.That(repeat[0].IsRepeat, Is.True);
+        }
     }
 
     // VK_RETURN is shared by both regular Enter (no extended flag) and KP_Enter (extended flag).
@@ -90,13 +96,19 @@ public class WinKeyResolverTests
     }
 
     [Test]
-    public void KpEnter_AutoRepeat_Suppressed()
+    public void KpEnter_AutoRepeat_EmitsRepeat()
     {
         var r = new WinKeyResolver();
         r.Resolve(NativeMethods.WM_KEYDOWN, ExtendedHook(WinVirtualKey.Return));
 
+        // master-driven repeats: a held KP_Enter's OS auto-repeat is forwarded marked IsRepeat
         var repeat = r.Resolve(NativeMethods.WM_KEYDOWN, ExtendedHook(WinVirtualKey.Return));
-        Assert.That(repeat, Is.Null);
+        Assert.That(repeat, Has.Length.EqualTo(1));
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(repeat![0].Key, Is.EqualTo(SpecialKey.KP_Enter));
+            Assert.That(repeat[0].IsRepeat, Is.True);
+        }
     }
 
     // key-up must replay the correct key even when both Return and KP_Enter are held simultaneously.

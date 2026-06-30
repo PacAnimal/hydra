@@ -25,6 +25,7 @@ public interface IHydraProfile
     bool SyncScreensaver { get; }
     bool ScreenLockPropagation { get; }
     bool AccelerateMouseWheel { get; }
+    bool UnicodeKeyRepeat { get; }
     int? DeadCorners { get; }
 
     // computed from Name + Hosts
@@ -54,6 +55,7 @@ public class HydraProfile(HydraConfigFile configFile, HydraConfig? activeProfile
     public bool SyncScreensaver => _activeProfile?.SyncScreensaver ?? true;
     public bool ScreenLockPropagation => _activeProfile?.ScreenLockPropagation ?? false;
     public bool AccelerateMouseWheel => _activeProfile?.AccelerateMouseWheel ?? true;
+    public bool UnicodeKeyRepeat => _activeProfile?.UnicodeKeyRepeat ?? true;
     public int? DeadCorners => _activeProfile?.DeadCorners;
 
     public HostConfig? LocalHost => Hosts.FirstOrDefault(h => h.Name.EqualsIgnoreCase(Name));
