@@ -15,7 +15,9 @@ public class CoalescingOutputWrapperTests
     public void SetUp()
     {
         _inner = new RecordingOutput();
-        _wrapper = new CoalescingOutputWrapper(_inner);
+        // manual drain mode: the test drives delivery via Drain(), so there is no background thread
+        // racing a sleep — coalescing is observed deterministically.
+        _wrapper = new CoalescingOutputWrapper(_inner, runDrainThread: false);
     }
 
     [TearDown]
@@ -143,8 +145,8 @@ public class CoalescingOutputWrapperTests
         Assert.That(_inner.Events.OfType<MoveEvent>().Any(), Is.True, "dispose should flush pending move");
     }
 
-    // wait for all enqueued events to be delivered by the drain thread
-    private static void Drain() => Thread.Sleep(50);
+    // deliver all enqueued events synchronously — deterministic, no sleep
+    private void Drain() => _wrapper.DrainPending();
 
     // -- recording infrastructure --
 

@@ -16,17 +16,21 @@ public sealed class CoalescingOutputWrapper : IPlatformOutput
     private int _pendingAbsX, _pendingAbsY;
     private int _pendingRelDx, _pendingRelDy;
     private readonly BlockingCollection<Action> _actions = [];
-    private readonly Thread _drainThread;
+    private readonly Thread? _drainThread;
 
-    // ReSharper disable once ConvertToPrimaryConstructor
-#pragma warning disable IDE0290
-    public CoalescingOutputWrapper(IPlatformOutput inner)
+    public CoalescingOutputWrapper(IPlatformOutput inner) : this(inner, runDrainThread: true) { }
+
+    // runDrainThread: false leaves draining to the caller via DrainPending() — used by tests to drive
+    // delivery deterministically instead of racing the background thread against a sleep.
+    internal CoalescingOutputWrapper(IPlatformOutput inner, bool runDrainThread)
     {
         _inner = inner;
-        _drainThread = new Thread(Drain) { IsBackground = true, Name = "output-coalescer" };
-        _drainThread.Start();
+        if (runDrainThread)
+        {
+            _drainThread = new Thread(Drain) { IsBackground = true, Name = "output-coalescer" };
+            _drainThread.Start();
+        }
     }
-#pragma warning restore IDE0290
 
     public void MoveMouse(int x, int y)
     {
@@ -125,6 +129,13 @@ public sealed class CoalescingOutputWrapper : IPlatformOutput
         catch (InvalidOperationException) { } // thrown by BlockingCollection when CompleteAdding races with enumeration start
     }
 
+    // drains every currently-queued action on the caller's thread. only valid when constructed with
+    // runDrainThread: false (no background drainer to race against) — the test seam for deterministic delivery.
+    internal void DrainPending()
+    {
+        while (_actions.TryTake(out var action)) action();
+    }
+
     public bool IsAccessibilityTrusted() => _inner.IsAccessibilityTrusted();
     public Task WaitForAccessibilityTrusted(CancellationToken cancel) => _inner.WaitForAccessibilityTrusted(cancel);
 
@@ -132,7 +143,10 @@ public sealed class CoalescingOutputWrapper : IPlatformOutput
     {
         FlushPendingMoveToQueue(); // deliver any final pending move
         _actions.CompleteAdding();
-        _drainThread.Join(1000);
+        if (_drainThread != null)
+            _drainThread.Join(1000);
+        else
+            DrainPending(); // manual mode: flush the queue inline so a pending move is still delivered
         _inner.Dispose();
     }
 }
