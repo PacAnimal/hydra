@@ -267,7 +267,8 @@ internal sealed class WinKeyResolver
     {
         PrepareResolveState(out var altGrActive);
         var hkl = GetForegroundKeyboardLayout();
-        uint uFlags = hookFlags & NativeMethods.LLKHF_EXTENDED;
+        // non-mutating: a repeat must never touch the kernel dead-key buffer (would corrupt later composition)
+        uint uFlags = (hookFlags & NativeMethods.LLKHF_EXTENDED) | NativeMethods.TOUNICODE_NOKERNELSTATE;
 
         char rawChar;
         unsafe
@@ -314,8 +315,11 @@ internal sealed class WinKeyResolver
         // get keyboard layout of the foreground window's thread for correct character mapping
         var hkl = GetForegroundKeyboardLayout();
 
-        // pass extended key flag through to ToUnicodeEx (same approach as input-leap MSWindowsKeyState)
-        uint uFlags = hookFlags & NativeMethods.LLKHF_EXTENDED;
+        // pass extended key flag through to ToUnicodeEx (same approach as input-leap MSWindowsKeyState).
+        // non-mutating (bit 2): dead keys still resolve to -1 but never arm the kernel buffer — Hydra composes
+        // dead keys itself (_pendingDeadKey), and a stale kernel dead key would otherwise make a later key
+        // resolve to a literal spacing char (e.g. AltGr+¨ then e → '~' instead of 'ẽ').
+        uint uFlags = (hookFlags & NativeMethods.LLKHF_EXTENDED) | NativeMethods.TOUNICODE_NOKERNELSTATE;
 
         int count;
         char rawChar;

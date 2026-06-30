@@ -249,6 +249,12 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     internal static partial short VkKeyScanW(ushort ch);
 
+    // ToUnicodeEx wFlags bit 2: do not change the kernel keyboard state (Win10 1607+). dead keys still
+    // resolve (return -1 with the spacing form in the buffer) but are never armed/consumed in the global
+    // buffer — Hydra tracks dead keys itself, so kernel state must stay untouched to avoid cross-keypress
+    // corruption (a stale kernel dead key makes the next resolution return a literal spacing char).
+    internal const uint TOUNICODE_NOKERNELSTATE = 0x4;
+
     [LibraryImport(User32)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     internal static unsafe partial int ToUnicodeEx(
