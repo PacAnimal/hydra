@@ -159,10 +159,10 @@ public class WinKeyResolverCharTests
         // Shift+key (without Ctrl) must produce the shifted character, not the base character.
         // e.g. on a Norwegian layout, Shift+' produces '*' — not "'".
         // This was broken when Shift was stripped unconditionally rather than only under Ctrl.
-        const uint VkA = 0x41;
+        const uint vkA = 0x41;
         var r = new WinKeyResolver();
         Down(r, WinVirtualKey.LShift);
-        var events = Down(r, VkA);
+        var events = Down(r, vkA);
         Assert.That(events, Is.Not.Null, "Shift+A must produce events");
         var charEvent = events!.FirstOrDefault(e => e.Character != null);
         using (Assert.EnterMultipleScope())
