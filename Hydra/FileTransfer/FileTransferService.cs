@@ -153,6 +153,32 @@ public sealed class FileTransferService : IDisposable
         if (cleared) _log.LogWarning("Coordinated transfer to {Target} timed out with no response — cleared", targetHost);
     }
 
+    // aborts an in-flight transfer if its peer (send target / receiver source / coordinator target) is no
+    // longer among the current peers. Without this, a sender whose target vanishes keeps streaming into the
+    // void and then falsely reports "complete"; a receiver/coordinator would hang until its own watchdog.
+    public void AbortIfPeerGone(IReadOnlyCollection<string> currentPeers, IRelaySender relay)
+    {
+        string? gone = null;
+        lock (_lock)
+        {
+            if (_sendTargetHost != null && !ContainsHost(currentPeers, _sendTargetHost)) gone = _sendTargetHost;
+            else if (_receiver != null && !ContainsHost(currentPeers, _receiver.SourceHost)) gone = _receiver.SourceHost;
+            else if (_coordTargetHost != null && !ContainsHost(currentPeers, _coordTargetHost)) gone = _coordTargetHost;
+        }
+        if (gone != null)
+        {
+            _log.LogInformation("Aborting transfer — peer '{Host}' left", gone);
+            Abort(relay, $"peer '{gone}' left");
+        }
+    }
+
+    private static bool ContainsHost(IReadOnlyCollection<string> hosts, string host)
+    {
+        foreach (var h in hosts)
+            if (h.EqualsIgnoreCase(host)) return true;
+        return false;
+    }
+
     public static bool IsFileTransferMessage(MessageKind kind) => kind is
         MessageKind.FileTransferRequest or MessageKind.FileTransferStart or
         MessageKind.FileTransferChunk or MessageKind.FileTransferDone or

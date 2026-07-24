@@ -272,6 +272,9 @@ public class SlaveRelayConnection : RelayConnection
             else if (_onScreenMasters.Count == 0 && _isReady)
                 _cursorHider.Hide();
         }
+        // abort any transfer whose peer has left (e.g. a slave→slave send whose target vanished) so it
+        // doesn't stream into the void and falsely report success
+        _fileTransfer.AbortIfPeerGone(current, this);
         await base.OnPeers(hostNames);
     }
 

@@ -252,11 +252,14 @@ public class InputRouter(
 
         if (disconnectedHost != null)
         {
-            _fileTransfer.Abort(relay, $"peer '{disconnectedHost}' disconnected");
             ReturnToLocalScreen(warpX, warpY);
             ShowCursorOnReturn();
             log.LogInformation("Remote peer '{Name}' disconnected — returned to local screen", disconnectedHost);
         }
+
+        // abort a transfer only if ITS peer actually left — not merely because the cursor's current screen
+        // peer did (Abort tears down ANY transfer, so the old cursor-screen-coupled call aborted unrelated ones)
+        _fileTransfer.AbortIfPeerGone(current, relay);
 
         // send MasterConfig only to newly appeared peers that are configured as slaves
         foreach (var host in delta.NewPeers)
