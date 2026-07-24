@@ -1,17 +1,18 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using Cathedral.Utils;
 
 namespace Hydra.Platform;
 
 internal static partial class ProcessRestart
 {
-    private static int _restarting; // 0 = not restarting, 1 = restart already initiated
+    private static readonly Toggle _restarting = new(); // one-shot latch — restart already initiated
 
     internal static void Restart()
     {
         // one restart only — a racing caller (NetworkWatcher + SelfUpdater, or an event burst) must not
         // spawn a second process (Windows) before Environment.Exit runs
-        if (Interlocked.CompareExchange(ref _restarting, 1, 0) != 0) return;
+        if (!_restarting.TrySet()) return;
 
         var exePath = Environment.ProcessPath!;
 
@@ -27,7 +28,7 @@ internal static partial class ProcessRestart
             }
             catch
             {
-                Interlocked.Exchange(ref _restarting, 0); // spawn failed — don't latch out a later retry
+                _restarting.TryReset(); // spawn failed — don't latch out a later retry
                 throw;
             }
             Environment.Exit(0);

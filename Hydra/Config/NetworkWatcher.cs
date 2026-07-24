@@ -23,7 +23,7 @@ internal sealed class NetworkWatcher : SimpleHostedService
     // debounce: ignore rapid re-triggers within this window
     private DateTime _lastCheck = DateTime.MinValue;
     private static readonly TimeSpan Debounce = TimeSpan.FromSeconds(2);
-    private int _checking; // 0 = idle, 1 = a check is running — serializes concurrent callers
+    private readonly Toggle _checking = new(); // set while a check is running — serializes concurrent callers
 
     public NetworkWatcher(INetworkDetector detector, Func<int> screenCountProvider, List<HydraConfig> configs, HydraConfig? activeConfig, string? profileOverride, ILogger<NetworkWatcher> log)
         : base(log, TimeSpan.FromSeconds(10))
@@ -65,14 +65,14 @@ internal sealed class NetworkWatcher : SimpleHostedService
         // serialize: the 10s Execute loop, NetworkAddressChanged and TriggerCheck can all fire
         // concurrently. Running one check at a time makes the debounce atomic (no TOCTOU on _lastCheck)
         // and stops two checks from both resolving + restarting on the same event burst.
-        if (Interlocked.CompareExchange(ref _checking, 1, 0) != 0) return;
+        if (!_checking.TrySet()) return;
         try
         {
             await CheckNetworkCore(cancel);
         }
         finally
         {
-            Interlocked.Exchange(ref _checking, 0);
+            _checking.TryReset();
         }
     }
 
@@ -95,6 +95,15 @@ internal sealed class NetworkWatcher : SimpleHostedService
         }
 
         var screenCount = _screenCountProvider();
+
+        // a transient 0-screen reading (sleep/wake, dock/undock, closing the laptop lid) is a degraded
+        // state, never a real target config — don't let it drive a restart to idle and straight back
+        // once the displays re-enumerate. Headless Linux reports 1, so this only skips genuine no-display.
+        if (screenCount <= 0)
+        {
+            _log.LogDebug("Skipping config check — no screens detected (transient display state)");
+            return;
+        }
 
         bool? isPluggedIn;
         try
