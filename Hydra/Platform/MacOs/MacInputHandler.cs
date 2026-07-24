@@ -51,6 +51,15 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
         _ = NativeMethods.CGWarpMouseCursorPosition(new CGPoint { X = x, Y = y });
     }
 
+    public async ValueTask WarpToPark(int x, int y)
+    {
+        // wait for the shield to be up and absorbing before the cursor lands on the park point;
+        // otherwise hover effects fire at the destination during the shield-show round-trip.
+        // Show() is idempotent and its reply echo fires only once the shield is actually absorbing.
+        await _shield.Show();
+        WarpCursor(x, y);
+    }
+
     public bool CursorIsVisible => NativeMethods.CGCursorIsVisible();
 
     public (int X, int Y)? GetCursorPosition()

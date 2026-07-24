@@ -36,4 +36,13 @@ public interface IPlatformInput : IAsyncDisposable, ICursor, ILocalEventTap
     bool IsOnVirtualScreen { get; set; }
 
     bool AnyMouseButtonHeld();
+
+    // warp the cursor to its park point, first ensuring the cursor shield is actually covering that
+    // point so hover/tooltips don't fire at the destination during shield-show latency.
+    // default: warp immediately (platforms with no async shield handshake).
+    ValueTask WarpToPark(int x, int y)
+    {
+        WarpCursor(x, y);
+        return ValueTask.CompletedTask;
+    }
 }

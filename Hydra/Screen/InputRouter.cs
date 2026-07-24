@@ -338,9 +338,10 @@ public class InputRouter(
                     cursorHider.Hide();
                     platform.IsOnVirtualScreen = true;
                     ApplyEnterScreen(st, dest, remoteInfo, savedX, savedY);
-                    platform.WarpCursor(st.WarpX, st.WarpY);
+                    // anchor immediately (bogus filter); delay physical warp until the shield is absorbing
                     st.LastWarpX = st.WarpX;
                     st.LastWarpY = st.WarpY;
+                    await platform.WarpToPark(st.WarpX, st.WarpY);
                     SendEnterScreen(dest, savedX, savedY);
                     log.LogInformation("Restored cursor to '{Screen}' after screensaver", savedScreen);
                 }
@@ -951,10 +952,11 @@ public class InputRouter(
         cursorHider.Hide();
         platform.IsOnVirtualScreen = true;
         ApplyEnterScreen(st, hit.Destination, remoteInfo, hit.EntryX, hit.EntryY);
-        // warp immediately so pre-queued events compute large dx → caught by bogus filter
-        platform.WarpCursor(st.WarpX, st.WarpY);
+        // set the warp anchor immediately so pre-queued events compute large dx → caught by bogus filter,
+        // but delay the physical warp until the shield is actually absorbing (avoids hover at the park point)
         st.LastWarpX = st.WarpX;
         st.LastWarpY = st.WarpY;
+        await platform.WarpToPark(st.WarpX, st.WarpY);
         log.LogInformation("Entered remote screen '{Name}' → ({X}, {Y})", hit.Destination.Name, hit.EntryX, hit.EntryY);
         SendEnterScreen(hit.Destination, hit.EntryX, hit.EntryY);
     }
