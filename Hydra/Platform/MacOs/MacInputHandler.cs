@@ -65,10 +65,13 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
     public async ValueTask HideCursor()
     {
         using var guard = await _cursorLock.WaitForDisposable();
+        // always (re)assert the shield's absorb state — the command is idempotent. gating it behind the
+        // _cursorHidden transition could skip it and leave the shield in pass-through on a remote screen,
+        // letting local hover/tooltips leak through. the transition below only guards one-time cursor setup.
+        await _shield.Show();
         if (!_cursorHidden)
         {
             _cursorHidden = true;
-            await _shield.Show();
             NativeMethods.EnableBackgroundCursorManipulation();
             _ = NativeMethods.CGAssociateMouseAndMouseCursorPosition(true);
             // near-zero suppression interval prevents CGWarpMouseCursorPosition from resetting acceleration
@@ -87,9 +90,11 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
     public async ValueTask ShowCursor()
     {
         using var guard = await _cursorLock.WaitForDisposable();
+        // always (re)assert pass-through on the shield, even if the cursor-hide refcount is already clear,
+        // so shield state can't desync into "stuck absorbing" on the local screen.
+        await _shield.Hide();
         if (!_cursorHidden) return;
         _cursorHidden = false;
-        await _shield.Hide();
         // matches Synergy pattern: call EnableBackgroundCursorManipulation in both hide and show
         // so the CGS connection property is warmed up before the next HideCursor attempt
         NativeMethods.EnableBackgroundCursorManipulation();
@@ -134,17 +139,19 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
 
         _tapThread = new Thread(() =>
         {
-            _runLoop = NativeMethods.CFRunLoopGetCurrent();
+            var runLoop = NativeMethods.CFRunLoopGetCurrent();
+            _runLoop = runLoop;
 
-            _tapPort = NativeMethods.CGEventTapCreate(
+            var tapPort = NativeMethods.CGEventTapCreate(
                 NativeMethods.KCGHidEventTap,
                 NativeMethods.KCGHeadInsertEventTap,
                 NativeMethods.KCGEventTapOptionDefault,
                 NativeMethods.KCGEventMaskForAllEvents,
                 _tapCallback!,
                 nint.Zero);
+            _tapPort = tapPort;
 
-            if (_tapPort == nint.Zero)
+            if (tapPort == nint.Zero)
             {
                 log.LogError("CGEventTapCreate returned null -- accessibility permission denied?");
                 ready.TrySetResult(false);
@@ -152,16 +159,18 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
             }
 
             var commonModes = GetCfRunLoopCommonModes();
-            _runLoopSource = NativeMethods.CFMachPortCreateRunLoopSource(nint.Zero, _tapPort, 0);
-            NativeMethods.CFRunLoopAddSource(_runLoop, _runLoopSource, commonModes);
-            NativeMethods.CGEventTapEnable(_tapPort, true);
+            var runLoopSource = NativeMethods.CFMachPortCreateRunLoopSource(nint.Zero, tapPort, 0);
+            _runLoopSource = runLoopSource;
+            NativeMethods.CFRunLoopAddSource(runLoop, runLoopSource, commonModes);
+            NativeMethods.CGEventTapEnable(tapPort, true);
 
             ready.TrySetResult(true);
             NativeMethods.CFRunLoopRun();
 
-            // cleanup after run loop stops
-            if (_runLoopSource != nint.Zero) NativeMethods.CFRelease(_runLoopSource);
-            if (_tapPort != nint.Zero) NativeMethods.CFRelease(_tapPort);
+            // release this thread's OWN handles via captured locals — the fields may have been
+            // overwritten by a concurrent RestartEventTap, and releasing those would free the live tap
+            if (runLoopSource != nint.Zero) NativeMethods.CFRelease(runLoopSource);
+            if (tapPort != nint.Zero) NativeMethods.CFRelease(tapPort);
         })
         { IsBackground = true, Name = "HydraEventTap" };
 

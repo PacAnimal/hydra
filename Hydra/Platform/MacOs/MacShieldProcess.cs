@@ -37,6 +37,7 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
     private TaskCompletionSource? _initialStateTcs;
     private volatile TaskCompletionSource? _authSettledTcs; // completed when location auth leaves notDetermined
     private readonly Toggle _stopping = new();
+    private readonly Lock _processLock = new();
     private volatile string _lastState = CmdHide; // last show/hide command; re-applied after unexpected restart
     private const int SendReplyTimeoutMs = 5_000;     // how long to wait for shield to echo a command back
     private const int RestartInitialDelayMs = 500;    // initial backoff before restarting a crashed shield
@@ -93,8 +94,20 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
         return Task.CompletedTask;
     }
 
-    internal Task Show() { _lastState = DebugShield ? CmdDebug : CmdShow; return SendWithReply(_lastState); }
-    internal Task Hide() { _lastState = CmdHide; return SendWithReply(CmdHide); }
+    internal Task Show()
+    {
+        var target = DebugShield ? CmdDebug : CmdShow;
+        if (_lastState != target) Log?.LogDebug("Shield → {State} (show/absorb)", target);
+        _lastState = target;
+        return SendWithReply(target);
+    }
+
+    internal Task Hide()
+    {
+        if (_lastState != CmdHide) Log?.LogDebug("Shield → hide (pass-through)");
+        _lastState = CmdHide;
+        return SendWithReply(CmdHide);
+    }
 
     // -- IFileTransferDialog --
 
@@ -131,15 +144,21 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
         if (OperatingSystem.IsMacOS()) EnsureExecutable();
         if (!File.Exists(_binaryPath)) return;
 
-        _process?.Dispose();
-        _process = Process.Start(new ProcessStartInfo
+        // start under the process lock and re-check _stopping so a restart racing Stop() can't
+        // resurrect the shield after shutdown (which would orphan an event-absorbing overlay window)
+        lock (_processLock)
         {
-            FileName = _binaryPath,
-            UseShellExecute = false,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-        });
+            if (_stopping) return;
+            _process?.Dispose();
+            _process = Process.Start(new ProcessStartInfo
+            {
+                FileName = _binaryPath,
+                UseShellExecute = false,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            });
+        }
 
         if (_process == null) return;
 
@@ -159,8 +178,14 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
 
     private void Stop()
     {
-        _stopping.TrySet();
-        var proc = _process;
+        // set _stopping and capture the process under the same lock StartProcess uses, so a concurrent
+        // (re)start either bails on _stopping or is captured here and killed — never left orphaned
+        Process? proc;
+        lock (_processLock)
+        {
+            _stopping.TrySet();
+            proc = _process;
+        }
         if (proc is null) return;
         try
         {
