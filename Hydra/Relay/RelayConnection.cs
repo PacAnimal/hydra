@@ -20,10 +20,19 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     private IStyxServer? _server;
     private RelayEncryption? _encryption;
 
-    // outbound send queue — written synchronously, drained by the Connect loop
+    // outbound send queue — written synchronously, drained by the Connect loop.
+    // bounded as a backstop against unbounded growth if the link half-stalls (the drain loop can block on
+    // a single Send until the connection is declared dead, at which point the whole queue is discarded).
+    // mouse-move coalescing is read-side, so raw moves can accumulate here under a flood; DropOldest sheds
+    // the stalest frames — correct, since a dropped old mouse position is benign and freshest input wins.
+    private const int SendQueueCapacity = 8192;
     private readonly Channel<(string[] Targets, byte[] Payload)> _sendQueue =
-        Channel.CreateUnbounded<(string[], byte[])>(
-            new UnboundedChannelOptions { SingleReader = true });
+        Channel.CreateBounded<(string[], byte[])>(
+            new BoundedChannelOptions(SendQueueCapacity)
+            {
+                SingleReader = true,
+                FullMode = BoundedChannelFullMode.DropOldest,
+            });
 
     protected virtual TimeSpan ReconnectDelay => TimeSpan.FromSeconds(Constants.ReconnectDelaySeconds);
 
