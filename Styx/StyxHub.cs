@@ -43,12 +43,20 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, IStyxPass
 
         var hostName = login.HostName.ToLowerInvariant();
 
-        // kick any existing connections with the same network+hostname (stale entries can accumulate on unclean disconnect)
-        var kicked = await registry.KickDuplicates(networkId, hostName, Context.ConnectionId);
+        // kick same network+hostname duplicates and register atomically (one lock) so two concurrent
+        // authenticates for the same host can't both register (stale phantom peer)
+        var kicked = await registry.RegisterKickingDuplicates(Context.ConnectionId, networkId, hostName, remoteIp);
         foreach (var connectionId in kicked)
             await Clients.Client(connectionId).Kicked("duplicate hostname");
 
-        await registry.Register(Context.ConnectionId, networkId, hostName, remoteIp);
+        // if the connection aborted during auth, OnDisconnectedAsync may have already run its Unregister
+        // (before we registered above) — clean up so we don't leave a stale entry for a dead connection
+        if (Context.ConnectionAborted.IsCancellationRequested)
+        {
+            await registry.Unregister(Context.ConnectionId);
+            return new RelayLoginResponse { Authenticated = false, Message = "Connection aborted" };
+        }
+
         log.LogInformation("Authentication accepted for \"{HostName}\" (connectionId:{ConnectionId}) from {RemoteIp} on network {NetworkId}", hostName, Context.ConnectionId, remoteIp, networkId);
         await throttle;
 

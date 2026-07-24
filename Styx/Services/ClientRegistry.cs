@@ -9,8 +9,10 @@ public interface IClientRegistry
     ValueTask Unregister(string connectionId);
     ValueTask<string?> GetConnectionId(Guid networkId, string hostName);
     ValueTask<ClientIdentity?> GetIdentity(string connectionId);
-    // returns all connectionIds that were kicked (may be >1 if stale entries accumulated)
-    ValueTask<IReadOnlyList<string>> KickDuplicates(Guid networkId, string hostName, string newConnectionId);
+    // atomically kicks same-network+host duplicates AND registers the new connection under one lock, so two
+    // concurrent authenticates for the same host can't both find nothing to kick and both register.
+    // returns the kicked connectionIds (may be >1 if stale entries accumulated on unclean disconnect).
+    ValueTask<IReadOnlyList<string>> RegisterKickingDuplicates(string connectionId, Guid networkId, string hostName, string remoteIp);
     // returns all (connectionId, hostName) pairs on a network, optionally excluding one connection
     ValueTask<IReadOnlyList<(string ConnectionId, string HostName)>> GetNetworkClients(Guid networkId, string? excludeConnectionId = null);
 }
@@ -52,21 +54,23 @@ public class ClientRegistry(ILogger<ClientRegistry> log) : IClientRegistry
         return clients.Value.TryGetValue(connectionId, out var identity) ? identity : null;
     }
 
-    // finds all existing connections with the same network+hostname, removes them, returns their connectionIds
-    public async ValueTask<IReadOnlyList<string>> KickDuplicates(Guid networkId, string hostName, string newConnectionId)
+    // atomically kick same-network+host duplicates and register the new connection under one lock
+    public async ValueTask<IReadOnlyList<string>> RegisterKickingDuplicates(string connectionId, Guid networkId, string hostName, string remoteIp)
     {
         using var clients = await _clients.WaitForDisposable();
         var found = clients.Value
             .Where(kv => kv.Value.NetworkId == networkId
                 && kv.Value.HostName.EqualsOrdinal(hostName)
-                && kv.Key != newConnectionId)
+                && kv.Key != connectionId)
             .Select(kv => kv.Key)
             .ToList();
-        foreach (var connectionId in found)
+        foreach (var id in found)
         {
-            clients.Value.Remove(connectionId);
+            clients.Value.Remove(id);
             log.LogInformation("Kicked duplicate \"{HostName}\" from network {NetworkId}", hostName, networkId);
         }
+        clients.Value[connectionId] = new ClientIdentity(networkId, hostName, remoteIp);
+        log.LogDebug("Registered client \"{HostName}\" from {RemoteIp} on network {NetworkId}", hostName, remoteIp, networkId);
         return found;
     }
 
