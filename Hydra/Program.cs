@@ -56,20 +56,27 @@ if (OperatingSystem.IsWindows())
 HydraConfigFile configFile;
 List<HydraConfig> profiles;
 string configPath;
-try
+string? lastConfigError = null;
+while (true)
 {
-    (configFile, configPath) = HydraConfigFile.LoadAll(Env.Config);
-    profiles = configFile.Profiles;
-}
-catch (FileNotFoundException ex)
-{
-    Console.Error.WriteLine(ex.Message);
-    return;
-}
-catch (InvalidOperationException ex)
-{
-    Console.Error.WriteLine(ex.Message);
-    return;
+    try
+    {
+        (configFile, configPath) = HydraConfigFile.LoadAll(Env.Config);
+        profiles = configFile.Profiles;
+        break;
+    }
+    catch (Exception ex) when (ex is IOException or InvalidOperationException or System.Text.Json.JsonException)
+    {
+        // don't hard-exit on a missing/invalid config: under launchd/service KeepAlive that turns into a
+        // ~5s relaunch storm that spams the redirect logs forever. Stay alive and retry so a corrected
+        // config is picked up automatically. Log the message once (and again only if it changes).
+        if (ex.Message != lastConfigError)
+        {
+            Console.Error.WriteLine(ex.Message);
+            lastConfigError = ex.Message;
+        }
+        await Task.Delay(TimeSpan.FromSeconds(30));
+    }
 }
 
 // acquire process lock if configured — prevents two instances from running with the same config
