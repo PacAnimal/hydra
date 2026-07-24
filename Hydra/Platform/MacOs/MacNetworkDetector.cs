@@ -4,12 +4,12 @@ namespace Hydra.Platform.MacOs;
 // (the hydra-shield Swift binary handles SSID detection via CoreWLAN).
 internal sealed class MacNetworkDetector(MacNetworkState? networkState = null) : INetworkDetector
 {
-    public Task<List<string>> GetActiveSsids(CancellationToken cancel = default)
+    public Task<List<string>?> GetActiveSsids(CancellationToken cancel = default)
     {
-        var results = new List<string>();
-        if (!string.IsNullOrEmpty(networkState?.Ssid))
-            results.Add(networkState.Ssid);
-        return Task.FromResult(results);
+        // no state source wired up → detection unavailable (unknown), not "no wifi"
+        if (networkState == null) return Task.FromResult<List<string>?>(null);
+        List<string> results = string.IsNullOrEmpty(networkState.Ssid) ? [] : [networkState.Ssid];
+        return Task.FromResult<List<string>?>(results);
     }
 
     public Task<bool?> GetIsPluggedIn(CancellationToken cancel = default) =>

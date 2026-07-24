@@ -6,7 +6,7 @@ namespace Hydra.Platform.Windows;
 
 internal sealed partial class WindowsNetworkDetector : INetworkDetector
 {
-    public Task<List<string>> GetActiveSsids(CancellationToken cancel = default) =>
+    public Task<List<string>?> GetActiveSsids(CancellationToken cancel = default) =>
         Task.FromResult(GetWifiSsids());
 
     public Task<bool?> GetIsPluggedIn(CancellationToken cancel = default)
@@ -17,18 +17,18 @@ internal sealed partial class WindowsNetworkDetector : INetworkDetector
         return Task.FromResult(result);
     }
 
-    private static List<string> GetWifiSsids()
+    // returns connected SSIDs; empty = no wifi; null = WLAN service unavailable/query error (unknown)
+    private static List<string>? GetWifiSsids()
     {
-        var results = new List<string>();
-
         if (WlanOpenHandle(2, nint.Zero, out _, out var handle) != 0)
-            return results;
+            return null;
 
         try
         {
             if (WlanEnumInterfaces(handle, nint.Zero, out var ifaceListPtr) != 0)
-                return results;
+                return null;
 
+            var results = new List<string>();
             try
             {
                 var count = Marshal.ReadInt32(ifaceListPtr); // dwNumberOfItems at offset 0
@@ -46,13 +46,13 @@ internal sealed partial class WindowsNetworkDetector : INetworkDetector
             {
                 WlanFreeMemory(ifaceListPtr);
             }
+
+            return results;
         }
         finally
         {
             _ = WlanCloseHandle(handle, nint.Zero);
         }
-
-        return results;
     }
 
     private static string? QuerySsid(nint handle, nint ifaceInfoPtr)

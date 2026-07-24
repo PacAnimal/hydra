@@ -6,10 +6,27 @@ namespace Hydra.Platform.Linux;
 
 internal sealed class LinuxNetworkDetector(ICmdRunner cmd, ILogger<LinuxNetworkDetector> log) : INetworkDetector
 {
-    public async Task<List<string>> GetActiveSsids(CancellationToken cancel = default)
+    public async Task<List<string>?> GetActiveSsids(CancellationToken cancel = default)
     {
-        var ssid = await GetSsid(cancel);
-        return ssid != null ? [ssid] : [];
+        try
+        {
+            var output = new StringBuilder();
+            var exitCode = await cmd.TextCommand("iwgetid", ["-r"], ".",
+                o => { if (o.Source == ICmdRunner.OutputSource.StdOut) output.AppendLine(o.Text); },
+                _ => { }, cancel);
+
+            // iwgetid ran: exit != 0 or empty output = genuinely not associated (known "no wifi")
+            if (exitCode != 0) return [];
+            var ssid = output.ToString().Trim();
+            return string.IsNullOrEmpty(ssid) ? [] : [ssid];
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            // couldn't even run the probe — detection is unavailable, NOT "no wifi". Return unknown so
+            // a transient iwgetid spawn failure doesn't get read as "wifi gone" and trigger a restart.
+            log.LogWarning("Failed to get ssid from iwgetid: {Message}", e.Message);
+            return null;
+        }
     }
 
     public Task<bool?> GetIsPluggedIn(CancellationToken cancel = default) =>
@@ -35,21 +52,4 @@ internal sealed class LinuxNetworkDetector(ICmdRunner cmd, ILogger<LinuxNetworkD
         return null;
     }
 
-    // iwgetid -r outputs raw SSID on stdout, empty if not connected
-    private async Task<string?> GetSsid(CancellationToken cancel)
-    {
-        try
-        {
-            var output = new StringBuilder();
-            var exitCode = await cmd.TextCommand("iwgetid", ["-r"], ".",
-                o => { if (o.Source == ICmdRunner.OutputSource.StdOut) output.AppendLine(o.Text); },
-                _ => { }, cancel);
-
-            if (exitCode != 0) return null;
-            var ssid = output.ToString().Trim();
-            return string.IsNullOrEmpty(ssid) ? null : ssid;
-        }
-        catch (Exception e) { log.LogWarning("Failed to get ssid from iwgetid: {Message}", e.Message); }
-        return null;
-    }
 }

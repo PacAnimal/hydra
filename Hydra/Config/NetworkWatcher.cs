@@ -83,7 +83,7 @@ internal sealed class NetworkWatcher : SimpleHostedService
         if (now - _lastCheck < Debounce) return;
         _lastCheck = now;
 
-        List<string> ssids;
+        List<string>? ssids;
         try
         {
             ssids = await _detector.GetActiveSsids(cancel);
@@ -91,6 +91,14 @@ internal sealed class NetworkWatcher : SimpleHostedService
         catch (Exception e) when (e is not OperationCanceledException)
         {
             _log.LogWarning(e, "network detection failed");
+            return;
+        }
+
+        // null = detection unavailable (unknown) — don't treat as "no wifi" and restart to a fallback;
+        // keep the current config until a real reading comes back
+        if (ssids == null)
+        {
+            _log.LogDebug("Skipping config check — SSID detection unavailable");
             return;
         }
 

@@ -116,7 +116,7 @@ else if (!HydraConfig.HasConditions(profiles))
     config = profiles[0]; // single unconditional profile — no detection needed
 else
 {
-    var activeSsids = HydraConfig.HasSsidConditions(profiles) ? await detector.GetActiveSsids() : [];
+    var activeSsids = (HydraConfig.HasSsidConditions(profiles) ? await detector.GetActiveSsids() : []) ?? [];
     var screenCount = HydraConfig.HasScreenCountConditions(profiles) ? GetScreenCount() : 1;
     var isPluggedIn = HydraConfig.HasPluggedInConditions(profiles) ? await detector.GetIsPluggedIn() : null;
     config = HydraConfig.Resolve(profiles, new ConditionState(activeSsids, screenCount, isPluggedIn));
