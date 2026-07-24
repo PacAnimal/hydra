@@ -30,7 +30,8 @@ public class ProcessLockTests
     public void Acquire_ThrowsWhenAlreadyLocked()
     {
         using var first = ProcessLock.Acquire(_path);
-        Assert.Throws<InvalidOperationException>(() => ProcessLock.Acquire(_path));
+        // maxAttempts:1 → fail fast without the default ~2s retry budget
+        Assert.Throws<InvalidOperationException>(() => ProcessLock.Acquire(_path, maxAttempts: 1, retryDelayMs: 0));
     }
 
     [Test]
@@ -39,7 +40,7 @@ public class ProcessLockTests
         // PID reading uses raw syscalls on unix; not testable on windows
         Assume.That(!OperatingSystem.IsWindows());
         using var first = ProcessLock.Acquire(_path);
-        var ex = Assert.Throws<InvalidOperationException>(() => ProcessLock.Acquire(_path))!;
+        var ex = Assert.Throws<InvalidOperationException>(() => ProcessLock.Acquire(_path, maxAttempts: 1, retryDelayMs: 0))!;
         Assert.That(ex.Message, Does.Contain(Environment.ProcessId.ToString()));
     }
 
@@ -47,8 +48,19 @@ public class ProcessLockTests
     public void Acquire_IncludesPathInError()
     {
         using var first = ProcessLock.Acquire(_path);
-        var ex = Assert.Throws<InvalidOperationException>(() => ProcessLock.Acquire(_path))!;
+        var ex = Assert.Throws<InvalidOperationException>(() => ProcessLock.Acquire(_path, maxAttempts: 1, retryDelayMs: 0))!;
         Assert.That(ex.Message, Does.Contain(_path));
+    }
+
+    [Test]
+    public void Acquire_RetriesUntilLockReleased()
+    {
+        // the dying-parent-vs-restart-child race: the child's Acquire must retry past the moment the
+        // parent releases its lock instead of failing on the first attempt. deterministic — the
+        // beforeRetry seam releases the held lock, so the next attempt succeeds (no timing).
+        var first = ProcessLock.Acquire(_path);
+        using var second = ProcessLock.Acquire(_path, maxAttempts: 5, retryDelayMs: 0, beforeRetry: () => first.Dispose());
+        Assert.Pass();
     }
 
     [Test]

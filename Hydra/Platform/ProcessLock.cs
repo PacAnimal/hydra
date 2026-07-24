@@ -56,16 +56,31 @@ internal sealed partial class ProcessLock : IDisposable
         }
     }
 
-    public static ProcessLock Acquire(string path)
+    private const int DefaultAcquireAttempts = 20;
+    private const int DefaultAcquireDelayMs = 100;
+
+    public static ProcessLock Acquire(string path) => Acquire(path, DefaultAcquireAttempts, DefaultAcquireDelayMs);
+
+    // Retries the exclusive open before giving up (~2s by default). On a restart the freshly spawned child
+    // can reach Acquire before the dying parent's OS file handle is released — on Windows there is no execv
+    // hand-off (ProcessRestart does Process.Start + Environment.Exit), so without the retry the child would
+    // throw "already running" and exit, leaving NO instance running. beforeRetry is a deterministic test seam.
+    internal static ProcessLock Acquire(string path, int maxAttempts, int retryDelayMs, Action? beforeRetry = null)
     {
-        FileStream stream;
-        try
+        FileStream stream = null!;
+        for (var attempt = 0; ; attempt++)
         {
-            stream = new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
-        }
-        catch (IOException)
-        {
-            throw LockError(path, TryReadPid(path));
+            try
+            {
+                stream = new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+                break;
+            }
+            catch (IOException)
+            {
+                if (attempt >= maxAttempts - 1) throw LockError(path, TryReadPid(path));
+                beforeRetry?.Invoke();
+                if (retryDelayMs > 0) Thread.Sleep(retryDelayMs);
+            }
         }
 
         stream.SetLength(0);
