@@ -403,7 +403,7 @@ public class InputRouter(
         try
         {
             var clip = ClipboardUtils.ReadWithFallback(_clipboardSync, _lastReceived, log, "push");
-            if (string.IsNullOrEmpty(clip.Text) && string.IsNullOrEmpty(clip.PrimaryText) && clip.ImagePng == null)
+            if (string.IsNullOrEmpty(clip.Text) && string.IsNullOrEmpty(clip.PrimaryText) && clip.ImagePng == null && clip.Html == null && clip.Rtf == null)
                 return; // nothing to push
             var hash = ClipboardUtils.ClipboardHash(clip);
             log.LogDebug("Sending clipboard hash to {Host}", host);
@@ -421,9 +421,9 @@ public class InputRouter(
         try
         {
             var clip = ClipboardUtils.ReadWithFallback(_clipboardSync, _lastReceived, log, "push");
-            if (string.IsNullOrEmpty(clip.Text) && string.IsNullOrEmpty(clip.PrimaryText) && clip.ImagePng == null)
+            if (string.IsNullOrEmpty(clip.Text) && string.IsNullOrEmpty(clip.PrimaryText) && clip.ImagePng == null && clip.Html == null && clip.Rtf == null)
                 return;
-            relay.Send([host], MessageSerializer.Encode(MessageKind.ClipboardPush, new ClipboardPushMessage(clip.Text ?? "", clip.PrimaryText, clip.ImagePng)));
+            relay.Send([host], MessageSerializer.Encode(MessageKind.ClipboardPush, new ClipboardPushMessage(clip.Text ?? "", clip.PrimaryText, clip.ImagePng, clip.Html, clip.Rtf)));
         }
         catch (Exception ex)
         {
@@ -498,8 +498,8 @@ public class InputRouter(
                     }
                     log.LogDebug("Clipboard pull response from {Host}: text={TextLen}, primary={PrimaryLen}, image={ImageLen}",
                         sourceHost, clip.Text?.Length, clip.PrimaryText?.Length, clip.ImagePng?.Length);
-                    var validated = ClipboardUtils.ValidateFields(clip.Text, clip.PrimaryText, clip.ImagePng, log, "pull response", sourceHost);
-                    _clipboardSync.SetClipboard(validated.Text, validated.PrimaryText, validated.ImagePng);
+                    var validated = ClipboardUtils.ValidateFields(clip.Text, clip.PrimaryText, clip.ImagePng, clip.Html, clip.Rtf, log, "pull response", sourceHost);
+                    _clipboardSync.SetClipboard(validated);
                     // if cursor is currently on a remote screen, forward the clipboard to it
                     var activeHost = await RunFence<string?>(st =>
                     {

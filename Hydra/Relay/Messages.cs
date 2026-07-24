@@ -63,8 +63,8 @@ public record EnterScreenMessage(string Screen, int X, int Y, int Width, int Hei
 public record ScreensaverSyncMessage(bool Active);
 public record LeaveScreenMessage;
 public record ClipboardPullMessage(ulong? MasterHash = null);
-public record ClipboardPushMessage(string Text, string? PrimaryText = null, byte[]? ImagePng = null);
-public record ClipboardPullResponseMessage(string? Text, string? PrimaryText = null, byte[]? ImagePng = null, bool? Unchanged = null);
+public record ClipboardPushMessage(string Text, string? PrimaryText = null, byte[]? ImagePng = null, string? Html = null, byte[]? Rtf = null);
+public record ClipboardPullResponseMessage(string? Text, string? PrimaryText = null, byte[]? ImagePng = null, bool? Unchanged = null, string? Html = null, byte[]? Rtf = null);
 public record ClipboardHashMessage(ulong Hash);
 public record ClipboardPullRequestMessage;
 public record LockScreenMessage(long MillisecondsSinceLastInput);

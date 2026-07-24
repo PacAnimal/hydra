@@ -107,8 +107,11 @@ public sealed class WindowsClipboardSync(ILogger<WindowsClipboardSync> log) : IC
         }
     }
 
-    public void SetClipboard(string? text, string? primaryText, byte[]? imagePng)
+    public void SetClipboard(ClipboardSnapshot contents)
     {
+        var text = contents.Text;
+        var primaryText = contents.PrimaryText;
+        var imagePng = contents.ImagePng;
         if (text == null && primaryText == null && imagePng == null) return;
 
         if (text != null) _echo.TrackText(text);

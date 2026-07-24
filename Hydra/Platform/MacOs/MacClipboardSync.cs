@@ -119,8 +119,11 @@ public sealed class MacClipboardSync : IClipboardSync
         WriteImagePng(pasteboard, pngData);
     }
 
-    public void SetClipboard(string? text, string? primaryText, byte[]? imagePng)
+    public void SetClipboard(ClipboardSnapshot contents)
     {
+        var text = contents.Text;
+        var primaryText = contents.PrimaryText;
+        var imagePng = contents.ImagePng;
         using var pool = new ObjcAutoreleasePool();
         try
         {

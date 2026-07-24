@@ -7,6 +7,10 @@ public sealed class FakeClipboardSync : IClipboardSync
     public string? Text { get; private set; }
     public string? PrimaryText { get; private set; }
     public byte[]? ImagePng { get; private set; }
+    public string? Html { get; private set; }
+    public byte[]? Rtf { get; private set; }
+    public int GetHtmlCallCount { get; private set; }
+    public int GetRtfCallCount { get; private set; }
     public int GetTextCallCount { get; private set; }
     public int SetTextCallCount { get; private set; }
     public int GetPrimaryTextCallCount { get; private set; }
@@ -51,15 +55,31 @@ public sealed class FakeClipboardSync : IClipboardSync
         ImagePng = pngData;
     }
 
-    public void SetClipboard(string? text, string? primaryText, byte[]? imagePng)
+    public string? GetHtml()
+    {
+        GetHtmlCallCount++;
+        return Html;
+    }
+
+    public byte[]? GetRtf()
+    {
+        GetRtfCallCount++;
+        return Rtf;
+    }
+
+    public void SetClipboard(ClipboardSnapshot contents)
     {
         SetClipboardCallCount++;
-        // mirror real implementations: clear all formats first, then write non-null ones
-        Text = text;
-        PrimaryText = primaryText;
-        ImagePng = imagePng;
+        // mirror real implementations: replace all formats with the snapshot
+        Text = contents.Text;
+        PrimaryText = contents.PrimaryText;
+        ImagePng = contents.ImagePng;
+        Html = contents.Html;
+        Rtf = contents.Rtf;
     }
 
     // helper for test setup (bypasses call counter)
     public void SetupImage(byte[]? png) => ImagePng = png;
+    public void SetupHtml(string? html) => Html = html;
+    public void SetupRtf(byte[]? rtf) => Rtf = rtf;
 }

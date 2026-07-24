@@ -205,9 +205,9 @@ public class SlaveRelayConnection : RelayConnection
                 {
                     _log.LogDebug("Clipboard push from {Host}: text={TextLen}, primary={PrimaryLen}, image={ImageLen}",
                         sourceHost, push.Text.Length, push.PrimaryText?.Length, push.ImagePng?.Length);
-                    var validated = ClipboardUtils.ValidateFields(push.Text, push.PrimaryText, push.ImagePng, _log, "push", sourceHost);
+                    var validated = ClipboardUtils.ValidateFields(push.Text, push.PrimaryText, push.ImagePng, push.Html, push.Rtf, _log, "push", sourceHost);
                     _lastPushed = validated;
-                    _clipboardSync.SetClipboard(validated.Text, validated.PrimaryText, validated.ImagePng);
+                    _clipboardSync.SetClipboard(validated);
                 }
                 break;
             case MessageKind.ClipboardPull:
@@ -222,7 +222,7 @@ public class SlaveRelayConnection : RelayConnection
                     }
                     _log.LogDebug("Clipboard pull to {Host}: text={TextLen}, primary={PrimaryLen}, image={ImageLen}",
                         sourceHost, pullClip.Text?.Length, pullClip.PrimaryText?.Length, pullClip.ImagePng?.Length);
-                    Send([sourceHost], MessageSerializer.Encode(MessageKind.ClipboardPullResponse, new ClipboardPullResponseMessage(pullClip.Text, pullClip.PrimaryText, pullClip.ImagePng)));
+                    Send([sourceHost], MessageSerializer.Encode(MessageKind.ClipboardPullResponse, new ClipboardPullResponseMessage(pullClip.Text, pullClip.PrimaryText, pullClip.ImagePng, Html: pullClip.Html, Rtf: pullClip.Rtf)));
                     break;
                 }
             case MessageKind.Osd:
