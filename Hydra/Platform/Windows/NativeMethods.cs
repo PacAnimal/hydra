@@ -310,9 +310,16 @@ internal static partial class NativeMethods
         internal nint hIconSm;
     }
 
-    [LibraryImport(User32, EntryPoint = "RegisterClassExW")]
+    internal const int ERROR_CLASS_ALREADY_EXISTS = 1410;
+
+    [LibraryImport(User32, EntryPoint = "RegisterClassExW", SetLastError = true)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     internal static partial ushort RegisterClassExW(in WNDCLASSEXW lpwcx);
+
+    [LibraryImport(User32, EntryPoint = "UnregisterClassW", SetLastError = true)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool UnregisterClassW(nint lpClassName, nint hInstance);
 
     [LibraryImport(User32, EntryPoint = "CreateWindowExW")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]

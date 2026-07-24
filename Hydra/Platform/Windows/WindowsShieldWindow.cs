@@ -8,6 +8,7 @@ namespace Hydra.Platform.Windows;
 // must only be called from the thread that owns the message pump (HydraHookPump).
 internal sealed class WindowsShieldWindow
 {
+    private const string ShieldClassName = "HydraShield";
     private nint _hwnd;
     private nint _savedForeground;
     private WndProc? _wndProc; // prevent GC while window exists
@@ -18,10 +19,12 @@ internal sealed class WindowsShieldWindow
     internal void Create(bool debugShield)
     {
         _debugShield = debugShield;
-        _wndProc = WndProcImpl;
+        // reuse a single delegate across Create/Destroy cycles — if a class registration ever lingers
+        // (UnregisterClass failed) the class still points at this live, field-referenced delegate
+        _wndProc ??= WndProcImpl;
 
         var hInstance = NativeMethods.GetModuleHandleW(nint.Zero);
-        var className = Marshal.StringToHGlobalUni("HydraShield");
+        var className = Marshal.StringToHGlobalUni(ShieldClassName);
         try
         {
             if (debugShield)
@@ -35,16 +38,21 @@ internal sealed class WindowsShieldWindow
                 hbrBackground = _debugBrush,
                 lpszClassName = className,
             };
+            // a leftover registration from a prior Create (if Destroy's UnregisterClass didn't run) is
+            // fine — proceed and create the window from the class name. only a genuine failure bails.
             var atom = NativeMethods.RegisterClassExW(in wc);
-            if (atom == 0) return;
+            if (atom == 0 && Marshal.GetLastWin32Error() != NativeMethods.ERROR_CLASS_ALREADY_EXISTS)
+                return;
 
             var exStyle = NativeMethods.WS_EX_TOOLWINDOW | NativeMethods.WS_EX_TOPMOST;
             if (debugShield) exStyle |= NativeMethods.WS_EX_LAYERED;
 
-            // start hidden, no WS_DISABLED — disabled windows can't be activated/set foreground
+            // start hidden, no WS_DISABLED — disabled windows can't be activated/set foreground.
+            // use the class NAME (not the atom) so this works whether the class was just registered
+            // or already existed from a prior instance.
             _hwnd = NativeMethods.CreateWindowExW(
                 exStyle,
-                atom, nint.Zero,
+                className, nint.Zero,
                 NativeMethods.WS_POPUP,
                 0, 0, 1, 1,
                 nint.Zero, nint.Zero, hInstance, nint.Zero);
@@ -113,6 +121,14 @@ internal sealed class WindowsShieldWindow
         _cursor.Dispose();
         if (_hwnd != nint.Zero) { NativeMethods.DestroyWindow(_hwnd); _hwnd = nint.Zero; }
         if (_debugBrush != nint.Zero) { NativeMethods.DeleteObject(_debugBrush); _debugBrush = nint.Zero; }
+
+        // unregister the window class — otherwise a later Create() (e.g. after a desktop switch) would
+        // fail with ERROR_CLASS_ALREADY_EXISTS and the shield would silently never appear again.
+        // must happen after DestroyWindow: a class can't be unregistered while it still has live windows.
+        var hInstance = NativeMethods.GetModuleHandleW(nint.Zero);
+        var className = Marshal.StringToHGlobalUni(ShieldClassName);
+        try { NativeMethods.UnregisterClassW(className, hInstance); }
+        finally { Marshal.FreeHGlobal(className); }
     }
 
     // foreground window covers the full primary screen — likely a fullscreen game or exclusive app
