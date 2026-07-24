@@ -45,8 +45,11 @@ public class CfHtmlTests
         Assert.That(context, Does.StartWith("<html>"));
         Assert.That(context, Does.EndWith("</html>"));
         Assert.That(context, Does.Contain("<!--StartFragment-->"));
-        Assert.That(context, Does.Contain("<b>hi</b>"));
-        Assert.That(endHtml, Is.EqualTo(blob.Length)); // context runs to the end of the blob
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(context, Does.Contain("<b>hi</b>"));
+            Assert.That(endHtml, Is.EqualTo(blob.Length)); // context runs to the end of the blob
+        }
     }
 
     [Test]
@@ -55,13 +58,13 @@ public class CfHtmlTests
         var blob = CfHtml.Wrap("<p>x</p>");
         int sh = Offset(blob, "StartHTML:"), sf = Offset(blob, "StartFragment:"),
             ef = Offset(blob, "EndFragment:"), eh = Offset(blob, "EndHTML:");
-        Assert.Multiple(() =>
+        using (Assert.EnterMultipleScope())
         {
             Assert.That(sh, Is.LessThan(sf));
             Assert.That(sf, Is.LessThan(ef));
             Assert.That(ef, Is.LessThanOrEqualTo(eh));
             Assert.That(eh, Is.LessThanOrEqualTo(blob.Length));
-        });
+        }
     }
 
     [Test]
@@ -72,8 +75,11 @@ public class CfHtmlTests
         var blob = CfHtml.Wrap(html);
         var sf = Offset(blob, "StartFragment:");
         var ef = Offset(blob, "EndFragment:");
-        Assert.That(Slice(blob, sf, ef), Is.EqualTo(html));
-        Assert.That(ef - sf, Is.EqualTo(Encoding.UTF8.GetByteCount(html)));
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(Slice(blob, sf, ef), Is.EqualTo(html));
+            Assert.That(ef - sf, Is.EqualTo(Encoding.UTF8.GetByteCount(html)));
+        }
     }
 
     [Test]
@@ -198,7 +204,10 @@ public class CfHtmlTests
     public void Wrap_EmptyHtml_ProducesEmptyFragment()
     {
         var blob = CfHtml.Wrap("");
-        Assert.That(Offset(blob, "StartFragment:"), Is.EqualTo(Offset(blob, "EndFragment:"))); // empty fragment
-        Assert.That(CfHtml.Unwrap(blob), Does.Contain("<!--StartFragment--><!--EndFragment-->"));
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(Offset(blob, "StartFragment:"), Is.EqualTo(Offset(blob, "EndFragment:"))); // empty fragment
+            Assert.That(CfHtml.Unwrap(blob), Does.Contain("<!--StartFragment--><!--EndFragment-->"));
+        }
     }
 }

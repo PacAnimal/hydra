@@ -18,15 +18,18 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
     private readonly nint _atomUtf8String;
     private readonly nint _atomIncr;
     private readonly nint _atomImagePng;
+    private readonly nint _atomTextHtml;
     private readonly nint _atomHydraClipboard;  // property for CLIPBOARD ConvertSelection responses
     private readonly nint _atomHydraPrimary;    // property for PRIMARY ConvertSelection responses
     private readonly nint _atomHydraImageClip;  // property for image ConvertSelection responses
+    private readonly nint _atomHydraHtmlClip;   // property for html ConvertSelection responses
 
     // owned clipboard state (written by Set*, read by event loop thread)
     private readonly Lock _dataLock = new();
     private string? _ownedText;
     private string? _ownedPrimaryText;
     private byte[]? _ownedImagePng;
+    private string? _ownedHtml;
     private ClipboardEchoFilter _echo;
     private string? _lastSetPrimaryText;
 
@@ -66,9 +69,11 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
         _atomUtf8String = NativeMethods.XInternAtom(_display, "UTF8_STRING", false);
         _atomIncr = NativeMethods.XInternAtom(_display, "INCR", false);
         _atomImagePng = NativeMethods.XInternAtom(_display, "image/png", false);
+        _atomTextHtml = NativeMethods.XInternAtom(_display, "text/html", false);
         _atomHydraClipboard = NativeMethods.XInternAtom(_display, "HYDRA_CLIPBOARD", false);
         _atomHydraPrimary = NativeMethods.XInternAtom(_display, "HYDRA_PRIMARY", false);
         _atomHydraImageClip = NativeMethods.XInternAtom(_display, "HYDRA_IMAGE_CLIP", false);
+        _atomHydraHtmlClip = NativeMethods.XInternAtom(_display, "HYDRA_HTML_CLIP", false);
 
         _running = true;
         _eventThread = new Thread(EventLoop) { IsBackground = true, Name = "HydraClipboardEventLoop" };
@@ -106,6 +111,18 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
         return bytes;
     }
 
+    public string? GetHtml()
+    {
+        if (NativeMethods.XGetSelectionOwner(_display, _atomClipboard) == _window)
+            return null;
+        var bytes = ReadSelectionBytes(_atomClipboard, _atomHydraHtmlClip, _atomTextHtml);
+        if (bytes == null) return null;
+        return _echo.FilterHtml(Encoding.UTF8.GetString(bytes));
+    }
+
+    // X11 has no standardised RTF selection target — HTML is the rich vehicle here, text is the fallback
+    public byte[]? GetRtf() => null;
+
     public void SetText(string text)
     {
         _echo.TrackText(text);
@@ -113,6 +130,7 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
         {
             _ownedText = text;
             _ownedImagePng = null; // replacing clipboard content
+            _ownedHtml = null;
         }
         _ = NativeMethods.XSetSelectionOwner(_display, _atomClipboard, _window, NativeMethods.CurrentTime);
         _ = NativeMethods.XFlush(_display);
@@ -134,6 +152,7 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
         {
             _ownedImagePng = pngData;
             _ownedText = null; // replacing clipboard content
+            _ownedHtml = null;
         }
         _ = NativeMethods.XSetSelectionOwner(_display, _atomClipboard, _window, NativeMethods.CurrentTime);
         _ = NativeMethods.XFlush(_display);
@@ -144,18 +163,19 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
         var text = contents.Text;
         var primaryText = contents.PrimaryText;
         var imagePng = contents.ImagePng;
-        if (text == null && primaryText == null && imagePng == null) return;
+        var html = contents.Html;
+        if (text == null && primaryText == null && imagePng == null && html == null) return;
 
         if (text != null) _echo.TrackText(text);
         if (imagePng != null) _echo.TrackImage(imagePng);
+        if (html != null) _echo.TrackHtml(html);
 
+        // the snapshot is the authoritative new clipboard — replace all owned representations
         lock (_dataLock)
         {
-            if (text != null) _ownedText = text;
-            if (imagePng != null) _ownedImagePng = imagePng;
-            // only clear the other field if we're setting something exclusive
-            if (text != null && imagePng == null) _ownedImagePng = null;
-            if (imagePng != null && text == null) _ownedText = null;
+            _ownedText = text;
+            _ownedImagePng = imagePng;
+            _ownedHtml = html;
         }
 
         _ = NativeMethods.XSetSelectionOwner(_display, _atomClipboard, _window, NativeMethods.CurrentTime);
@@ -220,7 +240,7 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
                     var sel = ev.SelectionClearSelection;
                     lock (_dataLock)
                     {
-                        if (sel == _atomClipboard) { _ownedText = null; _ownedImagePng = null; }
+                        if (sel == _atomClipboard) { _ownedText = null; _ownedImagePng = null; _ownedHtml = null; }
                         else if (sel == NativeMethods.XA_PRIMARY) _ownedPrimaryText = null;
                     }
                     break;
@@ -265,10 +285,14 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
         if (target == _atomTargets)
         {
             var atoms = new List<nint> { _atomTargets, _atomUtf8String, NativeMethods.XA_STRING };
-            bool hasImage;
+            bool hasImage, hasHtml;
             lock (_dataLock)
+            {
                 hasImage = selection == _atomClipboard && _ownedImagePng != null;
+                hasHtml = selection == _atomClipboard && _ownedHtml != null;
+            }
             if (hasImage) atoms.Add(_atomImagePng);
+            if (hasHtml) atoms.Add(_atomTextHtml);
 
             _ = NativeMethods.XChangeProperty(_display, requestor, property,
                 NativeMethods.XA_ATOM, 32, NativeMethods.PropModeReplace, atoms.ToArray(), atoms.Count);
@@ -289,6 +313,23 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
                 return property;
             }
             return StartIncrSend(requestor, property, _atomImagePng, img);
+        }
+
+        if (target == _atomTextHtml)
+        {
+            string? html;
+            lock (_dataLock)
+                html = selection == _atomClipboard ? _ownedHtml : null;
+            if (html == null) return nint.Zero;
+
+            var htmlBytes = Encoding.UTF8.GetBytes(html);
+            if (htmlBytes.Length <= MaxPropertyBytes)
+            {
+                _ = NativeMethods.XChangeProperty(_display, requestor, property,
+                    _atomTextHtml, 8, NativeMethods.PropModeReplace, htmlBytes, htmlBytes.Length);
+                return property;
+            }
+            return StartIncrSend(requestor, property, _atomTextHtml, htmlBytes);
         }
 
         if (target != _atomUtf8String && target != NativeMethods.XA_STRING)

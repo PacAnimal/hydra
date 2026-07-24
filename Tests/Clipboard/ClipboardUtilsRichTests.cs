@@ -44,34 +44,34 @@ public class ClipboardUtilsRichTests
     public void TrimToFit_DropsOversizedHtml_KeepsText()
     {
         var result = ClipboardUtils.TrimToFit("keep me", null, null, OversizedText(), null, Log, "test");
-        Assert.Multiple(() =>
+        using (Assert.EnterMultipleScope())
         {
             Assert.That(result.Text, Is.EqualTo("keep me"));
             Assert.That(result.Html, Is.Null);
-        });
+        }
     }
 
     [Test]
     public void TrimToFit_DropsOversizedRtf_KeepsText()
     {
         var result = ClipboardUtils.TrimToFit("keep me", null, null, null, Oversized(), Log, "test");
-        Assert.Multiple(() =>
+        using (Assert.EnterMultipleScope())
         {
             Assert.That(result.Text, Is.EqualTo("keep me"));
             Assert.That(result.Rtf, Is.Null);
-        });
+        }
     }
 
     [Test]
     public void TrimToFit_KeepsAllWhenUnderBudget()
     {
         var result = ClipboardUtils.TrimToFit("t", "p", [1], "<b>x</b>", [2], Log, "test");
-        Assert.Multiple(() =>
+        using (Assert.EnterMultipleScope())
         {
             Assert.That(result.Text, Is.EqualTo("t"));
             Assert.That(result.Html, Is.EqualTo("<b>x</b>"));
             Assert.That(result.Rtf, Is.EqualTo(new byte[] { 2 }));
-        });
+        }
     }
 
     // -- ValidateFields: oversized rich fields are dropped, valid ones pass --
@@ -80,23 +80,23 @@ public class ClipboardUtilsRichTests
     public void ValidateFields_DropsOversizedHtmlAndRtf_KeepsValid()
     {
         var result = ClipboardUtils.ValidateFields("t", null, null, OversizedText(), Oversized(), Log, "test", "host");
-        Assert.Multiple(() =>
+        using (Assert.EnterMultipleScope())
         {
             Assert.That(result.Text, Is.EqualTo("t"));
             Assert.That(result.Html, Is.Null);
             Assert.That(result.Rtf, Is.Null);
-        });
+        }
     }
 
     [Test]
     public void ValidateFields_KeepsValidRich()
     {
         var result = ClipboardUtils.ValidateFields("t", null, null, "<b>x</b>", [3], Log, "test", "host");
-        Assert.Multiple(() =>
+        using (Assert.EnterMultipleScope())
         {
             Assert.That(result.Html, Is.EqualTo("<b>x</b>"));
             Assert.That(result.Rtf, Is.EqualTo(new byte[] { 3 }));
-        });
+        }
     }
 
     // -- ReadWithFallback: rich reps travel with text; image copy still wins --
@@ -107,12 +107,12 @@ public class ClipboardUtilsRichTests
         var sync = new FakeClipboardSync();
         sync.SetClipboard(new ClipboardSnapshot("plain", null, null, Html: "<b>rich</b>", Rtf: [5, 6]));
         var result = ClipboardUtils.ReadWithFallback(sync, null, Log, "read");
-        Assert.Multiple(() =>
+        using (Assert.EnterMultipleScope())
         {
             Assert.That(result.Text, Is.EqualTo("plain"));
             Assert.That(result.Html, Is.EqualTo("<b>rich</b>"));
             Assert.That(result.Rtf, Is.EqualTo(new byte[] { 5, 6 }));
-        });
+        }
     }
 
     [Test]
@@ -122,12 +122,12 @@ public class ClipboardUtilsRichTests
         // image present alongside html: an image copy wins outright, rich/text are not carried
         sync.SetClipboard(new ClipboardSnapshot("t", null, [9, 9], Html: "<b>x</b>"));
         var result = ClipboardUtils.ReadWithFallback(sync, null, Log, "read");
-        Assert.Multiple(() =>
+        using (Assert.EnterMultipleScope())
         {
-            Assert.That(result.ImagePng, Is.EqualTo(new byte[] { 9, 9 }));
+            Assert.That(result.ImagePng, Is.EqualTo("\t\t"u8.ToArray()));
             Assert.That(result.Html, Is.Null);
             Assert.That(result.Text, Is.Null);
-        });
+        }
     }
 
     [Test]
@@ -136,11 +136,11 @@ public class ClipboardUtilsRichTests
         var sync = new FakeClipboardSync(); // all getters return null
         var fallback = new ClipboardSnapshot("ft", null, null, Html: "<i>fh</i>", Rtf: [1]);
         var result = ClipboardUtils.ReadWithFallback(sync, fallback, Log, "read");
-        Assert.Multiple(() =>
+        using (Assert.EnterMultipleScope())
         {
             Assert.That(result.Text, Is.EqualTo("ft"));
             Assert.That(result.Html, Is.EqualTo("<i>fh</i>"));
             Assert.That(result.Rtf, Is.EqualTo(new byte[] { 1 }));
-        });
+        }
     }
 }

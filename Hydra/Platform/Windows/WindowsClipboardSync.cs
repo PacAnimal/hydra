@@ -7,14 +7,76 @@ using Microsoft.Extensions.Logging;
 namespace Hydra.Platform.Windows;
 
 [SupportedOSPlatform("windows")]
-public sealed class WindowsClipboardSync(ILogger<WindowsClipboardSync> log) : IClipboardSync
+public sealed class WindowsClipboardSync : IClipboardSync, IDisposable
 {
     // registered once per process; Windows caches the value
     private static readonly uint CfPng = NativeMethods.RegisterClipboardFormat("PNG");
+    private static readonly uint CfHtmlFormat = NativeMethods.RegisterClipboardFormat("HTML Format");
+    private static readonly uint CfRtf = NativeMethods.RegisterClipboardFormat("Rich Text Format");
 
-    private readonly ILogger<WindowsClipboardSync> _log = log;
+    private readonly ILogger<WindowsClipboardSync> _log;
     private ClipboardEchoFilter _echo;
     private string? _storedPrimaryText;
+
+    // dedicated owner window for the clipboard — passing NULL to OpenClipboard makes EmptyClipboard
+    // set a NULL owner, which per MSDN causes SetClipboardData to fail. A real HWND fixes that.
+    private nint _ownerWindow;
+    private WndProc? _ownerWndProc;  // keep-alive to prevent GC of the delegate
+    private nint _ownerClassName;
+
+    public WindowsClipboardSync(ILogger<WindowsClipboardSync> log)
+    {
+        _log = log;
+        CreateOwnerWindow();
+    }
+
+    // message-only window created once on the constructing (main) thread. No message pump is needed:
+    // OpenClipboard/SetClipboardData do not require one — only clipboard-listener notifications do.
+    private void CreateOwnerWindow()
+    {
+        try
+        {
+            _ownerWndProc = (h, msg, wParam, lParam) => NativeMethods.DefWindowProcW(h, msg, wParam, lParam);
+            var hInst = NativeMethods.GetModuleHandleW(nint.Zero);
+            _ownerClassName = Marshal.StringToHGlobalUni("HydraClipboardOwner");
+            var wc = new NativeMethods.WNDCLASSEXW
+            {
+                cbSize = (uint)Marshal.SizeOf<NativeMethods.WNDCLASSEXW>(),
+                lpfnWndProc = Marshal.GetFunctionPointerForDelegate(_ownerWndProc),
+                hInstance = hInst,
+                lpszClassName = _ownerClassName,
+            };
+            var atom = NativeMethods.RegisterClassExW(in wc);
+            if (atom == 0)
+            {
+                _log.LogWarning("RegisterClassExW failed for clipboard owner (error {Error})", Marshal.GetLastWin32Error());
+                return;
+            }
+            _ownerWindow = NativeMethods.CreateWindowExW(0, atom, nint.Zero, 0,
+                0, 0, 0, 0, NativeMethods.HWND_MESSAGE, nint.Zero, hInst, nint.Zero);
+            if (_ownerWindow == nint.Zero)
+                _log.LogWarning("CreateWindowExW failed for clipboard owner (error {Error}) — falling back to NULL owner", Marshal.GetLastWin32Error());
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Failed to create clipboard owner window — falling back to NULL owner");
+        }
+    }
+
+    public void Dispose()
+    {
+        if (_ownerWindow != nint.Zero)
+        {
+            NativeMethods.DestroyWindow(_ownerWindow);
+            _ownerWindow = nint.Zero;
+        }
+        if (_ownerClassName != nint.Zero)
+        {
+            Marshal.FreeHGlobal(_ownerClassName);
+            _ownerClassName = nint.Zero;
+        }
+        _ownerWndProc = null;
+    }
 
     public string? GetText()
     {
@@ -107,30 +169,86 @@ public sealed class WindowsClipboardSync(ILogger<WindowsClipboardSync> log) : IC
         }
     }
 
-    public void SetClipboard(ClipboardSnapshot contents)
+    public string? GetHtml()
     {
-        var text = contents.Text;
-        var primaryText = contents.PrimaryText;
-        var imagePng = contents.ImagePng;
-        if (text == null && primaryText == null && imagePng == null) return;
-
-        if (text != null) _echo.TrackText(text);
-        if (primaryText != null) _storedPrimaryText = primaryText;
-        if (imagePng != null) _echo.TrackImage(imagePng);
-
-        if (!OpenClipboard()) return;
+        if (!OpenClipboard()) return null;
         try
         {
-            NativeMethods.EmptyClipboard();
-            // write image before text so image formats appear first in enumeration —
-            // legacy apps (Paint, etc.) pick the first format they support
-            if (imagePng != null) WriteImageToOpenClipboard(imagePng);
-            if (text != null) WriteTextToOpenClipboard(text);
+            if (!NativeMethods.IsClipboardFormatAvailable(CfHtmlFormat)) return null;
+            var blob = ReadGlobalMemory(NativeMethods.GetClipboardData(CfHtmlFormat));
+            var html = blob != null ? CfHtml.Unwrap(blob) : null; // strip the Windows CF_HTML wrapper → portable HTML
+            return html != null ? _echo.FilterHtml(html) : null;
         }
         finally
         {
             NativeMethods.CloseClipboard();
         }
+    }
+
+    public byte[]? GetRtf()
+    {
+        if (!OpenClipboard()) return null;
+        try
+        {
+            if (!NativeMethods.IsClipboardFormatAvailable(CfRtf)) return null;
+            // RTF is null-terminated ASCII and GlobalSize may over-report; trim trailing padding/null bytes
+            var rtf = TrimTrailingNulls(ReadGlobalMemory(NativeMethods.GetClipboardData(CfRtf)));
+            return rtf != null ? _echo.FilterRtf(rtf) : null;
+        }
+        finally
+        {
+            NativeMethods.CloseClipboard();
+        }
+    }
+
+    public void SetClipboard(ClipboardSnapshot contents)
+    {
+        var text = contents.Text;
+        var primaryText = contents.PrimaryText;
+        var imagePng = contents.ImagePng;
+        var html = contents.Html;
+        var rtf = contents.Rtf;
+        if (text == null && primaryText == null && imagePng == null && html == null && rtf == null) return;
+
+        if (text != null) _echo.TrackText(text);
+        if (primaryText != null) _storedPrimaryText = primaryText;
+        if (imagePng != null) _echo.TrackImage(imagePng);
+        if (html != null) _echo.TrackHtml(html);
+        if (rtf != null) _echo.TrackRtf(rtf);
+
+        if (!OpenClipboard()) return;
+        try
+        {
+            // preserve a local file-copy (CF_HDROP) across the wipe: Hydra doesn't sync files, and the
+            // user's Ctrl+C'd files should survive a clipboard sync while they stay on this host.
+            var savedHdrop = NativeMethods.IsClipboardFormatAvailable(NativeMethods.CF_HDROP)
+                ? ReadGlobalMemory(NativeMethods.GetClipboardData(NativeMethods.CF_HDROP))
+                : null;
+
+            NativeMethods.EmptyClipboard();
+
+            // image first (legacy image pasters pick the first supported format); rich before plain text
+            // so rich-aware apps prefer HTML/RTF over CF_UNICODETEXT.
+            if (imagePng != null) WriteImageToOpenClipboard(imagePng);
+            if (html != null) WriteGlobalMemory(CfHtmlFormat, NullTerminated(CfHtml.Wrap(html)));
+            if (rtf != null) WriteGlobalMemory(CfRtf, NullTerminated(rtf));
+            if (text != null) WriteTextToOpenClipboard(text);
+            if (savedHdrop != null) WriteGlobalMemory(NativeMethods.CF_HDROP, savedHdrop);
+        }
+        finally
+        {
+            NativeMethods.CloseClipboard();
+        }
+    }
+
+    private static byte[] NullTerminated(byte[] data) => [.. data, 0]; // text-based clipboard formats expect a NUL
+
+    private static byte[]? TrimTrailingNulls(byte[]? data)
+    {
+        if (data == null) return null;
+        var len = data.Length;
+        while (len > 0 && data[len - 1] == 0) len--;
+        return len == data.Length ? data : data[..len];
     }
 
     private static void WriteTextToOpenClipboard(string text)
@@ -319,7 +437,7 @@ public sealed class WindowsClipboardSync(ILogger<WindowsClipboardSync> log) : IC
         // clipboard is a global mutex; retry a few times if another app has it
         for (var i = 0; i < 5; i++)
         {
-            if (NativeMethods.OpenClipboard(nint.Zero)) return true;
+            if (NativeMethods.OpenClipboard(_ownerWindow)) return true;
             Thread.Sleep(5);
         }
         _log.LogWarning("Failed to open clipboard after 5 retries");
