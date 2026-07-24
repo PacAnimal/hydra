@@ -13,6 +13,10 @@ internal sealed class SessionWatchdog(ILogger<SessionWatchdog> log)
     private readonly Boxed<ChildProcess?> _child = new(null);
     private SafeFileHandle? _stopEvent;
     private TimeSpan _backoff = TimeSpan.FromSeconds(1);
+    private DateTime _childStartedAt = DateTime.MinValue;
+    // the child must stay alive at least this long before we trust it and reset the crash backoff —
+    // longer than the 30s cap so a child that keeps dying shortly after launch keeps escalating
+    private static readonly TimeSpan BackoffResetAfter = TimeSpan.FromSeconds(60);
 
     protected override async Task Execute(CancellationToken cancel)
     {
@@ -43,7 +47,10 @@ internal sealed class SessionWatchdog(ILogger<SessionWatchdog> log)
         }
         else
         {
-            _backoff = TimeSpan.FromSeconds(1);
+            // only reset the backoff once the child has proven stable. Resetting on every alive tick let a
+            // child that crashes shortly after each launch restart-storm forever (the 30s cap never engaged).
+            if (_childStartedAt != DateTime.MinValue && DateTime.UtcNow - _childStartedAt >= BackoffResetAfter)
+                _backoff = TimeSpan.FromSeconds(1);
         }
     }
 
@@ -71,10 +78,12 @@ internal sealed class SessionWatchdog(ILogger<SessionWatchdog> log)
         {
             var child = Win32Session.LaunchInSession(session, exe, "--session");
             lock (_child) { _child.Value = child; }
+            _childStartedAt = DateTime.UtcNow;
             log.LogInformation("Child launched in session {Session} (PID {Pid})", session, child.Pid);
         }
         catch (Exception ex)
         {
+            _childStartedAt = DateTime.MinValue; // failed launch is not a healthy start
             log.LogError(ex, "failed to launch child in session {Session}", session);
         }
     }
@@ -83,6 +92,7 @@ internal sealed class SessionWatchdog(ILogger<SessionWatchdog> log)
     {
         ChildProcess? child;
         lock (_child) { child = _child.Value; _child.Value = null; }
+        _childStartedAt = DateTime.MinValue; // no current child — don't let a stale timestamp reset backoff
         if (child == null) return;
 
         if (_stopEvent != null) Win32Session.SignalEvent(_stopEvent);
