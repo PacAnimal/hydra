@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using Cathedral.Utils;
 using Hydra.Keyboard;
 
 namespace Hydra.Platform.Linux;
@@ -11,6 +12,11 @@ internal sealed class EvdevKeyResolver : IDisposable
     private readonly nint _ctx;
     private readonly nint _keymap;
     private nint _state;
+    // Resolve() runs on the evdev event-loop thread; Reset()/Dispose() run on other threads (the
+    // InputRouter consumer sets IsOnVirtualScreen → Reset). Reset/Dispose free+recreate the native
+    // xkb_state, so serialize all access to avoid a use-after-free / torn _keyDownId.
+    private readonly Lock _stateLock = new();
+    private readonly Toggle _disposed = new();
     private char _pendingDeadKey;
     private char _pendingDeadSpacing;
     private readonly Dictionary<uint, CharClassification> _keyDownId = [];
@@ -67,6 +73,12 @@ internal sealed class EvdevKeyResolver : IDisposable
     // value=1 → KeyDown, value=0 → KeyUp, value=2 → repeat (ignored — auto-repeat handled by slave)
     internal KeyEvent?[]? Resolve(uint evdevCode, int value)
     {
+        lock (_stateLock) return ResolveLocked(evdevCode, value);
+    }
+
+    private KeyEvent?[]? ResolveLocked(uint evdevCode, int value)
+    {
+        if (_disposed) return null;
         // evdev keycode + 8 = xkb keycode (X11 convention used by libxkbcommon)
         var xkbKey = evdevCode + 8;
 
@@ -219,6 +231,12 @@ internal sealed class EvdevKeyResolver : IDisposable
     // bleed into new events via GetModifiers() / IsModActive() if the state object is reused.
     internal void Reset()
     {
+        lock (_stateLock) ResetLocked();
+    }
+
+    private void ResetLocked()
+    {
+        if (_disposed) return;
         _pendingDeadKey = '\0';
         _pendingDeadSpacing = '\0';
         _keyDownId.Clear();
@@ -244,8 +262,13 @@ internal sealed class EvdevKeyResolver : IDisposable
 
     public void Dispose()
     {
-        if (_state != 0) EvdevNativeMethods.xkb_state_unref(_state);
-        if (_keymap != 0) EvdevNativeMethods.xkb_keymap_unref(_keymap);
-        if (_ctx != 0) EvdevNativeMethods.xkb_context_unref(_ctx);
+        lock (_stateLock)
+        {
+            // one-shot: block any later Resolve/Reset (e.g. from a shutdown-race) from touching freed state
+            if (!_disposed.TrySet()) return;
+            if (_state != 0) { EvdevNativeMethods.xkb_state_unref(_state); _state = 0; }
+            if (_keymap != 0) EvdevNativeMethods.xkb_keymap_unref(_keymap);
+            if (_ctx != 0) EvdevNativeMethods.xkb_context_unref(_ctx);
+        }
     }
 }
