@@ -532,6 +532,7 @@ internal static partial class NativeMethods
     internal const uint CF_UNICODETEXT = 13;
     internal const uint CF_BITMAP = 2;
     internal const uint CF_DIB = 8;
+    internal const uint CF_DIBV5 = 17;
     internal const uint CF_HDROP = 15;
     internal const uint GMEM_MOVEABLE = 0x0002;
     internal const uint GMEM_DDESHARE = 0x2000;

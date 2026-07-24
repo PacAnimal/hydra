@@ -150,14 +150,14 @@ public sealed class WindowsClipboardSync(ILogger<WindowsClipboardSync> log) : IC
 
     private void WriteImageToOpenClipboard(byte[] pngData)
     {
-        // write as "PNG" registered format (raw bytes — modern apps prefer this)
+        // write as "PNG" registered format (raw bytes — modern apps prefer this, full fidelity + alpha)
         WriteGlobalMemory(CfPng, pngData);
 
-        // also write as CF_DIB so legacy apps (Paint, etc.) can paste.
-        // windows auto-synthesizes CF_BITMAP from CF_DIB on demand — the reliable direction.
-        var dib = PngToDib(pngData);
+        // also write CF_DIBV5 (32bpp, preserves alpha). Windows auto-synthesizes CF_DIB and CF_BITMAP from
+        // it for legacy apps (Paint/Office), so a single write covers both alpha-aware and legacy pasters.
+        var dib = PngToDibV5(pngData);
         if (dib != null)
-            WriteGlobalMemory(NativeMethods.CF_DIB, dib);
+            WriteGlobalMemory(NativeMethods.CF_DIBV5, dib);
     }
 
     private static byte[]? ReadGlobalMemory(nint hMem)
@@ -195,7 +195,8 @@ public sealed class WindowsClipboardSync(ILogger<WindowsClipboardSync> log) : IC
             NativeMethods.GlobalFree(hMem);
     }
 
-    private byte[]? PngToDib(byte[] pngData)
+    // converts a PNG to a CF_DIBV5 blob (BITMAPV5HEADER + 32bpp BGRA, bottom-up) preserving alpha.
+    private byte[]? PngToDibV5(byte[] pngData)
     {
         try
         {
@@ -204,33 +205,35 @@ public sealed class WindowsClipboardSync(ILogger<WindowsClipboardSync> log) : IC
 
             var width = bitmap.Width;
             var height = bitmap.Height;
-            const int bpp = 24;
-            const int headerSize = 40; // BITMAPINFOHEADER
-
-            // DIB rows are padded to 4-byte boundary
-            var dibStride = ((width * bpp + 31) & ~31) >> 3;
-            var imageSize = dibStride * height;
+            const int headerSize = 124; // BITMAPV5HEADER
+            var stride = width * 4;     // 32bpp rows are inherently 4-byte aligned
+            var imageSize = stride * height;
             var dib = new byte[headerSize + imageSize];
 
-            // BITMAPINFOHEADER (40 bytes, remaining fields are 0 = BI_RGB)
-            BitConverter.GetBytes(headerSize).CopyTo(dib, 0);  // biSize
-            BitConverter.GetBytes(width).CopyTo(dib, 4);       // biWidth
-            BitConverter.GetBytes(height).CopyTo(dib, 8);      // biHeight (positive = bottom-up)
-            BitConverter.GetBytes((short)1).CopyTo(dib, 12);   // biPlanes
-            BitConverter.GetBytes((short)bpp).CopyTo(dib, 14); // biBitCount
-            BitConverter.GetBytes(imageSize).CopyTo(dib, 20);  // biSizeImage
+            BitConverter.GetBytes(headerSize).CopyTo(dib, 0);                  // bV5Size
+            BitConverter.GetBytes(width).CopyTo(dib, 4);                       // bV5Width
+            BitConverter.GetBytes(height).CopyTo(dib, 8);                      // bV5Height (positive = bottom-up)
+            BitConverter.GetBytes((short)1).CopyTo(dib, 12);                   // bV5Planes
+            BitConverter.GetBytes((short)32).CopyTo(dib, 14);                  // bV5BitCount
+            BitConverter.GetBytes(3).CopyTo(dib, 16);                         // bV5Compression = BI_BITFIELDS
+            BitConverter.GetBytes(imageSize).CopyTo(dib, 20);                  // bV5SizeImage
+            BitConverter.GetBytes(0x00FF0000).CopyTo(dib, 40);                // bV5RedMask
+            BitConverter.GetBytes(0x0000FF00).CopyTo(dib, 44);                // bV5GreenMask
+            BitConverter.GetBytes(0x000000FF).CopyTo(dib, 48);                // bV5BlueMask
+            BitConverter.GetBytes(unchecked((int)0xFF000000)).CopyTo(dib, 52); // bV5AlphaMask
+            BitConverter.GetBytes(0x73524742).CopyTo(dib, 56);                // bV5CSType = LCS_sRGB
 
             var rect = new Rectangle(0, 0, width, height);
-            var bmpData = bitmap.LockBits(rect, ImageLockMode.ReadOnly, PixelFormat.Format24bppRgb);
+            var bmpData = bitmap.LockBits(rect, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
             try
             {
-                var srcStride = Math.Abs(bmpData.Stride);
-                // LockBits gives top-down rows; DIB needs bottom-up — copy in reverse
+                // Format32bppArgb is B,G,R,A in memory — matches the BGRA masks above.
+                // LockBits gives top-down rows; DIB needs bottom-up — copy in reverse.
                 for (var y = 0; y < height; y++)
                 {
                     var srcOffset = y * bmpData.Stride;
-                    var dstOffset = headerSize + (height - 1 - y) * dibStride;
-                    Marshal.Copy(bmpData.Scan0 + srcOffset, dib, dstOffset, Math.Min(srcStride, dibStride));
+                    var dstOffset = headerSize + (height - 1 - y) * stride;
+                    Marshal.Copy(bmpData.Scan0 + srcOffset, dib, dstOffset, stride);
                 }
             }
             finally
@@ -242,7 +245,7 @@ public sealed class WindowsClipboardSync(ILogger<WindowsClipboardSync> log) : IC
         }
         catch (Exception ex)
         {
-            _log.LogWarning(ex, "PNG to DIB conversion failed");
+            _log.LogWarning(ex, "PNG to DIBv5 conversion failed");
             return null;
         }
     }
@@ -258,15 +261,22 @@ public sealed class WindowsClipboardSync(ILogger<WindowsClipboardSync> log) : IC
 
             // compute colour table size for indexed-colour bitmaps
             var colourTableSize = 0;
-            if (dib.Length >= biSize)
-            {
-                var biBitCount = BitConverter.ToUInt16(dib, 14); // offset 14 in BITMAPINFOHEADER
-                var biClrUsed = BitConverter.ToInt32(dib, 32);
-                if (biBitCount <= 8)
-                    colourTableSize = (biClrUsed > 0 ? biClrUsed : (1 << biBitCount)) * 4;
-                else if (biClrUsed > 0)
-                    colourTableSize = biClrUsed * 4;
-            }
+            var biBitCount = BitConverter.ToUInt16(dib, 14); // offset 14 in BITMAPINFOHEADER
+            var biClrUsed = BitConverter.ToInt32(dib, 32);
+            if (biBitCount <= 8)
+                colourTableSize = (biClrUsed > 0 ? biClrUsed : (1 << biBitCount)) * 4;
+            else if (biClrUsed > 0)
+                colourTableSize = biClrUsed * 4;
+
+            // a 40-byte BITMAPINFOHEADER with BI_BITFIELDS is followed by 3 (or 4 with alpha) DWORD colour
+            // masks that sit BEFORE the pixel data — screenshots (Snipping Tool/PrtScn) arrive this way.
+            // Without counting them, bfOffBits was 12+ bytes short and the image decoded as garbage / failed.
+            // (V4/V5 headers carry the masks inside the header, so biSize>40 needs no extra.)
+            const int biBitfields = 3, biAlphaBitfields = 6;
+            var biCompression = BitConverter.ToInt32(dib, 16);
+            var maskSize = biSize == 40 && biCompression == biBitfields ? 12
+                : biSize == 40 && biCompression == biAlphaBitfields ? 16
+                : 0;
 
             // prepend 14-byte BMP file header to make a complete BMP file
             var bmpHeader = new byte[14];
@@ -277,8 +287,8 @@ public sealed class WindowsClipboardSync(ILogger<WindowsClipboardSync> log) : IC
             bmpHeader[3] = (byte)(totalSize >> 8);
             bmpHeader[4] = (byte)(totalSize >> 16);
             bmpHeader[5] = (byte)(totalSize >> 24);
-            // pixel data offset: file header + info header + colour table
-            var pixelOffset = 14 + biSize + colourTableSize;
+            // pixel data offset: file header + info header + colour table (or BITFIELDS masks)
+            var pixelOffset = 14 + biSize + colourTableSize + maskSize;
             bmpHeader[10] = (byte)pixelOffset;
             bmpHeader[11] = (byte)(pixelOffset >> 8);
             bmpHeader[12] = (byte)(pixelOffset >> 16);
