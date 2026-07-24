@@ -15,7 +15,14 @@ internal sealed class SelfUpdater(IHydraProfile profile, ILogger<SelfUpdater> lo
 {
     private const string Repo = "pacanimal/hydra";
     private readonly Toggle _warned = new();
-    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(30) };
+    private static readonly HttpClient Http = CreateHttp();
+
+    private static HttpClient CreateHttp()
+    {
+        var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+        http.DefaultRequestHeaders.UserAgent.TryParseAdd("Hydra"); // set once — GitHub requires a UA
+        return http;
+    }
 
     // set by ServiceHost to stop the child process before a binary swap
     internal Func<Task>? StopChild { get; set; }
@@ -54,8 +61,6 @@ internal sealed class SelfUpdater(IHydraProfile profile, ILogger<SelfUpdater> lo
     {
         var current = CurrentVersion();
         log.LogInformation("Checking for updates (current: {Version})", current);
-
-        Http.DefaultRequestHeaders.UserAgent.TryParseAdd("Hydra");
 
         var json = await Http.GetStringAsync($"https://api.github.com/repos/{Repo}/releases/latest", cancel);
         using var doc = JsonDocument.Parse(json);
@@ -140,8 +145,28 @@ internal sealed class SelfUpdater(IHydraProfile profile, ILogger<SelfUpdater> lo
         // atomic swap
         if (OperatingSystem.IsWindows())
         {
+            // Windows can't overwrite a running exe, so rename it aside then move the new one in — two
+            // non-atomic steps. Retry the second move to ride out transient AV/indexer locks on the fresh
+            // file; if it still fails, roll the old exe back so the install is never left with NO Hydra.exe.
             File.Move(exePath, exePath + ".old");
-            File.Move(tmpPath, exePath);
+            try
+            {
+                for (var attempt = 0; ; attempt++)
+                {
+                    try { File.Move(tmpPath, exePath); break; }
+                    catch (IOException) when (attempt < 5) { await Task.Delay(200, cancel); }
+                }
+            }
+            catch
+            {
+                try
+                {
+                    if (!File.Exists(exePath) && File.Exists(exePath + ".old"))
+                        File.Move(exePath + ".old", exePath); // restore — never leave the install with no exe
+                }
+                catch { /* best-effort restore */ }
+                throw;
+            }
         }
         else
         {
@@ -174,11 +199,23 @@ internal sealed class SelfUpdater(IHydraProfile profile, ILogger<SelfUpdater> lo
     {
         var appDir = Path.GetDirectoryName(Environment.ProcessPath);
         if (appDir == null) return;
-        foreach (var file in Directory.EnumerateFiles(appDir, "*.tmp").Concat(Directory.EnumerateFiles(appDir, "*.old")))
-        {
-            try { File.Delete(file); }
-            catch { /* best effort */ }
-        }
+
+        // always clear stale temp downloads
+        foreach (var file in Directory.EnumerateFiles(appDir, "*.tmp"))
+            TryDelete(file);
+
+        // only clear .old backups once the real binary is present again — never destroy the last
+        // recovery copy while Hydra.exe is missing (e.g. after an interrupted Windows swap)
+        var exeName = OperatingSystem.IsWindows() ? "Hydra.exe" : "Hydra";
+        if (File.Exists(Path.Combine(appDir, exeName)))
+            foreach (var file in Directory.EnumerateFiles(appDir, "*.old"))
+                TryDelete(file);
+    }
+
+    private static void TryDelete(string file)
+    {
+        try { File.Delete(file); }
+        catch { /* best effort */ }
     }
 
     private static Version CurrentVersion() =>
