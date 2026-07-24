@@ -148,15 +148,50 @@ public class InputRouter(
 
     private async Task ProcessCommands()
     {
-        try
+        await foreach (var cmd in _commands.Reader.ReadAllAsync())
         {
-            await foreach (var cmd in _commands.Reader.ReadAllAsync())
+            // guard EACH command: a throw from one command must not kill the consumer, which would
+            // silently wedge all edge-crossing / relay-message routing until process restart.
+            try
+            {
                 await cmd(_state);
+            }
+            catch (OperationCanceledException) { break; }
+            catch (Exception ex)
+            {
+                log.LogError(ex, "InputRouter command failed — continuing");
+            }
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            log.LogError(ex, "InputRouter consumer error");
-        }
+    }
+
+    // posts a fence command and awaits it. the tcs is ALWAYS completed — even if the command throws
+    // (logged) or the channel is closed — so a fence awaiter (screen/peer/disconnect handlers) can never
+    // hang, the counterpart to ProcessCommands' per-command guard.
+    private Task RunFence(Func<LocalMasterState, ValueTask> body)
+    {
+        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!_commands.Writer.TryWrite(async st =>
+            {
+                try { await body(st); }
+                catch (Exception ex) when (ex is not OperationCanceledException) { log.LogError(ex, "InputRouter fence command failed"); }
+                finally { tcs.TrySetResult(); }
+            }))
+            tcs.TrySetResult();
+        return tcs.Task;
+    }
+
+    private Task<T> RunFence<T>(Func<LocalMasterState, T> body, T onFailure)
+    {
+        var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!_commands.Writer.TryWrite(st =>
+            {
+                try { tcs.TrySetResult(body(st)); }
+                catch (Exception ex) when (ex is not OperationCanceledException) { log.LogError(ex, "InputRouter fence command failed"); }
+                finally { tcs.TrySetResult(onFailure); } // no-op if body already set a value; guarantees completion on any throw (incl. OCE)
+                return ValueTask.CompletedTask;
+            }))
+            tcs.TrySetResult(onFailure);
+        return tcs.Task;
     }
 
     // posts a fence command and awaits it — all previously queued commands will have been processed on return.
@@ -177,8 +212,7 @@ public class InputRouter(
         var newScreens = BuildAllScreens(snapshot.Screens);
         var peerScreens = await _peerState.GetPeerScreensSnapshot();
 
-        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        if (!_commands.Writer.TryWrite(st =>
+        await RunFence(st =>
         {
             ApplyPeerScreenSizes(peerScreens, newScreens);
             st.LocalScreens = snapshot.Screens;
@@ -191,14 +225,8 @@ public class InputRouter(
                 st.ActiveLocalScreen = st.LocalScreens.FirstOrDefault() ?? st.ActiveLocalScreen;
                 if (st.ActiveLocalScreen != null) UpdateWarpPoint(st, st.ActiveLocalScreen);
             }
-            tcs.TrySetResult();
             return ValueTask.CompletedTask;
-        }))
-        {
-            return;
-        }
-
-        await tcs.Task;
+        });
     }
 
     private async Task OnPeersChanged(string[] hostNames)
@@ -210,8 +238,7 @@ public class InputRouter(
 
         var delta = await _peerState.UpdatePeers(current, configuredSlaves);
 
-        var tcs = new TaskCompletionSource<(string?, int, int)>(TaskCreationOptions.RunContinuationsAsynchronously);
-        if (!_commands.Writer.TryWrite(st =>
+        var (disconnectedHost, warpX, warpY) = await RunFence<(string?, int, int)>(st =>
         {
             string? host = null;
             int wx = 0, wy = 0;
@@ -220,14 +247,8 @@ public class InputRouter(
                 host = LeaveVirtualScreen(st, out wx, out wy);
 
             if (delta.AnyDeparted) RebuildLayout(st, delta.PeerScreensSnapshot);
-            tcs.TrySetResult((host, wx, wy));
-            return ValueTask.CompletedTask;
-        }))
-        {
-            return;
-        }
-
-        var (disconnectedHost, warpX, warpY) = await tcs.Task;
+            return (host, wx, wy);
+        }, (null, 0, 0));
 
         if (disconnectedHost != null)
         {
@@ -247,31 +268,17 @@ public class InputRouter(
 
         if (profile.RemoteOnly)
         {
-            var tcs2 = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            if (!_commands.Writer.TryWrite(async st =>
-            {
-                await TryEnterRemoteOnly(st);
-                tcs2.TrySetResult();
-            }))
-                return;
-            await tcs2.Task;
+            await RunFence(async st => await TryEnterRemoteOnly(st));
         }
     }
 
     private async Task OnRelayDisconnected()
     {
-        var tcs = new TaskCompletionSource<(string?, int, int)>(TaskCreationOptions.RunContinuationsAsynchronously);
-        if (!_commands.Writer.TryWrite(st =>
+        var (disconnectedHost, warpX, warpY) = await RunFence<(string?, int, int)>(st =>
         {
             var host = LeaveVirtualScreen(st, out var wx, out var wy);
-            tcs.TrySetResult((host, wx, wy));
-            return ValueTask.CompletedTask;
-        }))
-        {
-            return;
-        }
-
-        var (disconnectedHost, warpX, warpY) = await tcs.Task;
+            return (host, wx, wy);
+        }, (null, 0, 0));
 
         // reset known peers so all slaves get a fresh MasterConfig on reconnect
         await _peerState.ClearPeers();
@@ -442,19 +449,11 @@ public class InputRouter(
                     if (info.Platform.HasValue)
                         await _peerState.SetPeerPlatform(sourceHost, info.Platform.Value);
                     var snapshot = await _peerState.GetPeerScreensSnapshot();
-                    var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                    if (!_commands.Writer.TryWrite(async st =>
+                    await RunFence(async st =>
                     {
-                        try
-                        {
-                            RebuildLayout(st, snapshot);
-                            if (profile.RemoteOnly) await TryEnterRemoteOnly(st);
-                            tcs.TrySetResult();
-                        }
-                        catch (Exception ex) { tcs.TrySetException(ex); }
-                    }))
-                        break;
-                    await tcs.Task;
+                        RebuildLayout(st, snapshot);
+                        if (profile.RemoteOnly) await TryEnterRemoteOnly(st);
+                    });
                     log.LogInformation("Screen info from {Host}: {Count} screen(s)", sourceHost, info.Screens.Count);
                 }
                 break;
@@ -470,18 +469,13 @@ public class InputRouter(
             case MessageKind.ClipboardPullRequest:
                 {
                     // only honour if cursor is currently on that slave's screen
-                    var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-                    if (_commands.Writer.TryWrite(st =>
-                    {
-                        tcs.TrySetResult(st.Mouse.IsOnVirtualScreen && st.Mouse.CurrentScreen?.Host.EqualsIgnoreCase(sourceHost) == true);
-                        return ValueTask.CompletedTask;
-                    }))
-                    {
-                        if (await tcs.Task)
-                            OnClipboardPullRequest(sourceHost);
-                        else
-                            log.LogDebug("Clipboard pull request from {Host} ignored (cursor not on that screen)", sourceHost);
-                    }
+                    var onThatScreen = await RunFence(
+                        st => st.Mouse.IsOnVirtualScreen && st.Mouse.CurrentScreen?.Host.EqualsIgnoreCase(sourceHost) == true,
+                        false);
+                    if (onThatScreen)
+                        OnClipboardPullRequest(sourceHost);
+                    else
+                        log.LogDebug("Clipboard pull request from {Host} ignored (cursor not on that screen)", sourceHost);
                     break;
                 }
             case MessageKind.ClipboardPullResponse:
@@ -504,18 +498,13 @@ public class InputRouter(
                     var validated = ClipboardUtils.ValidateFields(clip.Text, clip.PrimaryText, clip.ImagePng, log, "pull response", sourceHost);
                     _clipboardSync.SetClipboard(validated.Text, validated.PrimaryText, validated.ImagePng);
                     // if cursor is currently on a remote screen, forward the clipboard to it
-                    var tcs = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
-                    if (_commands.Writer.TryWrite(st =>
+                    var activeHost = await RunFence<string?>(st =>
                     {
                         _lastReceived = validated;
-                        tcs.TrySetResult(st.Mouse.CurrentScreen?.Host);
-                        return ValueTask.CompletedTask;
-                    }))
-                    {
-                        var activeHost = await tcs.Task;
-                        if (activeHost != null)
-                            PushClipboardToHost(activeHost);
-                    }
+                        return st.Mouse.CurrentScreen?.Host;
+                    }, null);
+                    if (activeHost != null)
+                        PushClipboardToHost(activeHost);
                 }
                 break;
             case MessageKind.FileSelectionResponse:
