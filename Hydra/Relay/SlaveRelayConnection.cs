@@ -37,7 +37,17 @@ public class SlaveRelayConnection : RelayConnection
     private volatile bool _isReady;
 
     // masters whose cursor is currently on this slave's screen
+    // masters whose cursor is currently on this slave's screen. Mutated from SignalR receive handlers AND
+    // from OnDisconnected/OnPeers (a different task), so guard it — an unsynchronized HashSet torn between
+    // those threads can throw or corrupt. Access only via the helpers below.
     private readonly HashSet<string> _onScreenMasters = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Lock _onScreenMastersLock = new();
+
+    private bool IsOnScreenMaster(string host) { lock (_onScreenMastersLock) return _onScreenMasters.Contains(host); }
+    private void AddOnScreenMaster(string host) { lock (_onScreenMastersLock) _onScreenMasters.Add(host); }
+    private bool RemoveOnScreenMaster(string host) { lock (_onScreenMastersLock) return _onScreenMasters.Remove(host); }
+    private void ClearOnScreenMasters() { lock (_onScreenMastersLock) _onScreenMasters.Clear(); }
+    private int OnScreenMasterCount { get { lock (_onScreenMastersLock) return _onScreenMasters.Count; } }
 
     private readonly IActivityTracker _activityTracker;
 
@@ -109,7 +119,7 @@ public class SlaveRelayConnection : RelayConnection
                     var keyMsg = body.ParseMessage<KeyEventMessage>(_log, kind.ToString());
                     if (keyMsg != null)
                     {
-                        if (_onScreenMasters.Contains(sourceHost))
+                        if (IsOnScreenMaster(sourceHost))
                             _cursorHider.Show();
                         await HandleKeyEvent(keyMsg);
                     }
@@ -134,14 +144,14 @@ public class SlaveRelayConnection : RelayConnection
                 if (enter != null)
                 {
                     MoveToCachedScreen(enter.Screen, enter.X, enter.Y);
-                    _onScreenMasters.Add(sourceHost);
+                    AddOnScreenMaster(sourceHost);
                     _cursorHider.Show();
                 }
                 break;
             case MessageKind.LeaveScreen:
                 await ReleaseAllKeys();
-                _onScreenMasters.Remove(sourceHost);
-                if (_onScreenMasters.Count == 0 && _isReady)
+                RemoveOnScreenMaster(sourceHost);
+                if (OnScreenMasterCount == 0 && _isReady)
                     _cursorHider.Hide();
                 break;
             case MessageKind.ScreensaverSync:
@@ -240,7 +250,7 @@ public class SlaveRelayConnection : RelayConnection
     {
         _fileTransfer.Abort(this, "relay disconnected");
         var masters = await _peerState.GetMasters();
-        _onScreenMasters.Clear();
+        ClearOnScreenMasters();
         await ReleaseAllKeys();
         if (masters.Length > 0)
             _cursorHider.Show();
@@ -259,7 +269,7 @@ public class SlaveRelayConnection : RelayConnection
         var anyOnScreenMasterLeft = false;
         foreach (var departed in before.Where(h => !afterSet.Contains(h)))
         {
-            if (_onScreenMasters.Remove(departed))
+            if (RemoveOnScreenMaster(departed))
                 anyOnScreenMasterLeft = true;
             anyMasterLeft = true;
         }
@@ -269,7 +279,7 @@ public class SlaveRelayConnection : RelayConnection
         {
             if (after.Length == 0)
                 _cursorHider.Show();
-            else if (_onScreenMasters.Count == 0 && _isReady)
+            else if (OnScreenMasterCount == 0 && _isReady)
                 _cursorHider.Hide();
         }
         // abort any transfer whose peer has left (e.g. a slave→slave send whose target vanished) so it
@@ -283,7 +293,7 @@ public class SlaveRelayConnection : RelayConnection
     {
         var msg = body.ParseMessage<T>(_log, kind.ToString());
         if (msg == null) return;
-        if (_onScreenMasters.Contains(sourceHost))
+        if (IsOnScreenMaster(sourceHost))
             _cursorHider.Show();
         handler(msg);
     }

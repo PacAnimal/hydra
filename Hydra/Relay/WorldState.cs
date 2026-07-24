@@ -113,7 +113,10 @@ public class WorldState : IWorldState
     {
         using var s = await _slave.WaitForDisposable();
         foreach (var key in s.Value.Masters.Keys.Where(h => !activePeers.Contains(h)).ToList())
+        {
             s.Value.Masters.Remove(key);
+            _remoteKeys.TryRemove(key, out _); // drop the departed master's cached encryption key
+        }
     }
 
     public async ValueTask ClearPeers()
@@ -124,6 +127,7 @@ public class WorldState : IWorldState
         s.PeerScreens.Clear();
         s.PeerPlatforms.Clear();
         _loggers.Clear();
+        _remoteKeys.Clear(); // keys are re-derived from the message salt on reconnect
     }
 
     public async ValueTask SetPeerPlatform(string host, PeerPlatform platform)
