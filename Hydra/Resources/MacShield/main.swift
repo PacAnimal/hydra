@@ -90,10 +90,8 @@ class ShieldDelegate: NSObject, NSApplicationDelegate, CLLocationManagerDelegate
       return
     }
     let level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.maximumWindow)))
-    let w10 = screen.frame.width * 0.2
-    let h10 = screen.frame.height * 0.2
-    let frame = NSRect(
-      x: screen.frame.midX - w10 / 2, y: screen.frame.midY - h10 / 2, width: w10, height: h10)
+    // cover the whole screen; the actual screen is chosen per-absorb from the cursor's location
+    let frame = screen.frame
 
     let w = NSWindow(
       contentRect: frame,
@@ -287,9 +285,11 @@ class ShieldDelegate: NSObject, NSApplicationDelegate, CLLocationManagerDelegate
     guard let w = window else { return }
     let absorb = desiredAbsorb && !isFullscreenAppActive()
     if absorb {
+      positionOverCursorScreen(w)
       w.backgroundColor = debugMode ? .red : .clear
       w.alphaValue = debugMode ? 0.2 : 0.01
       w.ignoresMouseEvents = false
+      w.orderFrontRegardless()
     } else {
       w.backgroundColor = .clear
       w.alphaValue = 0.01
@@ -297,12 +297,23 @@ class ShieldDelegate: NSObject, NSApplicationDelegate, CLLocationManagerDelegate
     }
   }
 
-  // any of these options indicate an app has taken over the display (e.g. a fullscreen game)
+  // cover the full screen that currently contains the cursor, so local hover is absorbed on whichever
+  // monitor the KVM parks the cursor on — and it follows display reconfiguration (dock/undock, clamshell).
+  // previously the window frame was fixed once at launch to NSScreen.main, which after a display change
+  // could leave it stranded on the wrong monitor entirely, absorbing nothing where the cursor actually is.
+  private func positionOverCursorScreen(_ w: NSWindow) {
+    let mouse = NSEvent.mouseLocation
+    guard
+      let screen = NSScreen.screens.first(where: { NSMouseInRect(mouse, $0.frame, false) })
+        ?? NSScreen.main ?? NSScreen.screens.first
+    else { return }
+    if w.frame != screen.frame { w.setFrame(screen.frame, display: false) }
+  }
+
+  // only a genuine fullscreen app (e.g. a game) should suppress the shield. deliberately does NOT key off
+  // menu-bar hiding — that is a common desktop setting and would wrongly suppress the shield in normal use.
   func isFullscreenAppActive() -> Bool {
-    let opts = NSApp.currentSystemPresentationOptions
-    return opts.contains(.fullScreen)
-      || opts.contains(.hideMenuBar)
-      || opts.contains(.autoHideMenuBar)
+    NSApp.currentSystemPresentationOptions.contains(.fullScreen)
   }
 }
 
