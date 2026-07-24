@@ -123,9 +123,7 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
     public async Task RestartEventTap()
     {
         log.LogInformation("Restarting event tap");
-        if (_runLoop != nint.Zero)
-            NativeMethods.CFRunLoopStop(_runLoop);
-        _tapThread?.Join(TimeSpan.FromSeconds(2));
+        StopEventTap();
         _keyResolver.Reset();
         await CreateTapThread();
     }
@@ -179,9 +177,15 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
 
     public void StopEventTap()
     {
-        if (_runLoop != nint.Zero)
-            NativeMethods.CFRunLoopStop(_runLoop);
-        _tapThread?.Join(TimeSpan.FromSeconds(2));
+        // claim the run loop atomically and clear the field — a thread's CFRunLoop is freed by macOS
+        // when the thread exits, so a second StopEventTap (StopAsync then DisposeAsync) must NOT call
+        // CFRunLoopStop on the stale pointer: the PAC check faults and .NET spins on the hardware exception
+        var runLoop = Interlocked.Exchange(ref _runLoop, nint.Zero);
+        if (runLoop == nint.Zero) return;
+        NativeMethods.CFRunLoopStop(runLoop);
+        var thread = _tapThread;
+        _tapThread = null;
+        thread?.Join(TimeSpan.FromSeconds(2));
     }
 
     public async ValueTask DisposeAsync()

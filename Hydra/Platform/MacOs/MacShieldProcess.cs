@@ -143,7 +143,10 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
 
         if (_process == null) return;
 
-        _ = Hide(); // pass-through on startup
+        // apply the current show/hide state as a single ordered command. on first start _lastState is
+        // CmdHide (pass-through); after an unexpected restart it still holds the pre-crash state so the
+        // shield resumes absorbing. sending it here rather than as a separate restore avoids a Hide/Show race.
+        _ = SendWithReply(_lastState);
 
         if (needsWifi)
             _ = SendFireAndForget(CmdWifi); // activate WiFi monitoring + location on demand (no echo expected)
@@ -277,14 +280,12 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
 
             if (!_stopping)
             {
-                // unexpected exit — restart with exponential backoff to avoid rapid crash-loops
+                // unexpected exit — restart with exponential backoff to avoid rapid crash-loops.
+                // StartProcess re-applies _lastState, so the shield resumes its pre-crash absorb state.
                 Log?.LogWarning("Shield process exited unexpectedly — restarting in {Delay}ms", (long)_restartDelay.TotalMilliseconds);
                 await Task.Delay(_restartDelay);
                 _restartDelay = TimeSpan.FromTicks(Math.Min(_restartDelay.Ticks * 2, TimeSpan.FromMilliseconds(RestartMaxDelayMs).Ticks)); // cap
-                var stateToRestore = _lastState; // save before StartProcess calls Hide() which resets _lastState
                 StartProcess();
-                if (stateToRestore != CmdHide)
-                    _ = SendWithReply(stateToRestore);
             }
         }
         catch (Exception ex) { Log?.LogDebug(ex, "Shield stdout reader exited"); }
