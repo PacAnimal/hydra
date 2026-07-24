@@ -5,8 +5,14 @@ namespace Hydra.Platform;
 
 internal static partial class ProcessRestart
 {
+    private static int _restarting; // 0 = not restarting, 1 = restart already initiated
+
     internal static void Restart()
     {
+        // one restart only — a racing caller (NetworkWatcher + SelfUpdater, or an event burst) must not
+        // spawn a second process (Windows) before Environment.Exit runs
+        if (Interlocked.CompareExchange(ref _restarting, 1, 0) != 0) return;
+
         var exePath = Environment.ProcessPath!;
 
         if (OperatingSystem.IsWindows())
@@ -15,7 +21,15 @@ internal static partial class ProcessRestart
             var info = new ProcessStartInfo { FileName = exePath, UseShellExecute = false };
             foreach (var arg in Environment.GetCommandLineArgs().Skip(1))
                 info.ArgumentList.Add(arg);
-            Process.Start(info);
+            try
+            {
+                Process.Start(info);
+            }
+            catch
+            {
+                Interlocked.Exchange(ref _restarting, 0); // spawn failed — don't latch out a later retry
+                throw;
+            }
             Environment.Exit(0);
         }
         else

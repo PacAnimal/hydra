@@ -23,6 +23,7 @@ internal sealed class NetworkWatcher : SimpleHostedService
     // debounce: ignore rapid re-triggers within this window
     private DateTime _lastCheck = DateTime.MinValue;
     private static readonly TimeSpan Debounce = TimeSpan.FromSeconds(2);
+    private int _checking; // 0 = idle, 1 = a check is running — serializes concurrent callers
 
     public NetworkWatcher(INetworkDetector detector, Func<int> screenCountProvider, List<HydraConfig> configs, HydraConfig? activeConfig, string? profileOverride, ILogger<NetworkWatcher> log)
         : base(log, TimeSpan.FromSeconds(10))
@@ -61,6 +62,22 @@ internal sealed class NetworkWatcher : SimpleHostedService
         // no conditional configs — nothing to check
         if (!HydraConfig.HasConditions(_configs)) return;
 
+        // serialize: the 10s Execute loop, NetworkAddressChanged and TriggerCheck can all fire
+        // concurrently. Running one check at a time makes the debounce atomic (no TOCTOU on _lastCheck)
+        // and stops two checks from both resolving + restarting on the same event burst.
+        if (Interlocked.CompareExchange(ref _checking, 1, 0) != 0) return;
+        try
+        {
+            await CheckNetworkCore(cancel);
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _checking, 0);
+        }
+    }
+
+    private async Task CheckNetworkCore(CancellationToken cancel)
+    {
         // debounce rapid-fire events
         var now = DateTime.UtcNow;
         if (now - _lastCheck < Debounce) return;
