@@ -34,6 +34,8 @@ public sealed class FileTransferService : IDisposable
     private string? _coordSourceHost;
     private string[]? _coordSourcePaths;
     private IRelaySender? _coordRelay;
+    private Timer? _coordWatchdog; // fires if the target never replies, so a vanished peer can't wedge FileTransferOngoing
+    private int _coordGeneration;  // bumped on every clear; a stale watchdog callback checks it so it can't clear a newer coordination
 
     // receiver side
     private ReceiverTransfer? _receiver;
@@ -117,12 +119,38 @@ public sealed class FileTransferService : IDisposable
         {
             var target = _coordTargetHost;
             var relay = _coordRelay;
-            _coordTargetHost = null;
-            _coordSourceHost = null;
-            _coordSourcePaths = null;
-            _coordRelay = null;
+            ClearCoordinatorLocked();
             return (target, relay);
         }
+    }
+
+    // clears all coordinator state and stops the watchdog. caller must hold _lock.
+    private void ClearCoordinatorLocked()
+    {
+        _coordTargetHost = null;
+        _coordSourceHost = null;
+        _coordSourcePaths = null;
+        _coordRelay = null;
+        _coordWatchdog?.Dispose();
+        _coordWatchdog = null;
+        _coordGeneration++; // invalidate any already-queued watchdog callback
+    }
+
+    // fired by the coordinator watchdog: if the target never answered the FileTransferRequest, clear the
+    // stale coordinator state so it doesn't block all future transfers (FileTransferOngoing == true forever).
+    // gen guards against a callback that was already queued when the coordination it belonged to was cleared.
+    private void CoordinatorTimedOut(int gen, string targetHost)
+    {
+        bool cleared = false;
+        lock (_lock)
+        {
+            if (_coordGeneration == gen && _coordTargetHost != null)
+            {
+                ClearCoordinatorLocked();
+                cleared = true;
+            }
+        }
+        if (cleared) _log.LogWarning("Coordinated transfer to {Target} timed out with no response — cleared", targetHost);
     }
 
     public static bool IsFileTransferMessage(MessageKind kind) => kind is
@@ -225,10 +253,10 @@ public sealed class FileTransferService : IDisposable
                     lock (_lock)
                     {
                         tcs = _sendAcceptTcs; _sendAcceptTcs = null;
-                        coordSource = _coordSourceHost; _coordSourceHost = null;
-                        coordPaths = _coordSourcePaths; _coordSourcePaths = null;
-                        coordTarget = _coordTargetHost; _coordTargetHost = null;
-                        _coordRelay = null;
+                        coordSource = _coordSourceHost;
+                        coordPaths = _coordSourcePaths;
+                        coordTarget = _coordTargetHost;
+                        ClearCoordinatorLocked(); // handed off to the source slave; stop the watchdog
                     }
                     tcs?.TrySetResult(true);
                     if (coordSource != null && coordPaths != null && coordTarget != null)
@@ -346,12 +374,7 @@ public sealed class FileTransferService : IDisposable
 
             // clear coordinator state if target aborted
             if (_coordTargetHost != null && _coordTargetHost.EqualsIgnoreCase(sourceHost))
-            {
-                _coordTargetHost = null;
-                _coordSourceHost = null;
-                _coordSourcePaths = null;
-                _coordRelay = null;
-            }
+                ClearCoordinatorLocked();
         }
 
         if (!relevant)
@@ -444,6 +467,10 @@ public sealed class FileTransferService : IDisposable
             _coordSourceHost = sourceHost;
             _coordSourcePaths = paths;
             _coordRelay = relay;
+            // watchdog: if the target never replies (Accepted/Busy/Abort), clear the coordinator state so a
+            // vanished peer can't leave FileTransferOngoing stuck true and block all future transfers.
+            var gen = _coordGeneration;
+            _coordWatchdog = new Timer(_ => CoordinatorTimedOut(gen, targetHost), null, _watchdogTimeoutMs, Timeout.Infinite);
         }
         SendTo(relay, targetHost, MessageKind.FileTransferRequest, new FileTransferRequestMessage(SourceHost: sourceHost));
         _log.LogInformation("Paste: sent FileTransferRequest to {Target} (data from {Source})", targetHost, sourceHost);
