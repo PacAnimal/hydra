@@ -36,6 +36,13 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
 
     protected virtual TimeSpan ReconnectDelay => TimeSpan.FromSeconds(Constants.ReconnectDelaySeconds);
 
+    // RR5: ±25% jitter so peers that all dropped at once (e.g. a relay restart) don't reconnect in lockstep
+    private static TimeSpan WithJitter(TimeSpan baseDelay)
+    {
+        var offsetMs = (Random.Shared.NextDouble() * 2 - 1) * baseDelay.TotalMilliseconds * 0.25;
+        return baseDelay + TimeSpan.FromMilliseconds(offsetMs);
+    }
+
     // IRelaySender
     public bool IsConnected => _server != null;
     public event Func<string[], Task>? PeersChanged;
@@ -108,7 +115,8 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     protected virtual Task OnKicked(string reason) => Task.CompletedTask;
     // fires after _server and _encryption are set — guaranteed connection-ready signal
     protected virtual Task OnAuthenticated() => Task.CompletedTask;
-    // cancellation token for the current connection lifetime — valid during OnAuthenticated and OnDisconnected
+    // per-connection cancellation token: cancels when this connection drops. Valid only during
+    // OnAuthenticated (the source CTS is disposed once the connection loop unwinds, before OnDisconnected).
     protected CancellationToken ConnectionToken { get; private set; }
     // fires when a live connection drops (not on auth failure or clean shutdown)
     protected virtual Task OnDisconnected() => Task.CompletedTask;
@@ -192,7 +200,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
             }
 
             if (!cancel.IsCancellationRequested)
-                await Task.Delay(ReconnectDelay, cancel).ConfigureAwait(false);
+                await Task.Delay(WithJitter(ReconnectDelay), cancel).ConfigureAwait(false);
         }
     }
 
@@ -226,11 +234,13 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         _encryption = new RelayEncryption(netConfig.EncryptionKey, peerState);
         _server = server;
 
+        // RR6: bound the auth round-trip so a server that accepts the socket then stalls the handshake
+        // doesn't hang the connect attempt — WaitAsync surfaces a timeout/cancel to the reconnect loop.
         var response = await server.Authenticate(new RelayLogin
         {
             Authorization = netConfig.Authorization,
             HostName = hostName
-        });
+        }).WaitAsync(TimeSpan.FromSeconds(Constants.AuthTimeoutSeconds), disco.Token);
 
         if (!response.Authenticated)
         {
@@ -241,7 +251,9 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         }
 
         log.LogInformation("Authenticated on relay as {HostName}", hostName);
-        ConnectionToken = cancel;
+        // R5: per-connection token (cancels when this connection drops), NOT the app-lifetime token — so
+        // awaiters like WaitForAccessibilityTrusted in OnAuthenticated unwind on a drop and reconnect.
+        ConnectionToken = disco.Token;
         await OnAuthenticated();
 
         // drain outbound queue until the connection drops
