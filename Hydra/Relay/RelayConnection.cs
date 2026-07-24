@@ -166,8 +166,19 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
                 while (_sendQueue.Reader.TryRead(out _)) { } // discard stale outbound messages
                 if (wasConnected)
                 {
-                    await OnDisconnected();
-                    if (Disconnected != null) await Disconnected();
+                    // guard the disconnect callbacks: a throw here would escape Execute, and because the
+                    // base SimpleHostedService has no exceptionLoopTime it would permanently kill the
+                    // reconnect loop (silent, until process restart). Log and keep reconnecting instead.
+                    try
+                    {
+                        await OnDisconnected();
+                        if (Disconnected != null) await Disconnected();
+                    }
+                    catch (OperationCanceledException) when (cancel.IsCancellationRequested) { }
+                    catch (Exception ex)
+                    {
+                        log.LogError(ex, "Error handling relay disconnect — continuing to reconnect");
+                    }
                 }
             }
 
