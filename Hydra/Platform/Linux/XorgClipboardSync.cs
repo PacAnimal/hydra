@@ -85,19 +85,18 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
         // fast path: we own the clipboard — return null to prevent re-syncing our own write
         if (NativeMethods.XGetSelectionOwner(_display, _atomClipboard) == _window)
             return null;
-        var bytes = ReadSelectionBytes(_atomClipboard, _atomHydraClipboard, _atomUtf8String);
-        if (bytes == null) return null;
-        var text = Encoding.UTF8.GetString(bytes);
-        return _echo.FilterText(text);
+        var read = ReadSelection(_atomClipboard, _atomHydraClipboard, _atomUtf8String);
+        if (read == null) return null;
+        return _echo.FilterText(read.DecodeText());
     }
 
     public string? GetPrimaryText()
     {
         if (NativeMethods.XGetSelectionOwner(_display, NativeMethods.XA_PRIMARY) == _window)
             return null;
-        var bytes = ReadSelectionBytes(NativeMethods.XA_PRIMARY, _atomHydraPrimary, _atomUtf8String);
-        if (bytes == null) return null;
-        var text = Encoding.UTF8.GetString(bytes);
+        var read = ReadSelection(NativeMethods.XA_PRIMARY, _atomHydraPrimary, _atomUtf8String);
+        if (read == null) return null;
+        var text = read.DecodeText();
         return text == _lastSetPrimaryText ? null : text;
     }
 
@@ -105,19 +104,20 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
     {
         if (NativeMethods.XGetSelectionOwner(_display, _atomClipboard) == _window)
             return null;
-        var bytes = ReadSelectionBytes(_atomClipboard, _atomHydraImageClip, _atomImagePng);
-        if (bytes == null) return null;
-        if (_echo.IsDuplicateImage(bytes)) return null;
-        return bytes;
+        var read = ReadSelection(_atomClipboard, _atomHydraImageClip, _atomImagePng);
+        if (read == null) return null;
+        if (_echo.IsDuplicateImage(read.Data)) return null;
+        return read.Data;
     }
 
     public string? GetHtml()
     {
         if (NativeMethods.XGetSelectionOwner(_display, _atomClipboard) == _window)
             return null;
-        var bytes = ReadSelectionBytes(_atomClipboard, _atomHydraHtmlClip, _atomTextHtml);
-        if (bytes == null) return null;
-        return _echo.FilterHtml(Encoding.UTF8.GetString(bytes));
+        // text/html is UTF-8 and never triggers the STRING fallback, so decode as UTF-8 directly
+        var read = ReadSelection(_atomClipboard, _atomHydraHtmlClip, _atomTextHtml);
+        if (read == null) return null;
+        return _echo.FilterHtml(Encoding.UTF8.GetString(read.Data));
     }
 
     // X11 has no standardised RTF selection target — HTML is the rich vehicle here, text is the fallback
@@ -342,7 +342,10 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
         }
         if (text == null) return nint.Zero;
 
-        var bytes = Encoding.UTF8.GetBytes(text);
+        // UTF8_STRING carries UTF-8; the legacy STRING target is ISO-8859-1 (Latin-1) per ICCCM
+        var bytes = target == NativeMethods.XA_STRING
+            ? Encoding.Latin1.GetBytes(text)
+            : Encoding.UTF8.GetBytes(text);
         if (bytes.Length <= MaxPropertyBytes)
         {
             _ = NativeMethods.XChangeProperty(_display, requestor, property,
@@ -388,8 +391,8 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
 
     // -- reading data from another app --
 
-    // returns raw bytes for the selection, or null on failure/timeout
-    private byte[]? ReadSelectionBytes(nint selectionAtom, nint propertyAtom, nint targetAtom)
+    // returns the selection bytes plus whether they came from the STRING fallback, or null on failure/timeout
+    private SelectionRead? ReadSelection(nint selectionAtom, nint propertyAtom, nint targetAtom)
     {
         lock (_getLock)
         {
@@ -406,10 +409,11 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
                     propertyAtom, _window, NativeMethods.CurrentTime);
                 _ = NativeMethods.XFlush(_display);
 
-                if (!signal.Wait(ClipboardTimeoutMs))
+                if (!signal.Wait(ClipboardTimeoutMs) || _getResult == null)
                     return null;
 
-                return _getResult;
+                // the STRING fallback yields ISO-8859-1 (Latin-1) bytes per ICCCM, not UTF-8
+                return new SelectionRead(_getResult, _fallbackToString);
             }
             finally
             {
@@ -554,6 +558,12 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
     {
         try { _getSignal?.Set(); }
         catch (ObjectDisposedException) { }
+    }
+
+    // bytes read from a selection, plus whether they arrived via the Latin-1 STRING fallback
+    private sealed record SelectionRead(byte[] Data, bool Latin1)
+    {
+        public string DecodeText() => (Latin1 ? Encoding.Latin1 : Encoding.UTF8).GetString(Data);
     }
 
     private sealed class IncrSendState
