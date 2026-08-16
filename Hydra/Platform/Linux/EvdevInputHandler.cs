@@ -102,7 +102,7 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
             var hasRel = EvdevNativeMethods.TestBit(evTypeBuf, EvdevNativeMethods.EV_REL);
 
             // keyboard: supports EV_KEY with letter keys
-            if (hasKey && EvdevNativeMethods.ioctl_bit(fd, EvdevNativeMethods.EVIOCGBIT_EV_KEY, keyBuf) == 0
+            if (hasKey && EvdevNativeMethods.ioctl_bit(fd, EvdevNativeMethods.EVIOCGBIT_EV_KEY, keyBuf) >= 0
                 && EvdevNativeMethods.TestBit(keyBuf, EvdevNativeMethods.KEY_A))
             {
                 _keyboardFds.Add(fd);
@@ -111,7 +111,7 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
             }
 
             // mouse/pointer: supports EV_REL with X and Y axes
-            if (hasRel && EvdevNativeMethods.ioctl_bit(fd, EvdevNativeMethods.EVIOCGBIT_EV_REL, relBuf) == 0
+            if (hasRel && EvdevNativeMethods.ioctl_bit(fd, EvdevNativeMethods.EVIOCGBIT_EV_REL, relBuf) >= 0
                 && EvdevNativeMethods.TestBit(relBuf, EvdevNativeMethods.REL_X)
                 && EvdevNativeMethods.TestBit(relBuf, EvdevNativeMethods.REL_Y))
             {
