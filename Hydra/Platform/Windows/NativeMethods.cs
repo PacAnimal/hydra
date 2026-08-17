@@ -207,6 +207,23 @@ internal static partial class NativeMethods
     [LibraryImport(User32)]
     internal static partial nint MonitorFromPoint(WINPOINT pt, uint dwFlags);
 
+    // -- per-monitor dpi --
+
+    private const string Shcore = "shcore.dll";
+
+    // MONITOR_DPI_TYPE.MDT_EFFECTIVE_DPI — the scaled dpi the user actually sees; 96 is 100%
+    internal const int MDT_EFFECTIVE_DPI = 0;
+
+    // Takes a monitor, which is what we have: the OSD picks its monitor from the cursor position via
+    // MonitorFromPoint, and has no window on that monitor to ask about. Microsoft notes this call is
+    // "not DPI aware" and suggests GetDpiForWindow instead, but that caveat is about dpi
+    // virtualisation for unaware callers: for a PROCESS_PER_MONITOR_DPI_AWARE process, which this is
+    // by manifest, it documents the return as the actual dpi the user set for that display.
+    // Returns S_OK (0) on success; dpiX and dpiY are always equal.
+    [LibraryImport(Shcore)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial int GetDpiForMonitor(nint hMonitor, int dpiType, out uint dpiX, out uint dpiY);
+
     internal const uint MONITOR_DEFAULTTONEAREST = 2;
 
     // -- input injection --
@@ -346,13 +363,6 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool SetWindowPos(nint hWnd, nint hWndInsertAfter, int x, int y, int cx, int cy, uint uFlags);
-
-    // this process is PerMonitorV2, so this reports the dpi of the monitor the window is currently
-    // on. 0 for an invalid hwnd. Preferred over shcore GetDpiForMonitor, which Microsoft documents
-    // as not dpi aware and not to be used from a per-monitor aware thread.
-    [LibraryImport(User32)]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
-    internal static partial uint GetDpiForWindow(nint hWnd);
 
     [LibraryImport(User32)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]

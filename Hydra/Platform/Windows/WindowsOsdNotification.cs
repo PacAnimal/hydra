@@ -115,16 +115,10 @@ internal sealed class WindowsOsdNotification : IOsdNotification, IDisposable
         var sw = mi.Monitor.Right - mi.Monitor.Left;
         var sh = mi.Monitor.Bottom - mi.Monitor.Top;
 
-        // Park the window on the target monitor before measuring: GetDpiForWindow follows the monitor
-        // the window is on, and it has not been moved there yet. 1x1 and no SWP_SHOWWINDOW, so
-        // nothing is visible until the real SetWindowPos below.
-        NativeMethods.SetWindowPos(_hwnd, NativeMethods.HWND_TOPMOST, mx, my, 1, 1,
-            NativeMethods.SWP_NOACTIVATE);
-
-        // Fixed logical size, scaled by the monitor's dpi - the same approach macOS gets for free
-        // from points. Sizing off resolution made a rotated 720x1280 panel render the OSD at nearly
-        // twice the size of the identical panel in landscape.
-        using var bmp = RenderText(text, DpiScale(_hwnd), out var bmpW, out var bmpH);
+        // Fixed logical size, scaled by the dpi of the monitor the pointer is on - the same approach
+        // macOS gets for free from points. Sizing off resolution made a rotated 720x1280 panel render
+        // the OSD at nearly twice the size of the identical panel in landscape.
+        using var bmp = RenderText(text, DpiScale(hMonitor), out var bmpW, out var bmpH);
         _hbmp = bmp.GetHbitmap(Color.FromArgb(0));
         _bmpW = bmpW;
         _bmpH = bmpH;
@@ -195,11 +189,13 @@ internal sealed class WindowsOsdNotification : IOsdNotification, IDisposable
     // bitmap: without that a 4K display at 150% would show a noticeably smaller OSD.
     private const float BaseEmSize = 22f;
 
-    // 96 dpi is USER_DEFAULT_SCREEN_DPI, i.e. 100% scaling. 0 means an invalid hwnd.
-    private static float DpiScale(nint hWnd)
+    // 96 dpi is USER_DEFAULT_SCREEN_DPI, i.e. 100% scaling. Fall back to that if the query fails,
+    // which leaves the OSD at its plain logical size rather than an arbitrary one.
+    private static float DpiScale(nint hMonitor)
     {
-        var dpi = NativeMethods.GetDpiForWindow(hWnd);
-        return dpi == 0 ? 1f : dpi / 96f;
+        if (NativeMethods.GetDpiForMonitor(hMonitor, NativeMethods.MDT_EFFECTIVE_DPI, out var dpiX, out _) != 0)
+            return 1f;
+        return dpiX == 0 ? 1f : dpiX / 96f;
     }
 
     private static Bitmap RenderText(string text, float dpiScale, out int width, out int height)
