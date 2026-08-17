@@ -36,6 +36,9 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
     private Process? _process;
     private TaskCompletionSource? _initialStateTcs;
     private volatile TaskCompletionSource? _authSettledTcs; // completed when location auth leaves notDetermined
+    // interlocked internally, so the bare reads outside _processLock are safe — the lock only guards
+    // the compound stopping-plus-_process operations
+    // ReSharper disable once InconsistentlySynchronizedField
     private readonly Toggle _stopping = new();
     private readonly Lock _processLock = new();
     private volatile string _lastState = CmdHide; // last show/hide command; re-applied after unexpected restart

@@ -501,7 +501,7 @@ public class InputRouter(
                     var validated = ClipboardUtils.ValidateFields(clip.Text, clip.PrimaryText, clip.ImagePng, clip.Html, clip.Rtf, log, "pull response", sourceHost);
                     _clipboardSync.SetClipboard(validated);
                     // if cursor is currently on a remote screen, forward the clipboard to it
-                    var activeHost = await RunFence<string?>(st =>
+                    var activeHost = await RunFence(st =>
                     {
                         _lastReceived = validated;
                         return st.Mouse.CurrentScreen?.Host;
@@ -699,40 +699,40 @@ public class InputRouter(
                     }
                     else
                     {
-                    st.LockedToScreen = !st.LockedToScreen;
-                    if (profile.RemoteOnly)
-                    {
-                        // ShowOsd falls back to a LOCAL osd when the cursor is not on a remote
-                        // screen, and a remote-only master often has no display to show it on. So
-                        // each branch shows its OSD at the only moment a remote screen is current:
-                        // after entering when locking, before leaving when unlocking. Announcing it
-                        // up front instead made re-locking silent.
-                        if (st.LockedToScreen)
+                        st.LockedToScreen = !st.LockedToScreen;
+                        if (profile.RemoteOnly)
                         {
-                            log.LogInformation("Remote lock: locked to remote");
-                            await TryEnterRemoteOnly(st);
-                            ShowOsd(st, "Input: remote");
+                            // ShowOsd falls back to a LOCAL osd when the cursor is not on a remote
+                            // screen, and a remote-only master often has no display to show it on. So
+                            // each branch shows its OSD at the only moment a remote screen is current:
+                            // after entering when locking, before leaving when unlocking. Announcing it
+                            // up front instead made re-locking silent.
+                            if (st.LockedToScreen)
+                            {
+                                log.LogInformation("Remote lock: locked to remote");
+                                await TryEnterRemoteOnly(st);
+                                ShowOsd(st, "Input: remote");
+                            }
+                            else
+                            {
+                                log.LogInformation("Remote lock: unlocked (local)");
+                                if (st.Mouse.IsOnVirtualScreen && st.Mouse.CurrentScreen != null)
+                                {
+                                    var leavingHost = st.Mouse.CurrentScreen.Host;
+                                    ShowOsd(st, "Input: local");
+                                    FlushMouseDelta(st);
+                                    st.Mouse.LeaveScreen();
+                                    platform.IsOnVirtualScreen = false;
+                                    ShowCursorOnReturn();
+                                    LeaveRemoteScreen(leavingHost);
+                                }
+                            }
                         }
                         else
                         {
-                            log.LogInformation("Remote lock: unlocked (local)");
-                            if (st.Mouse.IsOnVirtualScreen && st.Mouse.CurrentScreen != null)
-                            {
-                                var leavingHost = st.Mouse.CurrentScreen.Host;
-                                ShowOsd(st, "Input: local");
-                                FlushMouseDelta(st);
-                                st.Mouse.LeaveScreen();
-                                platform.IsOnVirtualScreen = false;
-                                ShowCursorOnReturn();
-                                LeaveRemoteScreen(leavingHost);
-                            }
+                            ShowOsd(st, st.LockedToScreen ? "Mouse lock: On" : "Mouse lock: Off");
+                            log.LogInformation("Screen lock: {State}", st.LockedToScreen ? "locked" : "unlocked");
                         }
-                    }
-                    else
-                    {
-                        ShowOsd(st, st.LockedToScreen ? "Mouse lock: On" : "Mouse lock: Off");
-                        log.LogInformation("Screen lock: {State}", st.LockedToScreen ? "locked" : "unlocked");
-                    }
                     }
                 }
                 else if (keyEvent.Character == 'k')

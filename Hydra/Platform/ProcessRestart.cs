@@ -6,13 +6,13 @@ namespace Hydra.Platform;
 
 internal static partial class ProcessRestart
 {
-    private static readonly Toggle _restarting = new(); // one-shot latch — restart already initiated
+    private static readonly Toggle Restarting = new(); // one-shot latch — restart already initiated
 
     internal static void Restart()
     {
         // one restart only — a racing caller (NetworkWatcher + SelfUpdater, or an event burst) must not
         // spawn a second process (Windows) before Environment.Exit runs
-        if (!_restarting.TrySet()) return;
+        if (!Restarting.TrySet()) return;
 
         var exePath = Environment.ProcessPath!;
 
@@ -28,7 +28,7 @@ internal static partial class ProcessRestart
             }
             catch
             {
-                _restarting.TryReset(); // spawn failed — don't latch out a later retry
+                Restarting.TryReset(); // spawn failed — don't latch out a later retry
                 throw;
             }
             Environment.Exit(0);

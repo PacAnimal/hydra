@@ -67,21 +67,7 @@ internal sealed partial class ProcessLock : IDisposable
     // throw "already running" and exit, leaving NO instance running. beforeRetry is a deterministic test seam.
     internal static ProcessLock Acquire(string path, int maxAttempts, int retryDelayMs, Action? beforeRetry = null)
     {
-        FileStream stream = null!;
-        for (var attempt = 0; ; attempt++)
-        {
-            try
-            {
-                stream = new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
-                break;
-            }
-            catch (IOException)
-            {
-                if (attempt >= maxAttempts - 1) throw LockError(path, TryReadPid(path));
-                beforeRetry?.Invoke();
-                if (retryDelayMs > 0) Thread.Sleep(retryDelayMs);
-            }
-        }
+        var stream = OpenExclusive(path, maxAttempts, retryDelayMs, beforeRetry);
 
         stream.SetLength(0);
         using var writer = new StreamWriter(stream, leaveOpen: true);
@@ -90,6 +76,23 @@ internal sealed partial class ProcessLock : IDisposable
         stream.Flush();
 
         return new ProcessLock(stream, path);
+    }
+
+    private static FileStream OpenExclusive(string path, int maxAttempts, int retryDelayMs, Action? beforeRetry)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                return new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            }
+            catch (IOException)
+            {
+                if (attempt >= maxAttempts - 1) throw LockError(path, TryReadPid(path));
+                beforeRetry?.Invoke();
+                if (retryDelayMs > 0) Thread.Sleep(retryDelayMs);
+            }
+        }
     }
 
     // internal for testing

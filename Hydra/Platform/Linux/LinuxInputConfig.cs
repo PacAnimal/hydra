@@ -65,7 +65,7 @@ internal static class LinuxInputConfig
     private static int? ParseDpi(string value)
     {
         var tokens = value.Split(" ", StringSplitOptions.RemoveEmptyEntries);
-        var chosen = tokens.FirstOrDefault(t => t.StartsWith("*", StringComparison.Ordinal)) ?? tokens.FirstOrDefault();
+        var chosen = tokens.FirstOrDefault(t => t.StartsWith('*')) ?? tokens.FirstOrDefault();
         if (chosen is null) return null;
         var digits = chosen.TrimStart(Convert.ToChar("*")).Split("@")[0];
         return int.TryParse(digits, out var dpi) ? dpi : null;
@@ -87,8 +87,8 @@ internal static class LinuxInputConfig
             foreach (var raw in File.ReadLines(KeyboardFile))
             {
                 var line = raw.Trim();
-                if (line.Length == 0 || line.StartsWith("#", StringComparison.Ordinal)) continue;
-                var eq = line.IndexOf("=", StringComparison.Ordinal);
+                if (line.Length == 0 || line.StartsWith('#')) continue;
+                var eq = line.IndexOf('=');
                 if (eq <= 0) continue;
                 result[line[..eq].Trim()] = line[(eq + 1)..].Trim().Trim(Convert.ToChar("\""));
             }

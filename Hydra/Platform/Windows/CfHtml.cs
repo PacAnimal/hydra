@@ -14,7 +14,6 @@ internal static class CfHtml
     // wraps raw HTML into a CF_HTML blob (UTF-8) with a minimal html/body context and correct byte offsets.
     public static byte[] Wrap(string rawHtml)
     {
-        rawHtml ??= "";
         var body = Prefix + rawHtml + Suffix;
 
         // fixed-width (10-digit) offsets keep the header a constant byte length, sidestepping the circular

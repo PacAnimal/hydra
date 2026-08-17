@@ -19,7 +19,6 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
     private Thread? _tapThread;
     private nint _runLoop;
     private nint _tapPort;
-    private nint _runLoopSource;
     private Action<double, double>? _onMouseMove;
     private Action<KeyEvent>? _onKeyEvent;
     private Action<MouseButtonEvent>? _onMouseButton;
@@ -169,7 +168,6 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
 
             var commonModes = GetCfRunLoopCommonModes();
             var runLoopSource = NativeMethods.CFMachPortCreateRunLoopSource(nint.Zero, tapPort, 0);
-            _runLoopSource = runLoopSource;
             NativeMethods.CFRunLoopAddSource(runLoop, runLoopSource, commonModes);
             NativeMethods.CGEventTapEnable(tapPort, true);
 
