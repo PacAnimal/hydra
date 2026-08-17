@@ -187,9 +187,9 @@ internal sealed class WindowsOsdNotification : IOsdNotification, IDisposable
     // Logical em size, in the same spirit as the macOS OSD's fixed point size. Multiplied by the
     // monitor's dpi scale, since this process is PerMonitorV2 aware and GDI+ renders into a 96 dpi
     // bitmap: without that a 4K display at 150% would show a noticeably smaller OSD.
-    // 22pt was what the old height-based rule produced on a 720-pixel-tall screen; side by side with
-    // the macOS OSD (28pt SF Pro bold) that read about 20% small in Segoe UI, hence 26.4pt.
-    private const float BaseEmSize = 26.4f;
+    // 28pt, the same size the macOS OSD uses (main.swift, systemFont ofSize: 28, .bold), so the two
+    // platforms match by construction rather than by a tuned Windows-only number.
+    private const float BaseEmSize = 28f;
 
     // 96 dpi is USER_DEFAULT_SCREEN_DPI, i.e. 100% scaling. Fall back to that if the query fails,
     // which leaves the OSD at its plain logical size rather than an arbitrary one.
