@@ -266,13 +266,6 @@ internal static partial class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool LockWorkStation();
 
-    // MDT_EFFECTIVE_DPI — the scaled dpi the user actually sees, 96 at 100%
-    internal const int MDT_EFFECTIVE_DPI = 0;
-
-    [LibraryImport("shcore", EntryPoint = "GetDpiForMonitor")]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
-    internal static partial int GetDpiForMonitor(nint hMonitor, int dpiType, out uint dpiX, out uint dpiY);
-
     // -- kernel --
 
     [LibraryImport(Kernel32)]
@@ -353,6 +346,13 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool SetWindowPos(nint hWnd, nint hWndInsertAfter, int x, int y, int cx, int cy, uint uFlags);
+
+    // this process is PerMonitorV2, so this reports the dpi of the monitor the window is currently
+    // on. 0 for an invalid hwnd. Preferred over shcore GetDpiForMonitor, which Microsoft documents
+    // as not dpi aware and not to be used from a per-monitor aware thread.
+    [LibraryImport(User32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial uint GetDpiForWindow(nint hWnd);
 
     [LibraryImport(User32)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
