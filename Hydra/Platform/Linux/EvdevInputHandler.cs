@@ -51,12 +51,20 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
         Action<MouseScrollEvent> onMouseScroll,
         Action? onLocalActivity = null)
     {
+        // StartEventTap can be called more than once on the same instance: this handler is a DI
+        // singleton and the self-updater restarts the host in-process. Without releasing first,
+        // DiscoverDevices appends a SECOND set of fds to the same lists - the old set still holds
+        // EVIOCGRAB, every grab on the new set fails with EBUSY, and input silently goes nowhere
+        // while the process looks perfectly healthy.
+        ReleaseDevices();
+
         _onMouseDelta = onMouseDelta;
         _onKeyEvent = onKeyEvent;
         _onMouseButton = onMouseButton;
         _onMouseScroll = onMouseScroll;
 
         var xkb = LinuxInputConfig.ResolveXkb();
+        _keyResolver?.Dispose();   // a re-tap would otherwise leak the previous xkb context/keymap
         _keyResolver = new EvdevKeyResolver(xkb);
         log.LogInformation("Keyboard layout: {Layout} model: {Model}{Variant}",
             xkb.Layout, xkb.Model, xkb.Variant is null ? "" : $" variant: {xkb.Variant}");
@@ -80,6 +88,22 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
         _running = false;
         _thread?.Join(TimeSpan.FromSeconds(2));
         _thread = null;
+    }
+
+    // stops the event loop and closes every device fd. Safe to call when nothing is open.
+    private void ReleaseDevices()
+    {
+        StopEventTap();   // stop polling before closing the fds the loop polls
+        if (_keyboardFds.Count == 0 && _mouseFds.Count == 0) return;
+
+        if (_grabbed) SetGrab(false);
+        foreach (var fd in _keyboardFds.Concat(_mouseFds))
+            _ = EvdevNativeMethods.close(fd);
+        log.LogDebug("Released {Count} input device(s)", _keyboardFds.Count + _mouseFds.Count);
+        _keyboardFds.Clear();
+        _mouseFds.Clear();
+        _mouseScales.Clear();
+        _grabbed = false;
     }
 
     private void DiscoverDevices()
@@ -249,19 +273,20 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
         foreach (var fd in all)
         {
             var r = EvdevNativeMethods.ioctl_grab(fd, EvdevNativeMethods.EVIOCGRAB, grab ? 1 : 0);
-            if (r < 0)
-                log.LogWarning("EVIOCGRAB({Grab}) failed on fd={Fd}", grab, fd);
+            if (r >= 0) continue;
+            // releasing a grab that was never taken fails with EINVAL on every device, which is
+            // noise rather than a fault. A failed *grab* is worth shouting about: it usually means
+            // something else holds the device.
+            if (grab) log.LogWarning("EVIOCGRAB(True) failed on fd={Fd} — is another process holding the device?", fd);
+            else log.LogDebug("EVIOCGRAB(False) failed on fd={Fd} (was not grabbed)", fd);
         }
     }
 
     public ValueTask DisposeAsync()
     {
-        StopEventTap();
+        ReleaseDevices();
         _keyResolver?.Dispose();
-        foreach (var fd in _keyboardFds.Concat(_mouseFds))
-            _ = EvdevNativeMethods.close(fd);
-        _keyboardFds.Clear();
-        _mouseFds.Clear();
+        _keyResolver = null;
         return ValueTask.CompletedTask;
     }
 }
