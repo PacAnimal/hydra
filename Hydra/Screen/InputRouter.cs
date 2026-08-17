@@ -679,20 +679,39 @@ public class InputRouter(
                 log.LogDebug("Key: {Type}{Label} mods={Modifiers}", keyEvent.Type, label, keyEvent.Modifiers);
 
             // consume both KeyDown and KeyUp for hotkeys so the slave never sees either half
-            var hotkeyConsumed = (keyEvent.Modifiers & LockHotkey) == LockHotkey && keyEvent.Character is 'l' or 'm' or 'c' or 'v' or 'z';
+            var hotkeyConsumed = (keyEvent.Modifiers & LockHotkey) == LockHotkey && keyEvent.Character is 'l' or 'm' or 'c' or 'v' or 'z' or 'k';
             // !IsRepeat: an auto-repeat of a held hotkey must not re-fire the toggle every tick
             if (hotkeyConsumed && keyEvent.Type == KeyEventType.KeyDown && !keyEvent.IsRepeat)
             {
                 if (keyEvent.Character == 'l')
                 {
+                    // A remote-only master with no local screen has nowhere to pass input to: the
+                    // old behaviour left the remote screen and OnMouseDelta then dropped every
+                    // delta, so keyboard and mouse appeared dead until the hotkey was pressed
+                    // again. Confine the cursor to the current remote screen instead, which is what
+                    // the hotkey does in every other mode.
+                    if (profile.RemoteOnly && !st.Screens.Any(sc => sc.IsLocal))
+                    {
+                        st.ConfinedToScreen = !st.ConfinedToScreen;
+                        ShowOsd(st, st.ConfinedToScreen ? "Cursor lock: On" : "Cursor lock: Off");
+                        log.LogInformation("Cursor lock: {State} (remote-only, no local screen)",
+                            st.ConfinedToScreen ? "confined to current screen" : "free to roam");
+                    }
+                    else
+                    {
                     st.LockedToScreen = !st.LockedToScreen;
-                    ShowOsd(st, st.LockedToScreen ? "Mouse lock: On" : "Mouse lock: Off");
                     if (profile.RemoteOnly)
                     {
+                        // ShowOsd falls back to a LOCAL osd when the cursor is not on a remote
+                        // screen, and a remote-only master often has no display to show it on. So
+                        // each branch shows its OSD at the only moment a remote screen is current:
+                        // after entering when locking, before leaving when unlocking. Announcing it
+                        // up front instead made re-locking silent.
                         if (st.LockedToScreen)
                         {
                             log.LogInformation("Remote lock: locked to remote");
                             await TryEnterRemoteOnly(st);
+                            ShowOsd(st, "Input: remote");
                         }
                         else
                         {
@@ -700,6 +719,7 @@ public class InputRouter(
                             if (st.Mouse.IsOnVirtualScreen && st.Mouse.CurrentScreen != null)
                             {
                                 var leavingHost = st.Mouse.CurrentScreen.Host;
+                                ShowOsd(st, "Input: local");
                                 FlushMouseDelta(st);
                                 st.Mouse.LeaveScreen();
                                 platform.IsOnVirtualScreen = false;
@@ -709,7 +729,22 @@ public class InputRouter(
                         }
                     }
                     else
+                    {
+                        ShowOsd(st, st.LockedToScreen ? "Mouse lock: On" : "Mouse lock: Off");
                         log.LogInformation("Screen lock: {State}", st.LockedToScreen ? "locked" : "unlocked");
+                    }
+                    }
+                }
+                else if (keyEvent.Character == 'k')
+                {
+                    // Lock every connected slave on demand. On a remote-only master this is the only
+                    // route to BroadcastLockScreen: that is otherwise driven by this machine's own
+                    // ScreenLocked event, which is Mac/Windows-only and cannot fire on a headless box.
+                    // Deliberately not gated on screenLockPropagation - that flag governs automatic
+                    // propagation, and an explicit keypress should never silently do nothing.
+                    ShowOsd(st, "Locking slaves");
+                    log.LogInformation("Lock hotkey: locking all slaves");
+                    await BroadcastLockScreen(st);
                 }
                 else if (keyEvent.Character == 'm' && st.Mouse.IsOnVirtualScreen && st.Mouse.CurrentScreen != null)
                 {
@@ -994,7 +1029,7 @@ public class InputRouter(
             {
                 if (!hit.Destination.IsLocal)
                 {
-                    if (profile.RemoteOnly || !st.LockedToScreen)
+                    if (profile.RemoteOnly ? !st.ConfinedToScreen : !st.LockedToScreen)
                     {
                         if (!platform.AnyMouseButtonHeld())
                         {
@@ -1255,6 +1290,10 @@ public class InputRouter(
         public double LastWarpX, LastWarpY;
         public long LastVirtualLogTick;
         public bool LockedToScreen;
+        // remote-only with no local screen: confine the cursor to the current remote screen.
+        // separate from LockedToScreen, which in remote-only means 'input is on remote at all'
+        // and defaults to true - reusing it would confine the cursor by default.
+        public bool ConfinedToScreen;
 
         // per-screen relative mouse mode (true = relative, false/absent = absolute)
         public Dictionary<string, bool> RelativeMouseScreens = new(StringComparer.OrdinalIgnoreCase);

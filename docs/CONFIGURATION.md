@@ -278,8 +278,14 @@ All hotkeys use **Ctrl+Alt+Super** (Super = ⌘ on macOS, Win on Windows) plus o
 | `Ctrl+Alt+Super+M` | Toggle relative mouse mode on the current remote screen (useful for games) |
 | `Ctrl+Alt+Super+C` | Copy selected files/folders to Hydra's cross-machine clipboard (macOS, Windows) |
 | `Ctrl+Alt+Super+V` | Paste previously copied files to the current machine |
+| `Ctrl+Alt+Super+K` | Lock every connected slave |
 
-**Lock in remote-only mode:** since there is no local screen, the lock hotkey acts as a **remote toggle** — press once to temporarily pass input through to the physical machine running Hydra, press again to re-lock to remote.
+**Lock all slaves:** `Ctrl+Alt+Super+K` sends a lock to every connected slave — the same action `screenLockPropagation` performs when the master's own machine locks. It is the only way to trigger it from a **remote-only master**, which has no screen of its own to lock and therefore never fires the underlying event. It is not gated on `screenLockPropagation`: that setting governs automatic propagation, while the hotkey is an explicit request. A slave that has seen local input more recently than the master still declines to lock, on the assumption that someone is sitting at it.
+
+**Lock in remote-only mode:** since there is no local screen, the lock hotkey acts as a **remote toggle** — behaviour depends on whether the machine has a screen of its own.
+
+- **With a local screen** (a desktop or laptop set `remoteOnly`), the hotkey is a remote/local toggle: press once to pass input through to the physical machine running Hydra, press again to re-lock to remote. The OSD reads `Input: local` / `Input: remote`.
+- **Headless** (a Pi with no display), there is nothing to pass input *to*, so the hotkey keeps the meaning it has everywhere else: it confines the cursor to the current remote screen, and pressing it again lets the cursor roam between slaves. The OSD reads `Cursor lock: On` / `Cursor lock: Off`. Before this, unlocking on a headless master handed input to a local screen that did not exist and the keyboard and mouse went dead until the hotkey was pressed again.
 
 **Relative mouse:** relative mode sends mouse deltas instead of absolute coordinates — useful for games or 3D apps that capture the cursor. Toggled per-screen; an on-screen notification confirms the current state.
 
