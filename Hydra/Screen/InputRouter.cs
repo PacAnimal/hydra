@@ -1174,7 +1174,16 @@ public class InputRouter(
             {
                 if (!hit.Destination.IsLocal)
                 {
-                    if (relay.IsConnected && !platform.AnyMouseButtonHeld())
+                    // Cursor lock in remote-only mode: refuse to leave this machine. Falling through
+                    // rather than returning lets the normal send path run, and ApplyDelta has already
+                    // clamped the position, so the cursor simply stops against the edge.
+                    // Confinement is per host: moving between a slave's own monitors is unaffected,
+                    // since that happens inside ApplyDelta as an intra-host transition.
+                    if (profile.RemoteOnly && st.ConfinedToScreen)
+                    {
+                        log.LogDebug("Cursor lock: blocked transition to '{Name}'", hit.Destination.Name);
+                    }
+                    else if (relay.IsConnected && !platform.AnyMouseButtonHeld())
                     {
                         await HandleEvdevCrossHostTransitionAsync(st, leavingScreen, hit);
                         return;
