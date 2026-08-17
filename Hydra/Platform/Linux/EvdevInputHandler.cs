@@ -11,6 +11,8 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
 {
     private readonly List<int> _keyboardFds = [];
     private readonly List<int> _mouseFds = [];
+    // per-device delta multiplier from udev hwdb MOUSE_DPI; absent means 1.0
+    private readonly Dictionary<int, double> _mouseScales = [];
     private volatile bool _running;
     private volatile bool _grabbed;
     private Thread? _thread;
@@ -54,9 +56,10 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
         _onMouseButton = onMouseButton;
         _onMouseScroll = onMouseScroll;
 
-        var layout = Environment.GetEnvironmentVariable("XKB_DEFAULT_LAYOUT") ?? "us";
-        _keyResolver = new EvdevKeyResolver(layout);
-        log.LogInformation("Keyboard layout: {Layout}", layout);
+        var xkb = LinuxInputConfig.ResolveXkb();
+        _keyResolver = new EvdevKeyResolver(xkb);
+        log.LogInformation("Keyboard layout: {Layout} model: {Model}{Variant}",
+            xkb.Layout, xkb.Model, xkb.Variant is null ? "" : $" variant: {xkb.Variant}");
 
         DiscoverDevices();
 
@@ -116,6 +119,13 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
                 && EvdevNativeMethods.TestBit(relBuf, EvdevNativeMethods.REL_Y))
             {
                 _mouseFds.Add(fd);
+                var scale = LinuxInputConfig.MouseScale(path);
+                if (Math.Abs(scale - 1.0) > 0.001)
+                {
+                    _mouseScales[fd] = scale;
+                    log.LogInformation("Mouse {Path}: MOUSE_DPI {Dpi} -> delta scale {Scale:0.##}",
+                        path, LinuxInputConfig.MouseDpi(path), scale);
+                }
                 log.LogDebug("Mouse: {Path}", path);
                 continue;
             }
@@ -152,7 +162,7 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
                     if (isKeyboard)
                         HandleKeyboardEvent(ev);
                     else
-                        HandleMouseEvent(ev, ref pendingDx, ref pendingDy);
+                        HandleMouseEvent(ev, _mouseScales.GetValueOrDefault(fd, 1.0), ref pendingDx, ref pendingDy);
                 }
             }
         }
@@ -179,7 +189,7 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
                 if (keyEvent is not null) _onKeyEvent?.Invoke(keyEvent);
     }
 
-    private void HandleMouseEvent(InputEvent ev, ref double pendingDx, ref double pendingDy)
+    private void HandleMouseEvent(InputEvent ev, double scale, ref double pendingDx, ref double pendingDy)
     {
         switch (ev.Type)
         {
@@ -192,10 +202,10 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
                     switch (ev.Code)
                     {
                         case EvdevNativeMethods.REL_X:
-                            pendingDx += ev.Value;
+                            pendingDx += ev.Value * scale;
                             break;
                         case EvdevNativeMethods.REL_Y:
-                            pendingDy += ev.Value;
+                            pendingDy += ev.Value * scale;
                             break;
                         case EvdevNativeMethods.REL_WHEEL:
                             _onMouseScroll?.Invoke(new MouseScrollEvent(0, (short)(ev.Value * 120)));

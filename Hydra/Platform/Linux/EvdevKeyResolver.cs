@@ -27,19 +27,22 @@ internal sealed class EvdevKeyResolver : IDisposable
     private readonly uint _numLockXkbKey;
     private readonly uint _scrollLockXkbKey;
 
-    internal EvdevKeyResolver(string layout)
+    internal EvdevKeyResolver(LinuxInputConfig.XkbNames xkb)
     {
+        var layout = xkb.Layout;
         _ctx = EvdevNativeMethods.xkb_context_new(0);
         if (_ctx == 0) throw new InvalidOperationException("Failed to create xkb context.");
 
-        // allocate native strings for rule names; freed in Dispose
+        // allocate native strings for rule names; freed in the finally below.
+        // Model comes from the system config too: a 105-key board is the common case but not a
+        // universal one, and getting it wrong misplaces the keys either side of Enter.
         var names = new XkbRuleNames
         {
             Rules = Marshal.StringToCoTaskMemUTF8("evdev"),
-            Model = Marshal.StringToCoTaskMemUTF8("pc105"),
+            Model = Marshal.StringToCoTaskMemUTF8(xkb.Model),
             Layout = Marshal.StringToCoTaskMemUTF8(layout),
-            Variant = 0,
-            Options = 0,
+            Variant = xkb.Variant is null ? 0 : Marshal.StringToCoTaskMemUTF8(xkb.Variant),
+            Options = xkb.Options is null ? 0 : Marshal.StringToCoTaskMemUTF8(xkb.Options),
         };
 
         try
@@ -51,6 +54,8 @@ internal sealed class EvdevKeyResolver : IDisposable
             Marshal.FreeCoTaskMem(names.Rules);
             Marshal.FreeCoTaskMem(names.Model);
             Marshal.FreeCoTaskMem(names.Layout);
+            if (names.Variant != 0) Marshal.FreeCoTaskMem(names.Variant);
+            if (names.Options != 0) Marshal.FreeCoTaskMem(names.Options);
         }
 
         if (_keymap == 0) throw new InvalidOperationException($"Failed to create xkb keymap for layout '{layout}'.");
