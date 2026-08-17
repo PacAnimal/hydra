@@ -266,6 +266,13 @@ internal static partial class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool LockWorkStation();
 
+    // MDT_EFFECTIVE_DPI — the scaled dpi the user actually sees, 96 at 100%
+    internal const int MDT_EFFECTIVE_DPI = 0;
+
+    [LibraryImport("shcore", EntryPoint = "GetDpiForMonitor")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial int GetDpiForMonitor(nint hMonitor, int dpiType, out uint dpiX, out uint dpiY);
+
     // -- kernel --
 
     [LibraryImport(Kernel32)]

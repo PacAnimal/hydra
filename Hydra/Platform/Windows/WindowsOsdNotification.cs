@@ -63,7 +63,7 @@ internal sealed class WindowsOsdNotification : IOsdNotification, IDisposable
     private void CreateWindow()
     {
         // prime GDI+ font + rendering pipeline so the first real Show() is instant
-        try { using var warm = RenderText(" ", 1080, out _, out _); } catch { /* ignore */ }
+        try { using var warm = RenderText(" ", 1f, out _, out _); } catch { /* ignore */ }
 
         _wndProc = WndProcImpl;
         var hInstance = NativeMethods.GetModuleHandleW(nint.Zero);
@@ -115,10 +115,10 @@ internal sealed class WindowsOsdNotification : IOsdNotification, IDisposable
         var sw = mi.Monitor.Right - mi.Monitor.Left;
         var sh = mi.Monitor.Bottom - mi.Monitor.Top;
 
-        // size off the SHORTER side so a rotated monitor gets the same OSD as it would in
-        // landscape: 3% of 1280 on a portrait 720x1280 panel was nearly twice the size of 3%
-        // of 720 on the same panel turned the other way.
-        using var bmp = RenderText(text, Math.Min(sw, sh), out var bmpW, out var bmpH);
+        // Fixed logical size, scaled by the monitor's effective dpi - the same approach macOS gets
+        // for free from points. Sizing off resolution made a rotated 720x1280 panel render the OSD
+        // at nearly twice the size of the identical panel in landscape.
+        using var bmp = RenderText(text, DpiScaleFor(hMonitor), out var bmpW, out var bmpH);
         _hbmp = bmp.GetHbitmap(Color.FromArgb(0));
         _bmpW = bmpW;
         _bmpH = bmpH;
@@ -184,12 +184,21 @@ internal sealed class WindowsOsdNotification : IOsdNotification, IDisposable
         _hbmp = nint.Zero;
     }
 
-    // shortSide: the smaller of the monitor's two dimensions, so the result does not depend on
-    // whether the display is rotated.
-    private static Bitmap RenderText(string text, int shortSide, out int width, out int height)
+    // Logical em size, in the same spirit as the macOS OSD's fixed point size. Multiplied by the
+    // monitor's dpi scale, since this process is PerMonitorV2 aware and GDI+ renders into a 96 dpi
+    // bitmap: without that a 4K display at 150% would show a noticeably smaller OSD.
+    private const float BaseEmSize = 22f;
+
+    private static float DpiScaleFor(nint hMonitor)
     {
-        // scale font to ~3% of the short side for readability on any resolution
-        var emSize = Math.Max(18f, shortSide * 0.03f);
+        if (NativeMethods.GetDpiForMonitor(hMonitor, NativeMethods.MDT_EFFECTIVE_DPI, out var dpiX, out _) != 0)
+            return 1f;   // S_OK is 0; anything else means treat the monitor as 100%
+        return dpiX == 0 ? 1f : dpiX / 96f;
+    }
+
+    private static Bitmap RenderText(string text, float dpiScale, out int width, out int height)
+    {
+        var emSize = BaseEmSize * dpiScale;
         var padding = (int)(emSize * 0.6f);
 
         // measure first on a throwaway bitmap
