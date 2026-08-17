@@ -115,7 +115,10 @@ internal sealed class WindowsOsdNotification : IOsdNotification, IDisposable
         var sw = mi.Monitor.Right - mi.Monitor.Left;
         var sh = mi.Monitor.Bottom - mi.Monitor.Top;
 
-        using var bmp = RenderText(text, sh, out var bmpW, out var bmpH);
+        // size off the SHORTER side so a rotated monitor gets the same OSD as it would in
+        // landscape: 3% of 1280 on a portrait 720x1280 panel was nearly twice the size of 3%
+        // of 720 on the same panel turned the other way.
+        using var bmp = RenderText(text, Math.Min(sw, sh), out var bmpW, out var bmpH);
         _hbmp = bmp.GetHbitmap(Color.FromArgb(0));
         _bmpW = bmpW;
         _bmpH = bmpH;
@@ -181,10 +184,12 @@ internal sealed class WindowsOsdNotification : IOsdNotification, IDisposable
         _hbmp = nint.Zero;
     }
 
-    private static Bitmap RenderText(string text, int sh, out int width, out int height)
+    // shortSide: the smaller of the monitor's two dimensions, so the result does not depend on
+    // whether the display is rotated.
+    private static Bitmap RenderText(string text, int shortSide, out int width, out int height)
     {
-        // scale font to ~3% of screen height for readability on any resolution
-        var emSize = Math.Max(18f, sh * 0.03f);
+        // scale font to ~3% of the short side for readability on any resolution
+        var emSize = Math.Max(18f, shortSide * 0.03f);
         var padding = (int)(emSize * 0.6f);
 
         // measure first on a throwaway bitmap
