@@ -15,6 +15,10 @@ internal static partial class EvdevNativeMethods
 
     internal const int O_RDONLY = 0;
     internal const int O_NONBLOCK = 0x800;
+    // 0o2000000. Load-bearing: ProcessRestart re-execs in place on Linux, so a device fd without
+    // this survives into the new image and keeps its EVIOCGRAB. The fresh DiscoverDevices then opens
+    // a second set that cannot grab anything, and input silently stops reaching any slave.
+    internal const int O_CLOEXEC = 0x80000;
 
     // -- ioctl commands (_IOC(dir, type, nr, size) = (dir<<30)|(size<<16)|(type<<8)|nr) --
 

@@ -115,7 +115,7 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
 
         foreach (var path in paths)
         {
-            var fd = EvdevNativeMethods.open(path, EvdevNativeMethods.O_RDONLY | EvdevNativeMethods.O_NONBLOCK);
+            var fd = EvdevNativeMethods.open(path, EvdevNativeMethods.O_RDONLY | EvdevNativeMethods.O_NONBLOCK | EvdevNativeMethods.O_CLOEXEC);
             if (fd < 0) continue;
 
             // check which event types the device supports
