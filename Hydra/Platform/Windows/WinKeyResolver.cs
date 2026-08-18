@@ -300,6 +300,9 @@ internal sealed class WinKeyResolver
             }
         }
 
+        if ((mods & (KeyModifiers.Control | KeyModifiers.Super)) != 0 && rawChar > 0x7F)
+            rawChar = MapShortcutAscii(vk, rawChar);
+
         var classified = KeyResolver.ClassifyChar(rawChar);
         if (classified.Ch.HasValue)
             return [KeyEvent.Char(KeyEventType.KeyDown, classified.Ch.Value, mods) with { IsRepeat = true }];
@@ -378,6 +381,9 @@ internal sealed class WinKeyResolver
                 rawChar = buff[0];
             }
         }
+
+        if ((mods & (KeyModifiers.Control | KeyModifiers.Super)) != 0 && rawChar > 0x7F)
+            rawChar = MapShortcutAscii(vk, rawChar);
 
         var classified = KeyResolver.ClassifyChar(rawChar);
         if (!classified.Ch.HasValue && !classified.Key.HasValue) return null;
@@ -507,4 +513,23 @@ internal sealed class WinKeyResolver
             or WinVirtualKey.LControl or WinVirtualKey.RControl
             or WinVirtualKey.LMenu or WinVirtualKey.RMenu
             or WinVirtualKey.LWin or WinVirtualKey.RWin;
+
+    // maps non-Latin layout characters back to their base ASCII keys during shortcut combinations (Ctrl/Super held).
+    private static char MapShortcutAscii(int vk, char rawChar) => vk switch
+    {
+        >= WinVirtualKey.A and <= WinVirtualKey.Z => (char)('a' + (vk - WinVirtualKey.A)),
+        >= WinVirtualKey.D0 and <= WinVirtualKey.D9 => (char)('0' + (vk - WinVirtualKey.D0)),
+        WinVirtualKey.Oem1 => ';',
+        WinVirtualKey.OemPlus => '=',
+        WinVirtualKey.OemComma => ',',
+        WinVirtualKey.OemMinus => '-',
+        WinVirtualKey.OemPeriod => '.',
+        WinVirtualKey.Oem2 => '/',
+        WinVirtualKey.Oem3 => '`',
+        WinVirtualKey.Oem4 => '[',
+        WinVirtualKey.Oem5 => '\\',
+        WinVirtualKey.Oem6 => ']',
+        WinVirtualKey.Oem7 => '\'',
+        _ => rawChar,
+    };
 }

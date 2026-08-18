@@ -198,6 +198,12 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
                 if (!shiftReady || !PostHidKey(charVk, isDown))
                     PostCgKey(charVk, isDown, flags);
             }
+            else if (!isAltGr && (flags & (NativeMethods.KCGEventFlagMaskCommand | NativeMethods.KCGEventFlagMaskControl)) != 0 &&
+                     _charToVk.TryGetValue(MapNonLatinShortcut(ch), out charVk))
+            {
+                if (!PostHidKey(charVk, isDown))
+                    PostCgKey(charVk, isDown, flags);
+            }
             else
             {
                 // AltGr chars are injected as unicode — strip Option and Shift so the CGEvent doesn't
@@ -706,6 +712,19 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
         if (_hidConnection != 0)
             _ = NativeMethods.IOObjectRelease(_hidConnection);
     }
+
+    private static char MapNonLatinShortcut(char c) => c switch
+    {
+        'й' or 'Й' => 'q', 'ц' or 'Ц' => 'w', 'у' or 'У' => 'e', 'к' or 'К' => 'r', 'е' or 'Е' => 't',
+        'н' or 'Н' => 'y', 'г' or 'Г' => 'u', 'ш' or 'Ш' => 'i', 'щ' or 'Щ' => 'o', 'з' or 'З' => 'p',
+        'х' or 'Х' => '[', 'ъ' or 'Ъ' => ']', 'ф' or 'Ф' => 'a', 'ы' or 'Ы' or 'і' or 'І' => 's',
+        'в' or 'В' => 'd', 'а' or 'А' => 'f', 'п' or 'П' => 'g', 'р' or 'Р' => 'h', 'о' or 'О' => 'j',
+        'л' or 'Л' => 'k', 'д' or 'Д' => 'l', 'ж' or 'Ж' => ';', 'э' or 'Э' or 'є' or 'Є' => '\'',
+        'я' or 'Я' => 'z', 'ч' or 'Ч' => 'x', 'с' or 'С' => 'c', 'м' or 'М' => 'v', 'и' or 'И' => 'b',
+        'т' or 'Т' => 't', 'ь' or 'Ь' => 'm', 'б' or 'Б' => ',', 'ю' or 'Ю' => '.', 'ё' or 'Ё' => '`',
+        'ї' or 'Ї' => ']', 'ў' or 'Ў' => 'u', 'ґ' or 'Ґ' => '\\',
+        _ => c,
+    };
 
     private record MoveEvent(int EventType, int Button);
 }

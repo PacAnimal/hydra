@@ -249,9 +249,16 @@ internal sealed class DesktopInputDispatcher : IDisposable
 
         if (msg.Character is { } ch)
         {
-            var scan = NativeMethods.VkKeyScanW(ch); // char implicit-converts to ushort
             var isAltGr = (msg.Modifiers & KeyModifiers.AltGr) != 0;
             var isSuper = (msg.Modifiers & KeyModifiers.Super) != 0;
+            var shortcutContext = (msg.Modifiers & (KeyModifiers.Control | KeyModifiers.Super)) != 0;
+
+            var scan = NativeMethods.VkKeyScanW(ch); // char implicit-converts to ushort
+            if (shortcutContext && scan == -1)
+            {
+                var fallback = MapNonLatinShortcut(ch);
+                if (fallback != ch) scan = NativeMethods.VkKeyScanW(fallback);
+            }
 
             // use vk injection for all chars that map to a key+optional-shift combo on the slave's layout.
             // this gives correct key-hold semantics (GetKeyState works) and proper WM_KEYDOWN for shortcuts.
@@ -263,7 +270,6 @@ internal sealed class DesktopInputDispatcher : IDisposable
             // exception: Ctrl/Super shortcuts always use VK injection (Shift is intentional there).
             var needsShift = (scan >> 8) == 1;
             var slaveUnshifted = (scan >> 8) == 0;
-            var shortcutContext = (msg.Modifiers & (KeyModifiers.Control | KeyModifiers.Super)) != 0;
             var shiftMismatch = slaveUnshifted && (msg.Modifiers & KeyModifiers.Shift) != 0 && !shortcutContext;
             if (!isAltGr && scan != -1 && !shiftMismatch && (slaveUnshifted || (needsShift && (msg.Modifiers & KeyModifiers.Shift) != 0)))
             {
@@ -520,6 +526,48 @@ internal sealed class DesktopInputDispatcher : IDisposable
             ? new string(buf)
             : "";
     }
+
+    // maps non-Latin Cyrillic/regional shortcut characters to standard QWERTY layout equivalents for VK mapping
+    private static char MapNonLatinShortcut(char c) => c switch
+    {
+        'й' or 'Й' => 'q',
+        'ц' or 'Ц' => 'w',
+        'у' or 'У' => 'e',
+        'к' or 'К' => 'r',
+        'е' or 'Е' => 't',
+        'н' or 'Н' => 'y',
+        'г' or 'Г' => 'u',
+        'ш' or 'Ш' => 'i',
+        'щ' or 'Щ' => 'o',
+        'з' or 'З' => 'p',
+        'х' or 'Х' => '[',
+        'ъ' or 'Ъ' => ']',
+        'ф' or 'Ф' => 'a',
+        'ы' or 'Ы' or 'і' or 'І' => 's',
+        'в' or 'В' => 'd',
+        'а' or 'А' => 'f',
+        'п' or 'П' => 'g',
+        'р' or 'Р' => 'h',
+        'о' or 'О' => 'j',
+        'л' or 'Л' => 'k',
+        'д' or 'Д' => 'l',
+        'ж' or 'Ж' => ';',
+        'э' or 'Э' or 'є' or 'Є' => '\'',
+        'я' or 'Я' => 'z',
+        'ч' or 'Ч' => 'x',
+        'с' or 'С' => 'c',
+        'м' or 'М' => 'v',
+        'и' or 'И' => 'b',
+        'т' or 'Т' => 't',
+        'ь' or 'Ь' => 'm',
+        'б' or 'Б' => ',',
+        'ю' or 'Ю' => '.',
+        'ё' or 'Ё' => '`',
+        'ї' or 'Ї' => ']',
+        'ў' or 'Ў' => 'u',
+        'ґ' or 'Ґ' => '\\',
+        _ => c,
+    };
 }
 
 // -- command types --
