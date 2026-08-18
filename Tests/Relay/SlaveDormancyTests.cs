@@ -1,4 +1,5 @@
 using Hydra.Keyboard;
+using Hydra.Screen;
 using Hydra.Relay;
 using Tests.Setup;
 
@@ -22,6 +23,11 @@ public class SlaveDormancyTests
         relay.Sent.Clear();
         return (relay, sync);
     }
+
+    // what a Mac reports once the externals have gone to sleep: one nameless, wrongly-sized display
+    private static readonly LocalScreenSnapshot OneScreen = new(
+        [new ScreenRect("phantom", "home", 0, 0, 1440, 900, IsLocal: true)],
+        [new ScreenInfoEntry("phantom", 0, 0, 1440, 900, 1.0m)]);
 
     private static Task SendMove(TestableSlaveRelay relay) =>
         relay.SimulateReceive(Master, MessageKind.MouseMove, """{"screen":"home:0","x":10,"y":10}""");
@@ -97,14 +103,33 @@ public class SlaveDormancyTests
         Assert.That(relay.Sent, Is.Empty);
     }
 
-    // a sleeping display enumerates to whatever the OS still lists; announcing that would rebuild the
-    // master's layout and drag its parked cursor off us
+    // a sleeping display enumerates to whatever the OS still lists — that is not our real geometry
     [Test]
-    public async Task Dormant_WithholdsScreenInfo()
+    public async Task Dormant_IgnoresScreenChanges()
     {
         var (relay, _) = await Setup();
+        relay.Screens.Snapshot = OneScreen;
         await relay.Screens.FireChange();
         Assert.That(relay.Sent, Is.Empty);
+    }
+
+    // the master must keep seeing us as a normal, fully-sized peer: it reconnects while we sleep, asks
+    // everyone for geometry, and a remote-only master parks its cursor on whoever answers with real
+    // dimensions. Answer with the phantom geometry, or not at all, and the cursor goes somewhere else.
+    [Test]
+    public async Task Dormant_AnnouncesLastAwakeGeometry_NotThePhantomOne()
+    {
+        var (relay, _) = await Setup();
+        relay.Screens.Snapshot = OneScreen;
+
+        await relay.SimulateMasterConfig("second-master");
+
+        var (Targets, Kind, Json) = relay.Sent.Single(m => m.Kind == MessageKind.ScreenInfo);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(Json, Does.Contain("home:0"), "must advertise the geometry we had while awake");
+            Assert.That(Json, Does.Not.Contain("phantom"));
+        }
     }
 
     [Test]

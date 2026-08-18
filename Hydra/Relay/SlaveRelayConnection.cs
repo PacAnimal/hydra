@@ -73,6 +73,13 @@ public class SlaveRelayConnection : RelayConnection
 
         _screens.ScreensChanged += async snapshot =>
         {
+            // sleeping displays enumerate to whatever the OS still lists, usually a single phantom screen.
+            // Hold on to the awake snapshot and say nothing; the wake path refreshes and re-announces.
+            if (_dormancy.IsDormant)
+            {
+                _log.LogDebug("Dormant: ignoring screen change to {Count} screen(s)", snapshot.Screens.Count);
+                return;
+            }
             _cachedScreens = snapshot;
             var masters = await _peerState.GetMasters();
             if (masters.Length > 0)
@@ -98,6 +105,18 @@ public class SlaveRelayConnection : RelayConnection
     }
 #pragma warning restore IDE0290
 
+    // the geometry we advertise to masters: live while awake, the last awake snapshot while dormant. A
+    // dormant machine is still a normal, fully-sized peer as far as its masters are concerned — it is
+    // refusing input, not shrinking — and a master told otherwise rebuilds its layout around the phantom
+    // and drags a parked cursor off us.
+    private async ValueTask<LocalScreenSnapshot> AdvertisedScreens()
+    {
+        if (_dormancy.IsDormant && _cachedScreens is { } lastAwake) return lastAwake;
+        var snapshot = await _screens.Get();
+        _cachedScreens = snapshot;
+        return snapshot;
+    }
+
     protected override async Task OnAuthenticated()
     {
         _isReady = false;
@@ -108,8 +127,7 @@ public class SlaveRelayConnection : RelayConnection
             if (ConnectionToken.IsCancellationRequested) return;
             _log.LogInformation("Accessibility permission granted");
         }
-        var snapshot = await _screens.Get();
-        _cachedScreens = snapshot;
+        var snapshot = await AdvertisedScreens();
         _log.LogInformation("Local screens: {Count}", snapshot.Screens.Count);
         _isReady = true;
     }
@@ -447,7 +465,7 @@ public class SlaveRelayConnection : RelayConnection
         var after = await _peerState.GetMasters();
         if (after.Length > before.Length && after.Length == 1 && _isReady)
             _cursorHider.Hide();
-        var snapshot = await _screens.Get();
+        var snapshot = await AdvertisedScreens();
         SendScreenInfo(masterHost, snapshot.Entries);
     }
 
@@ -463,14 +481,6 @@ public class SlaveRelayConnection : RelayConnection
 
     private void SendScreenInfo(string masterHost, List<ScreenInfoEntry> entries)
     {
-        // sleeping displays enumerate to whatever the OS still lists — often a single phantom screen.
-        // Announcing that would rebuild the master's layout and yank its parked cursor off us, so stay
-        // quiet until we wake and can report the real geometry.
-        if (_dormancy.IsDormant)
-        {
-            _log.LogDebug("Dormant: withholding screen info from {Master}", masterHost);
-            return;
-        }
         _log.LogInformation("Sending screen info to {Master}: {Count} screen(s)", masterHost, entries.Count);
         var platform = DetectLocalPlatform();
         var payload = MessageSerializer.Encode(MessageKind.ScreenInfo, new ScreenInfoMessage(entries, platform));
