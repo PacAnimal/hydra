@@ -323,22 +323,23 @@ public class SlaveRelayConnection : RelayConnection
         await base.OnPeers(hostNames);
     }
 
-    // message kinds that drive the local input devices. While dormant these are refused, and their arrival
-    // is itself the wake: a master pushing its cursor or keyboard at us is how we get told to come back.
-    private static bool IsInjectedInput(MessageKind kind) => kind is
+    // messages that mean a human is doing something. We are only dormant because the user stepped away and
+    // the displays slept, so any of these says they are back — including ActivityPing, which a master only
+    // sends off the back of real local input. The ping usually arrives first, while they are still working
+    // on the master and have not reached for us yet.
+    private static bool IsWakeSignal(MessageKind kind) => kind is
         MessageKind.MouseMove or MessageKind.MouseMoveDelta or MessageKind.MouseButton or
-        MessageKind.MouseScroll or MessageKind.KeyEvent or MessageKind.EnterScreen;
+        MessageKind.MouseScroll or MessageKind.KeyEvent or MessageKind.EnterScreen or MessageKind.ActivityPing;
 
     // returns true when the message must not reach the normal handlers. Dormant means we stay on the relay
-    // but touch nothing locally: input is refused, and everything else is discarded outright — notably
-    // ActivityPing, whose idle-timer poke would light the displays straight back up and defeat dormancy.
+    // but touch nothing locally: input is refused rather than injected, and everything else is discarded.
     // MasterConfig, LeaveScreen and EnterScreen fall through so peer, held-key and on-screen bookkeeping
     // is still correct once we wake.
     private bool DropWhileDormant(string sourceHost, MessageKind kind)
     {
-        if (IsInjectedInput(kind))
+        if (IsWakeSignal(kind))
         {
-            OnInputWhileDormant(sourceHost, kind);
+            OnActivityWhileDormant(sourceHost, kind);
             // EnterScreen still runs: we must know a master is parked on us when we wake, or the local
             // cursor stays hidden under a remote pointer. Only its cursor move is suppressed, in the handler.
             return kind != MessageKind.EnterScreen;
@@ -348,13 +349,13 @@ public class SlaveRelayConnection : RelayConnection
         return true;
     }
 
-    // input keeps arriving for as long as its owner is active, so this doubles as a retry if the first
-    // attempt to light the displays didn't take. Only the first one starts the clock — otherwise a master
-    // moving its mouse would keep pushing the deadline out and we would never hand the cursor back.
-    private void OnInputWhileDormant(string sourceHost, MessageKind kind)
+    // activity keeps arriving for as long as its owner is at their desk, so this doubles as a retry if the
+    // first attempt to light the displays didn't take. Only the first one starts the clock — otherwise a
+    // master moving its mouse would keep pushing the deadline out and we would never hand the cursor back.
+    private void OnActivityWhileDormant(string sourceHost, MessageKind kind)
     {
         if (_dormancy.RequestWake())
-            _log.LogInformation("Input from {Host} while dormant — restoring displays; {Seconds}s to match the profile or we leave the relay",
+            _log.LogInformation("Activity from {Host} while dormant — restoring displays; {Seconds}s to match the profile or we leave the relay",
                 sourceHost, DormancyState.WakeDeadline.TotalSeconds);
         else
             _log.LogDebug("Dormant: refused {Kind} from {Host}", kind, sourceHost);

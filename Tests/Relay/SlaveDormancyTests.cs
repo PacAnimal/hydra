@@ -66,11 +66,11 @@ public class SlaveDormancyTests
     }
 
     [Test]
-    public async Task Dormant_ActivityPing_DoesNotArmTheWakeDeadline()
+    public async Task Dormant_ActivityPing_ArmsTheWakeDeadline()
     {
         var (relay, _) = await Setup();
         await relay.SimulateReceive(Master, MessageKind.ActivityPing, "{}");
-        Assert.That(relay.Dormancy.RequestWake(), Is.True, "a ping is not input and must not start the clock");
+        Assert.That(relay.Dormancy.RequestWake(), Is.False, "deadline should already be armed by the ping");
     }
 
     [Test]
@@ -81,17 +81,18 @@ public class SlaveDormancyTests
         Assert.That(sync.WakeDisplayCount, Is.EqualTo(1));
     }
 
-    // ActivityPing pokes the local idle timer, which on every platform powers the displays back on —
-    // the master sends one every few seconds, so honouring it while dormant would defeat dormancy entirely
+    // a master only sends ActivityPing off the back of real local input, and we are dormant precisely
+    // because the user walked away — so a ping means they are back at their desk. It usually beats any
+    // input aimed at us, since they are working on the master before reaching over here.
     [Test]
-    public async Task Dormant_ActivityPing_DoesNotWakeTheDisplay()
+    public async Task Dormant_ActivityPing_WakesTheDisplay()
     {
         var (relay, sync) = await Setup();
         await relay.SimulateReceive(Master, MessageKind.ActivityPing, "{}");
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(sync.WakeDisplayCount, Is.Zero);
-            Assert.That(sync.ResetIdleTimerCalled, Is.False);
+            Assert.That(sync.WakeDisplayCount, Is.EqualTo(1));
+            Assert.That(sync.ResetIdleTimerCalled, Is.False, "wake the panel properly, don't just poke the idle timer");
         }
     }
 
