@@ -247,10 +247,50 @@ internal sealed class DesktopInputDispatcher : IDisposable
         if (!isUp && msg.Key is not (SpecialKey.CapsLock or SpecialKey.NumLock))
             SyncLockState(msg.Modifiers);
 
+        var isAltGr = (msg.Modifiers & KeyModifiers.AltGr) != 0;
+        var isSuper = (msg.Modifiers & KeyModifiers.Super) != 0;
+
+        // Raw VK mode: when VkCode is present (and not an AltGr composed character), inject physical VK directly
+        if (msg.VkCode is { } directVk && !isAltGr)
+        {
+            var vk = directVk;
+            if (isSuper && vk == 0x4C) // Win+L: UIPI blocks SendInput; use the API directly
+            {
+                if (!isUp) { _winKeyDown = false; _winUsedAsModifier = true; NativeMethods.LockWorkStation(); }
+                return 1;
+            }
+
+            if (isSuper && !isUp)
+            {
+                _winUsedAsModifier = true;
+                if (!_winInjected)
+                {
+                    // first shortcut key: batch Win down + key down atomically
+                    _winInjected = true;
+                    var inputs = stackalloc INPUT[2];
+                    inputs[0] = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = _bufferedWinVk, dwFlags = NativeMethods.KEYEVENTF_EXTENDEDKEY } };
+                    inputs[1] = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = vk } };
+                    return NativeMethods.SendInput(2, inputs, sizeof(INPUT));
+                }
+                // Win already injected: just send the key
+                var input = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = vk } };
+                return NativeMethods.SendInput(1, &input, sizeof(INPUT));
+            }
+            else
+            {
+                if (_winKeyDown) _winUsedAsModifier = true;
+                var flags = isUp ? NativeMethods.KEYEVENTF_KEYUP : 0u;
+                var input = new INPUT
+                {
+                    type = NativeMethods.INPUT_KEYBOARD,
+                    ki = new KEYBDINPUT { wVk = vk, dwFlags = flags },
+                };
+                return NativeMethods.SendInput(1, &input, sizeof(INPUT));
+            }
+        }
+
         if (msg.Character is { } ch)
         {
-            var isAltGr = (msg.Modifiers & KeyModifiers.AltGr) != 0;
-            var isSuper = (msg.Modifiers & KeyModifiers.Super) != 0;
             var shortcutContext = (msg.Modifiers & (KeyModifiers.Control | KeyModifiers.Super)) != 0;
 
             var scan = NativeMethods.VkKeyScanW(ch); // char implicit-converts to ushort
