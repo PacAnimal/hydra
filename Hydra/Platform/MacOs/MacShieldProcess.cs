@@ -306,6 +306,7 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
                 }
             }
 
+            // ReSharper disable once InconsistentlySynchronizedField
             if (!_stopping)
             {
                 // unexpected exit — restart with exponential backoff to avoid rapid crash-loops.

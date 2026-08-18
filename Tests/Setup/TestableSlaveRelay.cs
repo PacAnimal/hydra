@@ -15,14 +15,20 @@ public sealed class TestableSlaveRelay : SlaveRelayConnection
 {
     public readonly List<(string[] Targets, MessageKind Kind, string Json)> Sent = [];
     public IActivityTracker Tracker { get; }
+    public IDormancyState Dormancy { get; }
+    public FakeScreenDetector Screens { get; }
+    public NullPlatformOutput Output { get; }
 
     public TestableSlaveRelay(
         IWorldState? worldState = null,
         IClipboardSync? clipboard = null,
         ICursorHider? cursorHider = null,
         IScreenSaverSync? screenSaverSync = null,
-        Func<long>? trackerClock = null)
-        : this(MakeShared(worldState, screenSaverSync, trackerClock), clipboard, cursorHider, screenSaverSync)
+        Func<long>? trackerClock = null,
+        IDormancyState? dormancy = null,
+        FakeScreenDetector? screens = null)
+        : this(MakeShared(worldState, screenSaverSync, trackerClock), clipboard, cursorHider, screenSaverSync,
+            dormancy ?? new DormancyState(NullLogger<DormancyState>.Instance), screens ?? new FakeScreenDetector(), new NullPlatformOutput())
     { }
 
     // ActivityTracker and SlaveRelayConnection must share the same WorldState — chaining lets us build it once
@@ -30,20 +36,26 @@ public sealed class TestableSlaveRelay : SlaveRelayConnection
         SharedDeps deps,
         IClipboardSync? clipboard,
         ICursorHider? cursorHider,
-        IScreenSaverSync? screenSaverSync)
+        IScreenSaverSync? screenSaverSync,
+        IDormancyState dormancy,
+        FakeScreenDetector screens,
+        NullPlatformOutput output)
         : base(
             TransitionTestHelper.Profile("slave", new HydraConfig { Mode = Mode.Slave }),
             NullLogger<RelayConnection>.Instance,
-            new NullPlatformOutput(),
-            new FakeScreenDetector(),
+            output,
+            screens,
             deps.WorldState,
             cursorHider ?? new FakeCursorVisibility(),
             screenSaverSync ?? new NullScreenSaverSync(),
             clipboard ?? new NullClipboardSync(),
             FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification(),
-            deps.Tracker)
+            deps.Tracker, dormancy)
     {
         Tracker = deps.Tracker;
+        Dormancy = dormancy;
+        Screens = screens;
+        Output = output;
     }
 
     public Task SimulateConnected() => OnAuthenticated();

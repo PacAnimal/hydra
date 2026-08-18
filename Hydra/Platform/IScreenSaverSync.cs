@@ -19,4 +19,7 @@ public interface IScreenSaverSync
 
     // poke the local idle timer — called on activity to prevent screensaver from activating
     void ResetIdleTimer();
+
+    // slave-side: bring the displays back from sleep. used to wake a dormant machine on remote input.
+    void WakeDisplay();
 }

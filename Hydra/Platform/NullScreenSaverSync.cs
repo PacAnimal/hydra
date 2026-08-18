@@ -11,4 +11,5 @@ public class NullScreenSaverSync : IScreenSaverSync
     public void Deactivate() { }
     public void LockScreen() { }
     public void ResetIdleTimer() { }
+    public void WakeDisplay() { }
 }

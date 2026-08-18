@@ -1,4 +1,5 @@
 using System.Net.NetworkInformation;
+using Cathedral.Extensions;
 using Cathedral.Utils;
 using Hydra.Platform;
 using Microsoft.Extensions.Logging;
@@ -13,6 +14,9 @@ internal sealed class NetworkWatcher : SimpleHostedService
     private readonly List<HydraConfig> _configs;
     private readonly HydraConfig? _activeConfig;
     private readonly string? _profileOverride;
+    private readonly IDormancyState _dormancy;
+    private readonly Action _restart;
+    private readonly Func<DateTime> _now;
     private readonly ILogger<NetworkWatcher> _log;
 
     // tracks last known state for transition logging
@@ -25,7 +29,7 @@ internal sealed class NetworkWatcher : SimpleHostedService
     private static readonly TimeSpan Debounce = TimeSpan.FromSeconds(2);
     private readonly Toggle _checking = new(); // set while a check is running — serializes concurrent callers
 
-    public NetworkWatcher(INetworkDetector detector, Func<int> screenCountProvider, List<HydraConfig> configs, HydraConfig? activeConfig, string? profileOverride, ILogger<NetworkWatcher> log)
+    public NetworkWatcher(INetworkDetector detector, Func<int> screenCountProvider, List<HydraConfig> configs, HydraConfig? activeConfig, string? profileOverride, IDormancyState dormancy, ILogger<NetworkWatcher> log, Action? restart = null, Func<DateTime>? clock = null)
         : base(log, TimeSpan.FromSeconds(10))
     {
         _detector = detector;
@@ -33,9 +37,21 @@ internal sealed class NetworkWatcher : SimpleHostedService
         _configs = configs;
         _activeConfig = activeConfig;
         _profileOverride = profileOverride;
+        _dormancy = dormancy;
+        _restart = restart ?? ProcessRestart.Restart;
+        _now = clock ?? (() => DateTime.UtcNow);
         _log = log;
 
         NetworkChange.NetworkAddressChanged += OnNetworkAddressChanged;
+
+        // a woken machine that never got its profile back drops off the relay. Restarting is how: we come
+        // back up, resolve to whatever actually matches now (usually nothing) and sit there idle and
+        // disconnected, which is exactly the state a machine whose lid is still shut should be in.
+        _dormancy.WakeDeadlineExpired += () =>
+        {
+            _restart();
+            return Task.CompletedTask;
+        };
     }
 
     protected override async Task Execute(CancellationToken cancel)
@@ -51,8 +67,8 @@ internal sealed class NetworkWatcher : SimpleHostedService
 
     private void OnNetworkAddressChanged(object? sender, EventArgs e) => _ = CheckNetwork(CancellationToken.None);
 
-    // called by MacShieldProcess when network state changes post-startup
-    internal void TriggerCheck() => _ = CheckNetwork(CancellationToken.None);
+    // called when the shield reports a network change or the screens re-enumerate post-startup
+    internal Task TriggerCheck() => CheckNetwork(CancellationToken.None);
 
     private async Task CheckNetwork(CancellationToken cancel)
     {
@@ -79,7 +95,7 @@ internal sealed class NetworkWatcher : SimpleHostedService
     private async Task CheckNetworkCore(CancellationToken cancel)
     {
         // debounce rapid-fire events
-        var now = DateTime.UtcNow;
+        var now = _now();
         if (now - _lastCheck < Debounce) return;
         _lastCheck = now;
 
@@ -133,12 +149,41 @@ internal sealed class NetworkWatcher : SimpleHostedService
         _lastIsPluggedIn = isPluggedIn;
 
         var resolved = HydraConfig.Resolve(_configs, new ConditionState(ssids, screenCount, isPluggedIn));
-        if (resolved == _activeConfig) return;
+        if (resolved == _activeConfig)
+        {
+            if (_dormancy.IsDormant)
+            {
+                _log.LogInformation("Conditions match {Profile} again — waking from dormancy", _activeConfig?.ProfileName ?? "<unnamed>");
+                await _dormancy.Exit();
+            }
+            return;
+        }
+
+        if (resolved == null && OnlyScreensLost(ssids, screenCount, isPluggedIn))
+        {
+            if (!_dormancy.IsDormant)
+                _log.LogInformation("Screens no longer match {Profile} — going dormant: staying on the relay, refusing input until input wakes us", _activeConfig!.ProfileName ?? "<unnamed>");
+            await _dormancy.Enter();
+            return;
+        }
 
         var from = _activeConfig != null ? $"{_activeConfig.Mode}" : "idle";
         var to = resolved != null ? $"{resolved.Mode}" : "idle";
         _log.LogInformation("Conditions changed: switching from {From} to {To}, restarting", from, to);
-        ProcessRestart.Restart();
+        _restart();
+    }
+
+    // dormancy covers exactly one cause: displays going away. That is the only mismatch our own input can
+    // undo, and the only one where the machine is still sitting on the desk with a master's cursor on it.
+    // A changed SSID or a dropped power source means the machine really moved or was unplugged, and MORE
+    // screens than the profile wants means someone opened the lid and is standing right there — restart
+    // into idle for all of those and let it come up wherever it landed.
+    private bool OnlyScreensLost(List<string> ssids, int screenCount, bool? isPluggedIn)
+    {
+        if (_activeConfig is not { Mode: Mode.Slave } active) return false;
+        if (active.Conditions is not { ScreenCount: { } wanted } conditions || screenCount >= wanted) return false;
+        if (conditions.Ssid is { } ssid && !ssids.Any(s => s.EqualsIgnoreCase(ssid))) return false;
+        return conditions.IsPluggedIn is not { } plugged || plugged == isPluggedIn;
     }
 
     private void LogSsidTransition(List<string>? previous, List<string> current)

@@ -546,7 +546,8 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial nint IORegistryEntryCreateCFProperty(uint entry, nint key, nint allocator, uint options);
 
-    // kIOPMUserActiveLocal = 0
+    internal const uint KIOPMUserActiveLocal = 0;
+
     [LibraryImport(IOKit)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial int IOPMAssertionDeclareUserActivity(nint assertionName, uint userType, out uint assertionID);

@@ -186,6 +186,17 @@ public sealed class MacScreenSaverSync : SimpleHostedService, IScreenSaverSync
         if (src != nint.Zero) NativeMethods.CFRelease(src);
     }
 
+    public void WakeDisplay()
+    {
+        // ResetIdleTimer's synthetic HID event alone does not power a slept display back on — that needs
+        // IOPMAssertionDeclareUserActivity. Do both: wake the panel, then poke the idle timer so it stays on.
+        var name = NativeMethods.MakeNsString("Hydra remote input");
+        var result = NativeMethods.IOPMAssertionDeclareUserActivity(name, NativeMethods.KIOPMUserActiveLocal, out _);
+        NativeMethods.CFRelease(name);
+        if (result != 0) _log.LogWarning("IOPMAssertionDeclareUserActivity failed ({Result})", result);
+        ResetIdleTimer();
+    }
+
     protected override Task Execute(CancellationToken cancel)
     {
         var isLocked = IsScreenLocked();

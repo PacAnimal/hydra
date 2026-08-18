@@ -6,6 +6,7 @@ public sealed class FakeScreenSaverSync : IScreenSaverSync
 {
     public bool LockScreenCalled;
     public bool ResetIdleTimerCalled;
+    public int WakeDisplayCount;
 
     public event Action? ScreensaverActivated { add { } remove { } }
     public event Action? ScreensaverDeactivated { add { } remove { } }
@@ -16,4 +17,5 @@ public sealed class FakeScreenSaverSync : IScreenSaverSync
     public void Deactivate() { }
     public void LockScreen() => LockScreenCalled = true;
     public void ResetIdleTimer() => ResetIdleTimerCalled = true;
+    public void WakeDisplay() => WakeDisplayCount++;
 }

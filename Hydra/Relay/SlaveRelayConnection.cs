@@ -21,6 +21,7 @@ public class SlaveRelayConnection : RelayConnection
     private readonly FileTransferService _fileTransfer;
     private readonly IFileSelectionDetector _selectionDetector;
     private readonly IOsdNotification _osd;
+    private readonly IDormancyState _dormancy;
 
     // keys currently held down on the slave (for release-all on screen leave). access under _keyEventLock,
     // which serialises key handling against the release-all paths run by disconnect/screen-leave handlers.
@@ -53,7 +54,7 @@ public class SlaveRelayConnection : RelayConnection
 
     // ReSharper disable once ConvertToPrimaryConstructor
 #pragma warning disable IDE0290
-    public SlaveRelayConnection(IHydraProfile profile, ILogger<RelayConnection> log, IPlatformOutput output, IScreenDetector screens, IWorldState peerState, ICursorHider cursorHider, IScreenSaverSync screenSaverSync, IClipboardSync clipboardSync, FileTransferService fileTransfer, IFileSelectionDetector selectionDetector, IOsdNotification osd, IActivityTracker activityTracker)
+    public SlaveRelayConnection(IHydraProfile profile, ILogger<RelayConnection> log, IPlatformOutput output, IScreenDetector screens, IWorldState peerState, ICursorHider cursorHider, IScreenSaverSync screenSaverSync, IClipboardSync clipboardSync, FileTransferService fileTransfer, IFileSelectionDetector selectionDetector, IOsdNotification osd, IActivityTracker activityTracker, IDormancyState dormancy)
         : base(profile, log, peerState)
     {
         _output = output;
@@ -68,6 +69,7 @@ public class SlaveRelayConnection : RelayConnection
         _selectionDetector = selectionDetector;
         _osd = osd;
         _activityTracker = activityTracker;
+        _dormancy = dormancy;
 
         _screens.ScreensChanged += async snapshot =>
         {
@@ -79,6 +81,19 @@ public class SlaveRelayConnection : RelayConnection
                 foreach (var master in masters)
                     SendScreenInfo(master, snapshot.Entries);
             }
+        };
+
+        // the master keeps its cursor parked on us while we sleep, so we never see the KeyUp for whatever
+        // is held right now — release it here rather than waking with a stuck modifier.
+        _dormancy.Entered += ReleaseAllKeys;
+
+        _dormancy.Exited += async () =>
+        {
+            var snapshot = await _screens.Get();
+            _cachedScreens = snapshot;
+            _log.LogInformation("Woke from dormancy — local screens: {Count}", snapshot.Screens.Count);
+            foreach (var master in await _peerState.GetMasters())
+                SendScreenInfo(master, snapshot.Entries);
         };
     }
 #pragma warning restore IDE0290
@@ -101,6 +116,8 @@ public class SlaveRelayConnection : RelayConnection
 
     protected override async Task OnReceive(string sourceHost, MessageKind kind, ReadOnlyMemory<byte> body)
     {
+        if (_dormancy.IsDormant && DropWhileDormant(sourceHost, kind)) return;
+
         switch (kind)
         {
             case MessageKind.MasterConfig:
@@ -143,7 +160,7 @@ public class SlaveRelayConnection : RelayConnection
                 var enter = body.ParseMessage<EnterScreenMessage>(_log, kind.ToString());
                 if (enter != null)
                 {
-                    MoveToCachedScreen(enter.Screen, enter.X, enter.Y);
+                    if (!_dormancy.IsDormant) MoveToCachedScreen(enter.Screen, enter.X, enter.Y);
                     AddOnScreenMaster(sourceHost);
                     _cursorHider.Show();
                 }
@@ -288,6 +305,58 @@ public class SlaveRelayConnection : RelayConnection
         await base.OnPeers(hostNames);
     }
 
+    // message kinds that drive the local input devices. While dormant these are refused, and their arrival
+    // is itself the wake: a master pushing its cursor or keyboard at us is how we get told to come back.
+    private static bool IsInjectedInput(MessageKind kind) => kind is
+        MessageKind.MouseMove or MessageKind.MouseMoveDelta or MessageKind.MouseButton or
+        MessageKind.MouseScroll or MessageKind.KeyEvent or MessageKind.EnterScreen;
+
+    // returns true when the message must not reach the normal handlers. Dormant means we stay on the relay
+    // but touch nothing locally: input is refused, and everything else is discarded outright — notably
+    // ActivityPing, whose idle-timer poke would light the displays straight back up and defeat dormancy.
+    // MasterConfig, LeaveScreen and EnterScreen fall through so peer, held-key and on-screen bookkeeping
+    // is still correct once we wake.
+    private bool DropWhileDormant(string sourceHost, MessageKind kind)
+    {
+        if (IsInjectedInput(kind))
+        {
+            OnInputWhileDormant(sourceHost, kind);
+            // EnterScreen still runs: we must know a master is parked on us when we wake, or the local
+            // cursor stays hidden under a remote pointer. Only its cursor move is suppressed, in the handler.
+            return kind != MessageKind.EnterScreen;
+        }
+        if (kind is MessageKind.MasterConfig or MessageKind.LeaveScreen) return false;
+        _log.LogDebug("Dormant: refused {Kind} from {Host}", kind, sourceHost);
+        return true;
+    }
+
+    // input keeps arriving for as long as its owner is active, so this doubles as a retry if the first
+    // attempt to light the displays didn't take. Only the first one starts the clock — otherwise a master
+    // moving its mouse would keep pushing the deadline out and we would never hand the cursor back.
+    private void OnInputWhileDormant(string sourceHost, MessageKind kind)
+    {
+        if (_dormancy.RequestWake())
+            _log.LogInformation("Input from {Host} while dormant — restoring displays; {Seconds}s to match the profile or we leave the relay",
+                sourceHost, DormancyState.WakeDeadline.TotalSeconds);
+        else
+            _log.LogDebug("Dormant: refused {Kind} from {Host}", kind, sourceHost);
+        WakeDisplay();
+    }
+
+    // one attempt per second: input arrives in floods, and the displays need a moment to come back and
+    // fire the screen change that has NetworkWatcher re-check the conditions and lift dormancy.
+    private const long WakeThrottleMs = 1000;
+    private long _lastWakeTicks;
+
+    private void WakeDisplay()
+    {
+        var now = Environment.TickCount64;
+        var last = Interlocked.Read(ref _lastWakeTicks);
+        if (now - last < WakeThrottleMs) return;
+        if (Interlocked.CompareExchange(ref _lastWakeTicks, now, last) != last) return;
+        _screenSaverSync.WakeDisplay();
+    }
+
     // parses and dispatches an input event; shows cursor if the master is actively on screen
     private void HandleInputMessage<T>(ReadOnlyMemory<byte> body, MessageKind kind, string sourceHost, Action<T> handler) where T : class
     {
@@ -394,6 +463,14 @@ public class SlaveRelayConnection : RelayConnection
 
     private void SendScreenInfo(string masterHost, List<ScreenInfoEntry> entries)
     {
+        // sleeping displays enumerate to whatever the OS still lists — often a single phantom screen.
+        // Announcing that would rebuild the master's layout and yank its parked cursor off us, so stay
+        // quiet until we wake and can report the real geometry.
+        if (_dormancy.IsDormant)
+        {
+            _log.LogDebug("Dormant: withholding screen info from {Master}", masterHost);
+            return;
+        }
         _log.LogInformation("Sending screen info to {Master}: {Count} screen(s)", masterHost, entries.Count);
         var platform = DetectLocalPlatform();
         var payload = MessageSerializer.Encode(MessageKind.ScreenInfo, new ScreenInfoMessage(entries, platform));

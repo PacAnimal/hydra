@@ -22,6 +22,9 @@ public abstract class PollingScreenSaverSync(ILogger log) : SimpleHostedService(
     public abstract void ResetIdleTimer();
     public virtual void LockScreen() { }
 
+    // the Windows and Linux idle-timer pokes (SendInput / DPMSForceLevel) already power the displays back on
+    public virtual void WakeDisplay() => ResetIdleTimer();
+
     protected void OnScreenLocked() => ScreenLocked?.Invoke();
     protected void OnScreenUnlocked() => ScreenUnlocked?.Invoke();
 

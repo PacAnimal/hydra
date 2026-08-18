@@ -166,6 +166,9 @@ services.AddSingleton(profiles);
 services.AddSingleton<ICmdRunner, CmdRunner>();
 services.AddSingleton<INetworkDetector>(_ => detector);
 services.AddSingleton<IWorldState, WorldState>();
+services.AddSingleton<DormancyState>();
+services.AddSingleton<IDormancyState>(sp => sp.GetRequiredService<DormancyState>());
+services.AddHostedService(sp => sp.GetRequiredService<DormancyState>());
 services.AddLazyResolvers(); // enables Lazy<T> injection — used to break circular deps (e.g. ActivityTracker ↔ IRelaySender)
 
 // shield always runs on macOS — handles cursor shielding + network state detection
@@ -184,6 +187,7 @@ services.AddSingleton(sp => new NetworkWatcher(
     profiles,
     config,
     configFile.Profile,
+    sp.GetRequiredService<IDormancyState>(),
     sp.GetRequiredService<ILogger<NetworkWatcher>>()));
 services.AddHostedService(sp => sp.GetRequiredService<NetworkWatcher>());
 
@@ -371,7 +375,7 @@ if (HydraConfig.HasScreenCountConditions(profiles))
     if (screenDetector != null)
     {
         var watcher = app.Services.GetRequiredService<NetworkWatcher>();
-        screenDetector.ScreensChanged += _ => { watcher.TriggerCheck(); return Task.CompletedTask; };
+        screenDetector.ScreensChanged += _ => watcher.TriggerCheck();
     }
 }
 
