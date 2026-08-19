@@ -9,10 +9,10 @@ namespace Hydra.Platform.Linux;
 // cursor/warp are no-ops — remote-only mode uses deltas, not absolute positions.
 internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatformInput
 {
-    private readonly List<int> _keyboardFds = [];
-    private readonly List<int> _mouseFds = [];
-    // per-device delta multiplier from udev hwdb MOUSE_DPI; absent means 1.0
-    private readonly Dictionary<int, double> _mouseScales = [];
+    // One entry per open device, in poll order. Keyboard and pointer are FLAGS, not alternatives:
+    // a single evdev node can be both, and on a wireless receiver it usually is - see
+    // DiscoverDevices for what picking just one of them silently broke.
+    private readonly List<InputDeviceRole> _devices = [];
     private volatile bool _running;
     private volatile bool _grabbed;
     private Thread? _thread;
@@ -21,6 +21,10 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
     private Action<MouseButtonEvent>? _onMouseButton;
     private Action<MouseScrollEvent>? _onMouseScroll;
     private EvdevKeyResolver? _keyResolver;
+
+    // An open device and what it is for. Scale is the udev hwdb MOUSE_DPI delta multiplier, 1.0
+    // when the device has no entry or is not a pointer at all.
+    private sealed record InputDeviceRole(int Fd, bool Keyboard, bool Pointer, double Scale);
 
     public bool IsOnVirtualScreen
     {
@@ -71,10 +75,11 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
 
         DiscoverDevices();
 
-        if (_keyboardFds.Count == 0 && _mouseFds.Count == 0)
+        if (_devices.Count == 0)
             throw new InvalidOperationException("No input devices found in /dev/input/. Check permissions (user may need to be in 'input' group).");
 
-        log.LogInformation("Found {K} keyboard(s), {M} mouse/pointer device(s)", _keyboardFds.Count, _mouseFds.Count);
+        log.LogInformation("Found {K} keyboard(s), {M} mouse/pointer device(s)",
+            _devices.Count(d => d.Keyboard), _devices.Count(d => d.Pointer));
 
         _running = true;
         _thread = new Thread(EventLoop) { Name = "HydraEvdevEventLoop", IsBackground = true };
@@ -94,15 +99,13 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
     private void ReleaseDevices()
     {
         StopEventTap();   // stop polling before closing the fds the loop polls
-        if (_keyboardFds.Count == 0 && _mouseFds.Count == 0) return;
+        if (_devices.Count == 0) return;
 
         if (_grabbed) SetGrab(false);
-        foreach (var fd in _keyboardFds.Concat(_mouseFds))
-            _ = EvdevNativeMethods.close(fd);
-        log.LogDebug("Released {Count} input device(s)", _keyboardFds.Count + _mouseFds.Count);
-        _keyboardFds.Clear();
-        _mouseFds.Clear();
-        _mouseScales.Clear();
+        foreach (var device in _devices)
+            _ = EvdevNativeMethods.close(device.Fd);
+        log.LogDebug("Released {Count} input device(s)", _devices.Count);
+        _devices.Clear();
         _grabbed = false;
     }
 
@@ -129,39 +132,44 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
             var hasRel = EvdevNativeMethods.TestBit(evTypeBuf, EvdevNativeMethods.EV_REL);
 
             // keyboard: supports EV_KEY with letter keys
-            if (hasKey && EvdevNativeMethods.ioctl_bit(fd, EvdevNativeMethods.EVIOCGBIT_EV_KEY, keyBuf) >= 0
-                && EvdevNativeMethods.TestBit(keyBuf, EvdevNativeMethods.KEY_A))
-            {
-                _keyboardFds.Add(fd);
-                log.LogDebug("Keyboard: {Path}", path);
-                continue;
-            }
+            var isKeyboard = hasKey
+                && EvdevNativeMethods.ioctl_bit(fd, EvdevNativeMethods.EVIOCGBIT_EV_KEY, keyBuf) >= 0
+                && EvdevNativeMethods.TestBit(keyBuf, EvdevNativeMethods.KEY_A);
 
             // mouse/pointer: supports EV_REL with X and Y axes
-            if (hasRel && EvdevNativeMethods.ioctl_bit(fd, EvdevNativeMethods.EVIOCGBIT_EV_REL, relBuf) >= 0
+            var isPointer = hasRel
+                && EvdevNativeMethods.ioctl_bit(fd, EvdevNativeMethods.EVIOCGBIT_EV_REL, relBuf) >= 0
                 && EvdevNativeMethods.TestBit(relBuf, EvdevNativeMethods.REL_X)
-                && EvdevNativeMethods.TestBit(relBuf, EvdevNativeMethods.REL_Y))
+                && EvdevNativeMethods.TestBit(relBuf, EvdevNativeMethods.REL_Y);
+
+            // Both tests run and BOTH answers are kept. These roles are not exclusive: a wireless
+            // receiver presents one node that reports letter keys and relative axes together, so
+            // testing for a keyboard first and stopping there classified every such mouse as a
+            // keyboard and read its motion from nothing at all. The symptom is a pointer that does
+            // not move while typing works perfectly, and it is invisible in the device counts
+            // unless a pointer-only device (a Bluetooth mouse, a trackpad) happens to be present
+            // to make up the numbers.
+            if (!isKeyboard && !isPointer)
             {
-                _mouseFds.Add(fd);
-                var scale = LinuxInputConfig.MouseScale(path);
-                if (Math.Abs(scale - 1.0) > 0.001)
-                {
-                    _mouseScales[fd] = scale;
-                    log.LogInformation("Mouse {Path}: MOUSE_DPI {Dpi} -> delta scale {Scale:0.##}",
-                        path, LinuxInputConfig.MouseDpi(path), scale);
-                }
-                log.LogDebug("Mouse: {Path}", path);
+                _ = EvdevNativeMethods.close(fd);
                 continue;
             }
 
-            _ = EvdevNativeMethods.close(fd);
+            var scale = isPointer ? LinuxInputConfig.MouseScale(path) : 1.0;
+            _devices.Add(new InputDeviceRole(fd, isKeyboard, isPointer, scale));
+
+            if (isPointer && Math.Abs(scale - 1.0) > 0.001)
+                log.LogInformation("Mouse {Path}: MOUSE_DPI {Dpi} -> delta scale {Scale:0.##}",
+                    path, LinuxInputConfig.MouseDpi(path), scale);
+
+            log.LogDebug("{Role}: {Path}",
+                isKeyboard && isPointer ? "Keyboard+Mouse" : isKeyboard ? "Keyboard" : "Mouse", path);
         }
     }
 
     private void EventLoop()
     {
-        var allFds = _keyboardFds.Concat(_mouseFds).ToArray();
-        var polls = allFds.Select(fd => new PollFd { Fd = fd, Events = NativeMethods.POLLIN }).ToArray();
+        var polls = _devices.Select(d => new PollFd { Fd = d.Fd, Events = NativeMethods.POLLIN }).ToArray();
 
         // accumulated mouse deltas between SYN reports
         double pendingDx = 0, pendingDy = 0;
@@ -174,19 +182,27 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
             for (var i = 0; i < polls.Length; i++)
             {
                 if ((polls[i].Revents & NativeMethods.POLLIN) == 0) continue;
-                var fd = polls[i].Fd;
-                var isKeyboard = i < _keyboardFds.Count;
+                var device = _devices[i];   // polls is built from _devices, so the indices agree
 
                 while (true)
                 {
                     var ev = new InputEvent();
-                    var r = EvdevNativeMethods.read(fd, ref ev, (nuint)System.Runtime.InteropServices.Marshal.SizeOf<InputEvent>());
+                    var r = EvdevNativeMethods.read(device.Fd, ref ev, (nuint)System.Runtime.InteropServices.Marshal.SizeOf<InputEvent>());
                     if (r <= 0) break;
 
-                    if (isKeyboard)
-                        HandleKeyboardEvent(ev);
-                    else
-                        HandleMouseEvent(ev, _mouseScales.GetValueOrDefault(fd, 1.0), ref pendingDx, ref pendingDy);
+                    // Dispatch on the EVENT, not on the device. A combo device delivers keystrokes
+                    // and motion down one fd, so the device alone cannot say what an event is.
+                    // HandleKeyboardEvent already forwards BTN_* to the button path, which is why
+                    // a keyboard with buttons needs nothing extra here.
+                    if (ev.Type == EvdevNativeMethods.EV_KEY)
+                    {
+                        if (device.Keyboard) HandleKeyboardEvent(ev);
+                        else HandleButtonCode(ev.Code, ev.Value);
+                    }
+                    else if (device.Pointer)
+                    {
+                        HandleMouseEvent(ev, device.Scale, ref pendingDx, ref pendingDy);
+                    }
                 }
             }
         }
@@ -269,8 +285,7 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
 
     private void SetGrab(bool grab)
     {
-        var all = _keyboardFds.Concat(_mouseFds);
-        foreach (var fd in all)
+        foreach (var fd in _devices.Select(d => d.Fd))
         {
             var r = EvdevNativeMethods.ioctl_grab(fd, EvdevNativeMethods.EVIOCGRAB, grab ? 1 : 0);
             if (r >= 0) continue;
