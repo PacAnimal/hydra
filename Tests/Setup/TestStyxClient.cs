@@ -16,12 +16,11 @@ public sealed class TestStyxClient : IStyxClient, IAsyncDisposable
     private HubConnection? _hub;
     private IDisposable? _registration;
 
-    private readonly SemaphoreSlim _peerSignal = new(0);
+    private readonly NotificationQueue<string[]> _peers = new();
     private readonly SemaphoreSlim _receiveSignal = new(0);
     private readonly SemaphoreSlim _kickSignal = new(0);
 
     public IStyxServer? Server { get; private set; }
-    public string[] LastPeers { get; private set; } = [];
     public (string Source, string SourceIp, byte[] Payload)? LastReceived { get; private set; }
     public string? KickReason { get; private set; }
 
@@ -49,12 +48,7 @@ public sealed class TestStyxClient : IStyxClient, IAsyncDisposable
         Server = _hub.CreateHubProxy<IStyxServer>();
     }
 
-    public async Task<string[]> WaitForPeers(int timeoutMs = 5000)
-    {
-        if (!await _peerSignal.WaitAsync(timeoutMs))
-            throw new TimeoutException("Timed out waiting for peers update");
-        return LastPeers;
-    }
+    public Task<string[]> WaitForPeers(int timeoutMs = 5000) => _peers.Next(timeoutMs, "peers update");
 
     public async Task<(string Source, string SourceIp, byte[] Payload)> WaitForReceive(int timeoutMs = 5000)
     {
@@ -87,8 +81,7 @@ public sealed class TestStyxClient : IStyxClient, IAsyncDisposable
 
     public Task Peers(string[] hostNames)
     {
-        LastPeers = hostNames;
-        _peerSignal.Release();
+        _peers.Push(hostNames);
         return Task.CompletedTask;
     }
 

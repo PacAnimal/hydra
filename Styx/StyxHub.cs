@@ -54,8 +54,8 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, IStyxPass
 
         // kick same network+hostname duplicates and register atomically (one lock) so two concurrent
         // authenticates for the same host can't both register (stale phantom peer)
-        var kicked = await registry.RegisterKickingDuplicates(Context.ConnectionId, networkId, hostName, remoteIp);
-        foreach (var connectionId in kicked)
+        var registration = await registry.RegisterKickingDuplicates(Context.ConnectionId, networkId, hostName, remoteIp);
+        foreach (var connectionId in registration.Kicked)
             await Clients.Client(connectionId).Kicked("duplicate hostname");
 
         // if the connection aborted during auth, OnDisconnectedAsync may have already run its Unregister
@@ -63,11 +63,21 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, IStyxPass
         if (Context.ConnectionAborted.IsCancellationRequested)
         {
             await registry.Unregister(Context.ConnectionId);
+            // we displaced someone and then died before announcing either half, so nothing has told the
+            // other peers the host is gone — converge them on what the registry actually holds now
+            if (registration.Kicked.Count > 0) peers.QueueBroadcast(networkId);
             return new RelayLoginResponse { Authenticated = false, Message = "Connection aborted" };
         }
 
         log.LogInformation("Authentication accepted for \"{HostName}\" (connectionId:{ConnectionId}) from {RemoteIp} on network {NetworkId}", hostName, Context.ConnectionId, remoteIp, networkId);
         await throttle;
+
+        // a reconnecting host has to be seen leaving before it is seen arriving, or the pair is an identical
+        // membership list and reads as no change at all — a master then keeps stale geometry for it and never
+        // re-sends the config it needs. Both halves go through the broadcaster's single-reader queue, in this
+        // order, so every peer observes them that way round.
+        if (registration.Kicked.Count > 0)
+            peers.QueueBroadcast(networkId, registration.OtherClients);
 
         // queue after throttle so Authenticated=true is sent to the caller before Peers arrives
         peers.QueueBroadcast(networkId);

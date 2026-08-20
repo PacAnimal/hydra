@@ -237,6 +237,14 @@ disconnects. It is a complete snapshot, not a delta; a client SHOULD replace its
 
 A newly authenticated peer receives its own snapshot, which is empty if it is alone in the network.
 
+When an authentication displaces an existing registration for the same hostname (§6.3), the other members of
+the network receive **two** snapshots in this order: one without the hostname, then one with it. Peer identity
+on the wire is the hostname, so a displacement is otherwise indistinguishable from no change at all, and a
+client tracking membership by name alone would never learn that the peer behind it restarted. The relay
+guarantees the pair is delivered in that order; it does not guarantee that no other membership change is
+interleaved with it. Clients that reset per-peer state on departure get re-announcement for free; clients that
+do not SHOULD treat the removal as a genuine departure of that peer.
+
 Note the ordering hazard: `Peers` **may arrive before the completion record for the client's own
 `Authenticate` invocation**. Clients MUST register their callbacks before invoking `Authenticate`, or
 they will miss the first membership snapshot and any payload a peer sends in reaction to it.
@@ -246,7 +254,8 @@ they will miss the first membership snapshot and any payload a peer sends in rea
 Sent when the relay evicts the client's registration. The only reason currently issued is
 `"duplicate hostname"`: another connection authenticated with the same hostname in the same network, and
 the newcomer wins. Stale registrations from an unclean disconnect are evicted the same way, which is what
-makes reconnection after a dropped link work.
+makes reconnection after a dropped link work. Every other member of the network sees the displaced hostname
+leave and return, per §6.2.
 
 A kicked client is deregistered but **its connection stays open**. Anonymous methods still work, so the
 client MAY re-authenticate on the same connection. The first authenticated method invoked while
@@ -388,6 +397,8 @@ alpha ← {"type":1,"target":"Receive","arguments":["beta","203.0.113.7","AAEC/w
   (a third connection authenticates as "beta")
 
 beta  ← {"type":1,"target":"Kicked","arguments":["duplicate hostname"]}␞
+alpha ← {"type":1,"target":"Peers","arguments":[[]]}␞
+alpha ← {"type":1,"target":"Peers","arguments":[["beta"]]}␞
 ```
 
 Note `ALPHA-Box` announced, `alpha-box` reported; `ALPHA-box` accepted as a target; and the payload
@@ -401,7 +412,8 @@ A minimal client:
 2. Send the handshake; await `{}`.
 3. Register `Receive`, `Peers` and `Kicked` handlers **before** step 4.
 4. Invoke `Authenticate` with the token and a hostname. Allow for the ≥ 1 s floor.
-5. Maintain the peer set from `Peers` snapshots, replacing wholesale.
+5. Maintain the peer set from `Peers` snapshots, replacing wholesale. A hostname that leaves and returns
+   across two snapshots is a peer that reconnected; discard whatever you cached about it.
 6. `Send` to explicit hostname lists; expect no acknowledgement and tolerate silent loss.
 7. Answer relay ping records, emit your own, and reconnect with jittered backoff on loss.
 8. Treat `Kicked` as a stop, not a retry.

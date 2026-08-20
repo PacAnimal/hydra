@@ -187,6 +187,40 @@ public class StyxIntegrationTests
     }
 
     [Test]
+    public async Task DuplicateHostname_ObserverSeesHostLeaveThenReturn()
+    {
+        var networkId = Guid.NewGuid();
+        var auth = await StyxTestServer.GenerateAuthorization(networkId);
+
+        await using var observer = new TestStyxClient();
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That((await observer.Connect(_factory!, auth, "observer")).Authenticated, Is.True);
+            Assert.That(await observer.WaitForPeers(), Is.Empty);
+        }
+
+        await using var original = new TestStyxClient();
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That((await original.Connect(_factory!, auth, "roamer")).Authenticated, Is.True);
+            Assert.That(await observer.WaitForPeers(), Is.EqualTo(["roamer"]));
+        }
+
+        // the same host authenticates on a fresh connection, as it does when a half-open link is replaced
+        // before the server has noticed the old one died
+        await using var reconnected = new TestStyxClient();
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That((await reconnected.Connect(_factory!, auth, "roamer")).Authenticated, Is.True);
+            Assert.That(await original.WaitForKick(), Is.EqualTo("duplicate hostname"));
+
+            // both halves, in order — an observer given one identical list has no way to tell this happened
+            Assert.That(await observer.WaitForPeers(), Is.Empty, "displaced host should be broadcast as gone first");
+        }
+        Assert.That(await observer.WaitForPeers(), Is.EqualTo(["roamer"]), "and then as present again");
+    }
+
+    [Test]
     public async Task PeersList_UpdatesOnConnectAndDisconnect()
     {
         var networkId = Guid.NewGuid();

@@ -16,15 +16,13 @@ public sealed class HydraTestClient(WebApplicationFactory<global::Styx.Program> 
     private readonly WebApplicationFactory<global::Styx.Program> _factory = factory;
 
     private readonly SemaphoreSlim _readySignal = new(0);
-    private readonly SemaphoreSlim _peerSignal = new(0);
+    private readonly NotificationQueue<string[]> _peers = new();
     private readonly SemaphoreSlim _receiveSignal = new(0);
     private readonly SemaphoreSlim _kickSignal = new(0);
 
-    private volatile string[] _lastPeers = [];
     private (string Source, MessageKind Kind, string Json)? _lastMessage;
     private string? _kickReason;
 
-    public string[] LastPeers => _lastPeers;
     public (string Source, MessageKind Kind, string Json)? LastMessage => _lastMessage;
     public string? KickReason => _kickReason;
 
@@ -47,8 +45,7 @@ public sealed class HydraTestClient(WebApplicationFactory<global::Styx.Program> 
 
     protected override Task OnPeers(string[] hostNames)
     {
-        _lastPeers = hostNames;
-        _peerSignal.Release();
+        _peers.Push(hostNames);
         return Task.CompletedTask;
     }
 
@@ -67,12 +64,7 @@ public sealed class HydraTestClient(WebApplicationFactory<global::Styx.Program> 
     }
 
     // blocks until the next Peers broadcast arrives
-    public async Task<string[]> WaitForPeers(int timeoutMs = 15000)
-    {
-        if (!await _peerSignal.WaitAsync(timeoutMs))
-            throw new TimeoutException("Timed out waiting for peers update");
-        return _lastPeers;
-    }
+    public Task<string[]> WaitForPeers(int timeoutMs = 15000) => _peers.Next(timeoutMs, "peers update");
 
     public async Task<(string Source, MessageKind Kind, string Json)> WaitForMessage(int timeoutMs = 15000)
     {

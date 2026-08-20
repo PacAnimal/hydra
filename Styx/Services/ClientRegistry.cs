@@ -11,13 +11,19 @@ public interface IClientRegistry
     ValueTask<ClientIdentity?> GetIdentity(string connectionId);
     // atomically kicks same-network+host duplicates AND registers the new connection under one lock, so two
     // concurrent authenticates for the same host can't both find nothing to kick and both register.
-    // returns the kicked connectionIds (may be >1 if stale entries accumulated on unclean disconnect).
-    ValueTask<IReadOnlyList<string>> RegisterKickingDuplicates(string connectionId, Guid networkId, string hostName, string remoteIp);
-    // returns all (connectionId, hostName) pairs on a network, optionally excluding one connection
-    ValueTask<IReadOnlyList<(string ConnectionId, string HostName)>> GetNetworkClients(Guid networkId, string? excludeConnectionId = null);
+    ValueTask<RegistrationResult> RegisterKickingDuplicates(string connectionId, Guid networkId, string hostName, string remoteIp);
+    // returns all clients on a network, optionally excluding one connection
+    ValueTask<IReadOnlyList<NetworkClient>> GetNetworkClients(Guid networkId, string? excludeConnectionId = null);
 }
 
 public record ClientIdentity(Guid NetworkId, string HostName, string RemoteIp);
+
+public record NetworkClient(string ConnectionId, string HostName);
+
+/// <param name="Kicked">connectionIds displaced by this registration — more than one if stale entries accumulated.</param>
+/// <param name="OtherClients">the network with the duplicates gone but before this connection joined, so a
+/// displaced host can be broadcast as having left before it is broadcast as having arrived.</param>
+public record RegistrationResult(IReadOnlyList<string> Kicked, IReadOnlyList<NetworkClient> OtherClients);
 
 public class ClientRegistry(ILogger<ClientRegistry> log) : IClientRegistry
 {
@@ -55,7 +61,7 @@ public class ClientRegistry(ILogger<ClientRegistry> log) : IClientRegistry
     }
 
     // atomically kick same-network+host duplicates and register the new connection under one lock
-    public async ValueTask<IReadOnlyList<string>> RegisterKickingDuplicates(string connectionId, Guid networkId, string hostName, string remoteIp)
+    public async ValueTask<RegistrationResult> RegisterKickingDuplicates(string connectionId, Guid networkId, string hostName, string remoteIp)
     {
         using var clients = await _clients.WaitForDisposable();
         var found = clients.Value
@@ -69,21 +75,26 @@ public class ClientRegistry(ILogger<ClientRegistry> log) : IClientRegistry
             clients.Value.Remove(id);
             log.LogInformation("Kicked duplicate \"{HostName}\" from network {NetworkId}", hostName, networkId);
         }
+        var others = OnNetwork(clients.Value, networkId, connectionId);
         clients.Value[connectionId] = new ClientIdentity(networkId, hostName, remoteIp);
         log.LogDebug("Registered client \"{HostName}\" from {RemoteIp} on network {NetworkId}", hostName, remoteIp, networkId);
-        return found;
+        return new RegistrationResult(found, others);
     }
 
-    public async ValueTask<IReadOnlyList<(string ConnectionId, string HostName)>> GetNetworkClients(Guid networkId, string? excludeConnectionId = null)
+    public async ValueTask<IReadOnlyList<NetworkClient>> GetNetworkClients(Guid networkId, string? excludeConnectionId = null)
     {
         using var clients = await _clients.WaitForDisposable();
-        var result = new List<(string, string)>();
-        foreach (var (connectionId, identity) in clients.Value)
+        return OnNetwork(clients.Value, networkId, excludeConnectionId);
+    }
+
+    private static List<NetworkClient> OnNetwork(Dictionary<string, ClientIdentity> clients, Guid networkId, string? excludeConnectionId)
+    {
+        var result = new List<NetworkClient>();
+        foreach (var (connectionId, identity) in clients)
         {
             if (identity.NetworkId == networkId && connectionId != excludeConnectionId)
-                result.Add((connectionId, identity.HostName));
+                result.Add(new NetworkClient(connectionId, identity.HostName));
         }
         return result;
     }
-
 }
