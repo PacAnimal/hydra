@@ -1,7 +1,5 @@
 using ByteSizeLib;
-using MessagePack;
-using MessagePack.Resolvers;
-using Cathedral.Serialization;
+using Cathedral.Config;
 using System.Text.Json.Serialization.Metadata;
 
 namespace Styx;
@@ -33,15 +31,10 @@ public static class StyxSignalRExtensions
         }).AddMessagePackProtocol(options =>
         {
             // a client picks its own member-name casing, and MessagePack would otherwise match keys by exact
-            // bytes and hand the hub an argument with unset members. Only the resolver is borrowed, not
-            // SaneMessagePack's options: those also write enums as strings and Guids as raw bytes, which would
-            // change this hub's wire format the day a method carries either.
-            options.SerializerOptions = MessagePackSerializerOptions.Standard
-                .WithResolver(CompositeResolver.Create(
-                    [],
-                    [new CaseInsensitiveObjectResolver(ContractlessStandardResolver.Instance),
-                     ContractlessStandardResolver.Instance]))
-                .WithSecurity(MessagePackSecurity.UntrustedData);
+            // bytes and hand the hub an argument with unset members. StyxWireFormatTests pins the encoding of
+            // everything crossing this hub, so a change in what these options do to it can't pass unnoticed —
+            // the protocol is documented for third parties to implement against.
+            options.SerializerOptions = SaneMessagePack.InteropOptions;
         });
 
         return services;
