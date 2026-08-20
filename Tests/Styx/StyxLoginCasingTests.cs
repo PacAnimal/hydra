@@ -33,7 +33,7 @@ public class StyxLoginCasingTests
     {
         var builder = new HubConnectionBuilder()
             .WithUrl($"{_factory!.Server.BaseAddress}relay",
-                options => options.HttpMessageHandlerFactory = _ => _factory!.Server.CreateHandler());
+                options => options.HttpMessageHandlerFactory = _ => _factory.Server.CreateHandler());
 
         if (protocol == Protocol.MessagePack) builder.AddMessagePackProtocol();
 

@@ -125,11 +125,11 @@ public class SlaveDormancyTests
 
         await relay.SimulateMasterConfig("second-master");
 
-        var (Targets, Kind, Json) = relay.Sent.Single(m => m.Kind == MessageKind.ScreenInfo);
+        var (_, _, json) = relay.Sent.Single(m => m.Kind == MessageKind.ScreenInfo);
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(Json, Does.Contain("home:0"), "must advertise the geometry we had while awake");
-            Assert.That(Json, Does.Not.Contain("phantom"));
+            Assert.That(json, Does.Contain("home:0"), "must advertise the geometry we had while awake");
+            Assert.That(json, Does.Not.Contain("phantom"));
         }
     }
 

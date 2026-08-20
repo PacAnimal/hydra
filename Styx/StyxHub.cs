@@ -10,7 +10,7 @@ namespace Styx;
 public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, IStyxPasswordProvider passwordProvider, ILogger<StyxHub> log, StyxOptions options) : Hub<IStyxClient>, IStyxServer
 {
     [AllowAnonymousHub]
-    public async Task<RelayLoginResponse> Authenticate(RelayLogin login)
+    public async Task<RelayLoginResponse> Authenticate(RelayLogin? login)
     {
         // throttle — minimum response time regardless of outcome
         var throttle = Task.Delay(TimeSpan.FromSeconds(Constants.AuthThrottleSeconds), Context.ConnectionAborted);
