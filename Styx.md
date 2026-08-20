@@ -77,19 +77,22 @@ message MAY contain several records.
 
 ### 3.3 Hub protocols
 
-Two protocols are supported. They differ in a way that matters:
+Two protocols are supported, and either is a complete implementation target:
 
 | | `json` | `messagepack` |
 |---|---|---|
 | Frame body | UTF-8 JSON, `0x1E`-terminated | varint length prefix + MessagePack array |
 | Byte payloads | base64 string (+33% size) | native binary, no expansion |
-| Argument member names | **case-insensitive** (`hostName` or `HostName`) | **case-sensitive, exactly as in §5–§6** (`HostName`) |
+| Argument member names | case-insensitive | case-insensitive |
 | Returned member names | camelCase (`authenticated`) | PascalCase (`Authenticated`) |
 
-MessagePack argument names are an easy way to fail: a map keyed `hostName` deserialises to a record with
-null members, and the relay answers the invocation with an internal-error completion rather than a
-useful message. Implementations using MessagePack MUST use the exact member names given in this document.
-`json` clients MAY use either casing; this document writes the canonical camelCase form.
+Argument member names are matched case-insensitively under both protocols, so `hostName`, `HostName` and
+`HOSTNAME` are equally acceptable and a client may use whichever casing its language favours. This
+document writes the camelCase form throughout.
+
+Members returned by the relay are **not** normalised between the protocols: a `json` client reads
+`authenticated`, a `messagepack` client reads `Authenticated`. Clients that support both SHOULD read
+response members case-insensitively too.
 
 Message framing, invocation records (`type: 1`), completion records (`type: 3`), ping records
 (`type: 6`) and close records (`type: 7`) follow the SignalR Hub Protocol and are not restated here.
@@ -170,8 +173,12 @@ response { "authenticated": true|false, "message": "<text>"|null }
 ```
 
 `message` carries a short human-readable reason on failure — `"Invalid authorization"`,
-`"Server misconfigured"`, `"Connection aborted"` — and is null on success. Clients SHOULD surface it and
-MUST NOT parse it.
+`"Authorization and hostName are both required"`, `"Server misconfigured"`, `"Connection aborted"` — and
+is null on success. Clients SHOULD surface it and MUST NOT parse it.
+
+Both members are mandatory, but omitting one is answered rather than punished: a login missing either
+member, under either hub protocol, returns `authenticated: false` with the reason above. A client never
+has to distinguish a malformed request from a rejected credential by inspecting transport errors.
 
 Every response, successful or not, is delayed to a **minimum of one second** to blunt password guessing.
 Clients MUST tolerate this latency and SHOULD apply a timeout of several seconds to the invocation.
@@ -249,25 +256,29 @@ will ping-pong with the peer that displaced it indefinitely.
 
 ## 7. Session lifecycle
 
+Records sent by the client are left-aligned below, records sent by the relay right-aligned. Record
+separators are omitted for legibility; see §3.2.
+
 ```
-client                                   relay
-  │  (optional) POST /relay/negotiate      │
-  │──────────────────────────────────────▶ │
-  │  WebSocket /relay                      │
-  │──────────────────────────────────────▶ │
-  │  {"protocol":"json","version":1}␞      │
-  │──────────────────────────────────────▶ │
-  │                                    {}␞ │
-  │ ◀──────────────────────────────────────│
-  │  register Receive/Peers/Kicked handlers│   ← before the next step, not after
-  │  invoke Authenticate                   │
-  │──────────────────────────────────────▶ │
-  │                    Peers[…]  (may precede the completion)
-  │ ◀──────────────────────────────────────│
-  │            completion {authenticated}  │   ≥ 1 s after the invocation
-  │ ◀──────────────────────────────────────│
-  │  Send / Receive …                      │
-  │ ◀─────────────────────────────────────▶│
+  client                                          relay
+  │                                              │
+  │ (optional) POST /relay/negotiate             │
+  │─────────────────────────────────────────────▶│
+  │ WebSocket /relay                             │
+  │─────────────────────────────────────────────▶│
+  │ handshake {"protocol":"json","version":1}    │
+  │─────────────────────────────────────────────▶│
+  │                                           {} │
+  │◀─────────────────────────────────────────────│
+  │ register Receive/Peers/Kicked handlers       │  ← before Authenticate, not after
+  │ invoke Authenticate                          │
+  │─────────────────────────────────────────────▶│
+  │                                    Peers […] │  ← may precede the completion below
+  │◀─────────────────────────────────────────────│
+  │                   completion {authenticated} │  ← at least 1 s after the invocation
+  │◀─────────────────────────────────────────────│
+  │ Send / Receive …                             │
+  │◀────────────────────────────────────────────▶│
 ```
 
 On `authenticated: false` the connection remains usable for anonymous methods; the client MAY retry with

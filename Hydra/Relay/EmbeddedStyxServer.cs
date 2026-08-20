@@ -12,7 +12,6 @@ using Styx;
 using Styx.Filters;
 using Styx.Services;
 using System.Net;
-using StyxConstants = Styx.Constants;
 
 namespace Hydra.Relay;
 
@@ -52,14 +51,7 @@ public class EmbeddedStyxServer(EmbeddedStyxServerConfig config, ILogger<Embedde
         services.AddSereneConsoleLogging();
 
         services.AddDataProtection().PersistKeysToNowhere();
-        services.AddSignalR(options =>
-        {
-            options.KeepAliveInterval = TimeSpan.FromSeconds(StyxConstants.KeepAliveSeconds);
-            options.ClientTimeoutInterval = TimeSpan.FromSeconds(StyxConstants.ClientTimeoutSeconds);
-            options.EnableDetailedErrors = true;
-            options.MaximumReceiveMessageSize = StyxConstants.MaxMessageMebiBytes * 1024L * 1024L;
-            options.MaximumParallelInvocationsPerClient = StyxConstants.MaxParallelInvocations;
-        }).AddMessagePackProtocol();
+        services.AddStyxSignalR();
 
         services.AddSingleton(new StyxOptions(false));
         services.AddSingleton<IClientRegistry, ClientRegistry>();

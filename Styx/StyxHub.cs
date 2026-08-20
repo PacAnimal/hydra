@@ -29,6 +29,15 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, IStyxPass
 
         var remoteIp = RemoteIp;
 
+        // a third-party client can send any shape of login it likes — refuse an incomplete one with an
+        // answer it can act on, rather than failing somewhere in the paths below
+        if (login is null || string.IsNullOrWhiteSpace(login.Authorization) || string.IsNullOrWhiteSpace(login.HostName))
+        {
+            log.LogWarning("Authentication rejected from {RemoteIp}: login is missing an authorization or a hostname", remoteIp);
+            await throttle;
+            return new RelayLoginResponse { Authenticated = false, Message = "Authorization and hostName are both required" };
+        }
+
         Guid networkId;
         try
         {

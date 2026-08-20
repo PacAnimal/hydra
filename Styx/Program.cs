@@ -1,4 +1,3 @@
-using ByteSizeLib;
 using Cathedral.Config;
 using Cathedral.Extensions;
 using Cathedral.Logging;
@@ -31,14 +30,7 @@ services.AddSereneConsoleLogging(logging =>
 services.ConfigureHttpJsonOptions(options => SaneJson.Configure(options.SerializerOptions));
 services.AddDataProtection().PersistKeysToNowhere();
 
-services.AddSignalR(options =>
-{
-    options.KeepAliveInterval = TimeSpan.FromSeconds(Constants.KeepAliveSeconds);
-    options.ClientTimeoutInterval = TimeSpan.FromSeconds(Constants.ClientTimeoutSeconds);
-    options.EnableDetailedErrors = true;
-    options.MaximumReceiveMessageSize = (long)ByteSize.FromMebiBytes(Constants.MaxMessageMebiBytes).Bytes;
-    options.MaximumParallelInvocationsPerClient = Constants.MaxParallelInvocations;
-}).AddMessagePackProtocol();
+services.AddStyxSignalR();
 
 var debugMessages = Environment.GetEnvironmentVariable(Constants.DebugMessagesEnvVar)?.EqualsIgnoreCase("true") ?? false;
 services.AddSingleton(new StyxOptions(debugMessages));
