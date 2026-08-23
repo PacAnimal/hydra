@@ -117,6 +117,31 @@ public class StyxIntegrationTests
     }
 
     [Test]
+    public async Task TwoHydraClients_ReliableSendCompletesAndDelivers()
+    {
+        var networkId = Guid.NewGuid();
+        var cfg = await StyxTestServer.BuildNetworkConfig(_factory!, networkId);
+
+        await using var sender = new HydraTestClient(_factory!, TransitionTestHelper.Profile("sender", new HydraConfig { Mode = Mode.Master, NetworkConfig = cfg }));
+        await using var receiver = new HydraTestClient(_factory!, TransitionTestHelper.Profile("receiver", new HydraConfig { Mode = Mode.Master, NetworkConfig = cfg }));
+
+        await sender.StartAsync(CancellationToken.None);
+        await receiver.StartAsync(CancellationToken.None);
+        await sender.WaitForReady();
+        await receiver.WaitForReady();
+
+        var payload = MessageSerializer.Encode(MessageKind.FileTransferChunk, new FileTransferChunkMessage(0, [1, 2, 3]));
+        await sender.SendReliableAsync(["receiver"], payload).AsTask().WaitAsync(TimeSpan.FromSeconds(3));
+
+        var (source, kind, _) = await receiver.WaitForMessage();
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(source, Is.EqualTo("sender"));
+            Assert.That(kind, Is.EqualTo(MessageKind.FileTransferChunk));
+        }
+    }
+
+    [Test]
     public async Task TwoHydraClients_BidirectionalExchange()
     {
         var networkId = Guid.NewGuid();

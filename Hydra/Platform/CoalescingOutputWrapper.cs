@@ -15,6 +15,7 @@ public sealed class CoalescingOutputWrapper : IPlatformOutput
     private MoveBatch? _openMoveBatch;
     private readonly BlockingCollection<Action> _actions = [];
     private readonly Thread? _drainThread;
+    private bool _disposed;
 
     public CoalescingOutputWrapper(IPlatformOutput inner) : this(inner, runDrainThread: true) { }
 
@@ -44,6 +45,7 @@ public sealed class CoalescingOutputWrapper : IPlatformOutput
     {
         lock (_moveLock)
         {
+            if (_disposed) return;
             if (_openMoveBatch == null || _openMoveBatch.Absolute != absolute)
             {
                 var batch = new MoveBatch(absolute);
@@ -57,27 +59,29 @@ public sealed class CoalescingOutputWrapper : IPlatformOutput
 
     public void InjectKey(KeyEventMessage msg)
     {
-        SealPendingMove();
-        _actions.Add(() => _inner.InjectKey(msg));
+        PostControl(() => _inner.InjectKey(msg));
     }
 
     public void InjectMouseButton(MouseButtonMessage msg)
     {
-        SealPendingMove();
-        _actions.Add(() => _inner.InjectMouseButton(msg));
+        PostControl(() => _inner.InjectMouseButton(msg));
     }
 
     public void InjectMouseScroll(MouseScrollMessage msg)
     {
-        SealPendingMove();
-        _actions.Add(() => _inner.InjectMouseScroll(msg));
+        PostControl(() => _inner.InjectMouseScroll(msg));
     }
 
     // The batch action was queued when the batch opened. Sealing here ensures movement arriving after a
     // key/button/scroll creates a new action behind that control event instead of being folded ahead of it.
-    private void SealPendingMove()
+    private void PostControl(Action action)
     {
-        lock (_moveLock) _openMoveBatch = null;
+        lock (_moveLock)
+        {
+            if (_disposed) return;
+            _openMoveBatch = null;
+            _actions.Add(action);
+        }
     }
 
     private void FlushMove(MoveBatch batch)
@@ -112,10 +116,15 @@ public sealed class CoalescingOutputWrapper : IPlatformOutput
 
     public void Dispose()
     {
-        SealPendingMove(); // its batch action is already queued
-        _actions.CompleteAdding();
+        lock (_moveLock)
+        {
+            if (_disposed) return;
+            _disposed = true;
+            _openMoveBatch = null; // its batch action is already queued
+            _actions.CompleteAdding();
+        }
         if (_drainThread != null)
-            _drainThread.Join(1000);
+            _drainThread.Join();
         else
             DrainPending(); // manual mode: flush the queue inline so a pending move is still delivered
         _inner.Dispose();

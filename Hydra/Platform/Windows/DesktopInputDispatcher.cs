@@ -40,6 +40,7 @@ internal sealed class DesktopInputDispatcher : IDisposable
     private readonly BlockingCollection<InputCommand> _queue = [];
     private readonly Timer _pollTimer;
     private readonly Timer _relativeRestoreTimer;
+    private readonly Lock _desktopLock = new();
     private Thread? _workerThread;
     private nint _activeDesktop;
     private string _activeDesktopName;
@@ -65,21 +66,20 @@ internal sealed class DesktopInputDispatcher : IDisposable
     {
         _log = log;
         _activeDesktop = NativeMethods.OpenInputDesktop(NativeMethods.DF_ALLOWOTHERACCOUNTHOOK, true, DesktopAccess);
-        _activeDesktopName = WindowsDesktop.Name(_activeDesktop);
+        _activeDesktopName = GetDesktopName(_activeDesktop);
         if (_activeDesktop == nint.Zero)
             _log.LogWarning("OpenInputDesktop failed at startup (error {Error})", Marshal.GetLastWin32Error());
         else
             _log.LogInformation("Desktop input dispatcher started, current desktop: {Name}", _activeDesktopName);
         StartWorker(_activeDesktop);
         _pollTimer = new Timer(_ => PollDesktop(), null, TimeSpan.FromMilliseconds(200), TimeSpan.FromMilliseconds(200));
-        _relativeRestoreTimer = new Timer(_ => _queue.TryAdd(new RestoreMouseSettingsCommand()), null,
+        _relativeRestoreTimer = new Timer(_ => TryQueue(new RestoreMouseSettingsCommand()), null,
             Timeout.Infinite, Timeout.Infinite);
     }
 
     internal void Dispatch(InputCommand cmd)
     {
-        if (!_disposed)
-            _queue.TryAdd(cmd);
+        TryQueue(cmd);
     }
 
     public void Dispose()
@@ -87,15 +87,25 @@ internal sealed class DesktopInputDispatcher : IDisposable
         if (!_disposed.TrySet()) return;
         _pollTimer.Dispose();
         _relativeRestoreTimer.Dispose();
-        _queue.TryAdd(new RestoreMouseSettingsCommand(Force: true));
+        TryQueue(new RestoreMouseSettingsCommand(Force: true), duringDispose: true);
         _queue.CompleteAdding();
-        _workerThread?.Join(TimeSpan.FromSeconds(1));
+        _workerThread?.Join();
         _workerThread = null;
-        if (_activeDesktop != nint.Zero)
+        lock (_desktopLock)
         {
-            NativeMethods.CloseDesktop(_activeDesktop);
-            _activeDesktop = nint.Zero;
+            if (_activeDesktop != nint.Zero)
+            {
+                NativeMethods.CloseDesktop(_activeDesktop);
+                _activeDesktop = nint.Zero;
+            }
         }
+    }
+
+    private bool TryQueue(InputCommand command, bool duringDispose = false)
+    {
+        if (!duringDispose && _disposed) return false;
+        try { return _queue.TryAdd(command); }
+        catch (InvalidOperationException) { return false; }
     }
 
     private void StartWorker(nint hDesk)
@@ -128,21 +138,36 @@ internal sealed class DesktopInputDispatcher : IDisposable
             return;
         }
 
-        var name = WindowsDesktop.Name(hDesk);
-        if (name == _activeDesktopName)
+        var name = GetDesktopName(hDesk);
+        lock (_desktopLock)
         {
-            NativeMethods.CloseDesktop(hDesk);
-            return;
+            if (_disposed)
+            {
+                NativeMethods.CloseDesktop(hDesk);
+                return;
+            }
+
+            if (name == _activeDesktopName)
+            {
+                NativeMethods.CloseDesktop(hDesk);
+                return;
+            }
+
+            _log.LogInformation("Input desktop changed: {Old} → {New}", _activeDesktopName, name);
+
+            var oldDesk = _activeDesktop;
+
+            // Re-attach the worker thread to the new desktop; close the old handle after it detaches.
+            // If shutdown closed the queue between the checks, retain the old active handle and close
+            // the newly-opened one here instead of leaking it.
+            if (!TryQueue(new SwitchDesktopCommand(hDesk, oldDesk, name)))
+            {
+                NativeMethods.CloseDesktop(hDesk);
+                return;
+            }
+            _activeDesktop = hDesk;
+            _activeDesktopName = name;
         }
-
-        _log.LogInformation("Input desktop changed: {Old} → {New}", _activeDesktopName, name);
-
-        var oldDesk = _activeDesktop;
-        _activeDesktop = hDesk;
-        _activeDesktopName = name;
-
-        // re-attach the worker thread to the new desktop; close old handle after the thread detaches
-        _queue.TryAdd(new SwitchDesktopCommand(hDesk, oldDesk, name));
     }
 
     private void Execute(InputCommand cmd)
@@ -318,15 +343,9 @@ internal sealed class DesktopInputDispatcher : IDisposable
 
         if (msg.Character is { } ch)
         {
+            var scan = NativeMethods.VkKeyScanW(ch); // char implicit-converts to ushort
             var isAltGr = (msg.Modifiers & KeyModifiers.AltGr) != 0;
             var isSuper = (msg.Modifiers & KeyModifiers.Super) != 0;
-            var shortcutContext = (msg.Modifiers & (KeyModifiers.Control | KeyModifiers.Super)) != 0;
-
-            var scan = NativeMethods.VkKeyScanW(ch); // char implicit-converts to ushort
-            // a shortcut has to arrive as WM_KEYDOWN carrying a real VK — KEYEVENTF_UNICODE delivers
-            // WM_CHAR, which no app treats as a shortcut. when the active layout cannot map the char
-            // (Cyrillic active, master sent a base-ASCII shortcut char) resolve the VK elsewhere.
-            if (scan == -1 && shortcutContext) scan = ScanOutsideActiveLayout(ch);
 
             // use vk injection for all chars that map to a key+optional-shift combo on the slave's layout.
             // this gives correct key-hold semantics (GetKeyState works) and proper WM_KEYDOWN for shortcuts.
@@ -338,6 +357,7 @@ internal sealed class DesktopInputDispatcher : IDisposable
             // exception: Ctrl/Super shortcuts always use VK injection (Shift is intentional there).
             var needsShift = (scan >> 8) == 1;
             var slaveUnshifted = (scan >> 8) == 0;
+            var shortcutContext = (msg.Modifiers & (KeyModifiers.Control | KeyModifiers.Super)) != 0;
             var shiftMismatch = slaveUnshifted && (msg.Modifiers & KeyModifiers.Shift) != 0 && !shortcutContext;
             if (!isAltGr && scan != -1 && !shiftMismatch && (slaveUnshifted || (needsShift && (msg.Modifiers & KeyModifiers.Shift) != 0)))
             {
@@ -585,32 +605,14 @@ internal sealed class DesktopInputDispatcher : IDisposable
         }
     }
 
-    // resolves a char to a VK+shift pair without using the active layout, for shortcut injection only.
-    // tries every layout loaded in the session, then falls back to the VK codes the standard range
-    // fixes for ASCII (VK_A..VK_Z == 'A'..'Z', VK_0..VK_9 == '0'..'9') so a slave with no Latin
-    // layout installed at all still gets working shortcuts.
-    private static unsafe short ScanOutsideActiveLayout(char ch)
+    private static unsafe string GetDesktopName(nint hDesk)
     {
-        var count = NativeMethods.GetKeyboardLayoutList(0, null);
-        if (count > 0)
-        {
-            var layouts = stackalloc nint[count];
-            count = NativeMethods.GetKeyboardLayoutList(count, layouts);
-            for (var i = 0; i < count; i++)
-            {
-                var scan = NativeMethods.VkKeyScanExW(ch, layouts[i]);
-                if (scan != -1) return scan;
-            }
-        }
-
-        // high byte 0 = no Shift required, which is what a shortcut char wants
-        var upper = char.ToUpperInvariant(ch);
-        return upper switch
-        {
-            >= 'A' and <= 'Z' => (short)upper,
-            >= '0' and <= '9' => (short)upper,
-            _ => -1,
-        };
+        if (hDesk == nint.Zero) return "";
+        const int bufSize = 128;
+        char* buf = stackalloc char[bufSize];
+        return NativeMethods.GetUserObjectInformationW(hDesk, NativeMethods.UOI_NAME, (nint)buf, bufSize * sizeof(char), out _)
+            ? new string(buf)
+            : "";
     }
 }
 

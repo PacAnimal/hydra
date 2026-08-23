@@ -53,4 +53,22 @@ public class ClientRegistryTests
             Assert.That(await registry.GetIdentity("connection"), Is.Null);
         }
     }
+
+    [Test]
+    public async Task ConcurrentDuplicateRegistrations_LeaveOneConsistentEntry()
+    {
+        var registry = new ClientRegistry(NullLogger<ClientRegistry>.Instance);
+        var network = Guid.NewGuid();
+
+        await Task.WhenAll(Enumerable.Range(0, 64).Select(i => Task.Run(async () =>
+            await registry.RegisterKickingDuplicates($"connection-{i}", network, "shared-host", $"10.0.0.{i}"))));
+
+        var clients = await registry.GetNetworkClients(network);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(clients, Has.Count.EqualTo(1));
+            Assert.That(await registry.GetConnectionId(network, "SHARED-HOST"), Is.EqualTo(clients[0].ConnectionId));
+            Assert.That((await registry.GetIdentity(clients[0].ConnectionId))?.HostName, Is.EqualTo("shared-host"));
+        }
+    }
 }

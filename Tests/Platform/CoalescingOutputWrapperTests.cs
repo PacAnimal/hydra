@@ -79,7 +79,7 @@ public class CoalescingOutputWrapperTests
     }
 
     [Test]
-    public void AbsoluteOverridesRelative()
+    public void RelativeThenAbsolute_PreservesModeOrder()
     {
         _wrapper.MoveMouseRelative(10, 5);
         _wrapper.MoveMouse(300, 400);
@@ -88,14 +88,11 @@ public class CoalescingOutputWrapperTests
         Drain();
 
         var moves = _inner.Events.OfType<MoveEvent>().ToList();
-        // relative was pending but absolute flushes it then replaces with absolute
-        Assert.That(moves.Any(m => m.Absolute), Is.True, "should have an absolute move");
-        var lastMove = moves.Last();
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(lastMove.X, Is.EqualTo(300));
-            Assert.That(lastMove.Y, Is.EqualTo(400));
-            Assert.That(lastMove.Absolute, Is.True);
+            Assert.That(moves, Has.Count.EqualTo(2));
+            Assert.That(moves[0], Is.EqualTo(new MoveEvent(10, 5, Absolute: false)));
+            Assert.That(moves[1], Is.EqualTo(new MoveEvent(300, 400, Absolute: true)));
         }
     }
 
@@ -183,6 +180,19 @@ public class CoalescingOutputWrapperTests
         _wrapper.Dispose();
         // after Dispose, drain thread has stopped; inner should have received the move
         Assert.That(_inner.Events.OfType<MoveEvent>().Any(), Is.True, "dispose should flush pending move");
+    }
+
+    [Test]
+    public void CallsAfterDispose_AreIgnoredWithoutQueueExceptions()
+    {
+        _wrapper.Dispose();
+
+        Assert.DoesNotThrow(() =>
+        {
+            _wrapper.MoveMouse(1, 2);
+            _wrapper.MoveMouseRelative(3, 4);
+            _wrapper.InjectKey(new KeyEventMessage(KeyEventType.KeyDown, KeyModifiers.None, 'a', null));
+        });
     }
 
     // deliver all enqueued events synchronously — deterministic, no sleep
