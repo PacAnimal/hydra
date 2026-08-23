@@ -622,6 +622,42 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void CFNotificationCenterRemoveObserver(nint center, nint observer, nint name, nint obj);
 
+    // -- CoreAudio: output volume and mute --
+
+    private const string CoreAudio = "/System/Library/Frameworks/CoreAudio.framework/CoreAudio";
+
+    internal const uint KAudioObjectSystemObject = 1;
+    internal const uint KAudioHardwarePropertyDefaultOutputDevice = 0x644F7574; // 'dOut'
+    internal const uint KAudioObjectPropertyScopeGlobal = 0x676C6F62; // 'glob'
+    internal const uint KAudioObjectPropertyScopeOutput = 0x6F757470; // 'outp'
+    internal const uint KAudioObjectPropertyElementMain = 0;
+    internal const uint KAudioHardwareServiceDevicePropertyVirtualMainVolume = 0x766D7663; // 'vmvc'
+    internal const uint KAudioDevicePropertyMute = 0x6D757465; // 'mute'
+
+    [LibraryImport(CoreAudio)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int AudioObjectGetPropertyData(
+        uint objectId, in AudioObjectPropertyAddress address, uint qualifierDataSize, nint qualifierData,
+        ref uint dataSize, out float data);
+
+    [LibraryImport(CoreAudio)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int AudioObjectGetPropertyData(
+        uint objectId, in AudioObjectPropertyAddress address, uint qualifierDataSize, nint qualifierData,
+        ref uint dataSize, out uint data);
+
+    [LibraryImport(CoreAudio)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int AudioObjectSetPropertyData(
+        uint objectId, in AudioObjectPropertyAddress address, uint qualifierDataSize, nint qualifierData,
+        uint dataSize, in float data);
+
+    [LibraryImport(CoreAudio)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int AudioObjectSetPropertyData(
+        uint objectId, in AudioObjectPropertyAddress address, uint qualifierDataSize, nint qualifierData,
+        uint dataSize, in uint data);
+
 }
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
@@ -635,6 +671,14 @@ internal struct CGPoint
 {
     internal double X;
     internal double Y;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct AudioObjectPropertyAddress(uint selector, uint scope, uint element)
+{
+    internal uint Selector = selector;
+    internal uint Scope = scope;
+    internal uint Element = element;
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -659,4 +703,3 @@ internal struct NXEventData
     [FieldOffset(8)]
     internal ushort KeyCode;
 }
-

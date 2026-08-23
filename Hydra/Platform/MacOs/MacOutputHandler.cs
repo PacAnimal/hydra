@@ -9,6 +9,8 @@ namespace Hydra.Platform.MacOs;
 public sealed class MacOutputHandler : IPlatformOutput, ICursor
 {
     private readonly ILogger<MacOutputHandler> _log;
+    private readonly MacAudioController _audio;
+    private readonly MacMediaRemoteController _mediaRemote;
 
     private double _mouseX;
     private double _mouseY;
@@ -38,6 +40,8 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
     public MacOutputHandler(ILogger<MacOutputHandler> log)
     {
         _log = log;
+        _audio = new MacAudioController();
+        _mediaRemote = new MacMediaRemoteController();
         // rebuild char→vk map whenever the user switches keyboard layout mid-session
         _layoutNotificationCenter = NativeMethods.CFNotificationCenterGetDistributedCenter();
         if (_layoutNotificationCenter != nint.Zero)
@@ -215,6 +219,23 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
             if (key2 == SpecialKey.MissionControl)
             {
                 if (isDown) System.Diagnostics.Process.Start("open", ["-a", "Mission Control"]);
+            }
+            else if (key2 is SpecialKey.AudioVolumeUp or SpecialKey.AudioVolumeDown)
+            {
+                if (isDown && !_audio.TryAdjustVolume(key2 == SpecialKey.AudioVolumeUp)
+                    && GetNxMediaKeyType(key2) is >= 0 and var volumeNxType)
+                    PostNsMediaKey((uint)volumeNxType, true);
+            }
+            else if (key2 == SpecialKey.AudioMute)
+            {
+                if (isDown && !_audio.TryToggleMute() && GetNxMediaKeyType(key2) is >= 0 and var muteNxType)
+                    PostNsMediaKey((uint)muteNxType, true);
+            }
+            else if (key2 is SpecialKey.AudioPlay or SpecialKey.AudioNext or SpecialKey.AudioPrev)
+            {
+                var sent = !isDown || _mediaRemote.TrySend(key2);
+                if (!sent && GetNxMediaKeyType(key2) is >= 0 and var mediaNxType)
+                    PostNsMediaKey((uint)mediaNxType, isDown);
             }
             // media keys require NX_SYSDEFINED injection via NSEvent — regular NX_KEYDOWN with the VK
             // produces wrong results (volume VKs hit wrong keys in the regular keycode space).
