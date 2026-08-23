@@ -31,7 +31,7 @@
     </PropertyGroup>
 
     <ItemGroup>
-        <PackageReference Include="Cathedral" Version="0.0.452" />
+        <PackageReference Include="Cathedral" Version="0.0.453" />
         <PackageReference Include="System.IO.Hashing" Version="10.0.11" />
         <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.11" />
         <PackageReference Include="Microsoft.AspNetCore.SignalR.Protocols.MessagePack" Version="10.0.11" />
