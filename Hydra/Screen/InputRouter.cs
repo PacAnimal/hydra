@@ -44,6 +44,11 @@ public class InputRouter(
         Channel.CreateUnbounded<Func<LocalMasterState, ValueTask>>(
             new UnboundedChannelOptions { SingleReader = true, AllowSynchronousContinuations = false });
     private Task? _consumerTask;
+    private readonly Lock _mouseBatchLock = new();
+    private MouseInputBatch? _openMouseBatch;
+    private int _postedMouseBatchCount;
+
+    internal int PostedMouseBatchCount => Volatile.Read(ref _postedMouseBatchCount);
 
     private CancellationTokenSource? _pollCts;
     private readonly IScreenSaverSync _screenSaverSync = screenSaverSync;
@@ -670,6 +675,7 @@ public class InputRouter(
     {
         var label = keyEvent.Character.HasValue ? $" '{keyEvent.Character}'" : keyEvent.Key.HasValue ? $" {keyEvent.Key}" : "";
 
+        SealMouseBatch();
         _ = _commands.Writer.TryWrite(async st =>
         {
             st.LastInputTick = _getTickCount();
@@ -851,6 +857,7 @@ public class InputRouter(
 
     private void OnMouseButton(MouseButtonEvent e)
     {
+        SealMouseBatch();
         _ = _commands.Writer.TryWrite(async st =>
         {
             st.LastInputTick = _getTickCount();
@@ -865,6 +872,7 @@ public class InputRouter(
 
     private void OnMouseScroll(MouseScrollEvent e)
     {
+        SealMouseBatch();
         _ = _commands.Writer.TryWrite(async st =>
         {
             st.LastInputTick = _getTickCount();
@@ -940,16 +948,7 @@ public class InputRouter(
 
     private void OnMouseMove(double x, double y)
     {
-        _ = _commands.Writer.TryWrite(async st =>
-        {
-            st.LastInputTick = _getTickCount();
-            await activityTracker.LocalActivity();
-            if (st.Layout is null || st.ActiveLocalScreen is null) return;
-            if (!st.Mouse.IsOnVirtualScreen)
-                await HandleRealScreenMove(st, x, y);
-            else
-                await HandleVirtualScreenMove(st, x, y);
-        });
+        PostMouseInput(MouseInputKind.Absolute, x, y);
     }
 
     private async ValueTask HandleRealScreenMove(LocalMasterState st, double x, double y)
@@ -1154,71 +1153,149 @@ public class InputRouter(
     // feeds directly into VirtualMouseState — no warp-point math needed.
     private void OnMouseDelta(double dx, double dy)
     {
-        _ = _commands.Writer.TryWrite(async st =>
-        {
-            st.LastInputTick = _getTickCount();
-            await activityTracker.LocalActivity();
-            if (!st.Mouse.IsOnVirtualScreen) return;
+        PostMouseInput(MouseInputKind.Delta, dx, dy);
+    }
 
-            var leavingScreen = st.Mouse.CurrentScreen!;
-            var prevScreen = st.Mouse.ApplyDelta(dx, dy);
-            if (prevScreen != null)
+    private void PostMouseInput(MouseInputKind kind, double x, double y)
+    {
+        lock (_mouseBatchLock)
+        {
+            if (_openMouseBatch == null || _openMouseBatch.Kind != kind)
             {
-                HandleIntraHostTransition(st);
-                if (st.ActiveLocalScreen != null) platform.WarpCursor(st.WarpX, st.WarpY);
-                return;
+                var batch = new MouseInputBatch(kind);
+                _openMouseBatch = batch;
+                if (!_commands.Writer.TryWrite(st => ProcessMouseBatch(st, batch)))
+                {
+                    _openMouseBatch = null;
+                    return;
+                }
+                Interlocked.Increment(ref _postedMouseBatchCount);
             }
 
-            var hit = st.Layout?.DetectEdgeExit(st.Mouse.CurrentScreen!, (int)st.Mouse.X, (int)st.Mouse.Y);
-            if (hit is not null)
+            _openMouseBatch.Add(x, y);
+        }
+    }
+
+    private void SealMouseBatch()
+    {
+        lock (_mouseBatchLock) _openMouseBatch = null;
+    }
+
+    private async ValueTask ProcessMouseBatch(LocalMasterState st, MouseInputBatch batch)
+    {
+        MouseInputSample sample;
+        lock (_mouseBatchLock)
+        {
+            if (ReferenceEquals(_openMouseBatch, batch)) _openMouseBatch = null;
+            sample = batch.Snapshot();
+        }
+
+        st.LastInputTick = _getTickCount();
+        await activityTracker.LocalActivity();
+
+        if (sample.Kind == MouseInputKind.Absolute)
+        {
+            if (st.Layout is null || st.ActiveLocalScreen is null) return;
+            if (!st.Mouse.IsOnVirtualScreen)
+                await HandleRealScreenMove(st, sample.X, sample.Y);
+            else
+                await HandleVirtualScreenMove(st, sample.X, sample.Y);
+            return;
+        }
+
+        await HandleMouseDelta(st, sample.X, sample.Y);
+    }
+
+    private async ValueTask HandleMouseDelta(LocalMasterState st, double dx, double dy)
+    {
+        if (!st.Mouse.IsOnVirtualScreen) return;
+
+        var leavingScreen = st.Mouse.CurrentScreen!;
+        var prevScreen = st.Mouse.ApplyDelta(dx, dy);
+        if (prevScreen != null)
+        {
+            HandleIntraHostTransition(st);
+            if (st.ActiveLocalScreen != null) platform.WarpCursor(st.WarpX, st.WarpY);
+            return;
+        }
+
+        var hit = st.Layout?.DetectEdgeExit(st.Mouse.CurrentScreen!, (int)st.Mouse.X, (int)st.Mouse.Y);
+        if (hit is not null)
+        {
+            if (!hit.Destination.IsLocal)
             {
-                if (!hit.Destination.IsLocal)
+                // Cursor lock in remote-only mode: refuse to leave this machine. Falling through
+                // rather than returning lets the normal send path run, and ApplyDelta has already
+                // clamped the position, so the cursor simply stops against the edge.
+                // Confinement is per host: moving between a slave's own monitors is unaffected,
+                // since that happens inside ApplyDelta as an intra-host transition.
+                if (profile.RemoteOnly && st.ConfinedToScreen)
                 {
-                    // Cursor lock in remote-only mode: refuse to leave this machine. Falling through
-                    // rather than returning lets the normal send path run, and ApplyDelta has already
-                    // clamped the position, so the cursor simply stops against the edge.
-                    // Confinement is per host: moving between a slave's own monitors is unaffected,
-                    // since that happens inside ApplyDelta as an intra-host transition.
-                    if (profile.RemoteOnly && st.ConfinedToScreen)
-                    {
-                        log.LogDebug("Cursor lock: blocked transition to '{Name}'", hit.Destination.Name);
-                    }
-                    else if (relay.IsConnected && !platform.AnyMouseButtonHeld())
-                    {
-                        await HandleEvdevCrossHostTransitionAsync(st, leavingScreen, hit);
-                        return;
-                    }
+                    log.LogDebug("Cursor lock: blocked transition to '{Name}'", hit.Destination.Name);
                 }
-                else if (!st.LockedToScreen && !profile.RemoteOnly && !platform.AnyMouseButtonHeld())
+                else if (relay.IsConnected && !platform.AnyMouseButtonHeld())
                 {
-                    var targetScreen = hit.Destination;
-                    FlushMouseDelta(st);
-                    var globalX = targetScreen.X + hit.EntryX;
-                    var globalY = targetScreen.Y + hit.EntryY;
-                    st.Mouse.LeaveScreen();
-                    ReturnToLocalScreen(globalX, globalY);
-                    ShowCursorOnReturn();
-                    st.ActiveLocalScreen = targetScreen;
-                    UpdateWarpPoint(st, targetScreen);
-                    log.LogInformation("Returned to local screen ← ({X}, {Y})", globalX, globalY);
-                    if (relay.IsConnected)
-                        LeaveRemoteScreen(leavingScreen.Host);
+                    await HandleEvdevCrossHostTransitionAsync(st, leavingScreen, hit);
                     return;
                 }
             }
+            else if (!st.LockedToScreen && !profile.RemoteOnly && !platform.AnyMouseButtonHeld())
+            {
+                var targetScreen = hit.Destination;
+                FlushMouseDelta(st);
+                var globalX = targetScreen.X + hit.EntryX;
+                var globalY = targetScreen.Y + hit.EntryY;
+                st.Mouse.LeaveScreen();
+                ReturnToLocalScreen(globalX, globalY);
+                ShowCursorOnReturn();
+                st.ActiveLocalScreen = targetScreen;
+                UpdateWarpPoint(st, targetScreen);
+                log.LogInformation("Returned to local screen ← ({X}, {Y})", globalX, globalY);
+                if (relay.IsConnected)
+                    LeaveRemoteScreen(leavingScreen.Host);
+                return;
+            }
+        }
 
-            var isRelative = st.RelativeMouseScreens.GetValueOrDefault(st.Mouse.CurrentScreen!.Name);
-            var scale = isRelative ? (double)(st.Mouse.RelativeMouseScale ?? st.Mouse.MouseScale) : (double)st.Mouse.MouseScale;
-            st.PendingDx += dx * scale;
-            st.PendingDy += dy * scale;
+        var isRelative = st.RelativeMouseScreens.GetValueOrDefault(st.Mouse.CurrentScreen!.Name);
+        var scale = isRelative ? (double)(st.Mouse.RelativeMouseScale ?? st.Mouse.MouseScale) : (double)st.Mouse.MouseScale;
+        st.PendingDx += dx * scale;
+        st.PendingDy += dy * scale;
 
-            var now = _getTickCount();
-            if (now - st.LastMouseSendTick >= MinMouseIntervalMs)
-                SendMousePosition(st, now);
+        var now = _getTickCount();
+        if (now - st.LastMouseSendTick >= MinMouseIntervalMs)
+            SendMousePosition(st, now);
 
-            // warp to keep cursor near center — prevents it hitting local screen edges while on virtual
-            if (st.ActiveLocalScreen != null) platform.WarpCursor(st.WarpX, st.WarpY);
-        });
+        // warp to keep cursor near center — prevents it hitting local screen edges while on virtual
+        if (st.ActiveLocalScreen != null) platform.WarpCursor(st.WarpX, st.WarpY);
+    }
+
+    private enum MouseInputKind { Absolute, Delta }
+
+    private readonly record struct MouseInputSample(MouseInputKind Kind, double X, double Y);
+
+    private sealed class MouseInputBatch(MouseInputKind kind)
+    {
+        private double _x;
+        private double _y;
+
+        public MouseInputKind Kind { get; } = kind;
+
+        public void Add(double x, double y)
+        {
+            if (Kind == MouseInputKind.Absolute)
+            {
+                _x = x;
+                _y = y;
+            }
+            else
+            {
+                _x += x;
+                _y += y;
+            }
+        }
+
+        public MouseInputSample Snapshot() => new(Kind, _x, _y);
     }
 
     // evdev cross-host transitions; called from consumer, so st access is safe

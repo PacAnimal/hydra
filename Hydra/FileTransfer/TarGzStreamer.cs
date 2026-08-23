@@ -1,13 +1,14 @@
 using System.Formats.Tar;
 using System.IO.Compression;
 using System.Security.Cryptography;
-using ByteSizeLib;
 
 namespace Hydra.FileTransfer;
 
 public static class TarGzStreamer
 {
-    public static readonly int ChunkSize = (int)ByteSize.FromMebiBytes(16).Bytes;
+    // Keep each queued/encrypted SignalR invocation small enough that bulk transfer cannot monopolize the
+    // same ordered connection used by keyboard and mouse input. FileTransferService awaits each send.
+    public static readonly int ChunkSize = 256 * 1024;
     public const int ProgressBufferSize = 256 * 1024; // shared by sender (ByteCountingStream) and receiver (ExtractFileEntryAsync)
 
     // estimates total uncompressed bytes across all files and directories
@@ -35,7 +36,7 @@ public static class TarGzStreamer
         return total;
     }
 
-    // creates a tar.gz stream from paths, calls onChunk for each 16 MiB chunk of compressed output.
+    // creates a tar.gz stream from paths, calls onChunk for each bounded chunk of compressed output.
     // onChunk receives (compressedData, sequenceNumber, uncompressedBytesWrittenSoFar).
     // returns SHA-256 hash of all compressed bytes (same data the receiver will hash).
     public static async Task<byte[]> StreamAsync(List<string> paths, Func<byte[], int, long, Task> onChunk, Action<string> onFileStart, CancellationToken cancel)

@@ -146,6 +146,23 @@ public class TarGzStreamerTests
             Assert.That(sequences[i], Is.EqualTo(i));
     }
 
+    [Test]
+    public async Task StreamAsync_ChunksStayWithinLatencyBound()
+    {
+        var file = Path.Combine(_tempRoot, "random.bin");
+        var bytes = new byte[TarGzStreamer.ChunkSize * 3];
+        Random.Shared.NextBytes(bytes);
+        await File.WriteAllBytesAsync(file, bytes);
+
+        var sizes = new List<int>();
+        await TarGzStreamer.StreamAsync([file],
+            (data, _, _) => { sizes.Add(data.Length); return Task.CompletedTask; },
+            NoFileStart, CancellationToken.None);
+
+        Assert.That(sizes, Has.Count.GreaterThan(1));
+        Assert.That(sizes, Has.All.LessThanOrEqualTo(TarGzStreamer.ChunkSize));
+    }
+
     private static byte[] Combine(List<byte[]> chunks) => [.. chunks.SelectMany(c => c)];
 
     private static async Task<List<string>> ExtractEntryNames(byte[] compressed)

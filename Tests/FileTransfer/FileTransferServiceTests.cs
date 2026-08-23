@@ -473,6 +473,27 @@ public class FileTransferServiceTests
     }
 
     [Test]
+    public async Task ExecuteStreamRequest_WaitsForEachReliableChunkBeforeProducingNext()
+    {
+        var path = Path.Combine(_tempRoot, "random.bin");
+        var bytes = new byte[TarGzStreamer.ChunkSize * 3];
+        Random.Shared.NextBytes(bytes);
+        await File.WriteAllBytesAsync(path, bytes);
+        var relay = new GatedReliableRelay();
+
+        var transfer = _service.ExecuteStreamRequest([path], "target", relay);
+        await relay.FirstReliableSend.WaitAsync(TimeSpan.FromSeconds(3));
+        await Task.Delay(50);
+
+        Assert.That(relay.ReliableSendCount, Is.EqualTo(1),
+            "the compressor must not produce another chunk until the previous relay send completes");
+
+        relay.ReleaseAll();
+        await transfer.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.That(relay.ReliableSendCount, Is.GreaterThan(1));
+    }
+
+    [Test]
     public async Task ExecuteStreamRequest_RelayThrows_ShowsError()
     {
         await _service.ExecuteStreamRequest([CreateTempFile()], "target", new ThrowingRelay());
@@ -738,4 +759,32 @@ internal sealed class ThrowingRelay : IRelaySender
     public event Func<Task>? Disconnected;
 #pragma warning restore CS0067
     public void Send(string[] targetHosts, byte[] payload) => throw new InvalidOperationException("relay unavailable");
+}
+
+internal sealed class GatedReliableRelay : IRelaySender
+{
+    private readonly SemaphoreSlim _gate = new(0);
+    private readonly TaskCompletionSource _firstReliableSend = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private int _reliableSendCount;
+
+    public bool IsConnected => true;
+    public Task FirstReliableSend => _firstReliableSend.Task;
+    public int ReliableSendCount => Volatile.Read(ref _reliableSendCount);
+
+#pragma warning disable CS0067
+    public event Func<string[], Task>? PeersChanged;
+    public event Func<string, MessageKind, ReadOnlyMemory<byte>, Task>? MessageReceived;
+    public event Func<Task>? Disconnected;
+#pragma warning restore CS0067
+
+    public void Send(string[] targetHosts, byte[] payload) { }
+
+    public async ValueTask SendReliableAsync(string[] targetHosts, byte[] payload, CancellationToken cancel = default)
+    {
+        Interlocked.Increment(ref _reliableSendCount);
+        _firstReliableSend.TrySetResult();
+        await _gate.WaitAsync(cancel);
+    }
+
+    public void ReleaseAll() => _gate.Release(100);
 }

@@ -48,6 +48,17 @@ public class CoalescingOutputWrapperTests
     }
 
     [Test]
+    public void AbsoluteMoveBurst_QueuesSingleDrainAction()
+    {
+        for (var i = 0; i < 10_000; i++)
+            _wrapper.MoveMouse(i, i);
+
+        Assert.That(_wrapper.PendingActionCount, Is.EqualTo(1));
+        Drain();
+        Assert.That(_inner.Events.OfType<MoveEvent>().Single().X, Is.EqualTo(9_999));
+    }
+
+    [Test]
     public void RelativeMoves_AreAccumulated()
     {
         _wrapper.MoveMouseRelative(10, 5);
@@ -86,6 +97,35 @@ public class CoalescingOutputWrapperTests
             Assert.That(lastMove.Y, Is.EqualTo(400));
             Assert.That(lastMove.Absolute, Is.True);
         }
+    }
+
+    [Test]
+    public void AbsoluteThenRelative_PreservesModeOrder()
+    {
+        _wrapper.MoveMouse(100, 200);
+        _wrapper.MoveMouseRelative(5, 6);
+        Drain();
+
+        var moves = _inner.Events.OfType<MoveEvent>().ToList();
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(moves, Has.Count.EqualTo(2));
+            Assert.That(moves[0], Is.EqualTo(new MoveEvent(100, 200, Absolute: true)));
+            Assert.That(moves[1], Is.EqualTo(new MoveEvent(5, 6, Absolute: false)));
+        }
+    }
+
+    [Test]
+    public void MovementAfterKey_IsNotFoldedAheadOfKey()
+    {
+        _wrapper.MoveMouse(10, 20);
+        _wrapper.InjectKey(new KeyEventMessage(KeyEventType.KeyDown, KeyModifiers.None, 'a', null));
+        _wrapper.MoveMouse(30, 40);
+        Drain();
+
+        Assert.That(_inner.Events[0], Is.EqualTo(new MoveEvent(10, 20, Absolute: true)));
+        Assert.That(_inner.Events[1], Is.InstanceOf<KeyEvent>());
+        Assert.That(_inner.Events[2], Is.EqualTo(new MoveEvent(30, 40, Absolute: true)));
     }
 
     [Test]

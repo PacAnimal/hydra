@@ -34,12 +34,12 @@ public static class TransitionTestHelper
         ],
     });
 
-    public static TestServiceBundle CreateService(Func<long>? getTickCount = null)
+    public static TestServiceBundle CreateService(Func<long>? getTickCount = null, IActivityTracker? activityTracker = null)
     {
         var platform = new FakePlatform();
         var relay = new FakeRelay();
         var screens = new FakeScreenDetector();
-        var tracker = new ActivityTracker(TestConfig, new Lazy<IRelaySender>(() => relay), new WorldState(), new NullScreenSaverSync(), NullLogger<ActivityTracker>.Instance);
+        var tracker = activityTracker ?? new ActivityTracker(TestConfig, new Lazy<IRelaySender>(() => relay), new WorldState(), new NullScreenSaverSync(), NullLogger<ActivityTracker>.Instance);
         var service = new InputRouter(platform, platform, TestConfig, relay, screens, NullLoggerFactory.Instance, NullLogger<InputRouter>.Instance, new NullScreenSaverSync(), new NullClipboardSync(),
             FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification(), tracker, getTickCount: getTickCount);
         platform.AfterFireCallback = service.FlushAsync;

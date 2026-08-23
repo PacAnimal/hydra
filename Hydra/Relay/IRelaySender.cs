@@ -4,6 +4,12 @@ public interface IRelaySender
 {
     bool IsConnected { get; }
     void Send(string[] targetHosts, byte[] payload);
+    ValueTask SendReliableAsync(string[] targetHosts, byte[] payload, CancellationToken cancel = default)
+    {
+        cancel.ThrowIfCancellationRequested();
+        Send(targetHosts, payload);
+        return ValueTask.CompletedTask;
+    }
     event Func<string[], Task>? PeersChanged;
     event Func<string, MessageKind, ReadOnlyMemory<byte>, Task>? MessageReceived;
     event Func<Task>? Disconnected;

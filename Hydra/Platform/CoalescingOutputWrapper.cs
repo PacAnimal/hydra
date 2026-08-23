@@ -12,9 +12,7 @@ public sealed class CoalescingOutputWrapper : IPlatformOutput
 {
     private readonly IPlatformOutput _inner;
     private readonly Lock _moveLock = new();
-    private bool _pendingAbsolute;
-    private int _pendingAbsX, _pendingAbsY;
-    private int _pendingRelDx, _pendingRelDy;
+    private MoveBatch? _openMoveBatch;
     private readonly BlockingCollection<Action> _actions = [];
     private readonly Thread? _drainThread;
 
@@ -34,93 +32,64 @@ public sealed class CoalescingOutputWrapper : IPlatformOutput
 
     public void MoveMouse(int x, int y)
     {
-        lock (_moveLock)
-        {
-            _pendingAbsolute = true;
-            _pendingAbsX = x;
-            _pendingAbsY = y;
-            // absolute overrides any accumulated relative
-            _pendingRelDx = 0;
-            _pendingRelDy = 0;
-        }
-        _actions.TryAdd(FlushMove);
+        PostMove(absolute: true, x, y);
     }
 
     public void MoveMouseRelative(int dx, int dy)
     {
-        Action? flushPrevAbsolute = null;
+        PostMove(absolute: false, dx, dy);
+    }
+
+    private void PostMove(bool absolute, int x, int y)
+    {
         lock (_moveLock)
         {
-            if (_pendingAbsolute)
+            if (_openMoveBatch == null || _openMoveBatch.Absolute != absolute)
             {
-                // cannot merge relative into an absolute; queue the absolute and start fresh relative
-                var (ax, ay) = (_pendingAbsX, _pendingAbsY);
-                _pendingAbsolute = false;
-                flushPrevAbsolute = () => _inner.MoveMouse(ax, ay);
+                var batch = new MoveBatch(absolute);
+                _openMoveBatch = batch;
+                _actions.TryAdd(() => FlushMove(batch));
             }
-            _pendingRelDx += dx;
-            _pendingRelDy += dy;
+
+            _openMoveBatch.Add(x, y);
         }
-        if (flushPrevAbsolute != null) _actions.TryAdd(flushPrevAbsolute);
-        _actions.TryAdd(FlushMove);
     }
 
     public void InjectKey(KeyEventMessage msg)
     {
-        FlushPendingMoveToQueue();
+        SealPendingMove();
         _actions.Add(() => _inner.InjectKey(msg));
     }
 
     public void InjectMouseButton(MouseButtonMessage msg)
     {
-        FlushPendingMoveToQueue();
+        SealPendingMove();
         _actions.Add(() => _inner.InjectMouseButton(msg));
     }
 
     public void InjectMouseScroll(MouseScrollMessage msg)
     {
-        FlushPendingMoveToQueue();
+        SealPendingMove();
         _actions.Add(() => _inner.InjectMouseScroll(msg));
     }
 
-    // drains any pending move into the action queue, in order before the non-move event.
-    // called on the producer thread so the queued flush precedes the non-move event.
-    private void FlushPendingMoveToQueue()
+    // The batch action was queued when the batch opened. Sealing here ensures movement arriving after a
+    // key/button/scroll creates a new action behind that control event instead of being folded ahead of it.
+    private void SealPendingMove()
     {
-        bool abs;
-        int x = 0, y = 0, dx = 0, dy = 0;
-        lock (_moveLock)
-        {
-            abs = _pendingAbsolute;
-            if (abs) { x = _pendingAbsX; y = _pendingAbsY; _pendingAbsolute = false; }
-            else if (_pendingRelDx != 0 || _pendingRelDy != 0)
-            {
-                dx = _pendingRelDx; dy = _pendingRelDy;
-                _pendingRelDx = 0; _pendingRelDy = 0;
-            }
-            else return; // nothing pending
-        }
-        _actions.Add(abs ? (() => _inner.MoveMouse(x, y)) : (() => _inner.MoveMouseRelative(dx, dy)));
+        lock (_moveLock) _openMoveBatch = null;
     }
 
-    // called from the drain thread only; takes the pending move and delivers it
-    private void FlushMove()
+    private void FlushMove(MoveBatch batch)
     {
-        bool abs;
-        int x = 0, y = 0, dx = 0, dy = 0;
+        (int X, int Y) move;
         lock (_moveLock)
         {
-            abs = _pendingAbsolute;
-            if (abs) { x = _pendingAbsX; y = _pendingAbsY; _pendingAbsolute = false; }
-            else if (_pendingRelDx != 0 || _pendingRelDy != 0)
-            {
-                dx = _pendingRelDx; dy = _pendingRelDy;
-                _pendingRelDx = 0; _pendingRelDy = 0;
-            }
-            else return;
+            if (ReferenceEquals(_openMoveBatch, batch)) _openMoveBatch = null;
+            move = batch.Snapshot();
         }
-        if (abs) _inner.MoveMouse(x, y);
-        else _inner.MoveMouseRelative(dx, dy);
+        if (batch.Absolute) _inner.MoveMouse(move.X, move.Y);
+        else _inner.MoveMouseRelative(move.X, move.Y);
     }
 
     private void Drain()
@@ -136,17 +105,35 @@ public sealed class CoalescingOutputWrapper : IPlatformOutput
         while (_actions.TryTake(out var action)) action();
     }
 
+    internal int PendingActionCount => _actions.Count;
+
     public bool IsAccessibilityTrusted() => _inner.IsAccessibilityTrusted();
     public Task WaitForAccessibilityTrusted(CancellationToken cancel) => _inner.WaitForAccessibilityTrusted(cancel);
 
     public void Dispose()
     {
-        FlushPendingMoveToQueue(); // deliver any final pending move
+        SealPendingMove(); // its batch action is already queued
         _actions.CompleteAdding();
         if (_drainThread != null)
             _drainThread.Join(1000);
         else
             DrainPending(); // manual mode: flush the queue inline so a pending move is still delivered
         _inner.Dispose();
+    }
+
+    private sealed class MoveBatch(bool absolute)
+    {
+        private int _x;
+        private int _y;
+
+        public bool Absolute { get; } = absolute;
+
+        public void Add(int x, int y)
+        {
+            if (Absolute) { _x = x; _y = y; }
+            else { _x += x; _y += y; }
+        }
+
+        public (int X, int Y) Snapshot() => (_x, _y);
     }
 }

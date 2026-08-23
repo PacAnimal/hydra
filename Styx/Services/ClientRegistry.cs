@@ -27,44 +27,44 @@ public record RegistrationResult(IReadOnlyList<string> Kicked, IReadOnlyList<Net
 
 public class ClientRegistry(ILogger<ClientRegistry> log) : IClientRegistry
 {
-    private readonly SemaphoreSlimValue<Dictionary<string, ClientIdentity>> _clients = new([]);
+    private readonly SemaphoreSlimValue<RegistryState> _clients = new(new RegistryState());
 
     public async ValueTask Register(string connectionId, Guid networkId, string hostName, string remoteIp)
     {
         using var clients = await _clients.WaitForDisposable();
-        clients.Value[connectionId] = new ClientIdentity(networkId, hostName, remoteIp);
+        Register(clients.Value, connectionId, new ClientIdentity(networkId, hostName, remoteIp));
         log.LogDebug("Registered client \"{HostName}\" from {RemoteIp} on network {NetworkId}", hostName, remoteIp, networkId);
     }
 
     public async ValueTask Unregister(string connectionId)
     {
         using var clients = await _clients.WaitForDisposable();
-        if (clients.Value.Remove(connectionId, out var identity))
+        if (clients.Value.ByConnection.Remove(connectionId, out var identity))
+        {
+            var key = HostKey(identity.NetworkId, identity.HostName);
+            if (clients.Value.ByNetworkHost.GetValueOrDefault(key) == connectionId)
+                clients.Value.ByNetworkHost.Remove(key);
             log.LogInformation("Unregistered client \"{HostName}\" from network {NetworkId}", identity.HostName, identity.NetworkId);
+        }
     }
 
     public async ValueTask<string?> GetConnectionId(Guid networkId, string hostName)
     {
         using var clients = await _clients.WaitForDisposable();
-        foreach (var (connectionId, identity) in clients.Value)
-        {
-            if (identity.NetworkId == networkId && identity.HostName.EqualsOrdinal(hostName))
-                return connectionId;
-        }
-        return null;
+        return clients.Value.ByNetworkHost.GetValueOrDefault(HostKey(networkId, hostName));
     }
 
     public async ValueTask<ClientIdentity?> GetIdentity(string connectionId)
     {
         using var clients = await _clients.WaitForDisposable();
-        return clients.Value.TryGetValue(connectionId, out var identity) ? identity : null;
+        return clients.Value.ByConnection.TryGetValue(connectionId, out var identity) ? identity : null;
     }
 
     // atomically kick same-network+host duplicates and register the new connection under one lock
     public async ValueTask<RegistrationResult> RegisterKickingDuplicates(string connectionId, Guid networkId, string hostName, string remoteIp)
     {
         using var clients = await _clients.WaitForDisposable();
-        var found = clients.Value
+        var found = clients.Value.ByConnection
             .Where(kv => kv.Value.NetworkId == networkId
                 && kv.Value.HostName.EqualsOrdinal(hostName)
                 && kv.Key != connectionId)
@@ -72,11 +72,11 @@ public class ClientRegistry(ILogger<ClientRegistry> log) : IClientRegistry
             .ToList();
         foreach (var id in found)
         {
-            clients.Value.Remove(id);
+            Remove(clients.Value, id);
             log.LogInformation("Kicked duplicate \"{HostName}\" from network {NetworkId}", hostName, networkId);
         }
-        var others = OnNetwork(clients.Value, networkId, connectionId);
-        clients.Value[connectionId] = new ClientIdentity(networkId, hostName, remoteIp);
+        var others = OnNetwork(clients.Value.ByConnection, networkId, connectionId);
+        Register(clients.Value, connectionId, new ClientIdentity(networkId, hostName, remoteIp));
         log.LogDebug("Registered client \"{HostName}\" from {RemoteIp} on network {NetworkId}", hostName, remoteIp, networkId);
         return new RegistrationResult(found, others);
     }
@@ -84,7 +84,7 @@ public class ClientRegistry(ILogger<ClientRegistry> log) : IClientRegistry
     public async ValueTask<IReadOnlyList<NetworkClient>> GetNetworkClients(Guid networkId, string? excludeConnectionId = null)
     {
         using var clients = await _clients.WaitForDisposable();
-        return OnNetwork(clients.Value, networkId, excludeConnectionId);
+        return OnNetwork(clients.Value.ByConnection, networkId, excludeConnectionId);
     }
 
     private static List<NetworkClient> OnNetwork(Dictionary<string, ClientIdentity> clients, Guid networkId, string? excludeConnectionId)
@@ -96,5 +96,35 @@ public class ClientRegistry(ILogger<ClientRegistry> log) : IClientRegistry
                 result.Add(new NetworkClient(connectionId, identity.HostName));
         }
         return result;
+    }
+
+    private static void Register(RegistryState state, string connectionId, ClientIdentity identity)
+    {
+        // A connection can re-authenticate in tests/third-party clients. Remove its previous reverse index
+        // before assigning the new identity so the O(1) host index never points at stale connection data.
+        Remove(state, connectionId);
+        var hostKey = HostKey(identity.NetworkId, identity.HostName);
+        if (state.ByNetworkHost.TryGetValue(hostKey, out var previousConnectionId))
+            Remove(state, previousConnectionId);
+        state.ByConnection[connectionId] = identity;
+        state.ByNetworkHost[hostKey] = connectionId;
+    }
+
+    private static void Remove(RegistryState state, string connectionId)
+    {
+        if (!state.ByConnection.Remove(connectionId, out var old)) return;
+        var key = HostKey(old.NetworkId, old.HostName);
+        if (state.ByNetworkHost.GetValueOrDefault(key) == connectionId)
+            state.ByNetworkHost.Remove(key);
+    }
+
+    private static string Normalize(string hostName) => hostName.ToLowerInvariant();
+    private static (Guid NetworkId, string HostName) HostKey(Guid networkId, string hostName) =>
+        (networkId, Normalize(hostName));
+
+    private sealed class RegistryState
+    {
+        public Dictionary<string, ClientIdentity> ByConnection { get; } = [];
+        public Dictionary<(Guid NetworkId, string HostName), string> ByNetworkHost { get; } = [];
     }
 }

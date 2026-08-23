@@ -39,6 +39,8 @@ internal sealed class DesktopInputDispatcher : IDisposable
     private readonly ILogger _log;
     private readonly BlockingCollection<InputCommand> _queue = [];
     private readonly Timer _pollTimer;
+    private readonly Timer _relativeRestoreTimer;
+    private Thread? _workerThread;
     private nint _activeDesktop;
     private string _activeDesktopName;
     private readonly Toggle _disposed = new();
@@ -48,6 +50,16 @@ internal sealed class DesktopInputDispatcher : IDisposable
     private bool _winUsedAsModifier;
     private bool _winInjected;  // Win key is currently logically down in Windows input state
     private ushort _bufferedWinVk = WinVirtualKey.LWin;  // which Win key was buffered (LWin or RWin)
+
+    // Relative SendInput is accelerated by the user's mouse settings. Flatten once for a burst and restore
+    // after a short idle period instead of issuing six SystemParametersInfo calls for every 125 Hz packet.
+    private const int RelativeSettingsIdleMs = 100;
+    private bool _relativeSettingsOverridden;
+    private int _savedMouseThreshold1;
+    private int _savedMouseThreshold2;
+    private int _savedMouseAcceleration;
+    private int _savedMouseSpeed;
+    private long _lastRelativeMoveTick;
 
     internal DesktopInputDispatcher(ILogger log)
     {
@@ -60,6 +72,8 @@ internal sealed class DesktopInputDispatcher : IDisposable
             _log.LogInformation("Desktop input dispatcher started, current desktop: {Name}", _activeDesktopName);
         StartWorker(_activeDesktop);
         _pollTimer = new Timer(_ => PollDesktop(), null, TimeSpan.FromMilliseconds(200), TimeSpan.FromMilliseconds(200));
+        _relativeRestoreTimer = new Timer(_ => _queue.TryAdd(new RestoreMouseSettingsCommand()), null,
+            Timeout.Infinite, Timeout.Infinite);
     }
 
     internal void Dispatch(InputCommand cmd)
@@ -72,7 +86,11 @@ internal sealed class DesktopInputDispatcher : IDisposable
     {
         if (!_disposed.TrySet()) return;
         _pollTimer.Dispose();
+        _relativeRestoreTimer.Dispose();
+        _queue.TryAdd(new RestoreMouseSettingsCommand(Force: true));
         _queue.CompleteAdding();
+        _workerThread?.Join(TimeSpan.FromSeconds(1));
+        _workerThread = null;
         if (_activeDesktop != nint.Zero)
         {
             NativeMethods.CloseDesktop(_activeDesktop);
@@ -82,7 +100,7 @@ internal sealed class DesktopInputDispatcher : IDisposable
 
     private void StartWorker(nint hDesk)
     {
-        var t = new Thread(() =>
+        _workerThread = new Thread(() =>
         {
             if (hDesk != nint.Zero)
             {
@@ -96,7 +114,7 @@ internal sealed class DesktopInputDispatcher : IDisposable
             IsBackground = true,
             Name = "HydraDesktopInput",
         };
-        t.Start();
+        _workerThread.Start();
     }
 
     private void PollDesktop()
@@ -148,6 +166,7 @@ internal sealed class DesktopInputDispatcher : IDisposable
                 }
             case MoveMouseCommand m:
                 {
+                    RestoreRelativeMouseSettings();
                     // drain any queued-up absolute moves — only the latest position matters.
                     // on lag recovery the relay may have buffered many moves; replaying every
                     // intermediate position causes a visible "zip around" effect.
@@ -168,6 +187,25 @@ internal sealed class DesktopInputDispatcher : IDisposable
                 {
                     if (ExecuteMoveMouseRelative(m.Dx, m.Dy) == 0)
                         _log.LogWarning("SendInput(mouse relative) failed (error {Error})", Marshal.GetLastWin32Error());
+                    break;
+                }
+            case RestoreMouseSettingsCommand r:
+                {
+                    var idleFor = Environment.TickCount64 - Interlocked.Read(ref _lastRelativeMoveTick);
+                    if (!r.Force && idleFor < RelativeSettingsIdleMs)
+                    {
+                        try
+                        {
+                            _relativeRestoreTimer.Change(
+                                TimeSpan.FromMilliseconds(RelativeSettingsIdleMs - idleFor), Timeout.InfiniteTimeSpan);
+                        }
+                        catch (ObjectDisposedException)
+                        {
+                            RestoreRelativeMouseSettings();
+                        }
+                        break;
+                    }
+                    RestoreRelativeMouseSettings();
                     break;
                 }
             case InjectKeyCommand k:
@@ -205,23 +243,9 @@ internal sealed class DesktopInputDispatcher : IDisposable
         return NativeMethods.SendInput(1, &input, sizeof(INPUT));
     }
 
-    private static unsafe uint ExecuteMoveMouseRelative(int dx, int dy)
+    private unsafe uint ExecuteMoveMouseRelative(int dx, int dy)
     {
-        // disable mouse acceleration for 1:1 movement, then restore (matches input-leap approach)
-        int* oldMouse = stackalloc int[3];
-        int oldSpeed = 0;
-        var saved = NativeMethods.SystemParametersInfo(NativeMethods.SPI_GETMOUSE, 0, (nint)oldMouse, 0)
-                 && NativeMethods.SystemParametersInfo(NativeMethods.SPI_GETMOUSESPEED, 0, (nint)(&oldSpeed), 0);
-
-        if (saved)
-        {
-            int* flat = stackalloc int[3];
-            flat[0] = 0; flat[1] = 0; flat[2] = 0;
-            int flatSpeed = 1;
-            NativeMethods.SystemParametersInfo(NativeMethods.SPI_SETMOUSE, 0, (nint)flat, 0);
-            // SPI_SETMOUSESPEED takes the value directly as pvParam (not a pointer)
-            NativeMethods.SystemParametersInfo(NativeMethods.SPI_SETMOUSESPEED, 0, flatSpeed, 0);
-        }
+        EnsureFlatRelativeMouseSettings();
 
         var input = new INPUT
         {
@@ -229,14 +253,59 @@ internal sealed class DesktopInputDispatcher : IDisposable
             mi = new MOUSEINPUT { dx = dx, dy = dy, dwFlags = NativeMethods.MOUSEEVENTF_MOVE },
         };
         var result = NativeMethods.SendInput(1, &input, sizeof(INPUT));
-
-        if (saved)
+        Interlocked.Exchange(ref _lastRelativeMoveTick, Environment.TickCount64);
+        try
         {
-            NativeMethods.SystemParametersInfo(NativeMethods.SPI_SETMOUSE, 0, (nint)oldMouse, 0);
-            NativeMethods.SystemParametersInfo(NativeMethods.SPI_SETMOUSESPEED, 0, oldSpeed, 0);
+            _relativeRestoreTimer.Change(TimeSpan.FromMilliseconds(RelativeSettingsIdleMs), Timeout.InfiniteTimeSpan);
+        }
+        catch (ObjectDisposedException)
+        {
+            // Shutdown raced the worker. Do not leave the user's global mouse settings flattened.
+            RestoreRelativeMouseSettings();
+        }
+        return result;
+    }
+
+    private unsafe void EnsureFlatRelativeMouseSettings()
+    {
+        if (_relativeSettingsOverridden) return;
+
+        int* mouse = stackalloc int[3];
+        var speed = 0;
+        if (!NativeMethods.SystemParametersInfo(NativeMethods.SPI_GETMOUSE, 0, (nint)mouse, 0)
+            || !NativeMethods.SystemParametersInfo(NativeMethods.SPI_GETMOUSESPEED, 0, (nint)(&speed), 0))
+            return;
+
+        _savedMouseThreshold1 = mouse[0];
+        _savedMouseThreshold2 = mouse[1];
+        _savedMouseAcceleration = mouse[2];
+        _savedMouseSpeed = speed;
+
+        int* flat = stackalloc int[3];
+        flat[0] = 0; flat[1] = 0; flat[2] = 0;
+        var flatSpeed = 1;
+        if (!NativeMethods.SystemParametersInfo(NativeMethods.SPI_SETMOUSE, 0, (nint)flat, 0)
+            || !NativeMethods.SystemParametersInfo(NativeMethods.SPI_SETMOUSESPEED, 0, flatSpeed, 0))
+        {
+            // Best effort: a partial change is still restored from the snapshot immediately.
+            RestoreRelativeMouseSettings(force: true);
+            return;
         }
 
-        return result;
+        _relativeSettingsOverridden = true;
+    }
+
+    private unsafe void RestoreRelativeMouseSettings(bool force = false)
+    {
+        if (!_relativeSettingsOverridden && !force) return;
+
+        int* mouse = stackalloc int[3];
+        mouse[0] = _savedMouseThreshold1;
+        mouse[1] = _savedMouseThreshold2;
+        mouse[2] = _savedMouseAcceleration;
+        NativeMethods.SystemParametersInfo(NativeMethods.SPI_SETMOUSE, 0, (nint)mouse, 0);
+        NativeMethods.SystemParametersInfo(NativeMethods.SPI_SETMOUSESPEED, 0, _savedMouseSpeed, 0);
+        _relativeSettingsOverridden = false;
     }
 
     private unsafe uint ExecuteInjectKey(KeyEventMessage msg)
@@ -553,4 +622,5 @@ record MoveMouseRelativeCommand(int Dx, int Dy) : InputCommand;
 record InjectKeyCommand(KeyEventMessage Msg) : InputCommand;
 record InjectMouseButtonCommand(MouseButtonMessage Msg) : InputCommand;
 record InjectMouseScrollCommand(MouseScrollMessage Msg) : InputCommand;
+record RestoreMouseSettingsCommand(bool Force = false) : InputCommand;
 record SwitchDesktopCommand(nint NewDesktop, nint OldDesktop, string Name) : InputCommand;

@@ -30,11 +30,13 @@ public sealed class XorgInputHandler : IPlatformInput
     private readonly XGrabSession _keyboard;
     private readonly XGrabSession _pointer;
 
-    // XI2 event mask for raw key press (13), raw button press/release (15, 16) and raw motion (17).
+    // XI2 event mask for device motion (6), raw key press (13), raw button press/release (15, 16)
+    // and raw motion (17). Device motion supplies root coordinates locally without XQueryPointer;
+    // raw motion supplies accelerated deltas while the pointer is grabbed on a virtual screen.
     // XISetMask(mask, n) = mask[n>>3] |= 1 << (n&7)
     private static readonly byte[] Xi2Mask =
     [
-        0,
+        1 << (NativeMethods.XI_Motion & 7),
         (1 << (NativeMethods.XI_RawKeyPress & 7)) | (1 << (NativeMethods.XI_RawButtonPress & 7)),  // byte 1: bits 5+7 (events 13, 15)
         (1 << (NativeMethods.XI_RawButtonRelease & 7)) | (1 << (NativeMethods.XI_RawMotion & 7)),  // byte 2: bits 0+1 (events 16, 17)
         0,
@@ -279,7 +281,12 @@ public sealed class XorgInputHandler : IPlatformInput
                 return;
             }
 
-            if (ev.XCookieEvType == NativeMethods.XI_RawMotion)
+            if (ev.XCookieEvType == NativeMethods.XI_Motion && !_isOnVirtualScreen)
+            {
+                var motion = Marshal.PtrToStructure<XIDeviceEvent>(ev.XCookieData);
+                _onMouseMove?.Invoke(motion.RootX, motion.RootY);
+            }
+            else if (ev.XCookieEvType == NativeMethods.XI_RawMotion)
             {
                 if (_isOnVirtualScreen && _onMouseDelta != null)
                 {
@@ -289,12 +296,7 @@ public sealed class XorgInputHandler : IPlatformInput
                         _log.LogTrace("XI2 motion: accel=({Ax:F2}, {Ay:F2}) raw=({Rx:F2}, {Ry:F2})", adx, ady, rdx, rdy);
                     if (adx != 0 || ady != 0) _onMouseDelta(adx, ady);
                 }
-                else
-                {
-                    _ = NativeMethods.XQueryPointer(_display, _rootWindow,
-                        out _, out _, out var rootX, out var rootY, out _, out _, out _);
-                    _onMouseMove?.Invoke(rootX, rootY);
-                }
+                // Local movement is handled by XI_Motion above. Ignore its paired XI_RawMotion event.
             }
             else if (ev.XCookieEvType is NativeMethods.XI_RawButtonPress or NativeMethods.XI_RawButtonRelease)
             {

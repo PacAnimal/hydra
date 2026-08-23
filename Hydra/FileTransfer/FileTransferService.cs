@@ -643,11 +643,13 @@ public sealed class FileTransferService : IDisposable
             var sha = await TarGzStreamer.StreamAsync(paths, async (data, seq, uncompressedBytes) =>
             {
                 cancel.ThrowIfCancellationRequested();
-                relay.Send([targetHost], MessageSerializer.Encode(MessageKind.FileTransferChunk, new FileTransferChunkMessage(seq, data)));
+                await relay.SendReliableAsync(
+                    [targetHost],
+                    MessageSerializer.Encode(MessageKind.FileTransferChunk, new FileTransferChunkMessage(seq, data)),
+                    cancel);
                 totalSent += data.Length;
                 _dialog.UpdateProgress(uncompressedBytes, CalcSpeed(startTick, totalSent));
                 _log.LogDebug("Sent chunk #{Seq}: {Bytes} bytes", seq, data.Length);
-                await ValueTask.CompletedTask;
             }, _dialog.SetCurrentFile, cancel);
 
             relay.Send([targetHost], MessageSerializer.Encode(MessageKind.FileTransferDone, new FileTransferDoneMessage(totalSent, sha)));

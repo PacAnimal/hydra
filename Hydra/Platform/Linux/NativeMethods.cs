@@ -36,6 +36,7 @@ internal static partial class NativeMethods
 
     // -- XI2 event type constants --
 
+    internal const int XI_Motion = 6;
     internal const int XI_RawKeyPress = 13;
     internal const int XI_RawButtonPress = 15;
     internal const int XI_RawButtonRelease = 16;
@@ -598,4 +599,17 @@ internal struct XIRawEvent
     [FieldOffset(72)] internal nint ValuatorsMask;    // unsigned char*
     [FieldOffset(80)] internal nint ValuatorValues;   // double* — post-acceleration deltas
     [FieldOffset(88)] internal nint RawValues;        // double* — pre-acceleration deltas
+}
+
+// XIDeviceEvent prefix on 64-bit LP64. XI_Motion carries root coordinates directly, avoiding an
+// XQueryPointer request/reply for every local mouse event. Only fields through root_y are consumed.
+[StructLayout(LayoutKind.Explicit)]
+internal struct XIDeviceEvent
+{
+    [FieldOffset(56)] internal int Detail;
+    [FieldOffset(64)] internal nint Root;
+    [FieldOffset(72)] internal nint Event;
+    [FieldOffset(80)] internal nint Child;
+    [FieldOffset(88)] internal double RootX;
+    [FieldOffset(96)] internal double RootY;
 }

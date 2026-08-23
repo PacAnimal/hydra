@@ -20,19 +20,14 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     private IStyxServer? _server;
     private RelayEncryption? _encryption;
 
-    // outbound send queue — written synchronously, drained by the Connect loop.
-    // bounded as a backstop against unbounded growth if the link half-stalls (the drain loop can block on
-    // a single Send until the connection is declared dead, at which point the whole queue is discarded).
-    // mouse-move coalescing is read-side, so raw moves can accumulate here under a flood; DropOldest sheds
-    // the stalest frames — correct, since a dropped old mouse position is benign and freshest input wins.
-    private const int SendQueueCapacity = 8192;
-    private readonly Channel<(string[] Targets, byte[] Payload)> _sendQueue =
-        Channel.CreateBounded<(string[], byte[])>(
-            new BoundedChannelOptions(SendQueueCapacity)
-            {
-                SingleReader = true,
-                FullMode = BoundedChannelFullMode.DropOldest,
-            });
+    // One ordered outbound queue preserves key/control ordering. Bulk producers use SendReliableAsync and
+    // wait until their item has actually left the queue, so a file compressor cannot retain thousands of
+    // large payloads. Mouse traffic is capped by InputRouter and coalesced again by the read side below.
+    // The queue is deliberately unbounded: after bulk traffic gained backpressure, the remaining producers
+    // are small control/input messages and dropping an arbitrary oldest item could lose KeyUp/LeaveScreen.
+    private readonly Channel<OutboundMessage> _sendQueue =
+        Channel.CreateUnbounded<OutboundMessage>(
+            new UnboundedChannelOptions { SingleReader = true, AllowSynchronousContinuations = false });
 
     protected virtual TimeSpan ReconnectDelay => TimeSpan.FromSeconds(Constants.ReconnectDelaySeconds);
 
@@ -53,7 +48,21 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     {
         OnSent(targetHosts, payload);
         if (_server == null || _encryption == null) return;
-        _sendQueue.Writer.TryWrite((targetHosts, payload));
+        _sendQueue.Writer.TryWrite(new OutboundMessage(targetHosts, payload, null, CancellationToken.None));
+    }
+
+    public async ValueTask SendReliableAsync(string[] targetHosts, byte[] payload, CancellationToken cancel = default)
+    {
+        OnSent(targetHosts, payload);
+        if (_server == null || _encryption == null)
+            throw new InvalidOperationException("Relay is not connected");
+
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!_sendQueue.Writer.TryWrite(new OutboundMessage(targetHosts, payload, completion, cancel)))
+            throw new InvalidOperationException("Relay send queue is closed");
+
+        using var registration = cancel.Register(() => completion.TrySetCanceled(cancel));
+        await completion.Task.ConfigureAwait(false);
     }
 
     protected virtual void OnSent(string[] targetHosts, byte[] payload) { }
@@ -180,7 +189,8 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
                 var wasConnected = _server != null;
                 _server = null;
                 _encryption = null;
-                while (_sendQueue.Reader.TryRead(out _)) { } // discard stale outbound messages
+                while (_sendQueue.Reader.TryRead(out var stale))
+                    stale.Completion?.TrySetException(new IOException("Relay connection lost before message was sent"));
                 if (wasConnected)
                 {
                     // guard the disconnect callbacks: a throw here would escape Execute, and because the
@@ -257,27 +267,36 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         await OnAuthenticated();
 
         // drain outbound queue until the connection drops
-        (string[] Targets, byte[] Payload)? lookahead = null;
+        OutboundMessage? lookahead = null;
         while (true)
         {
-            (string[] Targets, byte[] Payload) item;
-            if (lookahead.HasValue)
+            OutboundMessage item;
+            if (lookahead != null)
             {
-                item = lookahead.Value;
+                item = lookahead;
                 lookahead = null;
             }
             else
             {
                 if (!await _sendQueue.Reader.WaitToReadAsync(disco.Token)) break;
-                if (!_sendQueue.Reader.TryRead(out item)) continue;
+                if (!_sendQueue.Reader.TryRead(out var read)) continue;
+                item = read;
+            }
+
+            if (item.Cancel.IsCancellationRequested || item.Completion?.Task.IsCanceled == true)
+            {
+                item.Completion?.TrySetCanceled(item.Cancel);
+                continue;
             }
 
             // coalesce mouse moves — skip intermediate positions, only send the latest
-            if (item.Payload.Length > 0 && item.Payload[0] == (byte)MessageKind.MouseMove)
+            if (item.Completion == null && item.Payload.Length > 0 && item.Payload[0] == (byte)MessageKind.MouseMove)
             {
                 while (_sendQueue.Reader.TryRead(out var next))
                 {
-                    if (next.Payload.Length > 0 && next.Payload[0] == (byte)MessageKind.MouseMove && next.Targets.SequenceEqual(item.Targets))
+                    if (next.Completion == null && next.Payload.Length > 0
+                        && next.Payload[0] == (byte)MessageKind.MouseMove
+                        && next.Targets.SequenceEqual(item.Targets))
                         item = next;
                     else
                     {
@@ -291,16 +310,29 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
             {
                 var encrypted = await _encryption.Encrypt(item.Payload, cancel);
                 await _server.Send(item.Targets, encrypted);
+                item.Completion?.TrySetResult();
             }
-            catch (OperationCanceledException) { break; }
+            catch (OperationCanceledException ex)
+            {
+                item.Completion?.TrySetCanceled(ex.CancellationToken);
+                break;
+            }
             catch (HttpRequestException ex)
             {
+                item.Completion?.TrySetException(ex);
                 log.LogWarning("Failed to send relay message to [{TargetHosts}]: {Message}", string.Join(", ", item.Targets), ex.InnerException?.Message ?? ex.Message);
             }
             catch (Exception ex)
             {
+                item.Completion?.TrySetException(ex);
                 log.LogWarning(ex, "Failed to send relay message to [{TargetHosts}]", string.Join(", ", item.Targets));
             }
         }
     }
+
+    private sealed record OutboundMessage(
+        string[] Targets,
+        byte[] Payload,
+        TaskCompletionSource? Completion,
+        CancellationToken Cancel);
 }

@@ -55,6 +55,32 @@ public class MouseThrottleTests
     }
 
     [Test]
+    public async Task RawMouseBurst_IsBoundedToInFlightAndPendingActorCommands()
+    {
+        var tracker = new BlockingActivityTracker();
+        var (platform, relay, service) = TransitionTestHelper.CreateService(activityTracker: tracker);
+        await service.StartAsync(CancellationToken.None);
+        await BringRemoteOnline(relay);
+        platform.FireMouseMove(2559, 720);
+        Assert.That(platform.IsOnVirtualScreen, Is.True);
+
+        platform.AfterFireCallback = null;
+        tracker.BlockNext();
+        var before = service.PostedMouseBatchCount;
+        platform.FireMouseMove(platform.WarpX + 2, platform.WarpY + 1);
+        await tracker.WaitUntilBlocked();
+        for (var i = 0; i < 10_000; i++)
+            platform.FireMouseMove(platform.WarpX + 2, platform.WarpY + 1);
+
+        Assert.That(service.PostedMouseBatchCount - before, Is.EqualTo(2),
+            "one in-flight batch plus one pending batch should absorb the entire burst");
+        tracker.Release();
+        await service.FlushAsync();
+        await service.StopAsync(CancellationToken.None);
+        await platform.DisposeAsync();
+    }
+
+    [Test]
     public void RelativeMouseToggle_Hotkey_SendsDeltaMessages()
     {
         // enter virtual screen
@@ -168,4 +194,33 @@ public class MouseThrottleTests
 
     private static Task BringRemoteOnline(FakeRelay relay) =>
         TransitionTestHelper.BringRemoteOnline(relay);
+
+    private sealed class BlockingActivityTracker : IActivityTracker
+    {
+        private TaskCompletionSource? _blocked;
+        private TaskCompletionSource? _release;
+
+        public long MsSinceLocalActivity => 0;
+
+        public void BlockNext()
+        {
+            _blocked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+
+        public Task WaitUntilBlocked() => _blocked!.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        public void Release() => _release!.TrySetResult();
+
+        public async ValueTask LocalActivity()
+        {
+            if (_blocked == null || _release == null) return;
+            _blocked.TrySetResult();
+            await _release.Task;
+            _blocked = null;
+            _release = null;
+        }
+
+        public ValueTask RemoteActivity(string sourcePeer) => ValueTask.CompletedTask;
+        public ValueTask IncomingPing() => ValueTask.CompletedTask;
+    }
 }
