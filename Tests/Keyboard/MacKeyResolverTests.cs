@@ -168,4 +168,25 @@ public class MacKeyResolverTests
         }
         finally { NativeMethods.CFRelease(ev); }
     }
+
+    [Test]
+    public void OptionSpace_PreservesPhysicalSpaceAndOptionModifier()
+    {
+        var resolver = new MacKeyResolver();
+        var ev = KeyDownEvent(MacVirtualKey.Space, NativeMethods.KCGEventFlagMaskAlternate);
+        try
+        {
+            var events = resolver.Resolve(NativeMethods.KCGEventKeyDown, ev);
+
+            Assert.That(events, Is.Not.Null);
+            var keyEvent = events!.Single()!;
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(keyEvent.Character, Is.EqualTo(' '));
+                Assert.That(keyEvent.Modifiers.HasFlag(KeyModifiers.Alt), Is.True);
+                Assert.That(keyEvent.Modifiers.HasFlag(KeyModifiers.AltGr), Is.False);
+            }
+        }
+        finally { NativeMethods.CFRelease(ev); }
+    }
 }

@@ -233,6 +233,13 @@ internal sealed class MacKeyResolver
 
             // detect AltGr: option was held and produced a printable character (not a keyboard shortcut)
             bool optionHeld = (cgFlags & NativeMethods.KCGEventFlagMaskAlternate) != 0;
+            // Option+Space is commonly used as an application shortcut on macOS. UCKeyTranslate renders
+            // it as a non-breaking space, which would otherwise be treated as AltGr text and injected as
+            // Unicode on the slave. Preserve the physical Space key and Option modifier so shortcut
+            // recorders and handlers receive the real chord; normal text entry still produces the
+            // destination layout's Option+Space character.
+            if (optionHeld && !isCommand && (ulong)vkCode == MacVirtualKey.Space)
+                return KeyEvent.Char(KeyEventType.KeyDown, ' ', mods);
             if (DetectAltGr(classified.Ch, isCommand, optionHeld))
             {
                 mods |= KeyModifiers.AltGr;
