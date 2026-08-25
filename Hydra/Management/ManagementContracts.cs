@@ -41,6 +41,7 @@ public sealed record RelayConnectionStatus(
     long BytesReceived);
 
 public sealed record NetworkAdapterStatus(string Name, string Type, List<string> Addresses, bool HasGateway);
+public sealed record EmbeddedRelayPeerStatus(string HostName, string RemoteAddress, string LocalAddress, string InterfaceName, string InterfaceType);
 
 public sealed record HydraStatusSnapshot(
     DateTimeOffset CapturedAt,
@@ -56,6 +57,7 @@ public sealed record HydraStatusSnapshot(
     bool RelayConnected,
     RelayConnectionStatus? RelayConnection,
     List<NetworkAdapterStatus> ActiveNetworkAdapters,
+    List<EmbeddedRelayPeerStatus> EmbeddedRelayPeers,
     bool Dormant,
     List<ScreenStatus> LocalScreens,
     List<PeerStatus> Peers,

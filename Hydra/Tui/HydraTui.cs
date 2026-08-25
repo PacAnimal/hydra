@@ -32,6 +32,7 @@ internal static class HydraTui
 
         using IApplication app = Application.Create();
         app.Init();
+        Button.DefaultShadow = ShadowStyles.None;
         using var window = new Window { Title = "Hydra Control Center", BorderStyle = Terminal.Gui.Drawing.LineStyle.Rounded };
         using var controller = new TuiController(app, window, configPath);
         controller.Build();
@@ -63,6 +64,12 @@ internal static class HydraTui
         private readonly Editor _config = new() { WordWrap = false, ViewportSettings = ViewportSettingsFlags.HasVerticalScrollBar | ViewportSettingsFlags.HasHorizontalScrollBar };
         private readonly FrameView _configForm = new() { BorderStyle = Terminal.Gui.Drawing.LineStyle.None };
         private readonly FrameView _configText = new() { BorderStyle = Terminal.Gui.Drawing.LineStyle.None, Visible = false };
+        private readonly Label _configHelp = new() { Text = "Move focus or hover over an option to see what it does.", X = 1, Y = 0, Width = Dim.Fill(1), Height = 2 };
+        private readonly Button _formModeButton = new() { Text = "● _Form" };
+        private readonly Button _textModeButton = new() { Text = "○ _Text" };
+        private readonly Button _previousProfile = new() { Text = "_Previous", Enabled = false };
+        private readonly Button _nextProfile = new() { Text = "_Next", Enabled = false };
+        private readonly Button _revealSecrets = new() { Text = "_Reveal secrets", Visible = false };
         private readonly Editor _diagnostics = ReadOnlyEditor();
         private readonly Label _connection = new() { Text = "Connecting…", X = 1, Y = 0, Width = Dim.Fill() };
         private readonly Button _reconnect = new() { Text = "_Reconnect relay", Enabled = false };
@@ -81,6 +88,9 @@ internal static class HydraTui
         private bool _guidedMode = true;
         private GuidedConfigDocument? _guidedConfig;
         private int _guidedProfileIndex;
+        private readonly List<(Button Button, FrameView Content, string Name)> _tabs = [];
+        private readonly List<(Button Button, FrameView Content, string Name)> _formSections = [];
+        private int _activeTab;
 
         private readonly TextField _rootName = new();
         private readonly TextField _rootLogLevel = new();
@@ -113,30 +123,63 @@ internal static class HydraTui
         internal void Build()
         {
             window.Add(_connection);
-            var tabs = new Tabs { X = 0, Y = 1, Width = Dim.Fill(), Height = Dim.Fill(2) };
-            tabs.Add(
-                BuildOverviewTab(),
-                BuildTextTab("_Peers & Screens", _peers),
-                BuildTextTab("_Logs", _logs),
-                BuildConfigTab(),
-                BuildTextTab("_Diagnostics", _diagnostics),
-                BuildHelpTab());
-            window.Add(tabs);
+            var navigation = new View { X = 1, Y = 1, Width = Dim.Fill(), Height = 1 };
+            var contents = new[]
+            {
+                ("Overview", BuildOverviewTab()),
+                ("Peers & Screens", BuildTextTab("Peers & Screens", _peers)),
+                ("Logs", BuildTextTab("Logs", _logs)),
+                ("Configuration", BuildConfigTab()),
+                ("Diagnostics", BuildTextTab("Diagnostics", _diagnostics)),
+                ("Help", BuildHelpTab())
+            };
+            Button? previous = null;
+            for (var index = 0; index < contents.Length; index++)
+            {
+                var captured = index;
+                var button = new Button { Text = $"○ _{contents[index].Item1}", X = previous == null ? 0 : Pos.Right(previous) + 1, Y = 0 };
+                button.Accepting += (_, e) => { e.Handled = true; SelectTab(captured); };
+                navigation.Add(button);
+                var content = contents[index].Item2;
+                content.X = 0;
+                content.Y = 2;
+                content.Width = Dim.Fill();
+                content.Height = Dim.Fill(3);
+                content.Visible = false;
+                window.Add(content);
+                _tabs.Add((button, content, contents[index].Item1));
+                previous = button;
+            }
+            window.Add(navigation);
+            SelectTab(0);
 
             var status = new StatusBar([
                 new Shortcut(Application.GetDefaultKey(Command.Quit), "Quit", () => window.RequestStop()),
                 new Shortcut(Key.F5, "Refresh", () => _ = RefreshAsync()),
-                new Shortcut(Key.F1, "Help", () => tabs.Value = tabs.TabCollection.Last())
+                new Shortcut(Key.F1, "Help", () => SelectTab(_tabs.Count - 1))
             ]);
             window.Add(status);
 
-            app.AddTimeout(TimeSpan.FromSeconds(1), () =>
+            app.AddTimeout(TimeSpan.FromSeconds(2), () =>
             {
                 _ = RefreshAsync();
                 return true;
             });
             _ = LoadConfigAsync();
             _ = RefreshAsync();
+        }
+
+        private void SelectTab(int index)
+        {
+            if (index < 0 || index >= _tabs.Count) return;
+            _activeTab = index;
+            for (var i = 0; i < _tabs.Count; i++)
+            {
+                var selected = i == index;
+                _tabs[i].Content.Visible = selected;
+                _tabs[i].Button.Text = $"{(selected ? "●" : "○")} _{_tabs[i].Name}";
+                _tabs[i].Button.Enabled = !selected;
+            }
         }
 
         private FrameView BuildOverviewTab()
@@ -160,104 +203,165 @@ internal static class HydraTui
 
         private FrameView BuildConfigTab()
         {
-            var tab = new FrameView { Title = "_Configuration", Width = Dim.Fill(), Height = Dim.Fill() };
-            var formMode = new Button { Text = "_Form", X = 1, Y = 0 };
-            var textMode = new Button { Text = "_Text", X = Pos.Right(formMode) + 2, Y = 0 };
-            var hint = new Label { Text = "Form preserves advanced fields; Text exposes the complete JSON", X = Pos.Right(textMode) + 3, Y = 0, Width = Dim.Fill() };
-            formMode.Accepting += (_, e) => { e.Handled = true; SwitchConfigMode(guided: true); };
-            textMode.Accepting += (_, e) => { e.Handled = true; SwitchConfigMode(guided: false); };
+            var tab = new FrameView { Title = "Configuration", Width = Dim.Fill(), Height = Dim.Fill() };
+            _formModeButton.X = 1; _formModeButton.Y = 0;
+            _textModeButton.X = Pos.Right(_formModeButton) + 1; _textModeButton.Y = 0;
+            var hint = new Label { Text = "Selected mode is marked ●", X = Pos.Right(_textModeButton) + 2, Y = 0, Width = Dim.Fill() };
+            _formModeButton.Accepting += (_, e) => { e.Handled = true; SwitchConfigMode(guided: true); };
+            _textModeButton.Accepting += (_, e) => { e.Handled = true; SwitchConfigMode(guided: false); };
 
             _configForm.X = _configText.X = 0;
             _configForm.Y = _configText.Y = 2;
             _configForm.Width = _configText.Width = Dim.Fill();
-            _configForm.Height = _configText.Height = Dim.Fill();
+            _configForm.Height = _configText.Height = Dim.Fill(7);
             BuildGuidedConfigForm();
 
             _config.X = 0;
             _config.Y = 0;
             _config.Width = Dim.Fill();
-            _config.Height = Dim.Fill(3);
+            _config.Height = Dim.Fill();
+
+            var helpPanel = new FrameView { Title = "Option help", X = 0, Y = Pos.AnchorEnd(6), Width = Dim.Fill(), Height = 3 };
+            helpPanel.Add(_configHelp);
             var validate = new Button { Text = "_Validate", X = 1, Y = Pos.AnchorEnd(2) };
             validate.Accepting += (_, e) => { e.Handled = true; ValidateConfig(); };
             var reload = new Button { Text = "Re_load", X = Pos.Right(validate) + 2, Y = Pos.Top(validate) };
             reload.Accepting += (_, e) => { e.Handled = true; _ = LoadConfigAsync(); };
-            var reveal = new Button { Text = "_Reveal secrets", X = Pos.Right(reload) + 2, Y = Pos.Top(validate) };
-            reveal.Accepting += (_, e) =>
+            _revealSecrets.X = Pos.Right(reload) + 2; _revealSecrets.Y = Pos.Top(validate);
+            _revealSecrets.Accepting += (_, e) =>
             {
                 e.Handled = true;
-                ToggleSecrets(reveal);
+                ToggleSecrets(_revealSecrets);
             };
-            var save = new Button { Text = "_Save", X = Pos.Right(reveal) + 2, Y = Pos.Top(validate) };
+            var save = new Button { Text = "_Save", X = Pos.Right(_revealSecrets) + 2, Y = Pos.Top(validate) };
             save.Accepting += (_, e) => { e.Handled = true; _ = SaveConfigAsync(restart: false); };
             var apply = new Button { Text = "Save && _restart", X = Pos.Right(save) + 2, Y = Pos.Top(validate) };
             apply.Accepting += (_, e) => { e.Handled = true; _ = SaveConfigAsync(restart: true); };
-            _configText.Add(_config, validate, reload, reveal, save, apply);
-            tab.Add(formMode, textMode, hint, _configForm, _configText);
+            _configText.Add(_config);
+            tab.Add(_formModeButton, _textModeButton, hint, _configForm, _configText, helpPanel,
+                validate, reload, _revealSecrets, save, apply);
+
+            BindConfigHelp(_formModeButton, "Form mode", "Edit common Hydra settings in labelled fields. Advanced topology remains unchanged.");
+            BindConfigHelp(_textModeButton, "Text mode", "Edit the complete hydra.conf JSON, including hosts, neighbours and screen definitions.");
+            BindConfigHelp(_config, "Raw configuration", "Complete hydra.conf JSON. Secrets stay masked until Reveal secrets is selected.");
+            BindConfigHelp(validate, "Validate", "Check the current form or JSON with Hydra's canonical parser without writing the file.");
+            BindConfigHelp(reload, "Reload", "Discard unsaved edits and reload hydra.conf from disk or the running daemon.");
+            BindConfigHelp(_revealSecrets, "Reveal secrets", "Temporarily show relay credentials in Text mode. Avoid this in recorded or shared terminals.");
+            BindConfigHelp(save, "Save", "Validate and atomically replace hydra.conf. The running Hydra process is not restarted.");
+            BindConfigHelp(apply, "Save and restart", "Validate, atomically save, then restart Hydra so the new configuration becomes active.");
+            ShowConfigMode(guided: true);
             return tab;
         }
 
         private void BuildGuidedConfigForm()
         {
-            _configForm.Add(new Label { Text = "GLOBAL", X = 1, Y = 0 });
-            AddField(_configForm, "Machine name", _rootName, 1, 1, 26);
-            AddField(_configForm, "Log level", _rootLogLevel, 1, 2, 26);
-            AddField(_configForm, "Force profile", _rootProfileOverride, 1, 3, 26);
-            _rootAutoUpdate.X = 17; _rootAutoUpdate.Y = 4;
-            _rootDebugShield.X = 17; _rootDebugShield.Y = 5;
-            _rootDebugMouse.X = 17; _rootDebugMouse.Y = 6;
+            var global = new FrameView { Title = "Global", X = 0, Y = 2, Width = Dim.Fill(), Height = Dim.Fill() };
+            AddField(global, "Machine name", _rootName, 0, 26, "Name advertised to peers; defaults to the hostname when empty.");
+            AddField(global, "Log level", _rootLogLevel, 2, 26, "Minimum log detail: trce, dbug, info, warn, fail, or crit.");
+            AddField(global, "Force profile", _rootProfileOverride, 4, 26, "Always select this profile name and ignore its activation conditions. Leave empty for automatic selection.");
+            PlaceCheckBox(global, _rootAutoUpdate, 6, "Allow Hydra's built-in updater to check for and apply releases.");
+            PlaceCheckBox(global, _rootDebugShield, 8, "Enable verbose macOS shield diagnostics. Normally leave disabled.");
+            PlaceCheckBox(global, _rootDebugMouse, 10, "Enable verbose mouse routing diagnostics. Normally leave disabled.");
 
-            var previous = new Button { Text = "_Previous", X = 1, Y = 8 };
-            var next = new Button { Text = "_Next", X = Pos.Right(previous) + 2, Y = 8 };
-            _profilePosition.X = Pos.Right(next) + 2; _profilePosition.Y = 8; _profilePosition.Width = 28;
-            previous.Accepting += (_, e) => { e.Handled = true; ChangeGuidedProfile(-1); };
-            next.Accepting += (_, e) => { e.Handled = true; ChangeGuidedProfile(1); };
-            AddField(_configForm, "Profile name", _profileName, 1, 9, 26);
-            AddField(_configForm, "Mode", _profileMode, 1, 10, 26);
-            AddField(_configForm, "SSID condition", _conditionSsid, 1, 11, 26);
-            AddField(_configForm, "Screen count", _conditionScreens, 1, 12, 26);
-            AddField(_configForm, "Power (any/yes/no)", _conditionPower, 1, 13, 26);
-            AddField(_configForm, "Mouse scale", _mouseScale, 1, 14, 26);
-            AddField(_configForm, "Relative scale", _relativeMouseScale, 1, 15, 26);
-            AddField(_configForm, "Dead corners px", _deadCorners, 1, 16, 26);
+            var profile = new FrameView { Title = "Profile", X = 0, Y = 2, Width = Dim.Fill(), Height = Dim.Fill(), Visible = false };
+            _profilePosition.X = 1; _profilePosition.Y = 0; _profilePosition.Width = 66;
+            _previousProfile.X = 1; _previousProfile.Y = 2;
+            _nextProfile.X = Pos.Right(_previousProfile) + 2; _nextProfile.Y = 2;
+            _previousProfile.Accepting += (_, e) => { e.Handled = true; ChangeGuidedProfile(-1); };
+            _nextProfile.Accepting += (_, e) => { e.Handled = true; ChangeGuidedProfile(1); };
+            AddFieldAt(profile, "Profile name", _profileName, 1, 15, 5, 18, "Display name used by the TUI and optional profile override.");
+            AddFieldAt(profile, "Mode", _profileMode, 1, 15, 7, 18, "Master captures and routes input; Slave receives and injects input.");
+            AddFieldAt(profile, "SSID", _conditionSsid, 1, 15, 9, 18, "Activate this profile only when connected to this Wi-Fi network. Empty means any SSID.");
+            AddFieldAt(profile, "Screen count", _conditionScreens, 1, 15, 11, 18, "Activate only when exactly this many local screens are detected. Empty means any count.");
+            AddFieldAt(profile, "Power", _conditionPower, 36, 50, 5, 18, "Activation condition: any, yes (AC power), or no (battery).");
+            AddFieldAt(profile, "Mouse scale", _mouseScale, 36, 50, 7, 18, "Slave fallback cursor-speed multiplier. Master profiles must leave this empty.");
+            AddFieldAt(profile, "Relative scale", _relativeMouseScale, 36, 50, 9, 18, "Slave fallback relative-mode cursor-speed multiplier.");
+            AddFieldAt(profile, "Dead corners", _deadCorners, 36, 50, 11, 18, "Pixels at each screen corner that do not trigger an edge transition.");
+            profile.Add(_profilePosition, _previousProfile, _nextProfile);
+            BindConfigHelp(_previousProfile, "Previous profile", "Move to the previous profile. Disabled on the first profile or when only one exists.");
+            BindConfigHelp(_nextProfile, "Next profile", "Move to the next profile. Disabled on the last profile or when only one exists.");
 
-            _hideCursor.X = 17; _hideCursor.Y = 18;
-            _remoteOnly.X = 17; _remoteOnly.Y = 19;
-            _syncScreensaver.X = 17; _syncScreensaver.Y = 20;
-            _screenLockPropagation.X = 17; _screenLockPropagation.Y = 21;
-            _accelerateMouseWheel.X = 17; _accelerateMouseWheel.Y = 22;
-            _unicodeKeyRepeat.X = 17; _unicodeKeyRepeat.Y = 23;
+            var relay = new FrameView { Title = "Relay", X = 0, Y = 2, Width = Dim.Fill(), Height = Dim.Fill(), Visible = false };
+            AddField(relay, "Network config", _networkConfig, 0, 38, "Encrypted/base64 Styx network configuration shared by peers.");
+            AddField(relay, "Embedded URL", _embeddedServer, 3, 38, "Connect to an embedded Styx relay at this URL instead of using networkConfig.");
+            AddField(relay, "Password", _embeddedPassword, 5, 38, "Password for the embedded Styx relay URL above. Masked while typing.");
+            AddField(relay, "Local port", _embeddedPort, 8, 38, "Run an embedded Styx relay on this TCP port.");
+            AddField(relay, "Password", _embeddedServerPassword, 10, 38, "Password used by peers connecting to this machine's embedded relay. Masked while typing.");
+            relay.Add(new Label { Text = "Secrets remain masked in Form mode.", X = 1, Y = 11 });
 
-            const int right = 51;
-            _configForm.Add(new Label { Text = "RELAY", X = right, Y = 0 });
-            AddField(_configForm, "Network config", _networkConfig, right, 1, 34);
-            AddField(_configForm, "Embedded URL", _embeddedServer, right, 3, 34);
-            AddField(_configForm, "Password", _embeddedPassword, right, 4, 34);
-            AddField(_configForm, "Local relay port", _embeddedPort, right, 6, 34);
-            AddField(_configForm, "Password", _embeddedServerPassword, right, 7, 34);
-            _configForm.Add(new Label { Text = "Secrets are masked while typing.", X = right, Y = 9 });
-            _advancedSummary.X = right; _advancedSummary.Y = 11; _advancedSummary.Width = Dim.Fill(1); _advancedSummary.Height = 4;
-            _configForm.Add(_advancedSummary);
+            var behavior = new FrameView { Title = "Behaviour & topology", X = 0, Y = 2, Width = Dim.Fill(), Height = Dim.Fill(), Visible = false };
+            PlaceCheckBox(behavior, _hideCursor, 0, "Hide the master's local cursor after inactivity. Master only.");
+            PlaceCheckBox(behavior, _remoteOnly, 2, "Treat this master as a headless input forwarder with no local screen route.");
+            PlaceCheckBox(behavior, _syncScreensaver, 4, "Synchronize screensaver activation with connected peers.");
+            PlaceCheckBox(behavior, _screenLockPropagation, 6, "Propagate this master's machine lock to connected slaves.");
+            PlaceCheckBox(behavior, _accelerateMouseWheel, 8, "Apply Hydra's scroll-wheel acceleration behavior.");
+            PlaceCheckBox(behavior, _unicodeKeyRepeat, 10, "Repeat printable keys as Unicode on Mac slaves to avoid the accent popup.");
 
-            var validate = new Button { Text = "_Validate", X = 1, Y = Pos.AnchorEnd(2) };
-            var reload = new Button { Text = "Re_load", X = Pos.Right(validate) + 2, Y = Pos.Top(validate) };
-            var save = new Button { Text = "_Save", X = Pos.Right(reload) + 2, Y = Pos.Top(validate) };
-            var apply = new Button { Text = "Save && _restart", X = Pos.Right(save) + 2, Y = Pos.Top(validate) };
-            validate.Accepting += (_, e) => { e.Handled = true; ValidateConfig(); };
-            reload.Accepting += (_, e) => { e.Handled = true; _ = LoadConfigAsync(); };
-            save.Accepting += (_, e) => { e.Handled = true; _ = SaveConfigAsync(restart: false); };
-            apply.Accepting += (_, e) => { e.Handled = true; _ = SaveConfigAsync(restart: true); };
-            _configForm.Add(_rootAutoUpdate, _rootDebugShield, _rootDebugMouse, previous, next,
-                _hideCursor, _remoteOnly, _syncScreensaver, _screenLockPropagation, _accelerateMouseWheel,
-                _unicodeKeyRepeat, validate, reload, save, apply);
+            _advancedSummary.X = 1; _advancedSummary.Y = 12; _advancedSummary.Width = Dim.Fill(1); _advancedSummary.Height = 3;
+            behavior.Add(_advancedSummary);
+            BindConfigHelp(_advancedSummary, "Advanced topology", "Host neighbours and per-screen matching are preserved here and editable in Text mode.");
+
+            var sections = new[]
+            {
+                ("Global", global),
+                ("Profile", profile),
+                ("Relay", relay),
+                ("Behaviour", behavior)
+            };
+            Button? previous = null;
+            for (var index = 0; index < sections.Length; index++)
+            {
+                var captured = index;
+                var button = new Button { Text = $"○ _{sections[index].Item1}", X = previous == null ? 1 : Pos.Right(previous) + 1, Y = 0 };
+                button.Accepting += (_, e) => { e.Handled = true; SelectFormSection(captured); };
+                _configForm.Add(button, sections[index].Item2);
+                _formSections.Add((button, sections[index].Item2, sections[index].Item1));
+                previous = button;
+            }
+            SelectFormSection(0);
         }
 
-        private static void AddField(View parent, string label, TextField field, int x, int y, int width)
+        private void SelectFormSection(int index)
         {
-            parent.Add(new Label { Text = label, X = x, Y = y });
-            field.X = x + 17;
+            if (index < 0 || index >= _formSections.Count) return;
+            for (var i = 0; i < _formSections.Count; i++)
+            {
+                var selected = i == index;
+                _formSections[i].Content.Visible = selected;
+                _formSections[i].Button.Text = $"{(selected ? "●" : "○")} _{_formSections[i].Name}";
+                _formSections[i].Button.Enabled = !selected;
+            }
+        }
+
+        private void AddField(View parent, string label, TextField field, int y, int width, string help)
+        {
+            AddFieldAt(parent, label, field, 1, 18, y, width, help);
+        }
+
+        private void AddFieldAt(View parent, string label, TextField field, int labelX, int fieldX, int y, int width, string help)
+        {
+            var caption = new Label { Text = label, X = labelX, Y = y, Width = fieldX - labelX - 1 };
+            field.X = fieldX;
             field.Y = y;
             field.Width = width;
-            parent.Add(field);
+            parent.Add(caption, field);
+            BindConfigHelp(caption, label, help);
+            BindConfigHelp(field, label, help);
+        }
+
+        private void PlaceCheckBox(View parent, CheckBox box, int y, string help)
+        {
+            box.X = 1;
+            box.Y = y;
+            parent.Add(box);
+            BindConfigHelp(box, box.Text, help);
+        }
+
+        private void BindConfigHelp(View view, string title, string help)
+        {
+            void Show() => _configHelp.Text = $"{title}: {help}";
+            view.MouseEnter += (_, _) => Show();
+            view.HasFocusChanged += (_, e) => { if (e.CurrentValue) Show(); };
         }
 
         private static FrameView BuildTextTab(string title, Editor editor)
@@ -342,9 +446,9 @@ internal static class HydraTui
         private void Render(HydraStatusSnapshot status, ManagementLogPage page)
         {
             SetLiveControls(true);
-            _connection.Text = $"● Connected  │  Hydra {status.Version}  │  {status.HostName}  │  {status.ProfileName ?? "idle"} / {status.Mode}";
-            _overview.Text = FormatOverview(status);
-            _peers.Text = FormatPeers(status);
+            SetText(_connection, $"● Connected  │  Hydra {status.Version}  │  {status.HostName}  │  {status.ProfileName ?? "idle"} / {status.Mode}");
+            SetText(_overview, FormatOverview(status));
+            SetText(_peers, FormatPeers(status));
             if (page.Entries.Count > 0)
             {
                 foreach (var entry in page.Entries)
@@ -353,9 +457,14 @@ internal static class HydraTui
                     while (_visibleLogs.Count > ManagementLogBuffer.Capacity)
                         _visibleLogs.Dequeue();
                 }
-                _logs.Text = string.Join('\n', _visibleLogs);
+                SetText(_logs, string.Join('\n', _visibleLogs));
             }
-            _diagnostics.Text = FormatDiagnostics();
+            SetText(_diagnostics, FormatDiagnostics());
+        }
+
+        private static void SetText(View view, string value)
+        {
+            if (view.Text != value) view.Text = value;
         }
 
         private async Task LoadConfigAsync()
@@ -506,6 +615,14 @@ internal static class HydraTui
             _guidedMode = guided;
             _configForm.Visible = guided;
             _configText.Visible = !guided;
+            _formModeButton.Text = guided ? "● _Form" : "○ _Form";
+            _textModeButton.Text = guided ? "○ _Text" : "● _Text";
+            _formModeButton.Enabled = !guided;
+            _textModeButton.Enabled = guided;
+            _revealSecrets.Visible = !guided;
+            _configHelp.Text = guided
+                ? "Form mode: Move focus or hover over an option to see what it does."
+                : "Text mode: Complete JSON is editable; secrets remain masked by default.";
         }
 
         private void LoadGuidedConfig(string json)
@@ -527,10 +644,14 @@ internal static class HydraTui
             if (_guidedConfig == null || _guidedConfig.ProfileCount == 0)
             {
                 _profilePosition.Text = "No profiles";
+                _previousProfile.Enabled = false;
+                _nextProfile.Enabled = false;
                 return;
             }
             var profile = _guidedConfig.ReadProfile(_guidedProfileIndex);
             _profilePosition.Text = $"{_guidedProfileIndex + 1}/{_guidedConfig.ProfileCount}  {_guidedConfig.ProfileLabel(_guidedProfileIndex)}";
+            _previousProfile.Enabled = _guidedProfileIndex > 0;
+            _nextProfile.Enabled = _guidedProfileIndex < _guidedConfig.ProfileCount - 1;
             _profileName.Text = profile.ProfileName ?? "";
             _profileMode.Text = profile.Mode;
             _conditionSsid.Text = profile.Ssid ?? "";
@@ -590,7 +711,7 @@ internal static class HydraTui
             {
                 if (_guidedConfig == null || _guidedConfig.ProfileCount == 0) return;
                 CommitGuidedFields();
-                _guidedProfileIndex = (_guidedProfileIndex + delta + _guidedConfig.ProfileCount) % _guidedConfig.ProfileCount;
+                _guidedProfileIndex = Math.Clamp(_guidedProfileIndex + delta, 0, _guidedConfig.ProfileCount - 1);
                 LoadGuidedProfile();
             }
             catch (Exception ex)
@@ -680,10 +801,16 @@ internal static class HydraTui
                   Relay traffic ↑ {FormatBytes(relay.BytesSent)} / {relay.MessagesSent} msg   ↓ {FormatBytes(relay.BytesReceived)} / {relay.MessagesReceived} msg
                   Attempts      {relay.ConnectionAttempts}
                 """;
-            var adapters = s.ActiveNetworkAdapters.Count == 0
+            var activeAdapters = s.ActiveNetworkAdapters ?? [];
+            var adapters = activeAdapters.Count == 0
                 ? "  (none detected)"
-                : string.Join('\n', s.ActiveNetworkAdapters.Select(adapter =>
+                : string.Join('\n', activeAdapters.Select(adapter =>
                     $"  {(adapter.HasGateway ? "◆" : "◇")} {adapter.Type,-12} {adapter.Name,-10} {string.Join(", ", adapter.Addresses)}"));
+            var relayPeers = s.EmbeddedRelayPeers ?? [];
+            var embeddedPeers = relayPeers.Count == 0
+                ? "  (not hosting an embedded relay)"
+                : string.Join('\n', relayPeers.Select(peer =>
+                    $"  ● {peer.HostName,-16} {peer.InterfaceType} ({peer.InterfaceName})  {peer.RemoteAddress} → {peer.LocalAddress}{(peer.HostName.Equals(s.HostName, StringComparison.OrdinalIgnoreCase) ? "  [this Hydra]" : "")}"));
             return $"""
                 Runtime
                   Process       {s.ProcessId}
@@ -703,6 +830,9 @@ internal static class HydraTui
 
                 Active network links  (◆ has a gateway)
                 {adapters}
+
+                Embedded relay clients  (actual inbound interface)
+                {embeddedPeers}
 
                 Routing
                   Active route  {route}

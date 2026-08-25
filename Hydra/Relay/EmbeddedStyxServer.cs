@@ -19,8 +19,11 @@ public class EmbeddedStyxServer(EmbeddedStyxServerConfig config, ILogger<Embedde
     : SimpleHostedService(log)
 {
     private readonly TaskCompletionSource _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private IClientRegistry? _registry;
 
     public Task WaitForReady() => _ready.Task;
+    internal ValueTask<IReadOnlyList<ClientIdentity>> GetClients() => _registry?.GetAllIdentities()
+        ?? ValueTask.FromResult<IReadOnlyList<ClientIdentity>>([]);
 
     protected override async Task Execute(CancellationToken cancel)
     {
@@ -86,6 +89,7 @@ public class EmbeddedStyxServer(EmbeddedStyxServerConfig config, ILogger<Embedde
         });
 
         var app = builder.Build();
+        _registry = app.Services.GetRequiredService<IClientRegistry>();
         app.MapHub<StyxHub>("/relay");
         return app;
     }

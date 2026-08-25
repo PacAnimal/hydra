@@ -12,7 +12,7 @@ public class ClientRegistryTests
         var registry = new ClientRegistry(NullLogger<ClientRegistry>.Instance);
         var networkA = Guid.NewGuid();
         var networkB = Guid.NewGuid();
-        await registry.Register("a", networkA, "Workstation", "10.0.0.1");
+        await registry.Register("a", networkA, "Workstation", "10.0.0.1", "192.168.1.10");
         await registry.Register("b", networkB, "Workstation", "10.0.0.2");
 
         using (Assert.EnterMultipleScope())
@@ -20,6 +20,8 @@ public class ClientRegistryTests
             Assert.That(await registry.GetConnectionId(networkA, "WORKSTATION"), Is.EqualTo("a"));
             Assert.That(await registry.GetConnectionId(networkB, "workstation"), Is.EqualTo("b"));
             Assert.That((await registry.GetIdentity("a"))?.HostName, Is.EqualTo("Workstation"));
+            Assert.That((await registry.GetIdentity("a"))?.LocalIp, Is.EqualTo("192.168.1.10"));
+            Assert.That(await registry.GetAllIdentities(), Has.Count.EqualTo(2));
         }
     }
 

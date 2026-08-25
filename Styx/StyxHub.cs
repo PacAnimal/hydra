@@ -54,7 +54,7 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, IStyxPass
 
         // kick same network+hostname duplicates and register atomically (one lock) so two concurrent
         // authenticates for the same host can't both register (stale phantom peer)
-        var registration = await registry.RegisterKickingDuplicates(Context.ConnectionId, networkId, hostName, remoteIp);
+        var registration = await registry.RegisterKickingDuplicates(Context.ConnectionId, networkId, hostName, remoteIp, LocalIp);
         foreach (var connectionId in registration.Kicked)
             await Clients.Client(connectionId).Kicked("duplicate hostname");
 
@@ -130,6 +130,7 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, IStyxPass
     }
 
     private string RemoteIp => Context.GetHttpContext()?.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+    private string LocalIp => Context.GetHttpContext()?.Connection.LocalIpAddress?.ToString() ?? "unknown";
 
     public override async Task OnDisconnectedAsync(Exception? exception)
     {

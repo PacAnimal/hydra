@@ -46,6 +46,7 @@ internal sealed class HydraStatusService(
         var transport = relay?.Transport;
         var router = services.GetService<InputRouter>();
         var adapters = GetActiveNetworkAdapters();
+        var embeddedPeers = await GetEmbeddedRelayPeers();
         var config = await configStore.ReadAsync(cancel);
         var version = Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.0.0";
 
@@ -76,10 +77,52 @@ internal sealed class HydraStatusService(
                 transport.BytesSent,
                 transport.BytesReceived),
             adapters,
+            embeddedPeers,
             dormancy.IsDormant,
             localScreens,
             peers,
             router == null ? null : await router.GetManagementStatusAsync());
+    }
+
+    private async Task<List<EmbeddedRelayPeerStatus>> GetEmbeddedRelayPeers()
+    {
+        var server = services.GetService<EmbeddedStyxServer>();
+        if (server == null) return [];
+        var clients = await server.GetClients();
+        return [.. clients
+            .Select(client =>
+            {
+                var network = FindInterface(client.LocalIp);
+                return new EmbeddedRelayPeerStatus(
+                    client.HostName,
+                    client.RemoteIp,
+                    client.LocalIp,
+                    network?.Name ?? "unknown",
+                    network == null ? "unknown" : DescribeInterface(network));
+            })
+            .OrderBy(client => client.HostName, StringComparer.Ordinal)];
+    }
+
+    private static NetworkInterface? FindInterface(string address)
+    {
+        if (!System.Net.IPAddress.TryParse(address, out var parsed)) return null;
+        try
+        {
+            if (parsed.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6 && parsed.ScopeId > 0)
+            {
+                var scoped = NetworkInterface.GetAllNetworkInterfaces().FirstOrDefault(network =>
+                    network.GetIPProperties().GetIPv6Properties()?.Index == parsed.ScopeId);
+                if (scoped != null) return scoped;
+            }
+            return NetworkInterface.GetAllNetworkInterfaces().FirstOrDefault(network =>
+                network.GetIPProperties().UnicastAddresses.Any(unicast =>
+                    unicast.Address.Equals(parsed)
+                    || unicast.Address.IsIPv4MappedToIPv6 && unicast.Address.MapToIPv4().Equals(parsed)));
+        }
+        catch (NetworkInformationException)
+        {
+            return null;
+        }
     }
 
     private static List<NetworkAdapterStatus> GetActiveNetworkAdapters()
@@ -100,7 +143,7 @@ internal sealed class HydraStatusService(
                     var hasGateway = properties.GatewayAddresses.Any(gateway =>
                         !gateway.Address.Equals(System.Net.IPAddress.Any)
                         && !gateway.Address.Equals(System.Net.IPAddress.IPv6Any));
-                    return new NetworkAdapterStatus(network.Name, DescribeInterface(network.NetworkInterfaceType), addresses, hasGateway);
+                    return new NetworkAdapterStatus(network.Name, DescribeInterface(network), addresses, hasGateway);
                 })
                 .Where(network => network.Addresses.Count > 0)
                 .OrderByDescending(network => network.HasGateway)
@@ -112,14 +155,22 @@ internal sealed class HydraStatusService(
         }
     }
 
-    private static string DescribeInterface(NetworkInterfaceType type) => type switch
+    private static string DescribeInterface(NetworkInterface network)
     {
-        NetworkInterfaceType.Wireless80211 => "Wi-Fi",
-        NetworkInterfaceType.Ethernet or NetworkInterfaceType.Ethernet3Megabit
-            or NetworkInterfaceType.FastEthernetFx or NetworkInterfaceType.FastEthernetT
-            or NetworkInterfaceType.GigabitEthernet => "Ethernet",
-        NetworkInterfaceType.Tunnel => "VPN / tunnel",
-        NetworkInterfaceType.Ppp => "PPP",
-        _ => type.ToString()
-    };
+        if (network.NetworkInterfaceType == NetworkInterfaceType.Unknown
+            && (network.Name.StartsWith("utun", StringComparison.OrdinalIgnoreCase)
+                || network.Name.StartsWith("tun", StringComparison.OrdinalIgnoreCase)
+                || network.Name.StartsWith("tap", StringComparison.OrdinalIgnoreCase)))
+            return "VPN / tunnel";
+        return network.NetworkInterfaceType switch
+        {
+            NetworkInterfaceType.Wireless80211 => "Wi-Fi",
+            NetworkInterfaceType.Ethernet or NetworkInterfaceType.Ethernet3Megabit
+                or NetworkInterfaceType.FastEthernetFx or NetworkInterfaceType.FastEthernetT
+                or NetworkInterfaceType.GigabitEthernet => "Ethernet",
+            NetworkInterfaceType.Tunnel => "VPN / tunnel",
+            NetworkInterfaceType.Ppp => "PPP",
+            _ => network.NetworkInterfaceType.ToString()
+        };
+    }
 }

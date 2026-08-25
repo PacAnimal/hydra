@@ -4,18 +4,19 @@ namespace Styx.Services;
 
 public interface IClientRegistry
 {
-    ValueTask Register(string connectionId, Guid networkId, string hostName, string remoteIp);
+    ValueTask Register(string connectionId, Guid networkId, string hostName, string remoteIp, string localIp = "unknown");
     ValueTask Unregister(string connectionId);
     ValueTask<string?> GetConnectionId(Guid networkId, string hostName);
     ValueTask<ClientIdentity?> GetIdentity(string connectionId);
     // atomically kicks same-network+host duplicates AND registers the new connection under one lock, so two
     // concurrent authenticates for the same host can't both find nothing to kick and both register.
-    ValueTask<RegistrationResult> RegisterKickingDuplicates(string connectionId, Guid networkId, string hostName, string remoteIp);
+    ValueTask<RegistrationResult> RegisterKickingDuplicates(string connectionId, Guid networkId, string hostName, string remoteIp, string localIp = "unknown");
     // returns all clients on a network, optionally excluding one connection
     ValueTask<IReadOnlyList<NetworkClient>> GetNetworkClients(Guid networkId, string? excludeConnectionId = null);
+    ValueTask<IReadOnlyList<ClientIdentity>> GetAllIdentities();
 }
 
-public record ClientIdentity(Guid NetworkId, string HostName, string RemoteIp);
+public record ClientIdentity(Guid NetworkId, string HostName, string RemoteIp, string LocalIp);
 
 public record NetworkClient(string ConnectionId, string HostName);
 
@@ -30,10 +31,10 @@ public class ClientRegistry(ILogger<ClientRegistry> log) : IClientRegistry
     private readonly ConcurrentDictionary<string, ClientIdentity> _byConnection = [];
     private readonly ConcurrentDictionary<(Guid NetworkId, string HostName), string> _byNetworkHost = [];
 
-    public ValueTask Register(string connectionId, Guid networkId, string hostName, string remoteIp)
+    public ValueTask Register(string connectionId, Guid networkId, string hostName, string remoteIp, string localIp = "unknown")
     {
         lock (_mutationLock)
-            Register(connectionId, new ClientIdentity(networkId, hostName, remoteIp));
+            Register(connectionId, new ClientIdentity(networkId, hostName, remoteIp, localIp));
         log.LogDebug("Registered client \"{HostName}\" from {RemoteIp} on network {NetworkId}", hostName, remoteIp, networkId);
         return ValueTask.CompletedTask;
     }
@@ -61,7 +62,7 @@ public class ClientRegistry(ILogger<ClientRegistry> log) : IClientRegistry
         ValueTask.FromResult(_byConnection.TryGetValue(connectionId, out var identity) ? identity : null);
 
     // atomically kick same-network+host duplicates and register the new connection under one lock
-    public ValueTask<RegistrationResult> RegisterKickingDuplicates(string connectionId, Guid networkId, string hostName, string remoteIp)
+    public ValueTask<RegistrationResult> RegisterKickingDuplicates(string connectionId, Guid networkId, string hostName, string remoteIp, string localIp = "unknown")
     {
         RegistrationResult result;
         lock (_mutationLock)
@@ -78,7 +79,7 @@ public class ClientRegistry(ILogger<ClientRegistry> log) : IClientRegistry
                 log.LogInformation("Kicked duplicate \"{HostName}\" from network {NetworkId}", hostName, networkId);
             }
             var others = OnNetwork(networkId, connectionId);
-            Register(connectionId, new ClientIdentity(networkId, hostName, remoteIp));
+            Register(connectionId, new ClientIdentity(networkId, hostName, remoteIp, localIp));
             result = new RegistrationResult(found, others);
         }
         log.LogDebug("Registered client \"{HostName}\" from {RemoteIp} on network {NetworkId}", hostName, remoteIp, networkId);
@@ -87,6 +88,9 @@ public class ClientRegistry(ILogger<ClientRegistry> log) : IClientRegistry
 
     public ValueTask<IReadOnlyList<NetworkClient>> GetNetworkClients(Guid networkId, string? excludeConnectionId = null) =>
         ValueTask.FromResult<IReadOnlyList<NetworkClient>>(OnNetwork(networkId, excludeConnectionId));
+
+    public ValueTask<IReadOnlyList<ClientIdentity>> GetAllIdentities() =>
+        ValueTask.FromResult<IReadOnlyList<ClientIdentity>>([.. _byConnection.Values]);
 
     private List<NetworkClient> OnNetwork(Guid networkId, string? excludeConnectionId)
     {

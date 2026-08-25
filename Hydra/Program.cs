@@ -370,7 +370,8 @@ if (config != null)
     if (config.EmbeddedStyxServer != null)
     {
         services.AddSingleton(config.EmbeddedStyxServer);
-        services.AddHostedService<EmbeddedStyxServer>();
+        services.AddSingleton<EmbeddedStyxServer>();
+        services.AddHostedService(sp => sp.GetRequiredService<EmbeddedStyxServer>());
     }
 
     if (profile.Mode == Mode.Slave)
