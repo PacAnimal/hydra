@@ -3,6 +3,7 @@ using System.Net.Sockets;
 using Hydra.Config;
 using Hydra.Management;
 using Terminal.Gui.App;
+using Terminal.Gui.Drawing;
 using Terminal.Gui.Editor;
 using Terminal.Gui.Input;
 using Terminal.Gui.ViewBase;
@@ -12,6 +13,9 @@ namespace Hydra;
 
 internal static class HydraTui
 {
+    internal static bool HasRestarted(HydraStatusSnapshot previous, HydraStatusSnapshot current) =>
+        current.ProcessId != previous.ProcessId || current.UptimeSeconds + 1 < previous.UptimeSeconds;
+
     internal static Task RunAsync(string[] args)
     {
         string? explicitConfig = null;
@@ -65,13 +69,14 @@ internal static class HydraTui
         private readonly FrameView _configForm = new() { BorderStyle = Terminal.Gui.Drawing.LineStyle.None };
         private readonly FrameView _configText = new() { BorderStyle = Terminal.Gui.Drawing.LineStyle.None, Visible = false };
         private readonly Label _configHelp = new() { Text = "Move focus or hover over an option to see what it does.", X = 1, Y = 0, Width = Dim.Fill(1), Height = 2 };
-        private readonly Button _formModeButton = new() { Text = "● _Form" };
-        private readonly Button _textModeButton = new() { Text = "○ _Text" };
+        private readonly Button _formModeButton = new() { Text = "_Form" };
+        private readonly Button _textModeButton = new() { Text = "_Text" };
         private readonly Button _previousProfile = new() { Text = "_Previous", Enabled = false };
         private readonly Button _nextProfile = new() { Text = "_Next", Enabled = false };
         private readonly Button _revealSecrets = new() { Text = "_Reveal secrets", Visible = false };
         private readonly Editor _diagnostics = ReadOnlyEditor();
-        private readonly Label _connection = new() { Text = "Connecting…", X = 1, Y = 0, Width = Dim.Fill() };
+        private readonly Label _connection = new() { Text = "Connecting…", X = 1, Y = 0, Width = Dim.Fill(), SchemeName = "Accent" };
+        private readonly Label _activity = new() { Text = "Ready", X = 1, Y = 1, Width = Dim.Fill(), SchemeName = "Base" };
         private readonly Button _reconnect = new() { Text = "_Reconnect relay", Enabled = false };
         private readonly Button _restart = new() { Text = "_Restart Hydra", Enabled = false };
         private readonly Queue<string> _visibleLogs = new();
@@ -86,6 +91,7 @@ internal static class HydraTui
         private bool _configMaskFailed;
         private bool _secretsRevealed;
         private bool _guidedMode = true;
+        private bool _commandBusy;
         private GuidedConfigDocument? _guidedConfig;
         private int _guidedProfileIndex;
         private readonly List<(Button Button, FrameView Content, string Name)> _tabs = [];
@@ -122,8 +128,8 @@ internal static class HydraTui
 
         internal void Build()
         {
-            window.Add(_connection);
-            var navigation = new View { X = 1, Y = 1, Width = Dim.Fill(), Height = 1 };
+            window.Add(_connection, _activity);
+            var navigation = new View { X = 1, Y = 2, Width = Dim.Fill(), Height = 3 };
             var contents = new[]
             {
                 ("Overview", BuildOverviewTab()),
@@ -137,14 +143,25 @@ internal static class HydraTui
             for (var index = 0; index < contents.Length; index++)
             {
                 var captured = index;
-                var button = new Button { Text = $"○ _{contents[index].Item1}", X = previous == null ? 0 : Pos.Right(previous) + 1, Y = 0 };
+                var button = new Button
+                {
+                    Text = $"_{contents[index].Item1}",
+                    X = previous == null ? 0 : Pos.Right(previous),
+                    Y = 0,
+                    Width = contents[index].Item1.Length + 4,
+                    Height = 3,
+                    BorderStyle = Terminal.Gui.Drawing.LineStyle.Rounded,
+                    NoDecorations = true,
+                    CanFocus = false,
+                    MouseHighlightStates = MouseState.None
+                };
                 button.Accepting += (_, e) => { e.Handled = true; SelectTab(captured); };
                 navigation.Add(button);
                 var content = contents[index].Item2;
                 content.X = 0;
-                content.Y = 2;
+                content.Y = 5;
                 content.Width = Dim.Fill();
-                content.Height = Dim.Fill(3);
+                content.Height = Dim.Fill(6);
                 content.Visible = false;
                 window.Add(content);
                 _tabs.Add((button, content, contents[index].Item1));
@@ -177,8 +194,7 @@ internal static class HydraTui
             {
                 var selected = i == index;
                 _tabs[i].Content.Visible = selected;
-                _tabs[i].Button.Text = $"{(selected ? "●" : "○")} _{_tabs[i].Name}";
-                _tabs[i].Button.Enabled = !selected;
+                _tabs[i].Button.SchemeName = selected ? "Accent" : "Base";
             }
         }
 
@@ -188,14 +204,18 @@ internal static class HydraTui
             _overview.Height = Dim.Fill(3);
             _reconnect.X = 1;
             _reconnect.Y = Pos.AnchorEnd(2);
-            _reconnect.Accepting += (_, e) => { e.Handled = true; _ = RunCommandAsync(() => _client.ReconnectRelayAsync(_cancel.Token)); };
+            _reconnect.Accepting += (_, e) =>
+            {
+                e.Handled = true;
+                _ = RunCommandAsync(() => _client.ReconnectRelayAsync(_cancel.Token), CommandKind.ReconnectRelay);
+            };
             _restart.X = Pos.Right(_reconnect) + 2;
             _restart.Y = Pos.Top(_reconnect);
             _restart.Accepting += (_, e) =>
             {
                 e.Handled = true;
                 if (MessageBox.Query(app, "Restart Hydra", "Restart the running Hydra process?", "Restart", "Cancel") == 0)
-                    _ = RunCommandAsync(() => _client.RestartHydraAsync(_cancel.Token));
+                    _ = RunCommandAsync(() => _client.RestartHydraAsync(_cancel.Token), CommandKind.RestartHydra);
             };
             tab.Add(_reconnect, _restart);
             return tab;
@@ -206,7 +226,10 @@ internal static class HydraTui
             var tab = new FrameView { Title = "Configuration", Width = Dim.Fill(), Height = Dim.Fill() };
             _formModeButton.X = 1; _formModeButton.Y = 0;
             _textModeButton.X = Pos.Right(_formModeButton) + 1; _textModeButton.Y = 0;
-            var hint = new Label { Text = "Selected mode is marked ●", X = Pos.Right(_textModeButton) + 2, Y = 0, Width = Dim.Fill() };
+            _formModeButton.CanFocus = false;
+            _formModeButton.MouseHighlightStates = MouseState.None;
+            _textModeButton.CanFocus = false;
+            _textModeButton.MouseHighlightStates = MouseState.None;
             _formModeButton.Accepting += (_, e) => { e.Handled = true; SwitchConfigMode(guided: true); };
             _textModeButton.Accepting += (_, e) => { e.Handled = true; SwitchConfigMode(guided: false); };
 
@@ -238,7 +261,7 @@ internal static class HydraTui
             var apply = new Button { Text = "Save && _restart", X = Pos.Right(save) + 2, Y = Pos.Top(validate) };
             apply.Accepting += (_, e) => { e.Handled = true; _ = SaveConfigAsync(restart: true); };
             _configText.Add(_config);
-            tab.Add(_formModeButton, _textModeButton, hint, _configForm, _configText, helpPanel,
+            tab.Add(_formModeButton, _textModeButton, _configForm, _configText, helpPanel,
                 validate, reload, _revealSecrets, save, apply);
 
             BindConfigHelp(_formModeButton, "Form mode", "Edit common Hydra settings in labelled fields. Advanced topology remains unchanged.");
@@ -273,10 +296,15 @@ internal static class HydraTui
             AddFieldAt(profile, "Mode", _profileMode, 1, 15, 7, 18, "Master captures and routes input; Slave receives and injects input.");
             AddFieldAt(profile, "SSID", _conditionSsid, 1, 15, 9, 18, "Activate this profile only when connected to this Wi-Fi network. Empty means any SSID.");
             AddFieldAt(profile, "Screen count", _conditionScreens, 1, 15, 11, 18, "Activate only when exactly this many local screens are detected. Empty means any count.");
-            AddFieldAt(profile, "Power", _conditionPower, 36, 50, 5, 18, "Activation condition: any, yes (AC power), or no (battery).");
-            AddFieldAt(profile, "Mouse scale", _mouseScale, 36, 50, 7, 18, "Slave fallback cursor-speed multiplier. Master profiles must leave this empty.");
-            AddFieldAt(profile, "Relative scale", _relativeMouseScale, 36, 50, 9, 18, "Slave fallback relative-mode cursor-speed multiplier.");
-            AddFieldAt(profile, "Dead corners", _deadCorners, 36, 50, 11, 18, "Pixels at each screen corner that do not trigger an edge transition.");
+            AddFieldAt(profile, "Power", _conditionPower, 53, 69, 5, 18, "Activation condition: any, yes (AC power), or no (battery).");
+            AddFieldAt(profile, "Mouse scale", _mouseScale, 53, 69, 7, 18, "Slave fallback cursor-speed multiplier. Master profiles must leave this empty.");
+            AddFieldAt(profile, "Relative scale", _relativeMouseScale, 53, 69, 9, 18, "Slave fallback relative-mode cursor-speed multiplier.");
+            AddFieldAt(profile, "Dead corners", _deadCorners, 53, 69, 11, 18, "Pixels at each screen corner that do not trigger an edge transition.");
+            AddDefaultHint(profile, _conditionSsid, "any SSID");
+            AddDefaultHint(profile, _conditionScreens, "any count");
+            AddDefaultHint(profile, _mouseScale, "1.0");
+            AddDefaultHint(profile, _relativeMouseScale, "mouse scale");
+            AddDefaultHint(profile, _deadCorners, "0 px");
             profile.Add(_profilePosition, _previousProfile, _nextProfile);
             BindConfigHelp(_previousProfile, "Previous profile", "Move to the previous profile. Disabled on the first profile or when only one exists.");
             BindConfigHelp(_nextProfile, "Next profile", "Move to the next profile. Disabled on the last profile or when only one exists.");
@@ -312,7 +340,14 @@ internal static class HydraTui
             for (var index = 0; index < sections.Length; index++)
             {
                 var captured = index;
-                var button = new Button { Text = $"○ _{sections[index].Item1}", X = previous == null ? 1 : Pos.Right(previous) + 1, Y = 0 };
+                var button = new Button
+                {
+                    Text = $"_{sections[index].Item1}",
+                    X = previous == null ? 1 : Pos.Right(previous) + 1,
+                    Y = 0,
+                    CanFocus = false,
+                    MouseHighlightStates = MouseState.None
+                };
                 button.Accepting += (_, e) => { e.Handled = true; SelectFormSection(captured); };
                 _configForm.Add(button, sections[index].Item2);
                 _formSections.Add((button, sections[index].Item2, sections[index].Item1));
@@ -328,9 +363,22 @@ internal static class HydraTui
             {
                 var selected = i == index;
                 _formSections[i].Content.Visible = selected;
-                _formSections[i].Button.Text = $"{(selected ? "●" : "○")} _{_formSections[i].Name}";
-                _formSections[i].Button.Enabled = !selected;
+                _formSections[i].Button.SchemeName = selected ? "Accent" : "Base";
             }
+        }
+
+        private static void AddDefaultHint(View parent, TextField field, string defaultValue)
+        {
+            var hint = new Label
+            {
+                Text = $"default: {defaultValue}",
+                X = Pos.Right(field) + 1,
+                Y = Pos.Top(field),
+                SchemeName = "Accent",
+                Visible = string.IsNullOrWhiteSpace(field.Text)
+            };
+            field.TextChanged += (_, _) => hint.Visible = string.IsNullOrWhiteSpace(field.Text);
+            parent.Add(hint);
         }
 
         private void AddField(View parent, string label, TextField field, int y, int width, string help)
@@ -536,6 +584,7 @@ internal static class HydraTui
         private async Task SaveConfigAsync(bool restart)
         {
             if (_configDocument == null) return;
+            var previousStatus = _lastStatus;
             try
             {
                 var json = CurrentConfigForSave();
@@ -549,6 +598,7 @@ internal static class HydraTui
                         restart ? "Save hydra.conf and restart Hydra?" : "Save hydra.conf?", "Save", "Cancel") != 0)
                     return;
 
+                SetCommandBusy(true, restart ? "Saving configuration and restarting Hydra…" : "Saving configuration…");
                 _configDocument = _connected
                     ? await _client.SaveConfigAsync(new SaveConfigRequest(_configDocument.Revision, json, restart), _cancel.Token)
                     : await _offlineStore.SaveAsync(_configDocument.Revision, json, _cancel.Token);
@@ -560,11 +610,18 @@ internal static class HydraTui
                     _config.Text = ConfigSecretMask.Mask(_configDocument.Json);
                     LoadGuidedConfig(_configDocument.Json);
                 });
-                app.Invoke(() => MessageBox.Query(app, "Configuration", restart ? "Saved. Hydra is restarting." : "Saved.", "OK"));
+                if (restart && _connected)
+                    await WaitForRestartAsync(previousStatus);
+                else
+                    SetCommandBusy(false, restart ? "Configuration saved. Start Hydra to apply it." : "Configuration saved.", "Accent");
             }
             catch (Exception ex)
             {
-                app.Invoke(() => MessageBox.ErrorQuery(app, "Save failed", ex.Message, "OK"));
+                app.Invoke(() =>
+                {
+                    SetCommandBusy(false, $"Save failed: {ex.Message}", "Error");
+                    MessageBox.ErrorQuery(app, "Save failed", ex.Message, "OK");
+                });
             }
         }
 
@@ -615,10 +672,10 @@ internal static class HydraTui
             _guidedMode = guided;
             _configForm.Visible = guided;
             _configText.Visible = !guided;
-            _formModeButton.Text = guided ? "● _Form" : "○ _Form";
-            _textModeButton.Text = guided ? "○ _Text" : "● _Text";
-            _formModeButton.Enabled = !guided;
-            _textModeButton.Enabled = guided;
+            _formModeButton.Text = "_Form";
+            _textModeButton.Text = "_Text";
+            _formModeButton.SchemeName = guided ? "Accent" : "Base";
+            _textModeButton.SchemeName = guided ? "Base" : "Accent";
             _revealSecrets.Visible = !guided;
             _configHelp.Text = guided
                 ? "Form mode: Move focus or hover over an option to see what it does."
@@ -761,7 +818,7 @@ internal static class HydraTui
             }
         }
 
-        private async Task RunCommandAsync(Func<Task<CommandResult>> command)
+        private async Task RunCommandAsync(Func<Task<CommandResult>> command, CommandKind kind)
         {
             if (!_liveControlsReady)
             {
@@ -769,23 +826,106 @@ internal static class HydraTui
                     "This TUI is not connected to Hydra. The running Hydra process has not been interrupted.", "OK"));
                 return;
             }
+            if (_commandBusy) return;
+            var previousStatus = _lastStatus;
+            SetCommandBusy(true, kind == CommandKind.RestartHydra ? "Restarting Hydra…" : "Reconnecting relay…");
             try
             {
                 var result = await command();
-                app.Invoke(() => MessageBox.Query(app, result.Accepted ? "Hydra" : "Command unavailable", result.Message, "OK"));
+                if (!result.Accepted)
+                {
+                    app.Invoke(() =>
+                    {
+                        SetCommandBusy(false, result.Message, "Error");
+                        MessageBox.ErrorQuery(app, "Command unavailable", result.Message, "OK");
+                    });
+                    return;
+                }
+                if (kind == CommandKind.RestartHydra)
+                    await WaitForRestartAsync(previousStatus);
+                else
+                    await WaitForRelayAsync();
             }
             catch (Exception ex)
             {
-                app.Invoke(() => MessageBox.ErrorQuery(app, "Command failed", ex.Message, "OK"));
+                app.Invoke(() =>
+                {
+                    SetCommandBusy(false, $"Command failed: {ex.Message}", "Error");
+                    MessageBox.ErrorQuery(app, "Command failed", ex.Message, "OK");
+                });
             }
+        }
+
+        private async Task WaitForRestartAsync(HydraStatusSnapshot? previousStatus)
+        {
+            SetActivity("Restart requested — waiting for Hydra to come back…", "Accent");
+            await WaitForStatusAsync(status => previousStatus == null || HasRestarted(previousStatus, status),
+                status => $"Hydra restarted and reconnected (PID {status.ProcessId}).");
+        }
+
+        private async Task WaitForRelayAsync()
+        {
+            SetActivity("Relay reconnect requested — waiting for the connection…", "Accent");
+            await WaitForStatusAsync(status => status.RelayConnected && status.RelayConnection != null,
+                _ => "Relay reconnected.");
+        }
+
+        private async Task WaitForStatusAsync(Func<HydraStatusSnapshot, bool> complete, Func<HydraStatusSnapshot, string> message)
+        {
+            var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(15);
+            while (DateTimeOffset.UtcNow < deadline && !_cancel.IsCancellationRequested)
+            {
+                await Task.Delay(300, _cancel.Token);
+                try
+                {
+                    using var timeout = CancellationTokenSource.CreateLinkedTokenSource(_cancel.Token);
+                    timeout.CancelAfter(TimeSpan.FromMilliseconds(800));
+                    var status = await _client.GetStatusAsync(timeout.Token);
+                    if (!complete(status)) continue;
+                    _connected = true;
+                    _helloComplete = false;
+                    _lastStatus = status;
+                    app.Invoke(() =>
+                    {
+                        Render(status, new ManagementLogPage(_logCursor, _logCursor, []));
+                        SetCommandBusy(false, message(status), "Accent");
+                    });
+                    return;
+                }
+                catch (Exception) when (DateTimeOffset.UtcNow < deadline)
+                {
+                    // A restart deliberately removes the management endpoint for a moment.
+                }
+            }
+            app.Invoke(() => SetCommandBusy(false,
+                "The command was accepted, but Hydra did not report completion within 15 seconds.", "Error"));
+        }
+
+        private void SetCommandBusy(bool busy, string message, string scheme = "Accent")
+        {
+            void Apply()
+            {
+                _commandBusy = busy;
+                SetLiveControls(_connected && !busy);
+                SetActivity(message, scheme);
+            }
+            app.Invoke(Apply);
+        }
+
+        private void SetActivity(string message, string scheme)
+        {
+            _activity.SchemeName = scheme;
+            SetText(_activity, message);
         }
 
         private void SetLiveControls(bool enabled)
         {
             _liveControlsReady = enabled;
-            _reconnect.Enabled = enabled;
-            _restart.Enabled = enabled;
+            _reconnect.Enabled = enabled && !_commandBusy;
+            _restart.Enabled = enabled && !_commandBusy;
         }
+
+        private enum CommandKind { ReconnectRelay, RestartHydra }
 
         private static string FormatOverview(HydraStatusSnapshot s)
         {
