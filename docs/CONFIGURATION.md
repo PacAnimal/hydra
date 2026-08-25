@@ -516,6 +516,8 @@ Requirements:
 
 For machines on different networks, **Styx** is a relay server that securely tunnels Hydra connections. You can run Styx as a **standalone** server (Docker or from source) or **embedded** directly inside a Hydra process.
 
+When a relay hostname resolves to addresses reachable through more than one interface, Hydra tries addresses in the operating system's configured network preference order before falling back to the remaining addresses. It follows Network Service Order on macOS, connected-interface metrics on Windows, and default-route metrics on Linux. If preference discovery is unavailable, Hydra preserves the resolver's address order and still attempts every resolved address.
+
 ### Embedded Styx
 
 If you don't want to run a separate Styx container, you can embed a Styx server directly inside a Hydra process. This is ideal for home setups where one machine acts as a hub.

@@ -12,6 +12,8 @@ internal static class RelaySocketConnector
         var addresses = IPAddress.TryParse(target.Host, out var literal)
             ? [literal]
             : await Dns.GetHostAddressesAsync(target.Host, cancellationToken);
+        if (addresses.Length > 1)
+            addresses = [.. await RelayAddressPreference.OrderAsync(addresses, target.Port, cancellationToken)];
         return await ConnectAsync(addresses, target.Port, AddressConnectTimeout, cancellationToken);
     }
 
