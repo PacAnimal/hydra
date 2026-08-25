@@ -73,11 +73,11 @@ internal static class HydraTui
         private readonly Button _textModeButton = new() { Text = "_Text" };
         private readonly Button _previousProfile = new() { Text = "_Previous", Enabled = false };
         private readonly Button _nextProfile = new() { Text = "_Next", Enabled = false };
-        private readonly Button _revealSecrets = new() { Text = "_Reveal secrets", Visible = false };
+        private readonly Button _revealSecrets = new() { Text = "_Reveal Secrets", Visible = false };
         private readonly Editor _diagnostics = ReadOnlyEditor();
         private readonly Label _connection = new() { Text = "Connecting…", X = 1, Y = 0, Width = Dim.Fill(), SchemeName = "Accent" };
-        private readonly Label _activity = new() { Text = "Ready", X = 1, Y = 1, Width = Dim.Fill(), SchemeName = "Base" };
-        private readonly Button _reconnect = new() { Text = "_Reconnect relay", Enabled = false };
+        private readonly Label _activity = new() { Text = "Ready", X = 1, Y = Pos.AnchorEnd(2), Width = Dim.Fill(), SchemeName = "Base" };
+        private readonly Button _reconnect = new() { Text = "_Reconnect Relay", Enabled = false };
         private readonly Button _restart = new() { Text = "_Restart Hydra", Enabled = false };
         private readonly Queue<string> _visibleLogs = new();
         private ConfigDocument? _configDocument;
@@ -94,16 +94,16 @@ internal static class HydraTui
         private bool _commandBusy;
         private GuidedConfigDocument? _guidedConfig;
         private int _guidedProfileIndex;
-        private readonly List<(Button Button, FrameView Content, string Name)> _tabs = [];
+        private readonly List<(View Button, FrameView Content, string Name)> _tabs = [];
         private readonly List<(Button Button, FrameView Content, string Name)> _formSections = [];
         private int _activeTab;
 
         private readonly TextField _rootName = new();
         private readonly TextField _rootLogLevel = new();
         private readonly TextField _rootProfileOverride = new();
-        private readonly CheckBox _rootAutoUpdate = new() { Text = "Auto update" };
-        private readonly CheckBox _rootDebugShield = new() { Text = "Debug shield" };
-        private readonly CheckBox _rootDebugMouse = new() { Text = "Debug mouse" };
+        private readonly CheckBox _rootAutoUpdate = new() { Text = "Auto Update" };
+        private readonly CheckBox _rootDebugShield = new() { Text = "Debug Shield" };
+        private readonly CheckBox _rootDebugMouse = new() { Text = "Debug Mouse" };
         private readonly Label _profilePosition = new();
         private readonly TextField _profileName = new();
         private readonly TextField _profileMode = new();
@@ -118,18 +118,18 @@ internal static class HydraTui
         private readonly TextField _mouseScale = new();
         private readonly TextField _relativeMouseScale = new();
         private readonly TextField _deadCorners = new();
-        private readonly CheckBox _hideCursor = new() { Text = "Hide cursor" };
-        private readonly CheckBox _remoteOnly = new() { Text = "Remote only" };
-        private readonly CheckBox _syncScreensaver = new() { Text = "Sync screensaver" };
-        private readonly CheckBox _screenLockPropagation = new() { Text = "Propagate screen lock" };
-        private readonly CheckBox _accelerateMouseWheel = new() { Text = "Accelerate wheel" };
-        private readonly CheckBox _unicodeKeyRepeat = new() { Text = "Unicode key repeat" };
+        private readonly CheckBox _hideCursor = new() { Text = "Hide Cursor" };
+        private readonly CheckBox _remoteOnly = new() { Text = "Remote Only" };
+        private readonly CheckBox _syncScreensaver = new() { Text = "Sync Screensaver" };
+        private readonly CheckBox _screenLockPropagation = new() { Text = "Propagate Screen Lock" };
+        private readonly CheckBox _accelerateMouseWheel = new() { Text = "Accelerate Wheel" };
+        private readonly CheckBox _unicodeKeyRepeat = new() { Text = "Unicode Key Repeat" };
         private readonly Label _advancedSummary = new();
 
         internal void Build()
         {
             window.Add(_connection, _activity);
-            var navigation = new View { X = 1, Y = 2, Width = Dim.Fill(), Height = 3 };
+            var navigation = new View { X = 1, Y = 1, Width = Dim.Fill(), Height = 2 };
             var contents = new[]
             {
                 ("Overview", BuildOverviewTab()),
@@ -139,35 +139,33 @@ internal static class HydraTui
                 ("Diagnostics", BuildTextTab("Diagnostics", _diagnostics)),
                 ("Help", BuildHelpTab())
             };
-            Button? previous = null;
+            View? previous = null;
             for (var index = 0; index < contents.Length; index++)
             {
-                var captured = index;
-                var button = new Button
+                var button = new View
                 {
-                    Text = $"_{contents[index].Item1}",
+                    Title = $"_{contents[index].Item1}",
                     X = previous == null ? 0 : Pos.Right(previous),
                     Y = 0,
                     Width = contents[index].Item1.Length + 4,
-                    Height = 3,
+                    Height = 2,
                     BorderStyle = Terminal.Gui.Drawing.LineStyle.Rounded,
-                    NoDecorations = true,
                     CanFocus = false,
                     MouseHighlightStates = MouseState.None
                 };
-                button.Accepting += (_, e) => { e.Handled = true; SelectTab(captured); };
                 navigation.Add(button);
                 var content = contents[index].Item2;
                 content.X = 0;
-                content.Y = 5;
+                content.Y = 3;
                 content.Width = Dim.Fill();
-                content.Height = Dim.Fill(6);
+                content.Height = Dim.Fill(4);
                 content.Visible = false;
                 window.Add(content);
                 _tabs.Add((button, content, contents[index].Item1));
                 previous = button;
             }
             window.Add(navigation);
+            app.Mouse.MouseEvent += HandleMainTabMouse;
             SelectTab(0);
 
             var status = new StatusBar([
@@ -195,6 +193,18 @@ internal static class HydraTui
                 var selected = i == index;
                 _tabs[i].Content.Visible = selected;
                 _tabs[i].Button.SchemeName = selected ? "Accent" : "Base";
+            }
+        }
+
+        private void HandleMainTabMouse(object? sender, Terminal.Gui.Input.Mouse mouse)
+        {
+            if (!mouse.Flags.HasFlag(MouseFlags.LeftButtonPressed)) return;
+            for (var index = 0; index < _tabs.Count; index++)
+            {
+                if (!_tabs[index].Button.FrameToScreen().Contains(mouse.ScreenPosition)) continue;
+                mouse.Handled = true;
+                SelectTab(index);
+                return;
             }
         }
 
@@ -226,9 +236,9 @@ internal static class HydraTui
             var tab = new FrameView { Title = "Configuration", Width = Dim.Fill(), Height = Dim.Fill() };
             _formModeButton.X = 1; _formModeButton.Y = 0;
             _textModeButton.X = Pos.Right(_formModeButton) + 1; _textModeButton.Y = 0;
-            _formModeButton.CanFocus = false;
+            _formModeButton.CanFocus = true;
             _formModeButton.MouseHighlightStates = MouseState.None;
-            _textModeButton.CanFocus = false;
+            _textModeButton.CanFocus = true;
             _textModeButton.MouseHighlightStates = MouseState.None;
             _formModeButton.Accepting += (_, e) => { e.Handled = true; SwitchConfigMode(guided: true); };
             _textModeButton.Accepting += (_, e) => { e.Handled = true; SwitchConfigMode(guided: false); };
@@ -244,7 +254,7 @@ internal static class HydraTui
             _config.Width = Dim.Fill();
             _config.Height = Dim.Fill();
 
-            var helpPanel = new FrameView { Title = "Option help", X = 0, Y = Pos.AnchorEnd(6), Width = Dim.Fill(), Height = 3 };
+            var helpPanel = new FrameView { Title = "Option Help", X = 0, Y = Pos.AnchorEnd(6), Width = Dim.Fill(), Height = 3 };
             helpPanel.Add(_configHelp);
             var validate = new Button { Text = "_Validate", X = 1, Y = Pos.AnchorEnd(2) };
             validate.Accepting += (_, e) => { e.Handled = true; ValidateConfig(); };
@@ -258,20 +268,20 @@ internal static class HydraTui
             };
             var save = new Button { Text = "_Save", X = Pos.Right(_revealSecrets) + 2, Y = Pos.Top(validate) };
             save.Accepting += (_, e) => { e.Handled = true; _ = SaveConfigAsync(restart: false); };
-            var apply = new Button { Text = "Save && _restart", X = Pos.Right(save) + 2, Y = Pos.Top(validate) };
+            var apply = new Button { Text = "Save && _Restart", X = Pos.Right(save) + 2, Y = Pos.Top(validate) };
             apply.Accepting += (_, e) => { e.Handled = true; _ = SaveConfigAsync(restart: true); };
             _configText.Add(_config);
             tab.Add(_formModeButton, _textModeButton, _configForm, _configText, helpPanel,
                 validate, reload, _revealSecrets, save, apply);
 
-            BindConfigHelp(_formModeButton, "Form mode", "Edit common Hydra settings in labelled fields. Advanced topology remains unchanged.");
-            BindConfigHelp(_textModeButton, "Text mode", "Edit the complete hydra.conf JSON, including hosts, neighbours and screen definitions.");
-            BindConfigHelp(_config, "Raw configuration", "Complete hydra.conf JSON. Secrets stay masked until Reveal secrets is selected.");
+            BindConfigHelp(_formModeButton, "Form Mode", "Edit common Hydra settings in labelled fields. Advanced topology remains unchanged.");
+            BindConfigHelp(_textModeButton, "Text Mode", "Edit the complete hydra.conf JSON, including hosts, neighbours and screen definitions.");
+            BindConfigHelp(_config, "Raw Configuration", "Complete hydra.conf JSON. Secrets stay masked until Reveal Secrets is selected.");
             BindConfigHelp(validate, "Validate", "Check the current form or JSON with Hydra's canonical parser without writing the file.");
             BindConfigHelp(reload, "Reload", "Discard unsaved edits and reload hydra.conf from disk or the running daemon.");
-            BindConfigHelp(_revealSecrets, "Reveal secrets", "Temporarily show relay credentials in Text mode. Avoid this in recorded or shared terminals.");
+            BindConfigHelp(_revealSecrets, "Reveal Secrets", "Temporarily show relay credentials in Text mode. Avoid this in recorded or shared terminals.");
             BindConfigHelp(save, "Save", "Validate and atomically replace hydra.conf. The running Hydra process is not restarted.");
-            BindConfigHelp(apply, "Save and restart", "Validate, atomically save, then restart Hydra so the new configuration becomes active.");
+            BindConfigHelp(apply, "Save and Restart", "Validate, atomically save, then restart Hydra so the new configuration becomes active.");
             ShowConfigMode(guided: true);
             return tab;
         }
@@ -279,9 +289,9 @@ internal static class HydraTui
         private void BuildGuidedConfigForm()
         {
             var global = new FrameView { Title = "Global", X = 0, Y = 2, Width = Dim.Fill(), Height = Dim.Fill() };
-            AddField(global, "Machine name", _rootName, 0, 26, "Name advertised to peers; defaults to the hostname when empty.");
-            AddField(global, "Log level", _rootLogLevel, 2, 26, "Minimum log detail: trce, dbug, info, warn, fail, or crit.");
-            AddField(global, "Force profile", _rootProfileOverride, 4, 26, "Always select this profile name and ignore its activation conditions. Leave empty for automatic selection.");
+            AddField(global, "Machine Name", _rootName, 0, 26, "Name advertised to peers; defaults to the hostname when empty.");
+            AddField(global, "Log Level", _rootLogLevel, 2, 26, "Minimum log detail: trce, dbug, info, warn, fail, or crit.");
+            AddField(global, "Force Profile", _rootProfileOverride, 4, 26, "Always select this profile name and ignore its activation conditions. Leave empty for automatic selection.");
             PlaceCheckBox(global, _rootAutoUpdate, 6, "Allow Hydra's built-in updater to check for and apply releases.");
             PlaceCheckBox(global, _rootDebugShield, 8, "Enable verbose macOS shield diagnostics. Normally leave disabled.");
             PlaceCheckBox(global, _rootDebugMouse, 10, "Enable verbose mouse routing diagnostics. Normally leave disabled.");
@@ -292,32 +302,32 @@ internal static class HydraTui
             _nextProfile.X = Pos.Right(_previousProfile) + 2; _nextProfile.Y = 2;
             _previousProfile.Accepting += (_, e) => { e.Handled = true; ChangeGuidedProfile(-1); };
             _nextProfile.Accepting += (_, e) => { e.Handled = true; ChangeGuidedProfile(1); };
-            AddFieldAt(profile, "Profile name", _profileName, 1, 15, 5, 18, "Display name used by the TUI and optional profile override.");
+            AddFieldAt(profile, "Profile Name", _profileName, 1, 15, 5, 18, "Display name used by the TUI and optional profile override.");
             AddFieldAt(profile, "Mode", _profileMode, 1, 15, 7, 18, "Master captures and routes input; Slave receives and injects input.");
             AddFieldAt(profile, "SSID", _conditionSsid, 1, 15, 9, 18, "Activate this profile only when connected to this Wi-Fi network. Empty means any SSID.");
-            AddFieldAt(profile, "Screen count", _conditionScreens, 1, 15, 11, 18, "Activate only when exactly this many local screens are detected. Empty means any count.");
+            AddFieldAt(profile, "Screen Count", _conditionScreens, 1, 15, 11, 18, "Activate only when exactly this many local screens are detected. Empty means any count.");
             AddFieldAt(profile, "Power", _conditionPower, 53, 69, 5, 18, "Activation condition: any, yes (AC power), or no (battery).");
-            AddFieldAt(profile, "Mouse scale", _mouseScale, 53, 69, 7, 18, "Slave fallback cursor-speed multiplier. Master profiles must leave this empty.");
-            AddFieldAt(profile, "Relative scale", _relativeMouseScale, 53, 69, 9, 18, "Slave fallback relative-mode cursor-speed multiplier.");
-            AddFieldAt(profile, "Dead corners", _deadCorners, 53, 69, 11, 18, "Pixels at each screen corner that do not trigger an edge transition.");
+            AddFieldAt(profile, "Mouse Scale", _mouseScale, 53, 69, 7, 18, "Slave fallback cursor-speed multiplier. Master profiles must leave this empty.");
+            AddFieldAt(profile, "Relative Scale", _relativeMouseScale, 53, 69, 9, 18, "Slave fallback relative-mode cursor-speed multiplier.");
+            AddFieldAt(profile, "Dead Corners", _deadCorners, 53, 69, 11, 18, "Pixels at each screen corner that do not trigger an edge transition.");
             AddDefaultHint(profile, _conditionSsid, "any SSID");
             AddDefaultHint(profile, _conditionScreens, "any count");
             AddDefaultHint(profile, _mouseScale, "1.0");
             AddDefaultHint(profile, _relativeMouseScale, "mouse scale");
             AddDefaultHint(profile, _deadCorners, "0 px");
             profile.Add(_profilePosition, _previousProfile, _nextProfile);
-            BindConfigHelp(_previousProfile, "Previous profile", "Move to the previous profile. Disabled on the first profile or when only one exists.");
-            BindConfigHelp(_nextProfile, "Next profile", "Move to the next profile. Disabled on the last profile or when only one exists.");
+            BindConfigHelp(_previousProfile, "Previous Profile", "Move to the previous profile. Disabled on the first profile or when only one exists.");
+            BindConfigHelp(_nextProfile, "Next Profile", "Move to the next profile. Disabled on the last profile or when only one exists.");
 
             var relay = new FrameView { Title = "Relay", X = 0, Y = 2, Width = Dim.Fill(), Height = Dim.Fill(), Visible = false };
-            AddField(relay, "Network config", _networkConfig, 0, 38, "Encrypted/base64 Styx network configuration shared by peers.");
+            AddField(relay, "Network Config", _networkConfig, 0, 38, "Encrypted/base64 Styx network configuration shared by peers.");
             AddField(relay, "Embedded URL", _embeddedServer, 3, 38, "Connect to an embedded Styx relay at this URL instead of using networkConfig.");
             AddField(relay, "Password", _embeddedPassword, 5, 38, "Password for the embedded Styx relay URL above. Masked while typing.");
-            AddField(relay, "Local port", _embeddedPort, 8, 38, "Run an embedded Styx relay on this TCP port.");
+            AddField(relay, "Local Port", _embeddedPort, 8, 38, "Run an embedded Styx relay on this TCP port.");
             AddField(relay, "Password", _embeddedServerPassword, 10, 38, "Password used by peers connecting to this machine's embedded relay. Masked while typing.");
             relay.Add(new Label { Text = "Secrets remain masked in Form mode.", X = 1, Y = 11 });
 
-            var behavior = new FrameView { Title = "Behaviour & topology", X = 0, Y = 2, Width = Dim.Fill(), Height = Dim.Fill(), Visible = false };
+            var behavior = new FrameView { Title = "Behaviour & Topology", X = 0, Y = 2, Width = Dim.Fill(), Height = Dim.Fill(), Visible = false };
             PlaceCheckBox(behavior, _hideCursor, 0, "Hide the master's local cursor after inactivity. Master only.");
             PlaceCheckBox(behavior, _remoteOnly, 2, "Treat this master as a headless input forwarder with no local screen route.");
             PlaceCheckBox(behavior, _syncScreensaver, 4, "Synchronize screensaver activation with connected peers.");
@@ -327,7 +337,7 @@ internal static class HydraTui
 
             _advancedSummary.X = 1; _advancedSummary.Y = 12; _advancedSummary.Width = Dim.Fill(1); _advancedSummary.Height = 3;
             behavior.Add(_advancedSummary);
-            BindConfigHelp(_advancedSummary, "Advanced topology", "Host neighbours and per-screen matching are preserved here and editable in Text mode.");
+            BindConfigHelp(_advancedSummary, "Advanced Topology", "Host neighbours and per-screen matching are preserved here and editable in Text mode.");
 
             var sections = new[]
             {
@@ -345,7 +355,7 @@ internal static class HydraTui
                     Text = $"_{sections[index].Item1}",
                     X = previous == null ? 1 : Pos.Right(previous) + 1,
                     Y = 0,
-                    CanFocus = false,
+                    CanFocus = true,
                     MouseHighlightStates = MouseState.None
                 };
                 button.Accepting += (_, e) => { e.Handled = true; SelectFormSection(captured); };
@@ -365,6 +375,7 @@ internal static class HydraTui
                 _formSections[i].Content.Visible = selected;
                 _formSections[i].Button.SchemeName = selected ? "Accent" : "Base";
             }
+            _formSections[index].Button.SetFocus();
         }
 
         private static void AddDefaultHint(View parent, TextField field, string defaultValue)
@@ -573,11 +584,11 @@ internal static class HydraTui
                 if (result.Valid)
                     MessageBox.Query(app, "Configuration", "Configuration is valid.", "OK");
                 else
-                    MessageBox.ErrorQuery(app, "Configuration error", result.Error ?? "Invalid configuration.", "OK");
+                    MessageBox.ErrorQuery(app, "Configuration Error", result.Error ?? "Invalid configuration.", "OK");
             }
             catch (Exception ex)
             {
-                MessageBox.ErrorQuery(app, "Configuration error", ex.Message, "OK");
+                MessageBox.ErrorQuery(app, "Configuration Error", ex.Message, "OK");
             }
         }
 
@@ -591,10 +602,10 @@ internal static class HydraTui
                 var validation = TransactionalConfigStore.Validate(json);
                 if (!validation.Valid)
                 {
-                    app.Invoke(() => MessageBox.ErrorQuery(app, "Configuration error", validation.Error ?? "Invalid configuration.", "OK"));
+                    app.Invoke(() => MessageBox.ErrorQuery(app, "Configuration Error", validation.Error ?? "Invalid configuration.", "OK"));
                     return;
                 }
-                if (MessageBox.Query(app, restart ? "Save and restart" : "Save configuration",
+                if (MessageBox.Query(app, restart ? "Save and Restart" : "Save Configuration",
                         restart ? "Save hydra.conf and restart Hydra?" : "Save hydra.conf?", "Save", "Cancel") != 0)
                     return;
 
@@ -620,7 +631,7 @@ internal static class HydraTui
                 app.Invoke(() =>
                 {
                     SetCommandBusy(false, $"Save failed: {ex.Message}", "Error");
-                    MessageBox.ErrorQuery(app, "Save failed", ex.Message, "OK");
+                    MessageBox.ErrorQuery(app, "Save Failed", ex.Message, "OK");
                 });
             }
         }
@@ -663,7 +674,7 @@ internal static class HydraTui
             }
             catch (Exception ex)
             {
-                MessageBox.ErrorQuery(app, "Configuration error", ex.Message, "OK");
+                MessageBox.ErrorQuery(app, "Configuration Error", ex.Message, "OK");
             }
         }
 
@@ -728,7 +739,7 @@ internal static class HydraTui
             SetChecked(_screenLockPropagation, profile.ScreenLockPropagation);
             SetChecked(_accelerateMouseWheel, profile.AccelerateMouseWheel);
             SetChecked(_unicodeKeyRepeat, profile.UnicodeKeyRepeat);
-            _advancedSummary.Text = $"ADVANCED\nHosts: {profile.HostCount}   Screen definitions: {profile.ScreenDefinitionCount}\nUse Text mode to edit hosts, neighbours and per-screen matching.";
+            _advancedSummary.Text = $"Advanced\nHosts: {profile.HostCount}   Screen Definitions: {profile.ScreenDefinitionCount}\nUse Text mode to edit hosts, neighbours and per-screen matching.";
         }
 
         private void CommitGuidedFields()
@@ -773,7 +784,7 @@ internal static class HydraTui
             }
             catch (Exception ex)
             {
-                MessageBox.ErrorQuery(app, "Configuration error", ex.Message, "OK");
+                MessageBox.ErrorQuery(app, "Configuration Error", ex.Message, "OK");
             }
         }
 
@@ -799,22 +810,22 @@ internal static class HydraTui
                     _config.Text = ConfigSecretMask.Mask(_config.Text);
                     _configMaskFailed = false;
                     _secretsRevealed = false;
-                    button.Text = "_Reveal secrets";
+                    button.Text = "_Reveal Secrets";
                 }
                 else
                 {
-                    if (MessageBox.Query(app, "Reveal secrets", "Show relay credentials in the terminal?", "Reveal", "Cancel") != 0)
+                    if (MessageBox.Query(app, "Reveal Secrets", "Show relay credentials in the terminal?", "Reveal", "Cancel") != 0)
                         return;
                     _config.Text = _configMaskFailed
                         ? _configWithSecrets
                         : ConfigSecretMask.Restore(_config.Text, _configWithSecrets);
                     _secretsRevealed = true;
-                    button.Text = "_Hide secrets";
+                    button.Text = "_Hide Secrets";
                 }
             }
             catch (Exception ex)
             {
-                MessageBox.ErrorQuery(app, "Configuration error", ex.Message, "OK");
+                MessageBox.ErrorQuery(app, "Configuration Error", ex.Message, "OK");
             }
         }
 
@@ -822,7 +833,7 @@ internal static class HydraTui
         {
             if (!_liveControlsReady)
             {
-                app.Invoke(() => MessageBox.Query(app, "Management unavailable",
+                app.Invoke(() => MessageBox.Query(app, "Management Unavailable",
                     "This TUI is not connected to Hydra. The running Hydra process has not been interrupted.", "OK"));
                 return;
             }
@@ -837,7 +848,7 @@ internal static class HydraTui
                     app.Invoke(() =>
                     {
                         SetCommandBusy(false, result.Message, "Error");
-                        MessageBox.ErrorQuery(app, "Command unavailable", result.Message, "OK");
+                        MessageBox.ErrorQuery(app, "Command Unavailable", result.Message, "OK");
                     });
                     return;
                 }
@@ -851,7 +862,7 @@ internal static class HydraTui
                 app.Invoke(() =>
                 {
                     SetCommandBusy(false, $"Command failed: {ex.Message}", "Error");
-                    MessageBox.ErrorQuery(app, "Command failed", ex.Message, "OK");
+                    MessageBox.ErrorQuery(app, "Command Failed", ex.Message, "OK");
                 });
             }
         }
@@ -968,10 +979,10 @@ internal static class HydraTui
                 Connection
                 {connection}
 
-                Active network links  (◆ has a gateway)
+                Active Network Links  (◆ has a gateway)
                 {adapters}
 
-                Embedded relay clients  (actual inbound interface)
+                Embedded Relay Clients  (actual inbound interface)
                 {embeddedPeers}
 
                 Routing
@@ -1031,6 +1042,7 @@ internal static class HydraTui
 
         public void Dispose()
         {
+            app.Mouse.MouseEvent -= HandleMainTabMouse;
             _cancel.Cancel();
             _cancel.Dispose();
         }
