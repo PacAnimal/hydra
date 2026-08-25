@@ -296,8 +296,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         {
             ConnectCallback = async (ctx, cancel) =>
             {
-                var socket = new Socket(SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
-                await socket.ConnectAsync(ctx.DnsEndPoint, cancel);
+                var socket = await RelaySocketConnector.ConnectAsync(ctx.DnsEndPoint, cancel);
                 return new NetworkStream(socket, ownsSocket: true);
             }
         };
