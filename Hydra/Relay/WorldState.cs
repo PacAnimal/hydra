@@ -11,6 +11,7 @@ public interface IWorldState
     ValueTask<PeerDelta> UpdatePeers(HashSet<string> currentPeers, HashSet<string> configuredSlaves);
     ValueTask SetPeerScreens(string host, List<ScreenInfoEntry> screens);
     ValueTask<Dictionary<string, List<ScreenInfoEntry>>> GetPeerScreensSnapshot();
+    ValueTask<List<PeerRuntimeSnapshot>> GetPeerRuntimeSnapshot();
     ILogger GetOrCreateSlaveLogger(string category, ILoggerFactory factory);
 
     // -- slave-side --
@@ -86,6 +87,15 @@ public class WorldState : IWorldState
     {
         using var m = await _master.WaitForDisposable();
         return m.Value.PeerScreens.ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase);
+    }
+
+    public async ValueTask<List<PeerRuntimeSnapshot>> GetPeerRuntimeSnapshot()
+    {
+        using var m = await _master.WaitForDisposable();
+        return [.. m.Value.KnownPeers.Order(StringComparer.OrdinalIgnoreCase).Select(name => new PeerRuntimeSnapshot(
+            name,
+            m.Value.PeerPlatforms.GetValueOrDefault(name),
+            m.Value.PeerScreens.TryGetValue(name, out var screens) ? [.. screens] : []))];
     }
 
     public ILogger GetOrCreateSlaveLogger(string category, ILoggerFactory factory) =>
@@ -169,3 +179,5 @@ public record PeerDelta(
     List<string> NewPeers,
     bool AnyDeparted,
     Dictionary<string, List<ScreenInfoEntry>> PeerScreensSnapshot);
+
+public sealed record PeerRuntimeSnapshot(string Name, PeerPlatform Platform, List<ScreenInfoEntry> Screens);

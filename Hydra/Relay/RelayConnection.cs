@@ -111,6 +111,18 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         }
     }
 
+    // Manual reconnect (TUI command): cancels whichever Connect() attempt is currently in flight so the
+    // Execute loop's reconnect-delay-then-retry immediately kicks in, without touching suspend state.
+    public bool RequestReconnect()
+    {
+        lock (_connectionLock)
+        {
+            if (_connectionCancellation == null || _connectionCancellation.IsCancellationRequested) return false;
+            _connectionCancellation.Cancel();
+            return true;
+        }
+    }
+
     public ValueTask SuspendConnectionAsync(CancellationToken cancel = default) =>
         SuspendConnectionCoreAsync(null, cancel);
 
@@ -204,6 +216,16 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         resume?.TrySetResult();
         try { retryDelay?.Cancel(); }
         catch (ObjectDisposedException) { }
+    }
+
+    public bool RequestReconnect()
+    {
+        lock (_connectionLock)
+        {
+            if (_connectionCancellation == null || _connectionCancellation.IsCancellationRequested) return false;
+            _connectionCancellation.Cancel();
+            return true;
+        }
     }
 
     public async ValueTask SendReliableAsync(string[] targetHosts, byte[] payload, CancellationToken cancel = default)
@@ -669,8 +691,9 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
             : MessageSerializer.Encode(MessageKind.MouseMoveDelta, new MouseMoveDeltaMessage(_dx, _dy));
     }
 
-    // Lets SuspendConnectionAsync cancel whichever Connect() attempt is currently in flight, wherever
-    // it is in the connect/authenticate/drain sequence, without tearing down the whole reconnect loop.
+    // Lets SuspendConnectionAsync/RequestReconnect cancel whichever Connect() attempt is currently in
+    // flight, wherever it is in the connect/authenticate/drain sequence, without tearing down the
+    // whole reconnect loop.
     private sealed class ConnectionCancellationScope : IDisposable
     {
         private readonly RelayConnection _owner;

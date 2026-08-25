@@ -8,6 +8,7 @@ using Hydra.Keyboard;
 using Hydra.Mouse;
 using Hydra.Platform;
 using Hydra.Relay;
+using Hydra.Management;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -212,6 +213,18 @@ public class InputRouter(
             return Task.CompletedTask;
         return tcs.Task;
     }
+
+    internal Task<RouterStatus?> GetManagementStatusAsync() => RunFence<RouterStatus?>(st =>
+    {
+        var current = st.Mouse.CurrentScreen;
+        return new RouterStatus(
+            current != null,
+            current?.Host,
+            current?.Name,
+            st.LockedToScreen,
+            st.ConfinedToScreen,
+            current != null && st.RelativeMouseScreens.GetValueOrDefault(current.Name));
+    }, null);
 
     private async Task OnScreensChanged(LocalScreenSnapshot snapshot)
     {

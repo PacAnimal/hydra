@@ -45,15 +45,20 @@ public class HydraConfigFile
 
     public static (HydraConfigFile file, string path) LoadAll(IConfiguration config)
     {
-        var binaryDir = Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory;
-        var path = config.GetStringOrNull("CONFIG")
-            ?? FindConfig(Path.Combine(binaryDir, "hydra.conf"))
-            ?? FindConfig(Path.Combine(Directory.GetCurrentDirectory(), "hydra.conf"))
-            ?? throw new FileNotFoundException("No hydra.conf found. Set CONFIG=/path/to/hydra.conf and try again.");
+        var path = ResolvePath(config.GetStringOrNull("CONFIG"));
 
         var json = File.ReadAllText(path);
         var file = Parse(json, path);
         return (file, path);
+    }
+
+    internal static string ResolvePath(string? explicitPath = null)
+    {
+        if (explicitPath != null) return Path.GetFullPath(explicitPath);
+        var binaryDir = Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory;
+        return FindConfig(Path.Combine(binaryDir, "hydra.conf"))
+            ?? FindConfig(Path.Combine(Directory.GetCurrentDirectory(), "hydra.conf"))
+            ?? throw new FileNotFoundException("No hydra.conf found. Set CONFIG=/path/to/hydra.conf and try again.");
     }
 
     internal static HydraConfigFile Parse(string json, string path)

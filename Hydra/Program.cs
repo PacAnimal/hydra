@@ -5,6 +5,7 @@ using Cathedral.Logging;
 using Cathedral.Utils;
 using Hydra.Config;
 using Hydra.FileTransfer;
+using Hydra.Management;
 using Hydra.Platform;
 using Hydra.Platform.Linux;
 using Hydra.Platform.MacOs;
@@ -12,6 +13,7 @@ using Hydra.Platform.Windows;
 using Hydra.Relay;
 using Hydra.Screen;
 using Hydra.Update;
+using Hydra;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -32,6 +34,12 @@ TaskScheduler.UnobservedTaskException += (_, e) =>
     Console.Error.WriteLine($"[FATAL] Unobserved task exception: {e.Exception}");
     e.SetObserved();
 };
+
+if (args.FirstOrDefault()?.Equals("tui", StringComparison.OrdinalIgnoreCase) == true)
+{
+    await HydraTui.RunAsync(args[1..]);
+    return;
+}
 
 if (args.Contains("--install"))
 {
@@ -144,6 +152,10 @@ else if (config?.EmbeddedStyxServer != null)
 var profile = new HydraProfile(configFile, config, embeddedNetworkConfig);
 services.AddSingleton<IHydraProfile>(profile);
 
+var managementLogs = new ManagementLogBuffer();
+services.AddSingleton(managementLogs);
+services.AddSingleton<ILoggerProvider>(managementLogs);
+
 services.AddSereneConsoleLogging(c => c.MinLogLevel = profile.LogLevel);
 
 // the session child is where the input hooks and the relay actually run, so in service mode its log is
@@ -243,7 +255,8 @@ if (config != null)
             throw new PlatformNotSupportedException($"Unsupported OS: {Environment.OSVersion}");
 
         services.AddHostedService<ICursorHider, CursorHiderService>();
-        services.AddHostedService<InputRouter>();
+        services.AddSingleton<InputRouter>();
+        services.AddHostedService(sp => sp.GetRequiredService<InputRouter>());
     }
     else if (profile.Mode == Mode.Slave)
     {
@@ -381,6 +394,13 @@ if (config != null)
 
 if (OperatingSystem.IsWindows() && RunMode.IsSessionChild)
     services.AddHostedService<SessionChildLifetime>();
+
+var runtimeInfo = new HydraRuntimeInfo(configPath, DateTimeOffset.UtcNow);
+services.AddSingleton(runtimeInfo);
+services.AddSingleton<TransactionalConfigStore>();
+services.AddSingleton<HydraStatusService>();
+services.AddSingleton<HydraLifetimeController>();
+services.AddHostedService<ManagementServer>();
 
 var app = builder.Build();
 

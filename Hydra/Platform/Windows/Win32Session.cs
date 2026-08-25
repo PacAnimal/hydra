@@ -1,6 +1,9 @@
 using System.ComponentModel;
+using System.IO.Pipes;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using Microsoft.Win32.SafeHandles;
 // ReSharper disable InconsistentNaming
 
@@ -78,6 +81,26 @@ internal static partial class Win32Session
     {
         if (!handle.IsInvalid && !handle.IsClosed)
             _ = TerminateProcess(handle, 0);
+    }
+
+    /// <summary>Builds a private management-pipe ACL for the service child and active desktop user.</summary>
+    internal static PipeSecurity CreateManagementPipeSecurity()
+    {
+        var system = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null);
+        var security = new PipeSecurity();
+        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        security.SetOwner(system);
+        security.AddAccessRule(new PipeAccessRule(system, PipeAccessRights.FullControl, AccessControlType.Allow));
+
+        var sessionId = GetActiveConsoleSessionId();
+        if (sessionId == NoSession) return security;
+
+        using var token = AcquireUserToken(sessionId);
+        if (token == null) return security;
+        using var identity = new WindowsIdentity(token.DangerousGetHandle());
+        if (identity.User is { } user)
+            security.AddAccessRule(new PipeAccessRule(user, PipeAccessRights.FullControl, AccessControlType.Allow));
+        return security;
     }
 
     // -- named events --

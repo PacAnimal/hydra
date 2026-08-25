@@ -6,6 +6,7 @@ See the [project README](../README.md) for installation and a quick-start guide.
 
 - [Requirements](#requirements)
 - [Config file location](#config-file-location)
+- [Terminal control center](#terminal-control-center)
 - [Config fields](#config-fields)
 - [Screen layout](#screen-layout)
 - [Dead corners](#dead-corners)
@@ -37,6 +38,23 @@ The config file is `hydra.conf`, located next to the binary. Set the `CONFIG` en
 ```bash
 CONFIG=/path/to/hydra.conf ./hydra
 ```
+
+## Terminal control center
+
+Run the TUI in a separate terminal while Hydra is running:
+
+```bash
+./hydra tui
+./hydra tui --config /path/to/hydra.conf
+```
+
+`--config` must identify the same canonical config path as the daemon you want to manage. The TUI connects through a local-only Unix socket on macOS/Linux or a restricted named pipe on Windows; it does not expose a network management port.
+
+The tabs provide runtime status, known peers and screens, bounded live logs, raw JSON configuration editing, diagnostics, and keyboard help. Runtime controls currently include relay reconnect and a confirmed Hydra restart. The configuration tab uses Hydra's canonical parser and validator, detects external file changes, and writes through a validated sibling temporary file before replacing the original. **Save** changes the file only; **Save & restart** also asks the running daemon to restart.
+
+Passwords and `networkConfig` values are masked by default. Revealing them displays the real values in the terminal, so avoid doing that in a recorded or shared session. When the daemon is unavailable, configuration read, validation, and save continue to work offline; live status and controls do not.
+
+Use `Esc` to close the TUI. Hydra continues running.
 
 ## Config fields
 

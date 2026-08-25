@@ -90,6 +90,19 @@ All releases are [self-contained](https://github.com/PacAnimal/hydra/releases) �
 
 > **Linux headless (no display):** See [Remote-only / Raspberry Pi setup](docs/CONFIGURATION.md#headless-linux-no-display-server).
 
+### Terminal control center
+
+Open Hydra's local cross-platform TUI in another terminal:
+
+```bash
+./hydra tui
+./hydra tui --config /path/to/hydra.conf
+```
+
+The control center shows the running process, active profile, relay, screens, peers, current routing state, and a bounded live log. It can request a relay reconnect or Hydra restart, and can validate and atomically save `hydra.conf`. Configuration editing remains available when Hydra is offline. Relay passwords and `networkConfig` values are hidden until you explicitly reveal them.
+
+The TUI controls only the Hydra instance on the same machine and config path. Closing it does not stop Hydra. Use `Esc` to quit the TUI.
+
 ---
 
 ## Quickstart
@@ -164,6 +177,7 @@ The easiest way to set up multi-machine layouts, Styx relay configs, and network
 - End-to-end encrypted relay via **Styx** for machines on different networks
 - **Multiple masters per slave** — several machines can share a single slave display; whoever moves their cursor onto it takes control
 - **Remote-only mode** — use a headless Linux machine (e.g. Raspberry Pi) as a dedicated input forwarder with no local screen
+- **Terminal control center** — monitor, control, and configure the local Hydra instance from macOS, Windows, Linux, or SSH
 
 ---
 
