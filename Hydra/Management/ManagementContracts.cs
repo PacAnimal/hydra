@@ -25,6 +25,23 @@ public sealed record PeerStatus(string Name, string Platform, bool Connected, Li
 
 public sealed record RouterStatus(bool IsRemote, string? ActiveHost, string? ActiveScreen, bool LockedToScreen, bool ConfinedToScreen, bool RelativeMouse);
 
+public sealed record RelayConnectionStatus(
+    string InterfaceName,
+    string InterfaceType,
+    string LocalAddress,
+    int LocalPort,
+    string RelayHost,
+    string RemoteAddress,
+    int RemotePort,
+    DateTimeOffset ConnectedAt,
+    long ConnectionAttempts,
+    long MessagesSent,
+    long MessagesReceived,
+    long BytesSent,
+    long BytesReceived);
+
+public sealed record NetworkAdapterStatus(string Name, string Type, List<string> Addresses, bool HasGateway);
+
 public sealed record HydraStatusSnapshot(
     DateTimeOffset CapturedAt,
     string Version,
@@ -37,6 +54,8 @@ public sealed record HydraStatusSnapshot(
     Mode Mode,
     bool IsIdle,
     bool RelayConnected,
+    RelayConnectionStatus? RelayConnection,
+    List<NetworkAdapterStatus> ActiveNetworkAdapters,
     bool Dormant,
     List<ScreenStatus> LocalScreens,
     List<PeerStatus> Peers,

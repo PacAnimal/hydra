@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Net.NetworkInformation;
 using Hydra.Config;
 using Hydra.Relay;
 using Hydra.Screen;
@@ -42,7 +43,9 @@ internal sealed class HydraStatusService(
         }
 
         var relay = services.GetService<IRelaySender>();
+        var transport = relay?.Transport;
         var router = services.GetService<InputRouter>();
+        var adapters = GetActiveNetworkAdapters();
         var config = await configStore.ReadAsync(cancel);
         var version = Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.0.0";
 
@@ -58,9 +61,65 @@ internal sealed class HydraStatusService(
             profile.Mode,
             profile.ProfileName == null && profile.Hosts.Count == 0,
             relay?.IsConnected == true,
+            transport == null ? null : new RelayConnectionStatus(
+                transport.InterfaceName,
+                transport.InterfaceType,
+                transport.LocalAddress,
+                transport.LocalPort,
+                transport.RelayHost,
+                transport.RemoteAddress,
+                transport.RemotePort,
+                transport.ConnectedAt,
+                transport.ConnectionAttempts,
+                transport.MessagesSent,
+                transport.MessagesReceived,
+                transport.BytesSent,
+                transport.BytesReceived),
+            adapters,
             dormancy.IsDormant,
             localScreens,
             peers,
             router == null ? null : await router.GetManagementStatusAsync());
     }
+
+    private static List<NetworkAdapterStatus> GetActiveNetworkAdapters()
+    {
+        try
+        {
+            return [.. NetworkInterface.GetAllNetworkInterfaces()
+                .Where(network => network.OperationalStatus == OperationalStatus.Up
+                    && network.NetworkInterfaceType != NetworkInterfaceType.Loopback)
+                .Select(network =>
+                {
+                    var properties = network.GetIPProperties();
+                    var addresses = properties.UnicastAddresses
+                        .Select(address => address.Address)
+                        .Where(address => !address.IsIPv6LinkLocal)
+                        .Select(address => address.ToString())
+                        .ToList();
+                    var hasGateway = properties.GatewayAddresses.Any(gateway =>
+                        !gateway.Address.Equals(System.Net.IPAddress.Any)
+                        && !gateway.Address.Equals(System.Net.IPAddress.IPv6Any));
+                    return new NetworkAdapterStatus(network.Name, DescribeInterface(network.NetworkInterfaceType), addresses, hasGateway);
+                })
+                .Where(network => network.Addresses.Count > 0)
+                .OrderByDescending(network => network.HasGateway)
+                .ThenBy(network => network.Name, StringComparer.Ordinal)];
+        }
+        catch (NetworkInformationException)
+        {
+            return [];
+        }
+    }
+
+    private static string DescribeInterface(NetworkInterfaceType type) => type switch
+    {
+        NetworkInterfaceType.Wireless80211 => "Wi-Fi",
+        NetworkInterfaceType.Ethernet or NetworkInterfaceType.Ethernet3Megabit
+            or NetworkInterfaceType.FastEthernetFx or NetworkInterfaceType.FastEthernetT
+            or NetworkInterfaceType.GigabitEthernet => "Ethernet",
+        NetworkInterfaceType.Tunnel => "VPN / tunnel",
+        NetworkInterfaceType.Ppp => "PPP",
+        _ => type.ToString()
+    };
 }

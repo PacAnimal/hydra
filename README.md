@@ -99,7 +99,7 @@ Open Hydra's local cross-platform TUI in another terminal:
 ./hydra tui --config /path/to/hydra.conf
 ```
 
-The control center shows the running process, active profile, relay, screens, peers, current routing state, and a bounded live log. It can request a relay reconnect or Hydra restart, and can validate and atomically save `hydra.conf`. Configuration editing remains available when Hydra is offline. Relay passwords and `networkConfig` values are hidden until you explicitly reveal them.
+The control center shows the running process, active profile, relay, screens, peers, current routing state, exact relay network interface/socket, traffic counters, and a bounded live log. It can request a relay reconnect or Hydra restart, and can validate and atomically save `hydra.conf`. The Configuration tab has a form for common settings and a complete JSON text editor; switching between them preserves advanced fields. Configuration editing remains available when Hydra is offline. Relay passwords and `networkConfig` values are hidden unless you explicitly reveal them in Text mode.
 
 The TUI controls only the Hydra instance on the same machine and config path. Closing it does not stop Hydra. Use `Esc` to quit the TUI.
 

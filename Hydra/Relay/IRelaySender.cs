@@ -3,6 +3,7 @@ namespace Hydra.Relay;
 public interface IRelaySender
 {
     bool IsConnected { get; }
+    RelayTransportSnapshot? Transport => null;
     void Send(string[] targetHosts, byte[] payload);
     bool RequestReconnect() => false;
     ValueTask SuspendConnectionAsync(CancellationToken cancel = default) => ValueTask.CompletedTask;
@@ -26,6 +27,21 @@ public interface IRelaySender
     event Func<string, MessageKind, ReadOnlyMemory<byte>, Task>? MessageReceived;
     event Func<Task>? Disconnected;
 }
+
+public sealed record RelayTransportSnapshot(
+    string InterfaceName,
+    string InterfaceType,
+    string LocalAddress,
+    int LocalPort,
+    string RelayHost,
+    string RemoteAddress,
+    int RemotePort,
+    DateTimeOffset ConnectedAt,
+    long ConnectionAttempts,
+    long MessagesSent,
+    long MessagesReceived,
+    long BytesSent,
+    long BytesReceived);
 
 public class NullRelaySender : IRelaySender
 {
