@@ -25,6 +25,11 @@ internal sealed class ManagementClient(string configPath)
     internal Task<ConfigDocument> SaveConfigAsync(SaveConfigRequest request, CancellationToken cancel = default) => InvokeAsync<ConfigDocument>("config.save", request, cancel);
     internal Task<CommandResult> ReconnectRelayAsync(CancellationToken cancel = default) => InvokeAsync<CommandResult>("relay.reconnect", cancel: cancel);
     internal Task<CommandResult> RestartHydraAsync(CancellationToken cancel = default) => InvokeAsync<CommandResult>("hydra.restart", cancel: cancel);
+    internal Task<RemotePairResult> PairRemoteAsync(RemotePairRequest request, CancellationToken cancel = default) => InvokeAsync<RemotePairResult>("remote.pair", request, cancel);
+    internal Task<RemoteConfigDocument> GetRemoteConfigAsync(string host, CancellationToken cancel = default) => InvokeAsync<RemoteConfigDocument>("remote.config.get", new RemoteHostRequest(host), cancel);
+    internal Task<ConfigValidation> ValidateRemoteConfigAsync(RemoteValidateRequest request, CancellationToken cancel = default) => InvokeAsync<ConfigValidation>("remote.config.validate", request, cancel);
+    internal Task<RemoteApplyAccepted> ApplyRemoteConfigAsync(RemoteApplyRequest request, CancellationToken cancel = default) => InvokeAsync<RemoteApplyAccepted>("remote.config.apply", request, cancel);
+    internal Task<CommandResult> ConfirmRemoteConfigAsync(RemoteConfirmRequest request, CancellationToken cancel = default) => InvokeAsync<CommandResult>("remote.config.confirm", request, cancel);
 
     private async Task<Stream> ConnectAsync(CancellationToken cancel)
     {

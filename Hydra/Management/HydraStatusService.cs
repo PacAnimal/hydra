@@ -47,6 +47,7 @@ internal sealed class HydraStatusService(
         var router = services.GetService<InputRouter>();
         var adapters = GetActiveNetworkAdapters();
         var embeddedPeers = await GetEmbeddedRelayPeers();
+        var latency = services.GetService<RelayLatencyService>()?.GetSnapshot() ?? [];
         var config = await configStore.ReadAsync(cancel);
         var version = Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.0.0";
 
@@ -78,6 +79,8 @@ internal sealed class HydraStatusService(
                 transport.BytesReceived),
             adapters,
             embeddedPeers,
+            [.. latency.Select(item => new PeerLatencyStatus(item.Host, item.LastRttMs, item.AverageRttMs,
+                item.P95RttMs, item.JitterMs, item.Samples, item.Lost, item.UpdatedAt))],
             dormancy.IsDormant,
             localScreens,
             peers,
@@ -143,7 +146,15 @@ internal sealed class HydraStatusService(
                     var hasGateway = properties.GatewayAddresses.Any(gateway =>
                         !gateway.Address.Equals(System.Net.IPAddress.Any)
                         && !gateway.Address.Equals(System.Net.IPAddress.IPv6Any));
-                    return new NetworkAdapterStatus(network.Name, DescribeInterface(network), addresses, hasGateway);
+                    var statistics = TryGetStatistics(network);
+                    return new NetworkAdapterStatus(network.Name, DescribeInterface(network), addresses, hasGateway,
+                        TryGetSpeed(network),
+                        statistics?.BytesReceived,
+                        statistics?.BytesSent,
+                        statistics?.IncomingPacketsWithErrors,
+                        statistics?.IncomingPacketsDiscarded,
+                        statistics?.OutgoingPacketsWithErrors,
+                        statistics == null || OperatingSystem.IsMacOS() ? null : statistics.OutgoingPacketsDiscarded);
                 })
                 .Where(network => network.Addresses.Count > 0)
                 .OrderByDescending(network => network.HasGateway)
@@ -153,6 +164,20 @@ internal sealed class HydraStatusService(
         {
             return [];
         }
+    }
+
+    private static IPInterfaceStatistics? TryGetStatistics(NetworkInterface network)
+    {
+        try { return network.GetIPStatistics(); }
+        catch (NetworkInformationException) { return null; }
+        catch (PlatformNotSupportedException) { return null; }
+    }
+
+    private static long TryGetSpeed(NetworkInterface network)
+    {
+        try { return network.Speed; }
+        catch (NetworkInformationException) { return 0; }
+        catch (PlatformNotSupportedException) { return 0; }
     }
 
     private static string DescribeInterface(NetworkInterface network)

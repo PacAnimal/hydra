@@ -7,6 +7,7 @@ using Hydra.Platform.Windows;
 using Hydra.Relay;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Hydra.Management;
 
@@ -15,7 +16,7 @@ internal sealed class ManagementServer(
     HydraStatusService status,
     TransactionalConfigStore config,
     ManagementLogBuffer logs,
-    HydraLifetimeController lifetime,
+    IHydraLifetimeController lifetime,
     IServiceProvider services,
     ILogger<ManagementServer> log) : BackgroundService
 {
@@ -171,6 +172,22 @@ internal sealed class ManagementServer(
             case "hydra.restart":
                 lifetime.RestartAfterResponse();
                 return ManagementResponse.Ok(new CommandResult(true, "Hydra restart requested."));
+            case "remote.pair":
+                return ManagementResponse.Ok(await services.GetRequiredService<RemoteManagementService>()
+                    .PairAsync(ManagementJson.Deserialize<RemotePairRequest>(request.Json), cancel));
+            case "remote.config.get":
+                return ManagementResponse.Ok(await services.GetRequiredService<RemoteManagementService>()
+                    .GetConfigAsync(ManagementJson.Deserialize<RemoteHostRequest>(request.Json).Host, cancel));
+            case "remote.config.validate":
+                return ManagementResponse.Ok(await services.GetRequiredService<RemoteManagementService>()
+                    .ValidateConfigAsync(ManagementJson.Deserialize<RemoteValidateRequest>(request.Json), cancel));
+            case "remote.config.apply":
+                return ManagementResponse.Ok(await services.GetRequiredService<RemoteManagementService>()
+                    .ApplyConfigAsync(ManagementJson.Deserialize<RemoteApplyRequest>(request.Json), cancel));
+            case "remote.config.confirm":
+                await services.GetRequiredService<RemoteManagementService>()
+                    .ConfirmConfigAsync(ManagementJson.Deserialize<RemoteConfirmRequest>(request.Json), cancel);
+                return ManagementResponse.Ok(new CommandResult(true, "Remote configuration confirmed."));
             default:
                 return ManagementResponse.Fail($"Unknown management method '{request.Method}'.");
         }

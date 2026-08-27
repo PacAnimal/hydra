@@ -3,7 +3,6 @@ using System.Net.Sockets;
 using Hydra.Config;
 using Hydra.Management;
 using Terminal.Gui.App;
-using Terminal.Gui.Drawing;
 using Terminal.Gui.Editor;
 using Terminal.Gui.Input;
 using Terminal.Gui.ViewBase;
@@ -82,16 +81,22 @@ internal static class HydraTui
         private readonly Button _nextProfile = new() { Text = "_Next", Enabled = false };
         private readonly Button _revealSecrets = new() { Text = "_Reveal Secrets", Visible = false };
         private readonly Editor _diagnostics = ReadOnlyEditor();
+        private readonly TextField _remoteHost = new();
+        private readonly TextField _remotePairingCode = new() { Secret = true };
+        private readonly Editor _remoteConfig = new() { WordWrap = false, ViewportSettings = ViewportSettingsFlags.HasVerticalScrollBar | ViewportSettingsFlags.HasHorizontalScrollBar };
+        private readonly Label _remoteStatus = new() { Text = "Select a peer, pair it locally, then load its redacted configuration." };
         private readonly Label _connection = new() { Text = "Connecting…", X = 1, Y = 0, Width = Dim.Fill(), SchemeName = "Accent" };
         private readonly Label _activity = new() { Text = "Ready", X = 1, Y = Pos.AnchorEnd(2), Width = Dim.Fill(), SchemeName = "Base" };
         private readonly Button _reconnect = new() { Text = "_Reconnect Relay", Enabled = false };
         private readonly Button _restart = new() { Text = "_Restart Hydra", Enabled = false };
         private readonly Queue<string> _visibleLogs = new();
         private ConfigDocument? _configDocument;
+        private RemoteConfigDocument? _remoteConfigDocument;
         private string? _configWithSecrets;
         private HydraStatusSnapshot? _lastStatus;
         private long _logCursor;
         private int _refreshing;
+        private int _remoteOperationActive;
         private bool _connected;
         private bool _liveControlsReady;
         private bool _helloComplete;
@@ -145,6 +150,7 @@ internal static class HydraTui
                 ("Peers & Screens", BuildTextTab("Peers & Screens", _peers)),
                 ("Logs", BuildTextTab("Logs", _logs)),
                 ("Configuration", BuildConfigTab()),
+                ("Remote", BuildRemoteConfigTab()),
                 ("Diagnostics", BuildTextTab("Diagnostics", _diagnostics)),
                 ("Help", BuildHelpTab())
             };
@@ -293,6 +299,223 @@ internal static class HydraTui
             BindConfigHelp(apply, "Save and Restart", "Validate, atomically save, then restart Hydra so the new configuration becomes active.");
             ShowConfigMode(guided: true);
             return tab;
+        }
+
+        private FrameView BuildRemoteConfigTab()
+        {
+            var tab = new FrameView { Title = "Remote Configuration", Width = Dim.Fill(), Height = Dim.Fill() };
+            var hostLabel = new Label { Text = "Peer host", X = 1, Y = 0 };
+            _remoteHost.X = 15; _remoteHost.Y = 0; _remoteHost.Width = 24;
+            var codeLabel = new Label { Text = "Pairing code", X = 42, Y = 0 };
+            _remotePairingCode.X = 57; _remotePairingCode.Y = 0; _remotePairingCode.Width = 34;
+
+            var pair = new Button { Text = "_Pair", X = 1, Y = 2 };
+            pair.Accepting += (_, e) => { e.Handled = true; _ = PairRemoteAsync(); };
+            var load = new Button { Text = "_Load Config", X = Pos.Right(pair) + 2, Y = 2 };
+            load.Accepting += (_, e) => { e.Handled = true; _ = LoadRemoteConfigAsync(); };
+            var validate = new Button { Text = "_Validate", X = Pos.Right(load) + 2, Y = 2 };
+            validate.Accepting += (_, e) => { e.Handled = true; _ = ValidateRemoteConfigAsync(); };
+            var apply = new Button { Text = "Save && _Apply", X = Pos.Right(validate) + 2, Y = 2 };
+            apply.Accepting += (_, e) => { e.Handled = true; _ = ApplyRemoteConfigAsync(); };
+            _remoteStatus.X = Pos.Right(apply) + 3; _remoteStatus.Y = 2; _remoteStatus.Width = Dim.Fill(1);
+
+            _remoteConfig.X = 0; _remoteConfig.Y = 4; _remoteConfig.Width = Dim.Fill(); _remoteConfig.Height = Dim.Fill();
+            tab.Add(hostLabel, _remoteHost, codeLabel, _remotePairingCode, pair, load, validate, apply, _remoteStatus, _remoteConfig);
+            return tab;
+        }
+
+        private async Task PairRemoteAsync()
+        {
+            var host = _remoteHost.Text.Trim();
+            var code = _remotePairingCode.Text.Trim();
+            if (string.IsNullOrWhiteSpace(host) || string.IsNullOrWhiteSpace(code))
+            {
+                MessageBox.ErrorQuery(app, "Remote Pairing", "Enter the peer host and its one-time pairing code.", "OK");
+                return;
+            }
+            if (!BeginRemoteOperation()) return;
+            try
+            {
+                SetText(_remoteStatus, $"Pairing with {host}…");
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(_cancel.Token);
+                timeout.CancelAfter(TimeSpan.FromSeconds(12));
+                var result = await _client.PairRemoteAsync(new RemotePairRequest(host, code), timeout.Token);
+                app.Invoke(() =>
+                {
+                    _remotePairingCode.Text = "";
+                    SetText(_remoteStatus, result.Message);
+                });
+            }
+            catch (OperationCanceledException) when (_cancel.IsCancellationRequested) { }
+            catch (Exception ex)
+            {
+                app.Invoke(() =>
+                {
+                    SetText(_remoteStatus, $"Pairing failed: {ex.Message}");
+                    MessageBox.ErrorQuery(app, "Remote Pairing", ex.Message, "OK");
+                });
+            }
+            finally { EndRemoteOperation(); }
+        }
+
+        private async Task LoadRemoteConfigAsync()
+        {
+            var host = _remoteHost.Text.Trim();
+            if (string.IsNullOrWhiteSpace(host))
+            {
+                MessageBox.ErrorQuery(app, "Remote Configuration", "Enter a peer host.", "OK");
+                return;
+            }
+            if (!BeginRemoteOperation()) return;
+            try
+            {
+                SetText(_remoteStatus, $"Loading {host}…");
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(_cancel.Token);
+                timeout.CancelAfter(TimeSpan.FromSeconds(12));
+                var document = await _client.GetRemoteConfigAsync(host, timeout.Token);
+                _remoteConfigDocument = document;
+                app.Invoke(() =>
+                {
+                    _remoteConfig.Text = document.Json;
+                    SetText(_remoteStatus, $"Loaded {host} revision {document.Revision[..Math.Min(12, document.Revision.Length)]}.");
+                });
+            }
+            catch (OperationCanceledException) when (_cancel.IsCancellationRequested) { }
+            catch (Exception ex)
+            {
+                app.Invoke(() =>
+                {
+                    SetText(_remoteStatus, $"Load failed: {ex.Message}");
+                    MessageBox.ErrorQuery(app, "Remote Configuration", ex.Message, "OK");
+                });
+            }
+            finally { EndRemoteOperation(); }
+        }
+
+        private async Task ValidateRemoteConfigAsync()
+        {
+            var host = _remoteHost.Text.Trim();
+            if (_remoteConfigDocument == null || !_remoteConfigDocument.Host.Equals(host, StringComparison.OrdinalIgnoreCase))
+            {
+                MessageBox.ErrorQuery(app, "Remote Configuration", "Load this peer's configuration before validating it.", "OK");
+                return;
+            }
+            if (!BeginRemoteOperation()) return;
+            try
+            {
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(_cancel.Token);
+                timeout.CancelAfter(TimeSpan.FromSeconds(12));
+                var result = await _client.ValidateRemoteConfigAsync(new RemoteValidateRequest(host, _remoteConfig.Text), timeout.Token);
+                app.Invoke(() =>
+                {
+                    if (result.Valid) MessageBox.Query(app, "Remote Configuration", "The remote configuration is valid.", "OK");
+                    else MessageBox.ErrorQuery(app, "Remote Configuration", result.Error ?? "Invalid configuration.", "OK");
+                });
+            }
+            catch (OperationCanceledException) when (_cancel.IsCancellationRequested) { }
+            catch (Exception ex)
+            {
+                app.Invoke(() => MessageBox.ErrorQuery(app, "Remote Configuration", ex.Message, "OK"));
+            }
+            finally { EndRemoteOperation(); }
+        }
+
+        private async Task ApplyRemoteConfigAsync()
+        {
+            var host = _remoteHost.Text.Trim();
+            var document = _remoteConfigDocument;
+            if (document == null || !document.Host.Equals(host, StringComparison.OrdinalIgnoreCase))
+            {
+                MessageBox.ErrorQuery(app, "Remote Configuration", "Load this peer's configuration before applying it.", "OK");
+                return;
+            }
+            if (!BeginRemoteOperation()) return;
+            try
+            {
+                using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(_cancel.Token))
+                {
+                    timeout.CancelAfter(TimeSpan.FromSeconds(12));
+                    var validation = await _client.ValidateRemoteConfigAsync(new RemoteValidateRequest(host, _remoteConfig.Text), timeout.Token);
+                    if (!validation.Valid)
+                    {
+                        app.Invoke(() => MessageBox.ErrorQuery(app, "Remote Configuration", validation.Error ?? "Invalid configuration.", "OK"));
+                        return;
+                    }
+                }
+
+                var choice = -1;
+                app.Invoke(() => choice = MessageBox.Query(app, "Apply Remote Configuration",
+                    $"Save this candidate on {host} and restart Hydra?\n\nThe peer must reconnect and be confirmed within {RemoteApplyStore.ConfirmationWindow.TotalSeconds:0} seconds or it automatically restores its last-known-good config.",
+                    "Apply", "Cancel") ?? -1);
+                if (choice != 0)
+                    return;
+
+                app.Invoke(() => SetText(_remoteStatus, $"Applying candidate to {host}…"));
+                using var applyTimeout = CancellationTokenSource.CreateLinkedTokenSource(_cancel.Token);
+                applyTimeout.CancelAfter(TimeSpan.FromSeconds(12));
+                var accepted = await _client.ApplyRemoteConfigAsync(
+                    new RemoteApplyRequest(host, document.Revision, _remoteConfig.Text), applyTimeout.Token);
+                app.Invoke(() => SetText(_remoteStatus, $"{host} restarting; waiting for candidate revision…"));
+                await WaitForRemoteApplyAsync(host, accepted);
+            }
+            catch (OperationCanceledException) when (_cancel.IsCancellationRequested) { }
+            catch (Exception ex)
+            {
+                app.Invoke(() =>
+                {
+                    SetText(_remoteStatus, $"Remote apply failed: {ex.Message}");
+                    MessageBox.ErrorQuery(app, "Remote Configuration", ex.Message, "OK");
+                });
+            }
+            finally { EndRemoteOperation(); }
+        }
+
+        private bool BeginRemoteOperation()
+        {
+            if (Interlocked.CompareExchange(ref _remoteOperationActive, 1, 0) == 0) return true;
+            MessageBox.ErrorQuery(app, "Remote Configuration", "Another remote operation is already in progress.", "OK");
+            return false;
+        }
+
+        private void EndRemoteOperation() => Interlocked.Exchange(ref _remoteOperationActive, 0);
+
+        private async Task WaitForRemoteApplyAsync(string host, RemoteApplyAccepted accepted)
+        {
+            var deadline = accepted.ExpiresAt + TimeSpan.FromSeconds(15);
+            while (DateTimeOffset.UtcNow < deadline && !_cancel.IsCancellationRequested)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(1), _cancel.Token);
+                try
+                {
+                    using var timeout = CancellationTokenSource.CreateLinkedTokenSource(_cancel.Token);
+                    timeout.CancelAfter(TimeSpan.FromSeconds(6));
+                    var document = await _client.GetRemoteConfigAsync(host, timeout.Token);
+                    if (document.Revision.Equals(accepted.CandidateRevision, StringComparison.Ordinal)
+                        && document.Apply?.TransactionId == accepted.TransactionId)
+                    {
+                        _ = await _client.ConfirmRemoteConfigAsync(
+                            new RemoteConfirmRequest(host, accepted.TransactionId, accepted.CandidateRevision), timeout.Token);
+                        _remoteConfigDocument = document with { Apply = null };
+                        app.Invoke(() =>
+                        {
+                            _remoteConfig.Text = document.Json;
+                            SetText(_remoteStatus, $"{host} is healthy on the new revision; rollback cancelled.");
+                        });
+                        return;
+                    }
+                    if (document.Apply == null && !document.Revision.Equals(accepted.CandidateRevision, StringComparison.Ordinal))
+                        throw new InvalidOperationException($"{host} restored its previous configuration.");
+                }
+                catch (Exception ex) when (!_cancel.IsCancellationRequested
+                    && (ex is IOException or TimeoutException or OperationCanceledException
+                        || ex is InvalidOperationException
+                            && ex.Message.Contains("Remote management", StringComparison.OrdinalIgnoreCase)))
+                {
+                    app.Invoke(() => SetText(_remoteStatus,
+                        $"Waiting for {host} to reconnect; rollback at {accepted.ExpiresAt.ToLocalTime():HH:mm:ss}…"));
+                }
+            }
+            throw new TimeoutException($"{host} did not confirm the candidate; the remote rollback deadline has passed.");
         }
 
         private void BuildGuidedConfigForm()
@@ -461,6 +684,9 @@ internal static class HydraTui
                 Configuration has a Form mode for common settings and Text mode for complete JSON.
                 Switching modes preserves advanced fields. Validate before saving. Save & restart atomically
                 writes the file and asks the daemon to restart; external edits are detected.
+
+                Remote pairs with an explicitly enrolled peer and loads a redacted configuration over the
+                encrypted relay. Generate the one-time code locally on that peer with `hydra pair`.
 
                 When the daemon is offline, configuration remains available but live controls are disabled.
                 """;
@@ -991,12 +1217,18 @@ internal static class HydraTui
             var adapters = activeAdapters.Count == 0
                 ? "  (none detected)"
                 : string.Join('\n', activeAdapters.Select(adapter =>
-                    $"  {(adapter.HasGateway ? "◆" : "◇")} {adapter.Type,-12} {adapter.Name,-10} {string.Join(", ", adapter.Addresses)}"));
+                    $"  {(adapter.HasGateway ? "◆" : "◇")} {adapter.Type,-12} {adapter.Name,-10} {FormatLinkSpeed(adapter.LinkSpeedBitsPerSecond),9}  ↓ {FormatBytes(adapter.BytesReceived),9} ↑ {FormatBytes(adapter.BytesSent),9}  drops ↓{FormatCounter(adapter.ReceiveDrops)} ↑{FormatCounter(adapter.SendDrops)} errors ↓{FormatCounter(adapter.ReceiveErrors)} ↑{FormatCounter(adapter.SendErrors)}\n" +
+                    $"      {string.Join(", ", adapter.Addresses)}"));
             var relayPeers = s.EmbeddedRelayPeers ?? [];
             var embeddedPeers = relayPeers.Count == 0
                 ? "  (not hosting an embedded relay)"
                 : string.Join('\n', relayPeers.Select(peer =>
                     $"  ● {peer.HostName,-16} {peer.InterfaceType} ({peer.InterfaceName})  {peer.RemoteAddress} → {peer.LocalAddress}{(peer.HostName.Equals(s.HostName, StringComparison.OrdinalIgnoreCase) ? "  [this Hydra]" : "")}"));
+            var latency = s.PeerLatency ?? [];
+            var peerLatency = latency.Count == 0
+                ? "  (collecting samples)"
+                : string.Join('\n', latency.Select(peer =>
+                    $"  {peer.Host,-16} now {peer.LastRttMs,6:0.0} ms   avg {peer.AverageRttMs,6:0.0} ms   p95 {peer.P95RttMs,6:0.0} ms   jitter {peer.JitterMs,5:0.0} ms   lost {peer.Lost}"));
             return $"""
                 Runtime
                   Process       {s.ProcessId}
@@ -1020,6 +1252,9 @@ internal static class HydraTui
                 Embedded Relay Clients  (actual inbound interface)
                 {embeddedPeers}
 
+                Peer Latency  (encrypted end-to-end RTT)
+                {peerLatency}
+
                 Routing
                   Active route  {route}
                   Screen lock   {(s.Router?.LockedToScreen == true ? "locked" : "unlocked")}
@@ -1027,12 +1262,23 @@ internal static class HydraTui
                 """;
         }
 
-        private static string FormatBytes(long bytes) => bytes switch
+        private static string FormatBytes(long? bytes) => bytes switch
         {
+            null => "unknown",
             >= 1024 * 1024 * 1024 => $"{bytes / (1024d * 1024 * 1024):0.0} GiB",
             >= 1024 * 1024 => $"{bytes / (1024d * 1024):0.0} MiB",
             >= 1024 => $"{bytes / 1024d:0.0} KiB",
             _ => $"{bytes} B"
+        };
+
+        private static string FormatCounter(long? value) => value?.ToString() ?? "n/a";
+
+        private static string FormatLinkSpeed(long bitsPerSecond) => bitsPerSecond switch
+        {
+            >= 1_000_000_000 => $"{bitsPerSecond / 1_000_000_000d:0.#} Gbps",
+            >= 1_000_000 => $"{bitsPerSecond / 1_000_000d:0.#} Mbps",
+            >= 1_000 => $"{bitsPerSecond / 1_000d:0.#} Kbps",
+            _ => "unknown"
         };
 
         private static string FormatPeers(HydraStatusSnapshot s)

@@ -3,9 +3,14 @@ using Microsoft.Extensions.Hosting;
 
 namespace Hydra.Management;
 
-internal sealed class HydraLifetimeController(IHostApplicationLifetime lifetime)
+internal interface IHydraLifetimeController
 {
-    internal void RestartAfterResponse()
+    void RestartAfterResponse();
+}
+
+internal sealed class HydraLifetimeController(IHostApplicationLifetime lifetime) : IHydraLifetimeController
+{
+    public void RestartAfterResponse()
     {
         _ = Task.Run(async () =>
         {

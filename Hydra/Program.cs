@@ -41,6 +41,27 @@ if (args.FirstOrDefault()?.Equals("tui", StringComparison.OrdinalIgnoreCase) == 
     return;
 }
 
+if (args.FirstOrDefault()?.Equals("pair", StringComparison.OrdinalIgnoreCase) == true)
+{
+    string? explicitConfig;
+    if (args.Length == 1)
+        explicitConfig = null;
+    else if (args.Length == 3 && args[1] == "--config" && !string.IsNullOrWhiteSpace(args[2]))
+        explicitConfig = args[2];
+    else
+    {
+        Console.Error.WriteLine("Usage: hydra pair [--config /path/to/hydra.conf]");
+        Environment.ExitCode = 2;
+        return;
+    }
+    var pairConfigPath = HydraConfigFile.ResolvePath(explicitConfig ?? Environment.GetEnvironmentVariable("CONFIG"));
+    var pairingStore = new RemoteManagementStore(pairConfigPath);
+    var pairingCode = await pairingStore.CreatePairingCodeAsync();
+    Console.WriteLine("Enter this one-time code in the controlling Hydra TUI within 10 minutes:");
+    Console.WriteLine(pairingCode);
+    return;
+}
+
 if (args.Contains("--install"))
 {
     if (OperatingSystem.IsWindows()) ServiceCommands.Install();
@@ -74,6 +95,9 @@ while (true)
 {
     try
     {
+        var recoveryConfigPath = HydraConfigFile.ResolvePath(Env.Config.GetStringOrNull("CONFIG"));
+        if (await RemoteApplyStore.RestoreExpiredBeforeStartupAsync(recoveryConfigPath))
+            Console.Error.WriteLine("Remote configuration was not confirmed; restored the last-known-good config.");
         (configFile, configPath) = HydraConfigFile.LoadAll(Env.Config);
         profiles = configFile.Profiles;
         break;
@@ -186,6 +210,16 @@ if (config?.EmbeddedStyxServer != null)
     startupLog.LogInformation("Embedded Styx relay on port {Port}", config.EmbeddedStyxServer.Port);
     startupLog.LogInformation("Remote hosts can connect with: embeddedStyx: {{\"server\": \"http://<your-ip>:{Port}\", \"password\": \"<password>\"}}", config.EmbeddedStyxServer.Port);
 }
+
+// Recovery must start before platform/input services: a candidate can block while waiting for permissions
+// or fail before the relay is ready, but its rollback deadline must still keep running.
+var runtimeInfo = new HydraRuntimeInfo(configPath, DateTimeOffset.UtcNow);
+services.AddSingleton(runtimeInfo);
+services.AddSingleton<TransactionalConfigStore>();
+services.AddSingleton<HydraLifetimeController>();
+services.AddSingleton<IHydraLifetimeController>(sp => sp.GetRequiredService<HydraLifetimeController>());
+services.AddSingleton<RemoteApplyStore>();
+services.AddHostedService(sp => sp.GetRequiredService<RemoteApplyStore>());
 
 // shared services always registered
 services.AddSingleton(profiles);
@@ -390,17 +424,18 @@ if (config != null)
             services.AddHostedService<LinuxSystemSleepMonitor>();
     }
 
+    services.AddSingleton<RelayLatencyService>();
+    services.AddHostedService(sp => sp.GetRequiredService<RelayLatencyService>());
+    services.AddSingleton<RemoteManagementStore>();
+    services.AddSingleton<RemoteManagementService>();
+    services.AddHostedService(sp => sp.GetRequiredService<RemoteManagementService>());
     services.AddSingleton<IActivityTracker, ActivityTracker>();
 }
 
 if (OperatingSystem.IsWindows() && RunMode.IsSessionChild)
     services.AddHostedService<SessionChildLifetime>();
 
-var runtimeInfo = new HydraRuntimeInfo(configPath, DateTimeOffset.UtcNow);
-services.AddSingleton(runtimeInfo);
-services.AddSingleton<TransactionalConfigStore>();
 services.AddSingleton<HydraStatusService>();
-services.AddSingleton<HydraLifetimeController>();
 services.AddHostedService<ManagementServer>();
 
 var app = builder.Build();

@@ -349,6 +349,10 @@ secret.
 **The relay sees every payload byte.** Styx authenticates network membership and routes; it provides no
 confidentiality or integrity for payload contents against the relay operator. An application whose
 payloads are sensitive MUST encrypt them end-to-end between peers, with keys the relay never receives.
+
+Hydra encrypts these opaque payloads end-to-end. Its optional remote-management messages additionally
+require a separately paired controller credential, signed requests, freshness checks, and replay protection;
+possessing the ordinary Styx/Hydra network configuration does not itself grant remote-management authority.
 Even then the relay observes hostnames, the peer graph, message sizes, and timing.
 
 **Membership is the whole authorization model.** There is no per-peer permission, no read/write split,

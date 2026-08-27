@@ -27,8 +27,11 @@ internal sealed class TransactionalConfigStore(HydraRuntimeInfo runtime)
         }
     }
 
-    internal async Task<ConfigDocument> SaveAsync(string expectedRevision, string json, CancellationToken cancel)
+    internal async Task<ConfigDocument> SaveAsync(string expectedRevision, string json, CancellationToken cancel,
+        bool allowPendingRemoteApply = false)
     {
+        if (!allowPendingRemoteApply && RemoteApplyStore.HasPendingTransaction(runtime.ConfigPath))
+            throw new InvalidOperationException("A remote configuration candidate is awaiting confirmation or rollback.");
         var validation = Validate(json);
         if (!validation.Valid) throw new InvalidOperationException(validation.Error);
 

@@ -4,7 +4,7 @@ namespace Hydra.Management;
 
 internal static class ManagementProtocol
 {
-    internal const int Version = 1;
+    internal const int Version = 2;
     internal const int MaxMessageBytes = 2 * 1024 * 1024;
 }
 
@@ -40,8 +40,20 @@ public sealed record RelayConnectionStatus(
     long BytesSent,
     long BytesReceived);
 
-public sealed record NetworkAdapterStatus(string Name, string Type, List<string> Addresses, bool HasGateway);
+public sealed record NetworkAdapterStatus(
+    string Name,
+    string Type,
+    List<string> Addresses,
+    bool HasGateway,
+    long LinkSpeedBitsPerSecond,
+    long? BytesReceived,
+    long? BytesSent,
+    long? ReceiveErrors,
+    long? ReceiveDrops,
+    long? SendErrors,
+    long? SendDrops);
 public sealed record EmbeddedRelayPeerStatus(string HostName, string RemoteAddress, string LocalAddress, string InterfaceName, string InterfaceType);
+public sealed record PeerLatencyStatus(string Host, double LastRttMs, double AverageRttMs, double P95RttMs, double JitterMs, long Samples, long Lost, DateTimeOffset UpdatedAt);
 
 public sealed record HydraStatusSnapshot(
     DateTimeOffset CapturedAt,
@@ -58,6 +70,7 @@ public sealed record HydraStatusSnapshot(
     RelayConnectionStatus? RelayConnection,
     List<NetworkAdapterStatus> ActiveNetworkAdapters,
     List<EmbeddedRelayPeerStatus> EmbeddedRelayPeers,
+    List<PeerLatencyStatus> PeerLatency,
     bool Dormant,
     List<ScreenStatus> LocalScreens,
     List<PeerStatus> Peers,

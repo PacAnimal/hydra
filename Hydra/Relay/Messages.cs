@@ -39,6 +39,10 @@ public enum MessageKind : byte
     ClipboardPullRequest = 29,  // slave → master: my hash differs, please push your clipboard
     LockScreen = 30,            // master → slave: lock the screen
     ActivityPing = 31,          // either direction: poke idle timer; master re-broadcasts to other slaves if syncScreensaver
+    LatencyProbe = 32,          // diagnostics-only peer RTT probe; receiver echoes the opaque sequence
+    LatencyProbeResponse = 33,  // diagnostics-only response; never enters the input path
+    RemoteManagementRequest = 34,
+    RemoteManagementResponse = 35,
 }
 
 public record MouseMoveMessage(string Screen, int X, int Y);
@@ -81,6 +85,8 @@ public record FileStreamRequestMessage(string[] Paths, string TargetHost);
 public record OsdMessage(string Text);
 public record FileTransferBusyMessage;
 public record ActivityPingMessage;
+public record LatencyProbeMessage(long Sequence);
+public record LatencyProbeResponseMessage(long Sequence);
 
 public static class MessageSerializer
 {

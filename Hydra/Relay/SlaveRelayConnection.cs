@@ -276,7 +276,7 @@ public class SlaveRelayConnection : RelayConnection
                 await _fileTransfer.OnMessageAsync(sourceHost, kind, body, this);
                 break;
             default:
-                _log.LogDebug("Unhandled message kind {Kind} from {Host}", kind, sourceHost);
+                await base.OnReceive(sourceHost, kind, body);
                 break;
         }
     }
@@ -344,7 +344,9 @@ public class SlaveRelayConnection : RelayConnection
             // cursor stays hidden under a remote pointer. Only its cursor move is suppressed, in the handler.
             return kind != MessageKind.EnterScreen;
         }
-        if (kind is MessageKind.MasterConfig or MessageKind.LeaveScreen) return false;
+        if (kind is MessageKind.MasterConfig or MessageKind.LeaveScreen
+            or MessageKind.LatencyProbe or MessageKind.LatencyProbeResponse
+            or MessageKind.RemoteManagementRequest or MessageKind.RemoteManagementResponse) return false;
         _log.LogDebug("Dormant: refused {Kind} from {Host}", kind, sourceHost);
         return true;
     }

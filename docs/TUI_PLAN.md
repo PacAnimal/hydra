@@ -6,6 +6,8 @@ Date assessed: 2026-08-23
 
 Scope: architecture record and roadmap. The first implementation includes the local management transport, status/log/config services, relay reconnect, restart, offline configuration editing, and the Terminal.Gui client. Later roadmap items remain explicitly marked by their phase.
 
+Later extension (2026-08-27): remote peer management is implemented as an explicitly paired, signed application protocol carried inside Hydra's encrypted Styx payloads. The local IPC endpoint remains local-only. Remote fetch is redacted at the source; apply is revision-aware, blocks connectivity-defining edits, retains a restrictive last-known-good backup, and requires post-restart controller confirmation before a 90-second rollback deadline. Missing/invalid first-time configurations still require local or out-of-band bootstrap.
+
 ## Executive decision
 
 Build the TUI in C# on .NET 10 with **Terminal.Gui v2**, and expose it as a new mode of the existing executable:
@@ -471,8 +473,8 @@ Exact CPU/memory/artifact-size thresholds should be recorded from the Phase 0 ba
 - Mask secrets in editors; prevent accidental diagnostic export and screen-copy exposure where practical.
 - Optimistic config concurrency, atomic replacement, restrictive backup permissions, and symlink/reparse-point checks.
 - Confirm all stop/restart/apply operations and make elevation explicit.
-- No install/uninstall, TCC changes, binary update trigger, force-kill, or remote control in the first release.
-- Add a focused threat-model review before enabling any remote-management concept.
+- No install/uninstall, TCC changes, binary update trigger, or force-kill.
+- Remote management uses a separate paired credential, authenticated envelopes, freshness and replay checks, bounded payloads, source redaction, revision checks, and an automatic recovery deadline; relay membership alone grants no administrative authority.
 
 ## Known risks and mitigations
 
@@ -487,11 +489,12 @@ Exact CPU/memory/artifact-size thresholds should be recorded from the Phase 0 ba
 | Invalid config prevents management host startup | Offline config/validation mode initially; consider an always-on bootstrap host only if operational evidence justifies the refactor |
 | Linux service behavior is inconsistent | Capability-based external/direct status first; do not assume systemd |
 | Status code races private runtime state | Snapshot through owning synchronization boundaries, especially InputRouter's command queue |
-| Remote monitoring grows into remote control implicitly | Keep v1 transport local and Styx protocol unchanged; require a separate threat model and design decision later |
+| Remote management expands the relay trust boundary | Keep local IPC local-only; require explicit pairing and signed/replay-protected messages, redact at source, refuse recovery-path edits, and roll back unconfirmed candidates |
 
-## Deliberate non-goals for the first release
+## Deliberate non-goals for the original local release
 
-- Remote administration of peer machines.
+Remote peer administration was deliberately excluded from the original local-only release. The 2026-08-27 extension at the top of this record supersedes that one item without exposing the local IPC transport or adding a listening management port. The remaining non-goals still apply.
+
 - Replacing HydraWebConfig's graphical topology editor.
 - A pixel-like freeform screen-layout canvas in the terminal; use tables/forms and an optional read-only ASCII preview.
 - Editing Styx server deployment or cloud infrastructure.

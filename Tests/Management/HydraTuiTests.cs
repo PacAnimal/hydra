@@ -51,5 +51,5 @@ public class HydraTuiTests
         relayAttempts == null ? null : new RelayConnectionStatus(
             "en0", "Ethernet", "127.0.0.1", 50000, "relay", "127.0.0.1", 51600,
             DateTimeOffset.UtcNow, relayAttempts.Value, 0, 0, 0, 0),
-        [], [], false, [], [], null);
+        [], [], [], false, [], [], null);
 }

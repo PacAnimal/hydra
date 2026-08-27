@@ -54,6 +54,21 @@ The views provide runtime status, the exact interface and socket selected by the
 
 Passwords and `networkConfig` values use secret fields in Form mode and are masked by default in Text mode. Revealing them in Text mode displays the real values in the terminal, so avoid doing that in a recorded or shared session. When the daemon is unavailable, configuration read, validation, and save continue to work offline; live status and controls do not.
 
+### Pairing and managing a remote peer
+
+Remote management is opt-in per machine. On the peer to manage, generate a single-use code locally:
+
+```bash
+./hydra pair
+./hydra pair --config /path/to/hydra.conf
+```
+
+The code expires after 10 minutes. In the controlling TUI, open **Remote**, enter the peer's Hydra host name and code, and select **Pair**. Pairing creates a separate management credential in `.hydra-management.json` beside `hydra.conf`; the ordinary shared relay configuration does not grant remote-admin rights. The sidecar contains secrets and is written with user-only permissions on Unix-like systems. A user-only `.hydra-management.lock` coordinates updates from the running daemon and the `pair` command. Do not copy either file into source control or diagnostics.
+
+After pairing, **Load Config** fetches a source-redacted document: `password` and `networkConfig` values never leave the peer. Unchanged placeholders are restored on the peer before validation or apply. **Save & Apply** stages the candidate, preserves the last-known-good configuration, and restarts Hydra. The controller confirms only after the peer reconnects and reports the expected revision. Without confirmation within 90 seconds, Hydra restores the backup and restarts automatically; expired transactions are also recovered before normal config bootstrap when the candidate is invalid.
+
+Remote changes to the machine name, forced/conditional profile selection, relay credentials, or embedded-relay settings are refused in this version. Make those changes locally because they can remove the relay path needed to confirm or recover a remote apply. A machine with no usable Hydra configuration also requires initial local, SSH, MDM, or other out-of-band provisioning before it can join the relay and be paired.
+
 Use `Esc` to close the TUI. Hydra continues running.
 
 ## Config fields
