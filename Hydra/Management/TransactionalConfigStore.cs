@@ -54,7 +54,7 @@ internal sealed class TransactionalConfigStore(HydraRuntimeInfo runtime)
                 if (!OperatingSystem.IsWindows())
                     File.SetUnixFileMode(temp, File.GetUnixFileMode(runtime.ConfigPath));
                 _ = HydraConfigFile.Parse(await File.ReadAllTextAsync(temp, cancel), temp);
-                File.Move(temp, runtime.ConfigPath, true);
+                File.Replace(temp, runtime.ConfigPath, null);
             }
             finally
             {

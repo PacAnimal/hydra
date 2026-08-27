@@ -16,6 +16,13 @@ internal static class HydraTui
     internal static bool HasRestarted(HydraStatusSnapshot previous, HydraStatusSnapshot current) =>
         current.ProcessId != previous.ProcessId || current.UptimeSeconds + 1 < previous.UptimeSeconds;
 
+    internal static bool HasRelayReconnected(HydraStatusSnapshot? previous, HydraStatusSnapshot current)
+    {
+        if (!current.RelayConnected || current.RelayConnection == null) return false;
+        var previousAttempts = previous?.RelayConnection?.ConnectionAttempts;
+        return previousAttempts == null || current.RelayConnection.ConnectionAttempts > previousAttempts;
+    }
+
     internal static Task RunAsync(string[] args)
     {
         string? explicitConfig = null;
@@ -92,6 +99,8 @@ internal static class HydraTui
         private bool _secretsRevealed;
         private bool _guidedMode = true;
         private bool _commandBusy;
+        private int? _serverProcessId;
+        private int _resetVisibleLogs;
         private GuidedConfigDocument? _guidedConfig;
         private int _guidedProfileIndex;
         private readonly List<(View Button, FrameView Content, string Name)> _tabs = [];
@@ -470,6 +479,9 @@ internal static class HydraTui
                     var hello = await _client.HelloAsync(timeout.Token);
                     if (hello.ProtocolVersion != ManagementProtocol.Version)
                         throw new InvalidOperationException($"Management protocol {hello.ProtocolVersion} is incompatible with this TUI ({ManagementProtocol.Version}).");
+                    if (_serverProcessId != null && _serverProcessId != hello.ProcessId)
+                        ResetLogStream();
+                    _serverProcessId = hello.ProcessId;
                     _helloComplete = true;
                 }
                 var status = await _client.GetStatusAsync(timeout.Token);
@@ -504,6 +516,11 @@ internal static class HydraTui
 
         private void Render(HydraStatusSnapshot status, ManagementLogPage page)
         {
+            if (Interlocked.Exchange(ref _resetVisibleLogs, 0) != 0)
+            {
+                _visibleLogs.Clear();
+                SetText(_logs, "");
+            }
             SetLiveControls(true);
             SetText(_connection, $"● Connected  │  Hydra {status.Version}  │  {status.HostName}  │  {status.ProfileName ?? "idle"} / {status.Mode}");
             SetText(_overview, FormatOverview(status));
@@ -533,10 +550,13 @@ internal static class HydraTui
                 ConfigDocument document;
                 try
                 {
-                    document = await _client.GetConfigAsync(_cancel.Token);
+                    using var timeout = CancellationTokenSource.CreateLinkedTokenSource(_cancel.Token);
+                    timeout.CancelAfter(TimeSpan.FromMilliseconds(800));
+                    document = await _client.GetConfigAsync(timeout.Token);
                     _connected = true;
                 }
-                catch (Exception ex) when (ex is IOException or SocketException)
+                catch (Exception ex) when (ex is IOException or SocketException
+                    || ex is OperationCanceledException && !_cancel.IsCancellationRequested)
                 {
                     document = await _offlineStore.ReadAsync(_cancel.Token);
                 }
@@ -855,7 +875,7 @@ internal static class HydraTui
                 if (kind == CommandKind.RestartHydra)
                     await WaitForRestartAsync(previousStatus);
                 else
-                    await WaitForRelayAsync();
+                    await WaitForRelayAsync(previousStatus);
             }
             catch (Exception ex)
             {
@@ -869,19 +889,22 @@ internal static class HydraTui
 
         private async Task WaitForRestartAsync(HydraStatusSnapshot? previousStatus)
         {
-            SetActivity("Restart requested — waiting for Hydra to come back…", "Accent");
+            app.Invoke(() => SetActivity("Restart requested — waiting for Hydra to come back…", "Accent"));
             await WaitForStatusAsync(status => previousStatus == null || HasRestarted(previousStatus, status),
-                status => $"Hydra restarted and reconnected (PID {status.ProcessId}).");
+                status => $"Hydra restarted and reconnected (PID {status.ProcessId}).", resetLogs: true);
         }
 
-        private async Task WaitForRelayAsync()
+        private async Task WaitForRelayAsync(HydraStatusSnapshot? previousStatus)
         {
-            SetActivity("Relay reconnect requested — waiting for the connection…", "Accent");
-            await WaitForStatusAsync(status => status.RelayConnected && status.RelayConnection != null,
+            app.Invoke(() => SetActivity("Relay reconnect requested — waiting for the connection…", "Accent"));
+            await WaitForStatusAsync(status => HasRelayReconnected(previousStatus, status),
                 _ => "Relay reconnected.");
         }
 
-        private async Task WaitForStatusAsync(Func<HydraStatusSnapshot, bool> complete, Func<HydraStatusSnapshot, string> message)
+        private async Task WaitForStatusAsync(
+            Func<HydraStatusSnapshot, bool> complete,
+            Func<HydraStatusSnapshot, string> message,
+            bool resetLogs = false)
         {
             var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(15);
             while (DateTimeOffset.UtcNow < deadline && !_cancel.IsCancellationRequested)
@@ -896,6 +919,7 @@ internal static class HydraTui
                     _connected = true;
                     _helloComplete = false;
                     _lastStatus = status;
+                    if (resetLogs) ResetLogStream();
                     app.Invoke(() =>
                     {
                         Render(status, new ManagementLogPage(_logCursor, _logCursor, []));
@@ -903,13 +927,24 @@ internal static class HydraTui
                     });
                     return;
                 }
+                catch (OperationCanceledException) when (_cancel.IsCancellationRequested)
+                {
+                    return;
+                }
                 catch (Exception) when (DateTimeOffset.UtcNow < deadline)
                 {
                     // A restart deliberately removes the management endpoint for a moment.
                 }
             }
+            if (_cancel.IsCancellationRequested) return;
             app.Invoke(() => SetCommandBusy(false,
                 "The command was accepted, but Hydra did not report completion within 15 seconds.", "Error"));
+        }
+
+        private void ResetLogStream()
+        {
+            Interlocked.Exchange(ref _logCursor, 0);
+            Interlocked.Exchange(ref _resetVisibleLogs, 1);
         }
 
         private void SetCommandBusy(bool busy, string message, string scheme = "Accent")

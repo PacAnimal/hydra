@@ -22,7 +22,8 @@ internal sealed class ManagementLogBuffer : ILoggerProvider
     private void Add(LogLevel level, string category, string message)
     {
         if (category.Contains("FileTransfer", StringComparison.OrdinalIgnoreCase)
-            || category.Contains("Clipboard", StringComparison.OrdinalIgnoreCase))
+            || category.Contains("Clipboard", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("file(s) selected", StringComparison.OrdinalIgnoreCase))
             return;
 
         lock (_lock)

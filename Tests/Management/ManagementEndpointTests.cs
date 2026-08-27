@@ -21,6 +21,18 @@ public class ManagementEndpointTests
     }
 
     [Test]
+    public void ForConfig_NormalizesWindowsPathCasing()
+    {
+        if (!OperatingSystem.IsWindows()) Assert.Ignore("Windows path identity test");
+        var path = Path.Combine(TestContext.CurrentContext.WorkDirectory, "Hydra", "hydra.conf");
+
+        var mixedCase = ManagementEndpoint.ForConfig(path);
+        var upperCase = ManagementEndpoint.ForConfig(path.ToUpperInvariant());
+
+        Assert.That(mixedCase.InstanceId, Is.EqualTo(upperCase.InstanceId));
+    }
+
+    [Test]
     public void ForConfig_UsesPrivateUnixRuntimeDirectory()
     {
         if (OperatingSystem.IsWindows()) Assert.Ignore("Unix permission test");

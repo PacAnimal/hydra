@@ -10,6 +10,7 @@ internal sealed partial record ManagementEndpoint(string InstanceId, string Addr
     internal static ManagementEndpoint ForConfig(string configPath)
     {
         var canonical = Path.GetFullPath(configPath);
+        if (OperatingSystem.IsWindows()) canonical = canonical.ToUpperInvariant();
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical))).ToLowerInvariant()[..12];
         if (OperatingSystem.IsWindows())
             return new ManagementEndpoint(hash, $"hydra-{hash}", true);
@@ -21,7 +22,9 @@ internal sealed partial record ManagementEndpoint(string InstanceId, string Addr
             runtime = Path.Combine(Path.GetTempPath(), $"hydra-{GetEffectiveUserId()}");
 
         var directory = Path.Combine(runtime, "hydra");
-        Directory.CreateDirectory(directory);
+        var directoryInfo = Directory.CreateDirectory(directory);
+        if (!OperatingSystem.IsWindows() && directoryInfo.LinkTarget != null)
+            throw new IOException($"Hydra management directory cannot be a symbolic link: {directory}");
         File.SetUnixFileMode(directory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         return new ManagementEndpoint(hash, Path.Combine(directory, $"{hash}.sock"), false);
     }

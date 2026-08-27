@@ -36,6 +36,22 @@ public class TransactionalConfigStoreTests
     }
 
     [Test]
+    public async Task Save_PreservesUnixFileMode()
+    {
+        if (OperatingSystem.IsWindows()) Assert.Ignore("Unix permission test");
+        const UnixFileMode expected = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+#pragma warning disable CA1416
+        File.SetUnixFileMode(_path, expected);
+        var store = new TransactionalConfigStore(new HydraRuntimeInfo(_path, DateTimeOffset.UtcNow));
+        var before = await store.ReadAsync();
+
+        await store.SaveAsync(before.Revision, Valid("Work"), CancellationToken.None);
+
+        Assert.That(File.GetUnixFileMode(_path), Is.EqualTo(expected));
+#pragma warning restore CA1416
+    }
+
+    [Test]
     public async Task Save_RejectsConcurrentEditWithoutOverwriting()
     {
         var store = new TransactionalConfigStore(new HydraRuntimeInfo(_path, DateTimeOffset.UtcNow));

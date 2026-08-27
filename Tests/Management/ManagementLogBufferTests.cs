@@ -11,9 +11,11 @@ public class ManagementLogBufferTests
         using var buffer = new ManagementLogBuffer();
         var normal = buffer.CreateLogger("Hydra.Relay");
         var sensitive = buffer.CreateLogger("Hydra.FileTransfer.FileTransferService");
+        var routing = buffer.CreateLogger("Hydra.Screen.InputRouter");
 
         normal.LogInformation("Connected to relay");
         sensitive.LogInformation("selected /private/file");
+        routing.LogInformation("Copy hotkey: 1 file(s) selected locally: /private/secret.txt");
         var page = buffer.Read(0);
 
         Assert.Multiple(() =>
@@ -21,6 +23,7 @@ public class ManagementLogBufferTests
             Assert.That(page.Entries, Has.Count.EqualTo(1));
             Assert.That(page.Entries[0].Message, Is.EqualTo("Connected to relay"));
             Assert.That(page.Entries[0].Category, Is.EqualTo("Hydra.Relay"));
+            Assert.That(page.Entries.Select(entry => entry.Message), Has.None.Contains("/private/secret.txt"));
         });
     }
 
