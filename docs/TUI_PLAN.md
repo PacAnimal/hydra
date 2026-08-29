@@ -8,6 +8,8 @@ Scope: architecture record and roadmap. The first implementation includes the lo
 
 Later extension (2026-08-27): remote peer management is implemented as an explicitly paired, signed application protocol carried inside Hydra's encrypted Styx payloads. The local IPC endpoint remains local-only. Remote fetch is redacted at the source; apply is revision-aware, blocks connectivity-defining edits, retains a restrictive last-known-good backup, and requires post-restart controller confirmation before a 90-second rollback deadline. Missing/invalid first-time configurations still require local or out-of-band bootstrap.
 
+Later simplification (2026-08-29): the guided form patches retained raw JSON so unsupported and advanced fields survive an edit. `HydraConfigFile.Parse` and `HydraConfig.Validate` remain canonical.
+
 ## Executive decision
 
 Build the TUI in C# on .NET 10 with **Terminal.Gui v2**, and expose it as a new mode of the existing executable:

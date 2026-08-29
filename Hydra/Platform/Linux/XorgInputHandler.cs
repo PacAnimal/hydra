@@ -46,10 +46,7 @@ public sealed class XorgInputHandler : IPlatformInput
     public XorgInputHandler(ILogger<XorgInputHandler> log)
     {
         _log = log;
-        // must be first X11 call in the process
-        _ = NativeMethods.XInitThreads();
-
-        _display = NativeMethods.XOpenDisplay(null);
+        _display = XlibRuntime.OpenDisplay();
         if (_display == nint.Zero)
             throw new InvalidOperationException("XOpenDisplay failed — is DISPLAY set?");
 

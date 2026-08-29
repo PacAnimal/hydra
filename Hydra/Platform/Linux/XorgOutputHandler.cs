@@ -24,8 +24,7 @@ public sealed class XorgOutputHandler : IPlatformOutput, ICursor
     public XorgOutputHandler(ILogger<XorgOutputHandler> log)
     {
         _log = log;
-        _ = NativeMethods.XInitThreads();
-        _display = NativeMethods.XOpenDisplay(null);
+        _display = XlibRuntime.OpenDisplay();
         if (_display == nint.Zero)
             throw new InvalidOperationException("XOpenDisplay failed — is DISPLAY set?");
 

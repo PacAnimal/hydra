@@ -13,8 +13,7 @@ public sealed class XorgScreenSaverSync : PollingScreenSaverSync
 
     public XorgScreenSaverSync(ILogger<XorgScreenSaverSync> log) : base(log)
     {
-        _ = NativeMethods.XInitThreads();
-        _display = NativeMethods.XOpenDisplay(null);
+        _display = XlibRuntime.OpenDisplay();
         if (_display == nint.Zero) return;
 
         _rootWindow = NativeMethods.XDefaultRootWindow(_display);

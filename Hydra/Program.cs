@@ -483,7 +483,7 @@ static int GetScreenCount()
     if (OperatingSystem.IsWindows()) return WindowsDisplayHelper.GetAllScreens().Count;
     if (OperatingSystem.IsLinux())
     {
-        var display = Hydra.Platform.Linux.NativeMethods.XOpenDisplay(null);
+        var display = XlibRuntime.TryOpenDisplay();
         if (display == nint.Zero) return 1;
         try
         {
