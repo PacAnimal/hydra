@@ -190,4 +190,5 @@ The easiest way to set up multi-machine layouts, Styx relay configs, and network
 ## Full documentation
 
 - [Configuration reference](docs/CONFIGURATION.md) — all config fields, screen layout options, network-aware profiles, hotkeys, Styx setup, and building from source
+- [TUI architecture](docs/TUI_ARCHITECTURE.md) — management boundaries, security invariants, platform lifecycle behavior, and validation expectations
 - [Styx protocol](Styx.md) — the relay's wire protocol, for implementing your own client or server against it

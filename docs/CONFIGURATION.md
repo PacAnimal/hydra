@@ -33,7 +33,7 @@ See the [project README](../README.md) for installation and a quick-start guide.
 
 ## Config file location
 
-The config file is `hydra.conf`, located next to the binary. Set the `CONFIG` environment variable to use a different path:
+Hydra first looks for `hydra.conf` next to the running binary, then in the current working directory. Set the `CONFIG` environment variable to use an explicit path:
 
 ```bash
 CONFIG=/path/to/hydra.conf ./hydra
@@ -88,6 +88,9 @@ Use `Esc` to close the TUI. It does not change Hydra's running state.
 - `logTruncate` — if `true`, truncate `logFile` and `sessionLogFile` to 0 bytes on each startup so they don't grow unbounded (default: `false`)
 - `autoUpdate` — `false` to disable automatic updates
 - `lockFile` — path to a lock file to prevent multiple instances (default: none)
+- `profile` — force the named `profileName` regardless of conditions; intended for diagnosis and controlled overrides
+- `debugShield` — enable verbose cursor-shield diagnostics (default: `false`)
+- `debugMouse` — enable verbose mouse-routing diagnostics (default: `false`)
 - `profiles` — array of profile objects (see below); at least one required
 
 **Per-profile** (inside a `profiles` entry):
@@ -100,6 +103,8 @@ Use `Esc` to close the TUI. It does not change Hydra's running state.
 - `hosts` — list of host entries for the neighbour graph (master only; slaves don't need this)
 - `screenDefinitions` — per-screen scale config (slave only; reported to master via ScreenInfo)
 - `mouseScale` — fallback cursor speed multiplier for all screens on this slave (slave only)
+- `relativeMouseScale` — fallback relative-mode speed multiplier for all screens on this slave; falls back to `mouseScale` when omitted (slave only)
+- `hideCursor` — hide the master's local cursor while it is inactive or routed remotely (master only; default: `false`)
 - `deadCorners` — pixel dead zone at screen corners where transitions are blocked (default `0`, `50` is a reasonable starting value). Scaled by the screen's mouseScale. Can also be set per-host to override.
 - `hotkeys` — rebind Hydra's hotkeys, as action name to an array of chords (master only; see [Customising hotkeys](#customising-hotkeys))
 - `remoteOnly` — `true` to forward all input to remote machines immediately at startup, with no local screen involved (see [Remote-only mode](#remote-only-mode))
@@ -232,8 +237,9 @@ Each entry specifies one or more match criteria — all specified criteria must 
 | `outputName` | — | Match by output connector name (e.g. `"HDMI-1"`) |
 | `platformId` | — | Match by platform-specific ID |
 | `mouseScale` | — | Cursor speed multiplier on this screen; overrides the profile-level `mouseScale` |
+| `relativeMouseScale` | — | Relative-mode speed multiplier on this screen; overrides profile-level `relativeMouseScale` |
 
-The profile-level `mouseScale` sets a fallback multiplier for all screens on this slave. Per-screen `mouseScale` in a `screenDefinitions` entry overrides it. If neither is set, the multiplier defaults to `1.0`.
+The profile-level `mouseScale` sets the ordinary fallback multiplier for all screens on this slave. `relativeMouseScale` sets the relative-mode fallback and itself falls back to `mouseScale`. Per-screen values override their corresponding profile values. If no applicable value is set, the multiplier defaults to `1.0`.
 
 At least one match field must be set per `screenDefinitions` entry.
 

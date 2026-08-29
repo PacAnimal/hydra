@@ -42,4 +42,4 @@ jobs:
           file: Styx/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name == 'push' }}
-          tags: ghcr.io/pacanimal/styx:latest
+          tags: ghcr.io/${{ github.repository_owner }}/styx:latest
