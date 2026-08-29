@@ -7,7 +7,10 @@ using Microsoft.AspNetCore.Http.Connections.Client;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using System.Net;
+using System.Net.NetworkInformation;
 using System.Net.Sockets;
+using System.Diagnostics;
 using System.Threading.Channels;
 using TypedSignalR.Client;
 using StyxConstants = Styx.Constants;
@@ -19,6 +22,19 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
 {
     private IStyxServer? _server;
     private RelayEncryption? _encryption;
+    private readonly Lock _connectionLock = new();
+    private CancellationTokenSource? _connectionCancellation;
+    private RelayTransportSnapshot? _transport;
+    private long _connectionAttempts;
+    private long _messagesSent;
+    private long _messagesReceived;
+    private long _bytesSent;
+    private long _bytesReceived;
+    private long _sendQueueDepth;
+    private long _maxSendQueueDepth;
+    private long _lastSendLatencyMilliseconds;
+    private readonly Lock _sendOrderLock = new();
+    private MovementBatch? _openMovementBatch;
 
     // One ordered outbound queue preserves key/control ordering. Bulk producers use SendReliableAsync and
     // wait until their item has actually left the queue, so a file compressor cannot retain thousands of
@@ -40,6 +56,25 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
 
     // IRelaySender
     public bool IsConnected => _server != null;
+    public RelayTransportSnapshot? Transport
+    {
+        get
+        {
+            var transport = _transport;
+            return transport == null ? null : transport with
+            {
+                ConnectionAttempts = Interlocked.Read(ref _connectionAttempts),
+                MessagesSent = Interlocked.Read(ref _messagesSent),
+                MessagesReceived = Interlocked.Read(ref _messagesReceived),
+                BytesSent = Interlocked.Read(ref _bytesSent),
+                BytesReceived = Interlocked.Read(ref _bytesReceived),
+                SendQueueDepth = Interlocked.Read(ref _sendQueueDepth),
+                MaxSendQueueDepth = Interlocked.Read(ref _maxSendQueueDepth),
+                OldestQueuedMilliseconds = GetOldestQueuedMilliseconds(),
+                LastSendLatencyMilliseconds = Interlocked.Read(ref _lastSendLatencyMilliseconds)
+            };
+        }
+    }
     public event Func<string[], Task>? PeersChanged;
     public event Func<string, MessageKind, ReadOnlyMemory<byte>, Task>? MessageReceived;
     public event Func<Task>? Disconnected;
@@ -48,7 +83,34 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     {
         OnSent(targetHosts, payload);
         if (_server == null || _encryption == null) return;
-        _sendQueue.Writer.TryWrite(new OutboundMessage(targetHosts, payload, null, CancellationToken.None));
+        lock (_sendOrderLock)
+        {
+            if (IsMovementPayload(payload))
+            {
+                if (_openMovementBatch?.TryAppend(targetHosts, payload) == true) return;
+                if (MovementBatch.TryCreate(targetHosts, payload, out var movement))
+                {
+                    _openMovementBatch = movement;
+                    TryQueue(new OutboundMessage(targetHosts, payload, null, CancellationToken.None,
+                        Stopwatch.GetTimestamp(), movement));
+                    return;
+                }
+            }
+
+            _openMovementBatch = null;
+            TryQueue(new OutboundMessage(targetHosts, payload, null, CancellationToken.None,
+                Stopwatch.GetTimestamp(), null));
+        }
+    }
+
+    public bool RequestReconnect()
+    {
+        lock (_connectionLock)
+        {
+            if (_connectionCancellation == null || _connectionCancellation.IsCancellationRequested) return false;
+            _connectionCancellation.Cancel();
+            return true;
+        }
     }
 
     public async ValueTask SendReliableAsync(string[] targetHosts, byte[] payload, CancellationToken cancel = default)
@@ -58,8 +120,13 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
             throw new InvalidOperationException("Relay is not connected");
 
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        if (!_sendQueue.Writer.TryWrite(new OutboundMessage(targetHosts, payload, completion, cancel)))
-            throw new InvalidOperationException("Relay send queue is closed");
+        lock (_sendOrderLock)
+        {
+            _openMovementBatch = null;
+            if (!TryQueue(new OutboundMessage(targetHosts, payload, completion, cancel,
+                    Stopwatch.GetTimestamp(), null)))
+                throw new InvalidOperationException("Relay send queue is closed");
+        }
 
         using var registration = cancel.Register(() => completion.TrySetCanceled(cancel));
         await completion.Task.ConfigureAwait(false);
@@ -71,6 +138,9 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     public async Task Receive(string sourceHost, string sourceIp, byte[] payload)
     {
         if (_encryption == null) return;
+
+        Interlocked.Increment(ref _messagesReceived);
+        Interlocked.Add(ref _bytesReceived, payload.LongLength);
 
         byte[] decrypted;
         try
@@ -137,8 +207,8 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         {
             ConnectCallback = async (ctx, cancel) =>
             {
-                var socket = new Socket(SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
-                await socket.ConnectAsync(ctx.DnsEndPoint, cancel);
+                var socket = await RelaySocketConnector.ConnectAsync(ctx.DnsEndPoint, cancel);
+                CaptureTransport(socket, ctx.DnsEndPoint);
                 return new NetworkStream(socket, ownsSocket: true);
             }
         };
@@ -164,6 +234,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
 
         while (!cancel.IsCancellationRequested)
         {
+            Interlocked.Increment(ref _connectionAttempts);
             try
             {
                 await Connect(netConfig, hostName, cancel);
@@ -189,7 +260,8 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
                 var wasConnected = _server != null;
                 _server = null;
                 _encryption = null;
-                while (_sendQueue.Reader.TryRead(out var stale))
+                _transport = null;
+                while (TryReadQueued(out var stale))
                     stale.Completion?.TrySetException(new IOException("Relay connection lost before message was sent"));
                 if (wasConnected)
                 {
@@ -217,6 +289,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     private async Task Connect(NetworkConfig netConfig, string hostName, CancellationToken cancel)
     {
         using var disco = CancellationTokenSource.CreateLinkedTokenSource(cancel);
+        using var connectionScope = new ConnectionCancellationScope(this, disco);
 
         await using var con = new HubConnectionBuilder()
             .WithUrl($"{netConfig.StyxServer}/relay", ConfigureHubUrl)
@@ -267,21 +340,10 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         await OnAuthenticated();
 
         // drain outbound queue until the connection drops
-        OutboundMessage? lookahead = null;
         while (true)
         {
-            OutboundMessage item;
-            if (lookahead != null)
-            {
-                item = lookahead;
-                lookahead = null;
-            }
-            else
-            {
-                if (!await _sendQueue.Reader.WaitToReadAsync(disco.Token)) break;
-                if (!_sendQueue.Reader.TryRead(out var read)) continue;
-                item = read;
-            }
+            if (!await _sendQueue.Reader.WaitToReadAsync(disco.Token)) break;
+            if (!TryReadQueued(out var item)) continue;
 
             if (item.Cancel.IsCancellationRequested || item.Completion?.Task.IsCanceled == true)
             {
@@ -289,27 +351,14 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
                 continue;
             }
 
-            // coalesce mouse moves — skip intermediate positions, only send the latest
-            if (item.Completion == null && item.Payload.Length > 0 && item.Payload[0] == (byte)MessageKind.MouseMove)
-            {
-                while (_sendQueue.Reader.TryRead(out var next))
-                {
-                    if (next.Completion == null && next.Payload.Length > 0
-                        && next.Payload[0] == (byte)MessageKind.MouseMove
-                        && next.Targets.SequenceEqual(item.Targets))
-                        item = next;
-                    else
-                    {
-                        lookahead = next;
-                        break;
-                    }
-                }
-            }
-
             try
             {
                 var encrypted = await _encryption.Encrypt(item.Payload, cancel);
                 await _server.Send(item.Targets, encrypted);
+                Interlocked.Increment(ref _messagesSent);
+                Interlocked.Add(ref _bytesSent, encrypted.LongLength);
+                Interlocked.Exchange(ref _lastSendLatencyMilliseconds,
+                    (long)Stopwatch.GetElapsedTime(item.EnqueuedTimestamp).TotalMilliseconds);
                 item.Completion?.TrySetResult();
             }
             catch (OperationCanceledException ex)
@@ -330,9 +379,206 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         }
     }
 
+    private void CaptureTransport(Socket socket, DnsEndPoint target)
+    {
+        if (socket.LocalEndPoint is not IPEndPoint local || socket.RemoteEndPoint is not IPEndPoint remote) return;
+        var network = FindInterface(local.Address);
+        _transport = new RelayTransportSnapshot(
+            network?.Name ?? "unknown",
+            DescribeInterface(network),
+            local.Address.ToString(),
+            local.Port,
+            target.Host,
+            remote.Address.ToString(),
+            remote.Port,
+            DateTimeOffset.UtcNow,
+            Interlocked.Read(ref _connectionAttempts),
+            Interlocked.Read(ref _messagesSent),
+            Interlocked.Read(ref _messagesReceived),
+            Interlocked.Read(ref _bytesSent),
+            Interlocked.Read(ref _bytesReceived),
+            Interlocked.Read(ref _sendQueueDepth),
+            Interlocked.Read(ref _maxSendQueueDepth),
+            GetOldestQueuedMilliseconds(),
+            Interlocked.Read(ref _lastSendLatencyMilliseconds));
+    }
+
+    private bool TryQueue(OutboundMessage item)
+    {
+        var depth = Interlocked.Increment(ref _sendQueueDepth);
+        UpdateMaxQueueDepth(depth);
+        if (_sendQueue.Writer.TryWrite(item)) return true;
+        Interlocked.Decrement(ref _sendQueueDepth);
+        return false;
+    }
+
+    private bool TryReadQueued(out OutboundMessage item)
+    {
+        if (!_sendQueue.Reader.TryRead(out item!)) return false;
+        Interlocked.Decrement(ref _sendQueueDepth);
+        if (item.Movement != null)
+        {
+            lock (_sendOrderLock)
+            {
+                if (ReferenceEquals(_openMovementBatch, item.Movement)) _openMovementBatch = null;
+                item = item with { Payload = item.Movement.Snapshot(), Movement = null };
+            }
+        }
+        return true;
+    }
+
+    private void UpdateMaxQueueDepth(long depth)
+    {
+        var current = Interlocked.Read(ref _maxSendQueueDepth);
+        while (depth > current)
+        {
+            var observed = Interlocked.CompareExchange(ref _maxSendQueueDepth, depth, current);
+            if (observed == current) return;
+            current = observed;
+        }
+    }
+
+    private long GetOldestQueuedMilliseconds()
+    {
+        return _sendQueue.Reader.TryPeek(out var oldest)
+            ? (long)Stopwatch.GetElapsedTime(oldest.EnqueuedTimestamp).TotalMilliseconds
+            : 0;
+    }
+
+    internal static bool TryCoalesceMovement(byte[] current, byte[] next, out byte[] combined)
+    {
+        combined = current;
+        if (!MovementBatch.TryCreate([], current, out var movement) || !movement.TryAppend([], next))
+            return false;
+        combined = movement.Snapshot();
+        return true;
+    }
+
+    private static bool IsMovementPayload(byte[] payload) => payload.Length > 0
+        && payload[0] is (byte)MessageKind.MouseMove or (byte)MessageKind.MouseMoveDelta;
+
+    private sealed class MovementBatch
+    {
+        private readonly MessageKind _kind;
+        private readonly string[] _targets;
+        private byte[] _absolutePayload;
+        private int _dx;
+        private int _dy;
+
+        private MovementBatch(string[] targets, byte[] payload, MessageKind kind, int dx = 0, int dy = 0)
+        {
+            _targets = targets;
+            _absolutePayload = payload;
+            _kind = kind;
+            _dx = dx;
+            _dy = dy;
+        }
+
+        internal static bool TryCreate(string[] targets, byte[] payload, out MovementBatch movement)
+        {
+            movement = null!;
+            if (payload.Length == 0) return false;
+            if (payload[0] == (byte)MessageKind.MouseMove)
+            {
+                movement = new MovementBatch(targets, payload, MessageKind.MouseMove);
+                return true;
+            }
+            if (payload[0] != (byte)MessageKind.MouseMoveDelta || !TryDecodeDelta(payload, out var dx, out var dy))
+                return false;
+            movement = new MovementBatch(targets, payload, MessageKind.MouseMoveDelta, dx, dy);
+            return true;
+        }
+
+        internal bool TryAppend(string[] targets, byte[] payload)
+        {
+            if (!_targets.SequenceEqual(targets) || payload.Length == 0 || payload[0] != (byte)_kind) return false;
+            if (_kind == MessageKind.MouseMove)
+            {
+                _absolutePayload = payload;
+                return true;
+            }
+            if (!TryDecodeDelta(payload, out var dx, out var dy)) return false;
+            _dx = (int)Math.Clamp((long)_dx + dx, int.MinValue, int.MaxValue);
+            _dy = (int)Math.Clamp((long)_dy + dy, int.MinValue, int.MaxValue);
+            return true;
+        }
+
+        internal byte[] Snapshot() => _kind == MessageKind.MouseMove
+            ? _absolutePayload
+            : MessageSerializer.Encode(MessageKind.MouseMoveDelta, new MouseMoveDeltaMessage(_dx, _dy));
+
+        private static bool TryDecodeDelta(byte[] payload, out int dx, out int dy)
+        {
+            dx = dy = 0;
+            try
+            {
+                var delta = System.Text.Json.JsonSerializer.Deserialize<MouseMoveDeltaMessage>(
+                    payload.AsSpan(1), Cathedral.Config.SaneJson.Options);
+                if (delta == null) return false;
+                dx = delta.Dx;
+                dy = delta.Dy;
+                return true;
+            }
+            catch (System.Text.Json.JsonException) { return false; }
+        }
+    }
+
+    private static NetworkInterface? FindInterface(IPAddress address)
+    {
+        var normalized = address.IsIPv4MappedToIPv6 ? address.MapToIPv4() : address;
+        try
+        {
+            return NetworkInterface.GetAllNetworkInterfaces().FirstOrDefault(network =>
+                network.GetIPProperties().UnicastAddresses.Any(unicast =>
+                {
+                    var candidate = unicast.Address.IsIPv4MappedToIPv6 ? unicast.Address.MapToIPv4() : unicast.Address;
+                    return candidate.Equals(normalized);
+                }));
+        }
+        catch (NetworkInformationException)
+        {
+            return null;
+        }
+    }
+
+    private static string DescribeInterface(NetworkInterface? network) => network?.NetworkInterfaceType switch
+    {
+        NetworkInterfaceType.Wireless80211 => "Wi-Fi",
+        NetworkInterfaceType.Ethernet or NetworkInterfaceType.Ethernet3Megabit
+            or NetworkInterfaceType.FastEthernetFx or NetworkInterfaceType.FastEthernetT
+            or NetworkInterfaceType.GigabitEthernet => "Ethernet",
+        NetworkInterfaceType.Tunnel => "VPN / tunnel",
+        NetworkInterfaceType.Loopback => "loopback",
+        NetworkInterfaceType.Ppp => "PPP",
+        null => "unknown",
+        _ => network.NetworkInterfaceType.ToString()
+    };
+
+    private sealed class ConnectionCancellationScope : IDisposable
+    {
+        private readonly RelayConnection _owner;
+        private readonly CancellationTokenSource _cancellation;
+
+        internal ConnectionCancellationScope(RelayConnection owner, CancellationTokenSource cancellation)
+        {
+            _owner = owner;
+            _cancellation = cancellation;
+            lock (_owner._connectionLock) _owner._connectionCancellation = cancellation;
+        }
+
+        public void Dispose()
+        {
+            lock (_owner._connectionLock)
+                if (ReferenceEquals(_owner._connectionCancellation, _cancellation))
+                    _owner._connectionCancellation = null;
+        }
+    }
+
     private sealed record OutboundMessage(
         string[] Targets,
         byte[] Payload,
         TaskCompletionSource? Completion,
-        CancellationToken Cancel);
+        CancellationToken Cancel,
+        long EnqueuedTimestamp,
+        MovementBatch? Movement);
 }

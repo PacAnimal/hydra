@@ -25,20 +25,30 @@ public class EmbeddedStyxServer(EmbeddedStyxServerConfig config, ILogger<Embedde
     protected override async Task Execute(CancellationToken cancel)
     {
         var app = BuildApp();
-
-        log.LogInformation("Starting embedded Styx relay on port {Port}", config.Port);
-        await app.StartAsync(cancel);
-        _ready.TrySetResult();
-        log.LogInformation("Embedded Styx relay listening on port {Port}", config.Port);
-
+        var started = false;
         try
         {
-            await Task.Delay(Timeout.Infinite, cancel);
+            log.LogInformation("Starting embedded Styx relay on port {Port}", config.Port);
+            await app.StartAsync(cancel);
+            started = true;
+            _ready.TrySetResult();
+            log.LogInformation("Embedded Styx relay listening on port {Port}", config.Port);
+            try { await Task.Delay(Timeout.Infinite, cancel); }
+            catch (OperationCanceledException) { }
         }
-        catch (OperationCanceledException) { }
         finally
         {
-            await app.StopAsync(cancel);
+            try
+            {
+                if (started)
+                {
+                    using var stopTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                    await app.StopAsync(stopTimeout.Token);
+                }
+            }
+            catch (OperationCanceledException) { log.LogWarning("Embedded Styx did not stop within five seconds"); }
+            catch (Exception ex) { log.LogWarning(ex, "Embedded Styx stop failed"); }
+            finally { await app.DisposeAsync(); }
         }
     }
 

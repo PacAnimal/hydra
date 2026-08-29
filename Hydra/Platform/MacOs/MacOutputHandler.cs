@@ -721,7 +721,11 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
         if (_cursorHidden)
             _ = NativeMethods.CGDisplayShowCursor(_display);
         if (_hidConnection != 0)
-            _ = NativeMethods.IOObjectRelease(_hidConnection);
+        {
+            var result = NativeMethods.IOServiceClose(_hidConnection);
+            if (result != 0) _log.LogWarning("IOServiceClose failed: kr={Kr}", result);
+            _hidConnection = 0;
+        }
     }
 
     private record MoveEvent(int EventType, int Button);

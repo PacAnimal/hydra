@@ -494,6 +494,35 @@ public class FileTransferServiceTests
     }
 
     [Test]
+    public async Task CancelledSend_CompletingLate_DoesNotClearReplacementSend()
+    {
+        var path = Path.Combine(_tempRoot, "random.bin");
+        var bytes = new byte[TarGzStreamer.ChunkSize * 2];
+        Random.Shared.NextBytes(bytes);
+        await File.WriteAllBytesAsync(path, bytes);
+        var firstRelay = new GatedReliableRelay(ignoreCancellation: true);
+        var secondRelay = new GatedReliableRelay();
+
+        var first = _service.ExecuteStreamRequest([path], "first-target", firstRelay);
+        await firstRelay.FirstReliableSend.WaitAsync(TimeSpan.FromSeconds(3));
+        _service.Abort(firstRelay, "replace transfer");
+
+        var second = _service.ExecuteStreamRequest([path], "second-target", secondRelay);
+        await secondRelay.FirstReliableSend.WaitAsync(TimeSpan.FromSeconds(3));
+        firstRelay.ReleaseAll();
+        await first.WaitAsync(TimeSpan.FromSeconds(5));
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(_service.FileTransferOngoing, Is.True);
+            Assert.That(_service.IsSendingTo("second-target"), Is.True);
+        }
+
+        secondRelay.ReleaseAll();
+        await second.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Test]
     public async Task ExecuteStreamRequest_RelayThrows_ShowsError()
     {
         await _service.ExecuteStreamRequest([CreateTempFile()], "target", new ThrowingRelay());
@@ -761,7 +790,7 @@ internal sealed class ThrowingRelay : IRelaySender
     public void Send(string[] targetHosts, byte[] payload) => throw new InvalidOperationException("relay unavailable");
 }
 
-internal sealed class GatedReliableRelay : IRelaySender
+internal sealed class GatedReliableRelay(bool ignoreCancellation = false) : IRelaySender
 {
     private readonly SemaphoreSlim _gate = new(0);
     private readonly TaskCompletionSource _firstReliableSend = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -783,7 +812,7 @@ internal sealed class GatedReliableRelay : IRelaySender
     {
         Interlocked.Increment(ref _reliableSendCount);
         _firstReliableSend.TrySetResult();
-        await _gate.WaitAsync(cancel);
+        await _gate.WaitAsync(ignoreCancellation ? CancellationToken.None : cancel);
     }
 
     public void ReleaseAll() => _gate.Release(100);

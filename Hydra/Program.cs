@@ -250,7 +250,8 @@ if (config != null)
         if (OperatingSystem.IsMacOS())
         {
             services.AddSingleton<MacOutputHandler>();
-            services.AddSingleton<IPlatformOutput>(sp => new CoalescingOutputWrapper(sp.GetRequiredService<MacOutputHandler>()));
+            services.AddSingleton<IPlatformOutput>(sp => new CoalescingOutputWrapper(
+                sp.GetRequiredService<MacOutputHandler>(), sp.GetRequiredService<ILogger<CoalescingOutputWrapper>>()));
             services.AddSingleton<ICursor>(sp => sp.GetRequiredService<MacOutputHandler>());
         }
         else if (OperatingSystem.IsWindows())
@@ -261,7 +262,7 @@ if (config != null)
             {
                 var handler = sp.GetRequiredService<WindowsOutputHandler>();
                 handler.Initialize();
-                return new CoalescingOutputWrapper(handler);
+                return new CoalescingOutputWrapper(handler, sp.GetRequiredService<ILogger<CoalescingOutputWrapper>>());
             });
             services.AddSingleton<ICursor>(sp => sp.GetRequiredService<WindowsOutputHandler>());
 #pragma warning restore CA1416
@@ -269,7 +270,8 @@ if (config != null)
         else if (OperatingSystem.IsLinux())
         {
             services.AddSingleton<XorgOutputHandler>();
-            services.AddSingleton<IPlatformOutput>(sp => new CoalescingOutputWrapper(sp.GetRequiredService<XorgOutputHandler>()));
+            services.AddSingleton<IPlatformOutput>(sp => new CoalescingOutputWrapper(
+                sp.GetRequiredService<XorgOutputHandler>(), sp.GetRequiredService<ILogger<CoalescingOutputWrapper>>()));
             services.AddSingleton<ICursor>(sp => sp.GetRequiredService<XorgOutputHandler>());
         }
         else

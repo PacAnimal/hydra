@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Hydra.Keyboard;
 using Hydra.Mouse;
 using Hydra.Platform;
@@ -54,6 +55,7 @@ public class CoalescingOutputWrapperTests
             _wrapper.MoveMouse(i, i);
 
         Assert.That(_wrapper.PendingActionCount, Is.EqualTo(1));
+        Assert.That(_wrapper.MaxPendingActionCount, Is.EqualTo(1));
         Drain();
         Assert.That(_inner.Events.OfType<MoveEvent>().Single().X, Is.EqualTo(9_999));
     }
@@ -142,6 +144,49 @@ public class CoalescingOutputWrapperTests
     }
 
     [Test]
+    public void PlatformActionFailure_IsRecorded_AndLaterActionsStillDrain()
+    {
+        var inner = new FaultingOutput();
+        using var wrapper = new CoalescingOutputWrapper(inner, runDrainThread: false);
+        var first = new KeyEventMessage(KeyEventType.KeyDown, KeyModifiers.None, 'a', null);
+        var second = new KeyEventMessage(KeyEventType.KeyDown, KeyModifiers.None, 'b', null);
+
+        wrapper.InjectKey(first);
+        wrapper.InjectKey(second);
+        wrapper.DrainPending();
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(wrapper.FaultCount, Is.EqualTo(1));
+            Assert.That(inner.Delivered, Is.EqualTo([second]));
+        }
+    }
+
+    [Test]
+    public void Dispose_ReturnsAfterBound_WhenPlatformActionIsBlocked()
+    {
+        var inner = new BlockingOutput();
+        var wrapper = new CoalescingOutputWrapper(inner, runDrainThread: true,
+            shutdownTimeout: TimeSpan.FromMilliseconds(50));
+        wrapper.InjectKey(new KeyEventMessage(KeyEventType.KeyDown, KeyModifiers.None, 'a', null));
+        Assert.That(inner.Entered.Wait(TimeSpan.FromSeconds(1)), Is.True);
+
+        var started = Stopwatch.GetTimestamp();
+        wrapper.Dispose();
+        var elapsed = Stopwatch.GetElapsedTime(started);
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(elapsed, Is.LessThan(TimeSpan.FromSeconds(1)));
+            Assert.That(inner.Disposed.IsSet, Is.False,
+                "native output must remain owned by the worker while an action is still executing");
+        }
+
+        inner.Release.Set();
+        Assert.That(inner.Disposed.Wait(TimeSpan.FromSeconds(1)), Is.True);
+    }
+
+    [Test]
     public void PendingMove_IsFlushedBeforeNonMoveEvent()
     {
         _wrapper.MoveMouse(100, 200);
@@ -210,6 +255,45 @@ public class CoalescingOutputWrapperTests
         public void InjectMouseButton(MouseButtonMessage msg) { lock (Events) Events.Add(new ButtonEvent()); }
         public void InjectMouseScroll(MouseScrollMessage msg) { lock (Events) Events.Add(new ScrollEvent()); }
         public void Dispose() { }
+    }
+
+    private sealed class FaultingOutput : IPlatformOutput
+    {
+        private bool _throwNext = true;
+        public List<KeyEventMessage> Delivered { get; } = [];
+
+        public void MoveMouse(int x, int y) { }
+        public void MoveMouseRelative(int dx, int dy) { }
+        public void InjectKey(KeyEventMessage msg)
+        {
+            if (_throwNext)
+            {
+                _throwNext = false;
+                throw new InvalidOperationException("injected output failure");
+            }
+            Delivered.Add(msg);
+        }
+        public void InjectMouseButton(MouseButtonMessage msg) { }
+        public void InjectMouseScroll(MouseScrollMessage msg) { }
+        public void Dispose() { }
+    }
+
+    private sealed class BlockingOutput : IPlatformOutput
+    {
+        public ManualResetEventSlim Entered { get; } = new();
+        public ManualResetEventSlim Release { get; } = new();
+        public ManualResetEventSlim Disposed { get; } = new();
+
+        public void MoveMouse(int x, int y) { }
+        public void MoveMouseRelative(int dx, int dy) { }
+        public void InjectKey(KeyEventMessage msg)
+        {
+            Entered.Set();
+            Release.Wait();
+        }
+        public void InjectMouseButton(MouseButtonMessage msg) { }
+        public void InjectMouseScroll(MouseScrollMessage msg) { }
+        public void Dispose() => Disposed.Set();
     }
 
     private record MoveEvent(int X, int Y, bool Absolute);

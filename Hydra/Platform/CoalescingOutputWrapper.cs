@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 using Hydra.Relay;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Hydra.Platform;
 
@@ -15,15 +17,24 @@ public sealed class CoalescingOutputWrapper : IPlatformOutput
     private MoveBatch? _openMoveBatch;
     private readonly BlockingCollection<Action> _actions = [];
     private readonly Thread? _drainThread;
+    private readonly ILogger<CoalescingOutputWrapper> _log;
+    private readonly TimeSpan _shutdownTimeout;
+    private int _faultCount;
+    private long _maxPendingActionCount;
+    private int _nextBacklogWarning = 1024;
     private bool _disposed;
 
-    public CoalescingOutputWrapper(IPlatformOutput inner) : this(inner, runDrainThread: true) { }
+    public CoalescingOutputWrapper(IPlatformOutput inner, ILogger<CoalescingOutputWrapper>? log = null)
+        : this(inner, runDrainThread: true, log: log) { }
 
     // runDrainThread: false leaves draining to the caller via DrainPending() — used by tests to drive
     // delivery deterministically instead of racing the background thread against a sleep.
-    internal CoalescingOutputWrapper(IPlatformOutput inner, bool runDrainThread)
+    internal CoalescingOutputWrapper(IPlatformOutput inner, bool runDrainThread,
+        ILogger<CoalescingOutputWrapper>? log = null, TimeSpan? shutdownTimeout = null)
     {
         _inner = inner;
+        _log = log ?? NullLogger<CoalescingOutputWrapper>.Instance;
+        _shutdownTimeout = shutdownTimeout ?? TimeSpan.FromSeconds(2);
         if (runDrainThread)
         {
             _drainThread = new Thread(Drain) { IsBackground = true, Name = "output-coalescer" };
@@ -50,7 +61,7 @@ public sealed class CoalescingOutputWrapper : IPlatformOutput
             {
                 var batch = new MoveBatch(absolute);
                 _openMoveBatch = batch;
-                _actions.TryAdd(() => FlushMove(batch));
+                if (_actions.TryAdd(() => FlushMove(batch))) RecordPendingDepth();
             }
 
             _openMoveBatch.Add(x, y);
@@ -81,6 +92,7 @@ public sealed class CoalescingOutputWrapper : IPlatformOutput
             if (_disposed) return;
             _openMoveBatch = null;
             _actions.Add(action);
+            RecordPendingDepth();
         }
     }
 
@@ -98,18 +110,65 @@ public sealed class CoalescingOutputWrapper : IPlatformOutput
 
     private void Drain()
     {
-        try { foreach (var action in _actions.GetConsumingEnumerable()) action(); }
-        catch (InvalidOperationException) { } // thrown by BlockingCollection when CompleteAdding races with enumeration start
+        try
+        {
+            foreach (var action in _actions.GetConsumingEnumerable()) ExecuteAction(action);
+        }
+        catch (Exception ex)
+        {
+            RecordFault(ex, "Output drain stopped unexpectedly");
+        }
+        finally
+        {
+            DisposeInner();
+        }
     }
 
     // drains every currently-queued action on the caller's thread. only valid when constructed with
     // runDrainThread: false (no background drainer to race against) — the test seam for deterministic delivery.
     internal void DrainPending()
     {
-        while (_actions.TryTake(out var action)) action();
+        while (_actions.TryTake(out var action)) ExecuteAction(action);
     }
 
     internal int PendingActionCount => _actions.Count;
+    internal int FaultCount => Volatile.Read(ref _faultCount);
+    internal long MaxPendingActionCount => Interlocked.Read(ref _maxPendingActionCount);
+
+    private void RecordPendingDepth()
+    {
+        var depth = _actions.Count;
+        var max = Interlocked.Read(ref _maxPendingActionCount);
+        while (depth > max)
+        {
+            var observed = Interlocked.CompareExchange(ref _maxPendingActionCount, depth, max);
+            if (observed == max) break;
+            max = observed;
+        }
+
+        var threshold = Volatile.Read(ref _nextBacklogWarning);
+        if (depth < threshold || Interlocked.CompareExchange(ref _nextBacklogWarning, threshold * 2, threshold) != threshold)
+            return;
+        _log.LogWarning("Platform output backlog reached {Depth} actions; native output may be stalled", depth);
+    }
+
+    private void ExecuteAction(Action action)
+    {
+        try { action(); }
+        catch (Exception ex) { RecordFault(ex, "Platform output action failed; continuing to drain"); }
+    }
+
+    private void RecordFault(Exception ex, string message)
+    {
+        Interlocked.Increment(ref _faultCount);
+        _log.LogError(ex, "{Message}", message);
+    }
+
+    private void DisposeInner()
+    {
+        try { _inner.Dispose(); }
+        catch (Exception ex) { RecordFault(ex, "Platform output disposal failed"); }
+    }
 
     public bool IsAccessibilityTrusted() => _inner.IsAccessibilityTrusted();
     public Task WaitForAccessibilityTrusted(CancellationToken cancel) => _inner.WaitForAccessibilityTrusted(cancel);
@@ -124,10 +183,16 @@ public sealed class CoalescingOutputWrapper : IPlatformOutput
             _actions.CompleteAdding();
         }
         if (_drainThread != null)
-            _drainThread.Join();
+        {
+            if (!_drainThread.Join(_shutdownTimeout))
+                _log.LogWarning("Output drain did not stop within {TimeoutMs}ms; native output remains owned by the background worker",
+                    _shutdownTimeout.TotalMilliseconds);
+        }
         else
+        {
             DrainPending(); // manual mode: flush the queue inline so a pending move is still delivered
-        _inner.Dispose();
+            DisposeInner();
+        }
     }
 
     private sealed class MoveBatch(bool absolute)

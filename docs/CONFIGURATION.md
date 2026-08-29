@@ -1,11 +1,12 @@
 # Hydra — Configuration Reference
 
-See the [project README](../README.md) for installation and a quick-start guide.
+This reference documents this fork. See the [project README](../README.md) for fork identity, installation, and a quick-start guide.
 
 **Contents**
 
 - [Requirements](#requirements)
 - [Config file location](#config-file-location)
+- [Terminal control center](#terminal-control-center)
 - [Config fields](#config-fields)
 - [Screen layout](#screen-layout)
 - [Dead corners](#dead-corners)
@@ -31,11 +32,49 @@ See the [project README](../README.md) for installation and a quick-start guide.
 
 ## Config file location
 
-The config file is `hydra.conf`, located next to the binary. Set the `CONFIG` environment variable to use a different path:
+Hydra first looks for `hydra.conf` next to the running binary, then in the current working directory. Set the `CONFIG` environment variable to use an explicit path:
 
 ```bash
-CONFIG=/path/to/hydra.conf ./hydra
+CONFIG=/path/to/hydra.conf ./Hydra
 ```
+
+## Terminal control center
+
+Run the TUI in a separate terminal while Hydra is running:
+
+```bash
+./Hydra tui
+./Hydra tui --config /path/to/hydra.conf
+```
+
+`--config` must identify the same canonical config path as the daemon you want to manage. The TUI connects through a local-only Unix socket on macOS/Linux or a restricted named pipe on Windows; it does not expose a network management port.
+
+The views provide runtime status, the exact interface and socket selected by the live relay connection, the actual inbound interface for clients of an embedded relay, relay traffic and send-queue diagnostics, known peers and screens, bounded live logs, configuration editing, diagnostics, and keyboard help. Runtime controls include relay reconnect, confirmed Hydra restart, and confirmed Hydra shutdown; after shutdown is confirmed, **Start Hydra** becomes available. The configuration view has **Form** and **Text** modes; the active mode and form section use a persistent accent colour that is independent of keyboard or mouse focus. Form mode divides global, profile, relay, and behaviour settings into separate sections; Text mode exposes the complete JSON including hosts, neighbours, and screen definitions. Empty optional form fields show their effective inherited/default value beside the field without writing that value into the configuration. Hovering an option or moving keyboard focus to it updates the help panel at the bottom. Profile navigation is disabled at the first/last profile and when only one profile exists. Switching modes round-trips through the same document and preserves fields not shown by the form. The view uses Hydra's canonical parser and validator, detects external file changes, and writes through a validated sibling temporary file before replacing the original. **Save** changes the file only; **Save & Restart** also asks the running daemon to restart. Accepted save, reconnect, restart, and shutdown actions report progress and completion in the bottom activity line instead of blocking the refreshed UI behind a success dialog.
+
+The Overview tab also provides a confirmed **Shutdown Hydra** action. On macOS, shutdown unloads but preserves the current LaunchAgent so its `KeepAlive` setting does not immediately relaunch Hydra. Windows service-managed sessions must instead be stopped through Windows Services or an elevated terminal.
+
+After the TUI confirms shutdown, **Start Hydra** becomes available. It starts the installed macOS LaunchAgent when available, or launches the current executable directly with the selected configuration. A generic management connection failure does not enable Start because Hydra may still be running.
+
+When a relay hostname resolves to addresses reachable through more than one interface, Hydra tries addresses in the operating system's configured network preference order before falling back to the remaining addresses. It follows Network Service Order on macOS, connected-interface metrics on Windows, and default-route metrics on Linux. If preference discovery is unavailable, Hydra preserves the resolver's address order and still attempts every resolved address.
+
+Passwords and `networkConfig` values use secret fields in Form mode and are masked by default in Text mode. Revealing them in Text mode displays the real values in the terminal, so avoid doing that in a recorded or shared session. When the daemon is unavailable, configuration read, validation, and save continue to work offline; live status and runtime controls are disabled unless this TUI just confirmed a shutdown and can safely offer **Start Hydra**.
+
+### Pairing and managing a remote peer
+
+Remote management is opt-in per machine. On the peer to manage, generate a single-use code locally:
+
+```bash
+./Hydra pair
+./Hydra pair --config /path/to/hydra.conf
+```
+
+The code expires after 10 minutes. In the controlling TUI, open **Remote**, enter the peer's Hydra host name and code, and select **Pair**. Pairing creates a separate management credential in `.hydra-management.json` beside `hydra.conf`; the ordinary shared relay configuration does not grant remote-admin rights. The sidecar contains secrets and is written with user-only permissions on Unix-like systems. A user-only `.hydra-management.lock` coordinates updates from the running daemon and the `pair` command. Do not copy either file into source control or diagnostics.
+
+After pairing, **Load Config** fetches a source-redacted document: `password` and `networkConfig` values never leave the peer. Unchanged placeholders are restored on the peer before validation or apply. **Save & Apply** stages the candidate, preserves the last-known-good configuration, and restarts Hydra. The controller confirms only after the peer reconnects and reports the expected revision. Without confirmation within 90 seconds, Hydra restores the backup and restarts automatically; expired transactions are also recovered before normal config bootstrap when the candidate is invalid.
+
+Remote changes to the machine name, forced/conditional profile selection, relay credentials, or embedded-relay settings are refused in this version. Make those changes locally because they can remove the relay path needed to confirm or recover a remote apply. A machine with no usable Hydra configuration also requires initial local, SSH, MDM, or other out-of-band provisioning before it can join the relay and be paired.
+
+Use `Esc` to close the TUI. It does not change Hydra's running state.
 
 ## Config fields
 
@@ -44,26 +83,34 @@ CONFIG=/path/to/hydra.conf ./hydra
 - `name` — this machine's name on the network. Optional — defaults to the machine's hostname without domain. Must match one of the host names for the master to identify its own screen.
 - `logLevel` — `trce`, `dbug`, `info`, `warn`, `fail`, or `crit`
 - `logFile` — path to a file where log output is also written (in addition to the console); relative paths are resolved from the config file's directory (default: none)
-- `sessionLogFile` — Windows service mode only: path to a file where the session child's log output is written. The service spawns a child process in the interactive session to run the input hooks and the relay, so this is the log that records what actually happened. Defaults to `logFile` with a `.session.log` extension, so it is only worth setting to move it elsewhere.
-- `logTruncate` — if `true`, truncate `logFile` and `sessionLogFile` to 0 bytes on each startup so they don't grow unbounded (default: `false`)
-- `autoUpdate` — `false` to disable automatic updates
+- `sessionLogFile` — log file used by the interactive child launched by Windows service mode (default: none)
+- `logTruncate` — if `true`, truncate the active `logFile` or `sessionLogFile` on startup (default: `false`)
+- `autoUpdate` — `false` to disable automatic updates (default: `true`). Current fork binaries still query the upstream `PacAnimal/hydra` release feed, so disable this to prevent a source-built fork binary from replacing itself with an upstream release.
 - `lockFile` — path to a lock file to prevent multiple instances (default: none)
+- `profile` — force the named `profileName` regardless of conditions; intended for diagnosis and controlled overrides
+- `debugShield` — enable verbose cursor-shield diagnostics (default: `false`)
+- `debugMouse` — enable verbose mouse-routing diagnostics (default: `false`)
 - `profiles` — array of profile objects (see below); at least one required
 
 **Per-profile** (inside a `profiles` entry):
 
 - `profileName` — name for this profile, logged at startup so you know which one is active (no duplicates allowed)
 - `mode` — `Master` or `Slave`
-- `networkConfig` — base64 relay config string from the Styx web UI; use this to connect to a standalone Styx server
+- `networkConfig` — base64 relay config string from the Styx relay network-config page; use this to connect to a standalone Styx server
 - `embeddedStyx` — connect to a Styx server using plain-text credentials: `{ "server": "http://<host>:<port>", "password": "<password>" }` — a more readable alternative to copying the base64 `networkConfig` blob
 - `embeddedStyxServer` — run a Styx relay server embedded inside this Hydra process: `{ "port": <port>, "password": "<password>" }` — useful for home setups where you don't want a separate Styx container; the machine running this automatically connects to its own server, and other machines connect to it using `embeddedStyx`
 - `hosts` — list of host entries for the neighbour graph (master only; slaves don't need this)
 - `screenDefinitions` — per-screen scale config (slave only; reported to master via ScreenInfo)
 - `mouseScale` — fallback cursor speed multiplier for all screens on this slave (slave only)
+- `relativeMouseScale` — fallback relative-mode speed multiplier for all screens on this slave; falls back to `mouseScale` when omitted (slave only)
+- `hideCursor` — hide the master's local cursor while it is inactive or routed remotely (master only; default: `false`)
 - `deadCorners` — pixel dead zone at screen corners where transitions are blocked (default `0`, `50` is a reasonable starting value). Scaled by the screen's mouseScale. Can also be set per-host to override.
-- `hotkeys` — rebind Hydra's hotkeys, as action name to an array of chords (master only; see [Customising hotkeys](#customising-hotkeys))
 - `remoteOnly` — `true` to forward all input to remote machines immediately at startup, with no local screen involved (see [Remote-only mode](#remote-only-mode))
+- `clipboardSync` — `Hydra` uses Hydra's cross-platform clipboard protocol (default). `System` makes a macOS master stand down for macOS peers so Universal Clipboard can operate without competing pasteboard writes; Hydra continues syncing with Windows and Linux peers.
 - `syncScreensaver` — `false` to disable screensaver synchronisation (default: `true`)
+- `screenLockPropagation` — propagate a Mac/Windows master's local lock to connected slaves (master only; default: `false`)
+- `accelerateMouseWheel` — apply the platform wheel-acceleration behavior (default: `true`)
+- `unicodeKeyRepeat` — repeat held printable keys through Unicode insertion where supported, avoiding the macOS press-and-hold accent UI (master preference; default: `true`)
 - `conditions` — optional object; if set, this profile only activates when **all** specified conditions are met (see [Network-aware config](#network-aware-config))
   - `ssid` — activates when connected to this WiFi network name (case-insensitive)
   - `screenCount` — activates when exactly this many screens are connected (integer ≥ 1)
@@ -187,8 +234,9 @@ Each entry specifies one or more match criteria — all specified criteria must 
 | `outputName` | — | Match by output connector name (e.g. `"HDMI-1"`) |
 | `platformId` | — | Match by platform-specific ID |
 | `mouseScale` | — | Cursor speed multiplier on this screen; overrides the profile-level `mouseScale` |
+| `relativeMouseScale` | — | Relative-mode speed multiplier on this screen; overrides profile-level `relativeMouseScale` |
 
-The profile-level `mouseScale` sets a fallback multiplier for all screens on this slave. Per-screen `mouseScale` in a `screenDefinitions` entry overrides it. If neither is set, the multiplier defaults to `1.0`.
+The profile-level `mouseScale` sets the ordinary fallback multiplier for all screens on this slave. `relativeMouseScale` sets the relative-mode fallback and itself falls back to `mouseScale`. Per-screen values override their corresponding profile values. If no applicable value is set, the multiplier defaults to `1.0`.
 
 At least one match field must be set per `screenDefinitions` entry.
 
@@ -272,17 +320,15 @@ A common setup: at home your stationary desktop controls your laptop (the laptop
 
 ## Hotkeys
 
-By default every hotkey uses **Ctrl+Alt+Super** (Super = ⌘ on macOS, Win on Windows) plus one letter. All of
-them can be rebound — see [Customising hotkeys](#customising-hotkeys) below.
+All hotkeys use **Ctrl+Alt+Super** (Super = ⌘ on macOS, Win on Windows) plus one letter.
 
-| Default hotkey | Action name | Action |
-|--------|--------|--------|
-| `Ctrl+Alt+Super+L` | `toggleCursorLock` | Toggle cursor lock — lock to current screen, or unlock to roam freely |
-| `Ctrl+Alt+Super+M` | `toggleRelativeMouse` | Toggle relative mouse mode on the current remote screen (useful for games) |
-| `Ctrl+Alt+Super+C` | `copyFiles` | Copy selected files/folders to Hydra's cross-machine clipboard (macOS, Windows) |
-| `Ctrl+Alt+Super+V` | `pasteFiles` | Paste previously copied files to the current machine |
-| `Ctrl+Alt+Super+K` | `lockSlaves` | Lock every connected slave |
-| `Ctrl+Alt+Super+Z` | `missionControl` | Send Mission Control to the current remote screen (macOS slave) |
+| Hotkey | Action |
+|--------|--------|
+| `Ctrl+Alt+Super+L` | Toggle cursor lock — lock to current screen, or unlock to roam freely |
+| `Ctrl+Alt+Super+M` | Toggle relative mouse mode on the current remote screen (useful for games) |
+| `Ctrl+Alt+Super+C` | Copy selected files/folders to Hydra's cross-machine clipboard (macOS, Windows) |
+| `Ctrl+Alt+Super+V` | Paste previously copied files to the current machine |
+| `Ctrl+Alt+Super+K` | Lock every connected slave |
 
 **Lock all slaves:** `Ctrl+Alt+Super+K` sends a lock to every connected slave — the same action `screenLockPropagation` performs when the master's own machine locks. It is the only way to trigger it from a **remote-only master**, which has no screen of its own to lock and therefore never fires the underlying event. It is not gated on `screenLockPropagation`: that setting governs automatic propagation, while the hotkey is an explicit request. A slave that has seen local input more recently than the master still declines to lock, on the assumption that someone is sitting at it.
 
@@ -293,96 +339,13 @@ them can be rebound — see [Customising hotkeys](#customising-hotkeys) below.
 
 **Relative mouse:** relative mode sends mouse deltas instead of absolute coordinates — useful for games or 3D apps that capture the cursor. Toggled per-screen; an on-screen notification confirms the current state.
 
-### Customising hotkeys
-
-`hotkeys` is a **master** profile setting mapping an action name to the chords bound to it. Hotkeys are consumed
-on the master before anything is forwarded, so a slave never sees one and setting this on a slave profile does
-nothing.
-
-```json
-{
-  "mode": "Master",
-  "hotkeys": {
-    "toggleCursorLock": ["Ctrl+Alt+Super+L", "ScrollLock"],
-    "toggleRelativeMouse": ["F13"]
-  },
-  "hosts": [...]
-}
-```
-
-Each value is an **array**, so one action can have several chords — useful for keeping the default while adding
-something reachable one-handed. A listed array **replaces** that action's default entirely: to keep the default
-as well, list it, as `toggleCursorLock` does above. Actions you don't mention keep their defaults.
-
-**Writing a chord.** Join parts with `+`, in any order, case-insensitively: `Ctrl+Alt+Super+L`, `cmd+alt+ctrl+l`
-and `L+Ctrl+Alt+Super` are the same binding. Modifier names, with aliases:
-
-| Modifier | Accepted names |
-|----------|----------------|
-| Control | `ctrl`, `control` |
-| Alt / Option | `alt`, `opt`, `option` |
-| Shift | `shift` |
-| Super (⌘ / Win) | `super`, `win`, `windows`, `cmd`, `command`, `meta` |
-| AltGr | `altgr` |
-
-**The key itself** is either a single character (`l`, `4`, `/`, `å`) or one of the names in
-[Bindable keys](#bindable-keys) below — so `Ctrl+Home`, `Alt+PageDown`, `Win+F1` and `Ctrl+Shift+End` all work.
-
-**Two rules, both enforced at startup:**
-
-- A **named** key may be used on its own — `["ScrollLock"]` is the point of this feature.
-- A **single character** may not. Hydra consumes both the press and the release of a hotkey, so `["c"]` would
-  stop `c` ever being typed again. Give it at least one modifier.
-
-Modifier keys themselves (`Shift_L`, `Control_R`, `Alt_L`, `Super_L`, `AltGr`) cannot be bound, for the same
-reason. `ScrollLock`, `NumLock` and `CapsLock` can — they are toggles, and binding one is a deliberate choice.
-
-A binding Hydra cannot parse is logged as a warning at startup and ignored, and that action keeps its default,
-so a typo never leaves an action unreachable or stops Hydra starting. Lock states are not part of a chord:
-`Ctrl+Alt+Super+L` still fires with CapsLock on.
-
-### Bindable keys
-
-Names are case-insensitive. Any of them combines with any modifiers.
-
-| Group | Names |
-|-------|-------|
-| Editing | `BackSpace` `Tab` `Return` `Escape` `Delete` `Insert` |
-| Navigation | `Home` `End` `PageUp` `PageDown` `Left` `Right` `Up` `Down` |
-| Function | `F1` `F2` `F3` `F4` `F5` `F6` `F7` `F8` `F9` `F10` `F11` `F12` `F13` `F14` `F15` `F16` `F17` `F18` `F19` `F20` |
-| Locks | `CapsLock` `NumLock` `ScrollLock` |
-| PC extras | `Pause` `PrintScreen` `Menu` |
-| Numpad | `KP_0` `KP_1` `KP_2` `KP_3` `KP_4` `KP_5` `KP_6` `KP_7` `KP_8` `KP_9` `KP_Enter` `KP_Add` `KP_Subtract` `KP_Multiply` `KP_Divide` `KP_Decimal` `KP_Equal` `KP_Space` `KP_Tab` |
-| Media | `AudioMute` `AudioVolumeUp` `AudioVolumeDown` `AudioPlay` `AudioStop` `AudioNext` `AudioPrev` |
-| System | `BrightnessUp` `BrightnessDown` `Eject` `MissionControl` |
-| macOS text | `MoveToBeginningOfLine` `MoveToEndOfLine` |
-
-Punctuation and space can be written literally or by name — the name is clearer, and for `Space` it is the
-only way, since a literal space is stripped as padding:
-
-| Name | Key | | Name | Key |
-|------|-----|-|------|-----|
-| `Space` | space | | `Grave`, `Backtick` | `` ` `` |
-| `Plus` | `+` | | `Equal`, `Equals` | `=` |
-| `Minus` | `-` | | `Semicolon` | `;` |
-| `Comma` | `,` | | `Quote`, `Apostrophe` | `'` |
-| `Period`, `Dot` | `.` | | `BracketLeft` | `[` |
-| `Slash` | `/` | | `BracketRight` | `]` |
-| `Backslash` | `\` | | | |
-
-The modifier keys themselves (`Shift_L`, `Shift_R`, `Control_L`, `Control_R`, `Alt_L`, `Alt_R`, `Super_L`,
-`Super_R`, `AltGr`) are not bindable as the key of a chord — use them as modifiers instead.
-
-`Menu` is the Applications or context-menu key found on PC keyboards.
-
-`Pause`, `PrintScreen` and `Menu` are captured and injected natively on Windows and Linux. Apple keyboards have
-none of them and macOS has no virtual keycode for any, so a macOS *master* cannot originate them. A macOS
-*slave* receives `Pause` and `PrintScreen` as F15 and F13 — the codes a PC keyboard reports on a Mac — and
-ignores `Menu`, which has no macOS equivalent at all.
-
 ## Clipboard sync
 
 When you move the cursor to a remote machine, Hydra pushes the local clipboard to it. When you move back, the remote clipboard is pulled to the local machine. This happens automatically — no hotkey needed.
+
+For Mac-to-Mac peers already using Apple's Universal Clipboard, set `"clipboardSync": "System"` on the active master profile. Hydra then sends no clipboard hash, push, or pull messages for macOS peers, while retaining its normal clipboard sync for Windows and Linux peers. Hydra cannot detect whether both Macs share an Apple Account or whether Handoff is enabled, so this mode is explicit rather than automatic. It does not disable Hydra's separate file-transfer hotkeys.
+
+On macOS, a Finder clipboard containing file URLs is always preserved: Hydra neither treats it as an empty clipboard nor overwrites it with an automatic clipboard transition.
 
 Synced content:
 - **Plain text** — all platforms
@@ -474,7 +437,7 @@ On a console-only Linux machine (no `$DISPLAY`), Hydra automatically uses the ev
 Requirements:
 - User must be in the `input` group: `sudo usermod -aG input $USER` (log out and back in for the group change to take effect)
 - `libxkbcommon` installed: `sudo apt install libxkbcommon0`
-- Set the keyboard layout via `XKB_DEFAULT_LAYOUT` if not `us`, e.g. `XKB_DEFAULT_LAYOUT=gb ./hydra`
+- Set the keyboard layout via `XKB_DEFAULT_LAYOUT` if not `us`, e.g. `XKB_DEFAULT_LAYOUT=gb ./Hydra`
 
 > If `$DISPLAY` is set (X11 is running), Hydra uses X11 regardless of `remoteOnly`.
 
@@ -530,6 +493,8 @@ The `embeddedStyx` property is also an alternative to `networkConfig` for any ex
 
 ### Running standalone Styx
 
+The commands below use the upstream-compatible public image. To guarantee that Styx matches this fork's current source, build it locally using the commands after the examples.
+
 ```bash
 docker run -e RELAY_PASSWORD=<secret> -p 5000:5000 ghcr.io/pacanimal/styx:latest
 ```
@@ -555,7 +520,7 @@ docker run -e RELAY_PASSWORD=<secret> -p 5000:5000 styx:local
 
 ### Generating a network config
 
-Open `http://<your-styx-host>:5000` in a browser, enter the relay password, and click **Generate**. Copy the config string.
+Open the optional Styx relay network-config page at `http://<your-styx-host>:5000`, enter the relay password, and click **Generate**. This page belongs to the relay server and is separate from the retired Hydra configuration editor. Copy the generated config string.
 
 ### Connecting Hydra to a standalone Styx server
 
@@ -571,7 +536,7 @@ Add `networkConfig` to `hydra.conf` on both machines. Use the same config string
     {
       "profileName": "Home",
       "mode": "Master",
-      "networkConfig": "<base64 string from the Styx web UI>",
+      "networkConfig": "<base64 string from the Styx relay network-config page>",
       "hosts": [
         {
           "name": "laptop",

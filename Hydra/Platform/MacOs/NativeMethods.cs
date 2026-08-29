@@ -533,6 +533,10 @@ internal static partial class NativeMethods
 
     [LibraryImport(IOKit)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int IOServiceClose(uint connect);
+
+    [LibraryImport(IOKit)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial int IOObjectRelease(uint obj);
 
     [LibraryImport(IOKit)]

@@ -96,20 +96,41 @@ public sealed class FileTransferService : IDisposable
 
     // swaps out _sendCts under lock, cancels and disposes it; also clears host/relay/tcs fields.
     // returns true if there was an active send to cancel.
-    private bool TryCancelSend(out string? targetHost, out IRelaySender? sendRelay)
+    private bool TryCancelSend(out string? targetHost, out IRelaySender? sendRelay, CancellationTokenSource? expected = null)
     {
         CancellationTokenSource? cts;
         lock (_lock)
         {
-            cts = _sendCts; _sendCts = null;
+            cts = _sendCts;
+            if (cts == null || (expected != null && !ReferenceEquals(cts, expected)))
+            {
+                targetHost = null;
+                sendRelay = null;
+                return false;
+            }
+            _sendCts = null;
             targetHost = _sendTargetHost; _sendTargetHost = null;
             sendRelay = _sendRelay; _sendRelay = null;
             _sendAcceptTcs = null;
         }
-        if (cts == null) return false;
         cts.Cancel();
         cts.Dispose();
         return true;
+    }
+
+    // A cancelled send releases the slot before its async worker has necessarily reached finally. Only the
+    // operation that still owns the slot may clear it; otherwise an old worker can dispose a replacement send.
+    private void FinishSend(CancellationTokenSource owner)
+    {
+        lock (_lock)
+        {
+            if (!ReferenceEquals(_sendCts, owner)) return;
+            _sendCts = null;
+            _sendTargetHost = null;
+            _sendRelay = null;
+            _sendAcceptTcs = null;
+        }
+        owner.Dispose();
     }
 
     // clears coordinator state and returns the target host + relay (null if not coordinating)
@@ -508,6 +529,7 @@ public sealed class FileTransferService : IDisposable
     public async Task ExecuteStreamRequest(string[] paths, string targetHost, IRelaySender relay)
     {
         var cts = new CancellationTokenSource();
+        var cancel = cts.Token;
         lock (_lock)
         {
             if (_sendCts != null || _receiver != null) { cts.Dispose(); return; }
@@ -527,7 +549,7 @@ public sealed class FileTransferService : IDisposable
         }
         catch (Exception ex)
         {
-            TryCancelSend(out _, out _);
+            TryCancelSend(out _, out _, cts);
             SendTo(relay, targetHost, MessageKind.FileTransferAbort, new FileTransferAbortMessage(ex.Message));
             _dialog.ShowError($"Transfer failed: {ex.Message}");
             _log.LogWarning(ex, "ExecuteStreamRequest pre-stream setup failed");
@@ -539,17 +561,11 @@ public sealed class FileTransferService : IDisposable
 
         try
         {
-            await RunSendCoreAsync(pathList, names, totalBytes, startTick, targetHost, relay, cts.Token);
+            await RunSendCoreAsync(pathList, names, totalBytes, startTick, targetHost, relay, cancel);
         }
         finally
         {
-            lock (_lock)
-            {
-                _sendCts?.Dispose();
-                _sendCts = null;
-                _sendTargetHost = null;
-                _sendRelay = null;
-            }
+            FinishSend(cts);
         }
     }
 
@@ -558,6 +574,7 @@ public sealed class FileTransferService : IDisposable
     public void InitiateSend(List<string> paths, string targetHost, IRelaySender relay, string localHost = "")
     {
         var cts = new CancellationTokenSource();
+        var cancel = cts.Token;
         lock (_lock)
         {
             if (_sendCts != null || _receiver != null) { cts.Dispose(); return; }
@@ -576,7 +593,7 @@ public sealed class FileTransferService : IDisposable
         }
         catch (Exception ex)
         {
-            TryCancelSend(out _, out _);
+            TryCancelSend(out _, out _, cts);
             _log.LogWarning(ex, "InitiateSend pre-stream setup failed");
             _dialog.ShowError($"Transfer failed: {ex.Message}");
             return;
@@ -584,10 +601,10 @@ public sealed class FileTransferService : IDisposable
 
         var tick = Environment.TickCount64;
         _dialog.ShowTransferring(new FileTransferInfo(names, totalBytes, IsSender: true));
-        _ = Task.Run(() => RunSendAsync(paths, names, totalBytes, tick, targetHost, localHost, relay, cts.Token));
+        _ = Task.Run(() => RunSendAsync(paths, names, totalBytes, tick, targetHost, localHost, relay, cts, cancel));
     }
 
-    private async Task RunSendAsync(List<string> paths, string[] names, long totalBytes, long startTick, string targetHost, string localHost, IRelaySender relay, CancellationToken cancel)
+    private async Task RunSendAsync(List<string> paths, string[] names, long totalBytes, long startTick, string targetHost, string localHost, IRelaySender relay, CancellationTokenSource owner, CancellationToken cancel)
     {
         try
         {
@@ -620,14 +637,7 @@ public sealed class FileTransferService : IDisposable
         }
         finally
         {
-            lock (_lock)
-            {
-                _sendCts?.Dispose();
-                _sendCts = null;
-                _sendTargetHost = null;
-                _sendRelay = null;
-                _sendAcceptTcs = null;
-            }
+            FinishSend(owner);
         }
     }
 
