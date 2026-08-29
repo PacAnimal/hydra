@@ -2,6 +2,7 @@ using System.Text;
 using System.Net.Sockets;
 using Hydra.Config;
 using Hydra.Management;
+using Hydra.Platform;
 using Terminal.Gui.App;
 using Terminal.Gui.Editor;
 using Terminal.Gui.Input;
@@ -14,6 +15,9 @@ internal static class HydraTui
 {
     internal static bool HasRestarted(HydraStatusSnapshot previous, HydraStatusSnapshot current) =>
         current.ProcessId != previous.ProcessId || current.UptimeSeconds + 1 < previous.UptimeSeconds;
+
+    internal static bool CanStartHydra(bool connected, bool shutdownConfirmed, bool commandBusy) =>
+        !connected && shutdownConfirmed && !commandBusy;
 
     internal static bool HasRelayReconnected(HydraStatusSnapshot? previous, HydraStatusSnapshot current)
     {
@@ -89,6 +93,8 @@ internal static class HydraTui
         private readonly Label _activity = new() { Text = "Ready", X = 1, Y = Pos.AnchorEnd(2), Width = Dim.Fill(), SchemeName = "Base" };
         private readonly Button _reconnect = new() { Text = "_Reconnect Relay", Enabled = false };
         private readonly Button _restart = new() { Text = "_Restart Hydra", Enabled = false };
+        private readonly Button _shutdown = new() { Text = "_Shutdown Hydra", Enabled = false };
+        private readonly Button _start = new() { Text = "_Start Hydra", Enabled = false };
         private readonly Queue<string> _visibleLogs = new();
         private ConfigDocument? _configDocument;
         private RemoteConfigDocument? _remoteConfigDocument;
@@ -104,6 +110,7 @@ internal static class HydraTui
         private bool _secretsRevealed;
         private bool _guidedMode = true;
         private bool _commandBusy;
+        private bool _shutdownConfirmed;
         private int? _serverProcessId;
         private int _resetVisibleLogs;
         private GuidedConfigDocument? _guidedConfig;
@@ -242,7 +249,26 @@ internal static class HydraTui
                 if (MessageBox.Query(app, "Restart Hydra", "Restart the running Hydra process?", "Restart", "Cancel") == 0)
                     _ = RunCommandAsync(() => _client.RestartHydraAsync(_cancel.Token), CommandKind.RestartHydra);
             };
-            tab.Add(_reconnect, _restart);
+            _shutdown.X = Pos.Right(_restart) + 2;
+            _shutdown.Y = Pos.Top(_restart);
+            _shutdown.Accepting += (_, e) =>
+            {
+                e.Handled = true;
+                if (MessageBox.Query(app, "Shutdown Hydra",
+                        "Stop Hydra and disconnect all peers? You can start it again later.",
+                        "Shutdown", "Cancel") == 0)
+                    _ = RunCommandAsync(() => _client.ShutdownHydraAsync(_cancel.Token), CommandKind.ShutdownHydra);
+            };
+            _start.X = Pos.Right(_shutdown) + 2;
+            _start.Y = Pos.Top(_shutdown);
+            _start.Accepting += (_, e) =>
+            {
+                e.Handled = true;
+                if (MessageBox.Query(app, "Start Hydra",
+                        "Start Hydra with the current configuration?", "Start", "Cancel") == 0)
+                    _ = StartHydraAsync();
+            };
+            tab.Add(_reconnect, _restart, _shutdown, _start);
             return tab;
         }
 
@@ -684,11 +710,16 @@ internal static class HydraTui
                 Configuration has a Form mode for common settings and Text mode for complete JSON.
                 Switching modes preserves advanced fields. Validate before saving. Save & restart atomically
                 writes the file and asks the daemon to restart; external edits are detected.
+                Overview can shut Hydra down after confirmation and start it again from this TUI.
+                On macOS, shutdown unloads the current LaunchAgent so KeepAlive does not immediately
+                start Hydra again; Start Hydra bootstraps that agent when it is installed.
+                Windows service-managed sessions must be stopped through Windows Services.
 
                 Remote pairs with an explicitly enrolled peer and loads a redacted configuration over the
                 encrypted relay. Generate the one-time code locally on that peer with `hydra pair`.
 
-                When the daemon is offline, configuration remains available but live controls are disabled.
+                When the daemon is unavailable, configuration remains available but live controls are disabled.
+                Start Hydra is enabled only after this TUI confirms a shutdown.
                 """;
             return BuildTextTab("_Help", help);
         }
@@ -730,8 +761,16 @@ internal static class HydraTui
                 app.Invoke(() =>
                 {
                     SetLiveControls(false);
-                    _connection.Text = "○ Management unavailable — Hydra may still be running; configuration editing remains available";
-                    _diagnostics.Text = FormatDiagnostics(ex);
+                    if (_shutdownConfirmed)
+                    {
+                        _connection.Text = "○ Hydra is stopped — use Start Hydra to launch it";
+                        _diagnostics.Text = FormatDiagnostics();
+                    }
+                    else
+                    {
+                        _connection.Text = "○ Management unavailable — Hydra may still be running; configuration editing remains available";
+                        _diagnostics.Text = FormatDiagnostics(ex);
+                    }
                 });
             }
             finally
@@ -1085,7 +1124,13 @@ internal static class HydraTui
             }
             if (_commandBusy) return;
             var previousStatus = _lastStatus;
-            SetCommandBusy(true, kind == CommandKind.RestartHydra ? "Restarting Hydra…" : "Reconnecting relay…");
+            var activity = kind switch
+            {
+                CommandKind.RestartHydra => "Restarting Hydra…",
+                CommandKind.ShutdownHydra => "Shutting down Hydra…",
+                _ => "Reconnecting relay…"
+            };
+            SetCommandBusy(true, activity);
             try
             {
                 var result = await command();
@@ -1098,7 +1143,9 @@ internal static class HydraTui
                     });
                     return;
                 }
-                if (kind == CommandKind.RestartHydra)
+                if (kind == CommandKind.ShutdownHydra)
+                    await WaitForShutdownAsync();
+                else if (kind == CommandKind.RestartHydra)
                     await WaitForRestartAsync(previousStatus);
                 else
                     await WaitForRelayAsync(previousStatus);
@@ -1111,6 +1158,96 @@ internal static class HydraTui
                     MessageBox.ErrorQuery(app, "Command Failed", ex.Message, "OK");
                 });
             }
+        }
+
+        private async Task StartHydraAsync()
+        {
+            if (!CanStartHydra(_connected, _shutdownConfirmed, _commandBusy)) return;
+            SetCommandBusy(true, "Starting Hydra…");
+            try
+            {
+                using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(_cancel.Token))
+                {
+                    timeout.CancelAfter(TimeSpan.FromMilliseconds(800));
+                    try
+                    {
+                        var status = await _client.GetStatusAsync(timeout.Token);
+                        _connected = true;
+                        _lastStatus = status;
+                        app.Invoke(() =>
+                        {
+                            Render(status, new ManagementLogPage(_logCursor, _logCursor, []));
+                            SetCommandBusy(false, "Hydra is already running; Start was not needed.", "Accent");
+                        });
+                        return;
+                    }
+                    catch (OperationCanceledException) when (_cancel.IsCancellationRequested)
+                    {
+                        return;
+                    }
+                    catch
+                    {
+                        // The endpoint is still absent, so proceed with the previously confirmed start.
+                    }
+                }
+                HydraProcessLauncher.Start(configPath);
+                await WaitForStartAsync();
+            }
+            catch (Exception ex)
+            {
+                app.Invoke(() =>
+                {
+                    SetCommandBusy(false, $"Command failed: {ex.Message}", "Error");
+                    MessageBox.ErrorQuery(app, "Start Failed", ex.Message, "OK");
+                });
+            }
+        }
+
+        private async Task WaitForStartAsync()
+        {
+            app.Invoke(() => SetActivity("Start requested — waiting for Hydra to come online…", "Accent"));
+            await WaitForStatusAsync(_ => true,
+                status => $"Hydra started and connected (PID {status.ProcessId}).", resetLogs: true);
+        }
+
+        private async Task WaitForShutdownAsync()
+        {
+            app.Invoke(() => SetActivity("Shutdown requested — waiting for Hydra to stop…", "Accent"));
+            var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(15);
+            var failedReads = 0;
+            while (DateTimeOffset.UtcNow < deadline && !_cancel.IsCancellationRequested)
+            {
+                await Task.Delay(300, _cancel.Token);
+                try
+                {
+                    using var timeout = CancellationTokenSource.CreateLinkedTokenSource(_cancel.Token);
+                    timeout.CancelAfter(TimeSpan.FromMilliseconds(800));
+                    await _client.GetStatusAsync(timeout.Token);
+                    failedReads = 0;
+                }
+                catch (OperationCanceledException) when (_cancel.IsCancellationRequested)
+                {
+                    return;
+                }
+                catch
+                {
+                    if (++failedReads < 2) continue;
+                    _connected = false;
+                    _helloComplete = false;
+                    _lastStatus = null;
+                    _shutdownConfirmed = true;
+                    app.Invoke(() =>
+                    {
+                        _connection.Text = "○ Hydra is stopped — use Start Hydra to launch it";
+                        _diagnostics.Text = FormatDiagnostics();
+                        SetCommandBusy(false, "Hydra stopped. Use Start Hydra to launch it.", "Accent");
+                    });
+                    return;
+                }
+            }
+            if (_cancel.IsCancellationRequested) return;
+            app.Invoke(() => SetCommandBusy(false,
+                "Hydra did not stop within 15 seconds; it may still be running.", "Error"));
         }
 
         private async Task WaitForRestartAsync(HydraStatusSnapshot? previousStatus)
@@ -1159,7 +1296,7 @@ internal static class HydraTui
                 }
                 catch (Exception) when (DateTimeOffset.UtcNow < deadline)
                 {
-                    // A restart deliberately removes the management endpoint for a moment.
+                    // Restart and start deliberately remove or recreate the management endpoint.
                 }
             }
             if (_cancel.IsCancellationRequested) return;
@@ -1192,12 +1329,15 @@ internal static class HydraTui
 
         private void SetLiveControls(bool enabled)
         {
+            if (enabled) _shutdownConfirmed = false;
             _liveControlsReady = enabled;
             _reconnect.Enabled = enabled && !_commandBusy;
             _restart.Enabled = enabled && !_commandBusy;
+            _shutdown.Enabled = enabled && !_commandBusy;
+            _start.Enabled = CanStartHydra(_connected, _shutdownConfirmed, _commandBusy);
         }
 
-        private enum CommandKind { ReconnectRelay, RestartHydra }
+        private enum CommandKind { ReconnectRelay, RestartHydra, ShutdownHydra }
 
         private static string FormatOverview(HydraStatusSnapshot s)
         {

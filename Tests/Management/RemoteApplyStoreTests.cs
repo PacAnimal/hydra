@@ -226,5 +226,6 @@ public class RemoteApplyStoreTests
     {
         internal TaskCompletionSource RestartRequested { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public void RestartAfterResponse() => RestartRequested.TrySetResult();
+        public CommandResult ShutdownAfterResponse() => new(true, "Shutdown requested.");
     }
 }

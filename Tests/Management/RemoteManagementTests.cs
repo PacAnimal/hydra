@@ -256,5 +256,6 @@ public class RemoteManagementTests
     {
         internal int RestartRequests;
         public void RestartAfterResponse() => RestartRequests++;
+        public CommandResult ShutdownAfterResponse() => new(true, "Shutdown requested.");
     }
 }

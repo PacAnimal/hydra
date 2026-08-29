@@ -32,6 +32,32 @@ public class HydraTuiTests
     }
 
     [Test]
+    public void StartIsAvailableAfterAConfirmedShutdown()
+    {
+        Assert.That(global::Hydra.HydraTui.CanStartHydra(
+            connected: false, shutdownConfirmed: true, commandBusy: false), Is.True);
+    }
+
+    [Test]
+    public void StartIsUnavailableForAnUnconfirmedManagementFailure()
+    {
+        Assert.That(global::Hydra.HydraTui.CanStartHydra(
+            connected: false, shutdownConfirmed: false, commandBusy: false), Is.False);
+    }
+
+    [Test]
+    public void StartIsUnavailableWhileConnectedOrBusy()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(global::Hydra.HydraTui.CanStartHydra(
+                connected: true, shutdownConfirmed: true, commandBusy: false), Is.False);
+            Assert.That(global::Hydra.HydraTui.CanStartHydra(
+                connected: false, shutdownConfirmed: true, commandBusy: true), Is.False);
+        });
+    }
+
+    [Test]
     public void RelayReconnectCompletionRequiresANewerConnectionAttempt()
     {
         var previous = Status(processId: 10, uptime: 120, relayAttempts: 3);

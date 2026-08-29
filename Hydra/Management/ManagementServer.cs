@@ -141,7 +141,7 @@ internal sealed class ManagementServer(
         }
     }
 
-    private async Task<ManagementResponse> DispatchAsync(ManagementRequest request, CancellationToken cancel)
+    internal async Task<ManagementResponse> DispatchAsync(ManagementRequest request, CancellationToken cancel)
     {
         switch (request.Method)
         {
@@ -172,6 +172,8 @@ internal sealed class ManagementServer(
             case "hydra.restart":
                 lifetime.RestartAfterResponse();
                 return ManagementResponse.Ok(new CommandResult(true, "Hydra restart requested."));
+            case "hydra.shutdown":
+                return ManagementResponse.Ok(lifetime.ShutdownAfterResponse());
             case "remote.pair":
                 return ManagementResponse.Ok(await services.GetRequiredService<RemoteManagementService>()
                     .PairAsync(ManagementJson.Deserialize<RemotePairRequest>(request.Json), cancel));
