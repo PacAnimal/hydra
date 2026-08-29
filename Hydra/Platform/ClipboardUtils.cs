@@ -49,12 +49,13 @@ public static class ClipboardUtils
 
     // reads from sync, falling back to snapshot fields when Get* returns null (echo suppression).
     //
-    // Get*() returns null for two distinct reasons that we cannot tell apart:
+    // Get*() returns null for two distinct reasons:
     //   (a) the type is genuinely absent from the pasteboard
     //   (b) the type is present but Hydra wrote it, so it is echo-suppressed
     //
-    // the fallback exists solely to handle (b). we only apply it when ALL fields are null,
-    // meaning everything is echo-suppressed and the user has not copied anything new.
+    // the fallback exists solely to handle (b). we only apply it when ALL fields are null and
+    // the platform confirms that an echo fallback is still safe. macOS uses pasteboard ownership
+    // to reject fallback after Finder, Universal Clipboard, or another process takes ownership.
     // if ANY field is non-null (fresh user copy), we skip the fallback entirely — mixing a
     // freshly-copied type with a stale fallback field would resurrect data from an older operation.
     //
@@ -69,12 +70,18 @@ public static class ClipboardUtils
     // source app added, not something the user explicitly copied as text.
     public static ClipboardSnapshot ReadWithFallback(IClipboardSync sync, ClipboardSnapshot? fallback, ILogger log, string context)
     {
+        if (sync.HasFileClipboard())
+        {
+            log.LogDebug("Clipboard {Context} contains files; preserving the native file clipboard", context);
+            return new ClipboardSnapshot(null, null, null);
+        }
+
         var text = sync.GetText();
         var primaryText = sync.GetPrimaryText();
         var image = sync.GetImagePng();
         var html = sync.GetHtml();
         var rtf = sync.GetRtf();
-        if (text == null && primaryText == null && image == null && html == null && rtf == null)
+        if (text == null && primaryText == null && image == null && html == null && rtf == null && sync.CanUseEchoFallback())
         {
             text = fallback?.Text;
             primaryText = fallback?.PrimaryText;
@@ -87,6 +94,18 @@ public static class ClipboardUtils
         return image != null
             ? TrimToFit(null, null, image, null, null, log, context)
             : TrimToFit(text, primaryText, null, html, rtf, log, context);
+    }
+
+    public static bool TrySetClipboardPreservingFiles(IClipboardSync sync, ClipboardSnapshot contents, ILogger log, string context)
+    {
+        if (sync.HasFileClipboard())
+        {
+            log.LogInformation("Clipboard {Context} skipped because the local clipboard contains files", context);
+            return false;
+        }
+
+        sync.SetClipboard(contents);
+        return true;
     }
 
     // drop fields until the combined size fits. order keeps the universal plain text LAST (it's the
@@ -139,7 +158,7 @@ public static class ClipboardUtils
         return ((ulong)(uint)hc1.ToHashCode() << 32) | (uint)hc2.ToHashCode();
     }
 
-    // xxhash64 of all 3 clipboard fields; used to avoid redundant syncs between master and slave
+    // xxhash64 of all clipboard fields; used to avoid redundant syncs between master and slave
     public static ulong ClipboardHash(ClipboardSnapshot snap)
     {
         var hash = new XxHash64();

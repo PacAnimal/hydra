@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Cathedral.Config;
+using Hydra.Config;
 using Hydra.FileTransfer;
 using Hydra.Platform;
 using Hydra.Relay;
@@ -49,6 +50,39 @@ public class ClipboardSyncTests
         var msg = JsonSerializer.Deserialize<ClipboardPushMessage>(push[0].Json, SaneJson.Options);
         Assert.That(msg?.Text, Is.EqualTo("hello from master"));
 
+    }
+
+    [Test]
+    public async Task SystemClipboardSync_MacToMac_SendsNoClipboardMessages()
+    {
+        var clipboard = new FakeClipboardSync();
+        clipboard.SetText("handled by Universal Clipboard");
+        var profile = CreateProfile(ClipboardSyncMode.System);
+        var (platform, relay, service) = CreateMasterService(clipboard, profile, PeerPlatform.MacOS);
+        await service.StartAsync(CancellationToken.None);
+        await BringRemoteOnlineWithPlatform(relay, PeerPlatform.MacOS);
+
+        platform.FireMouseMove(2559, 720);
+        platform.FireMouseMove(1280, 720);
+        platform.FireMouseMove(1275, 720);
+
+        Assert.That(relay.Sent.Where(s => s.Kind is MessageKind.ClipboardHash or MessageKind.ClipboardPush or MessageKind.ClipboardPull), Is.Empty);
+    }
+
+    [TestCase(PeerPlatform.Windows)]
+    [TestCase(PeerPlatform.Linux)]
+    public async Task SystemClipboardSync_NonMacPeer_StillUsesHydra(PeerPlatform remotePlatform)
+    {
+        var clipboard = new FakeClipboardSync();
+        clipboard.SetText("cross-platform");
+        var profile = CreateProfile(ClipboardSyncMode.System);
+        var (platform, relay, service) = CreateMasterService(clipboard, profile, PeerPlatform.MacOS);
+        await service.StartAsync(CancellationToken.None);
+        await BringRemoteOnlineWithPlatform(relay, remotePlatform);
+
+        platform.FireMouseMove(2559, 720);
+
+        Assert.That(relay.Sent.Any(s => s.Kind == MessageKind.ClipboardHash), Is.True);
     }
 
     [Test]
@@ -131,6 +165,27 @@ public class ClipboardSyncTests
 
         Assert.That(clipboard.Text, Is.EqualTo("from slave"));
 
+    }
+
+    [Test]
+    public async Task OnClipboardPullResponse_LocalFileClipboard_IsPreserved()
+    {
+        var clipboard = new FakeClipboardSync();
+        var (platform, relay, service) = CreateMasterService(clipboard);
+        await service.StartAsync(CancellationToken.None);
+        await TransitionTestHelper.BringRemoteOnline(relay);
+
+        platform.FireMouseMove(2559, 720);
+        platform.FireMouseMove(1280, 720);
+        platform.FireMouseMove(1275, 720);
+        clipboard.HasFileClipboardValue = true;
+        var before = clipboard.SetClipboardCallCount;
+
+        var response = new ClipboardPullResponseMessage("incoming text");
+        await relay.FireMessageReceived("remote", MessageKind.ClipboardPullResponse,
+            JsonSerializer.Serialize(response, SaneJson.Options));
+
+        Assert.That(clipboard.SetClipboardCallCount, Is.EqualTo(before));
     }
 
     [Test]
@@ -646,18 +701,40 @@ public class ClipboardSyncTests
 
     // -- helpers --
 
-    private (FakePlatform Platform, FakeRelay Relay, InputRouter Service) CreateMasterService(IClipboardSync clipboard)
+    private (FakePlatform Platform, FakeRelay Relay, InputRouter Service) CreateMasterService(
+        IClipboardSync clipboard, IHydraProfile? profile = null, PeerPlatform? localPlatform = null)
     {
         _platform = new FakePlatform();
         var relay = new FakeRelay();
         _service = new InputRouter(
-            _platform, _platform, TransitionTestHelper.TestConfig, relay,
+            _platform, _platform, profile ?? TransitionTestHelper.TestConfig, relay,
             new FakeScreenDetector(), NullLoggerFactory.Instance, NullLogger<InputRouter>.Instance,
             new NullScreenSaverSync(), clipboard,
-            FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification(), TransitionTestHelper.TestActivityTracker());
+            FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification(), TransitionTestHelper.TestActivityTracker(profile),
+            localPlatform: localPlatform);
         _platform.AfterFireCallback = _service.FlushAsync;
         return (_platform, relay, _service);
     }
+
+    private static IHydraProfile CreateProfile(ClipboardSyncMode clipboardSync) =>
+        TransitionTestHelper.Profile("home", new HydraConfig
+        {
+            Mode = Mode.Master,
+            ClipboardSync = clipboardSync,
+            Hosts =
+            [
+                new HostConfig
+                {
+                    Name = "home",
+                    Neighbours = [new NeighbourConfig { Direction = Direction.Right, Name = "remote" }],
+                },
+                new HostConfig
+                {
+                    Name = "remote",
+                    Neighbours = [new NeighbourConfig { Direction = Direction.Left, Name = "home" }],
+                },
+            ],
+        });
 
     // brings "remote" online and records its platform so the master knows what to push
     private static async Task BringRemoteOnlineWithPlatform(FakeRelay relay, PeerPlatform platform)

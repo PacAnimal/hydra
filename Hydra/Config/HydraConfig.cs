@@ -64,6 +64,7 @@ public class HydraConfig
 
     public bool HideCursor { get; init; } = false;  // master only — hide cursor on inactivity
     public bool RemoteOnly { get; init; }
+    public ClipboardSyncMode ClipboardSync { get; init; } = ClipboardSyncMode.Hydra;
     public bool SyncScreensaver { get; init; } = true;
     public bool ScreenLockPropagation { get; init; } = false;  // master only (Mac/Windows) — propagate machine lock to connected slaves
     public bool AccelerateMouseWheel { get; init; } = true;

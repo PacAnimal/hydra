@@ -15,6 +15,12 @@ public interface IClipboardSync
     void SetImagePng(byte[] pngData) { }
     string? GetHtml() => null;   // portable raw HTML (platforms that don't support it return null)
     byte[]? GetRtf() => null;
+    bool HasFileClipboard() => false;
+
+    // True only while an all-null read can mean that this process still owns the clipboard and
+    // the getters echo-suppressed its representations. Platforms that can track ownership should
+    // return false after another process (or the system clipboard) takes ownership.
+    bool CanUseEchoFallback() => true;
 
     // atomically clears and writes the given contents in a single clipboard open.
     // every platform implementation must override this — there is no safe default.

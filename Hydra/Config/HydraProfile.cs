@@ -22,6 +22,7 @@ public interface IHydraProfile
     string? NetworkConfig { get; }
     bool HideCursor { get; }
     bool RemoteOnly { get; }
+    ClipboardSyncMode ClipboardSync { get; }
     bool SyncScreensaver { get; }
     bool ScreenLockPropagation { get; }
     bool AccelerateMouseWheel { get; }
@@ -53,6 +54,7 @@ public class HydraProfile(HydraConfigFile configFile, HydraConfig? activeProfile
     public string? NetworkConfig => networkConfigOverride ?? _activeProfile?.NetworkConfig;
     public bool HideCursor => _activeProfile?.HideCursor ?? false;
     public bool RemoteOnly => _activeProfile?.RemoteOnly ?? false;
+    public ClipboardSyncMode ClipboardSync => _activeProfile?.ClipboardSync ?? ClipboardSyncMode.Hydra;
     public bool SyncScreensaver => _activeProfile?.SyncScreensaver ?? true;
     public bool ScreenLockPropagation => _activeProfile?.ScreenLockPropagation ?? false;
     public bool AccelerateMouseWheel => _activeProfile?.AccelerateMouseWheel ?? true;

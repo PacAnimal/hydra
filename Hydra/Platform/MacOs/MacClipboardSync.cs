@@ -9,10 +9,13 @@ public sealed class MacClipboardSync : IClipboardSync
     private const string PasteboardTypePng = "public.png";
     private const string PasteboardTypeHtml = "public.html";
     private const string PasteboardTypeRtf = "public.rtf";
+    private const string PasteboardTypeFileUrl = "public.file-url";
+    private const string PasteboardTypeLegacyFileNames = "NSFilenamesPboardType";
 
     private readonly ILogger<MacClipboardSync> _log;
     private ClipboardEchoFilter _echo;
     private string? _storedPrimaryText;
+    private long _ownedChangeCount = -1;
 
     public MacClipboardSync(ILogger<MacClipboardSync> log)
     {
@@ -48,7 +51,7 @@ public sealed class MacClipboardSync : IClipboardSync
 
         if (result == nint.Zero) return null;
         var text = NativeMethods.CfStringToManaged(result);
-        return _echo.FilterText(text);
+        return OwnsCurrentClipboard(pasteboard) ? _echo.FilterText(text) : text;
     }
 
     public void SetText(string text)
@@ -60,11 +63,16 @@ public sealed class MacClipboardSync : IClipboardSync
         if (pasteboard == nint.Zero) return;
 
         var clearSel = NativeMethods.sel_registerName("clearContents");
-        NativeMethods.objc_msgSend_noarg(pasteboard, clearSel);
+        var changeCount = NativeMethods.objc_msgSend_long(pasteboard, clearSel);
         WriteText(pasteboard, text);
+        Volatile.Write(ref _ownedChangeCount, changeCount);
     }
 
-    public string? GetPrimaryText() => _storedPrimaryText;
+    public string? GetPrimaryText()
+    {
+        var pasteboard = GetGeneralPasteboard();
+        return pasteboard != nint.Zero && OwnsCurrentClipboard(pasteboard) ? _storedPrimaryText : null;
+    }
 
     public void SetPrimaryText(string text) => _storedPrimaryText = text;
 
@@ -103,7 +111,7 @@ public sealed class MacClipboardSync : IClipboardSync
         var bytes = new byte[(int)length];
         Marshal.Copy(ptr, bytes, 0, (int)length);
 
-        if (_echo.IsDuplicateImage(bytes)) return null;
+        if (OwnsCurrentClipboard(pasteboard) && _echo.IsDuplicateImage(bytes)) return null;
 
         return bytes;
     }
@@ -117,8 +125,9 @@ public sealed class MacClipboardSync : IClipboardSync
         if (pasteboard == nint.Zero) return;
 
         var clearSel = NativeMethods.sel_registerName("clearContents");
-        NativeMethods.objc_msgSend_noarg(pasteboard, clearSel);
+        var changeCount = NativeMethods.objc_msgSend_long(pasteboard, clearSel);
         WriteImagePng(pasteboard, pngData);
+        Volatile.Write(ref _ownedChangeCount, changeCount);
     }
 
     public string? GetHtml()
@@ -135,7 +144,8 @@ public sealed class MacClipboardSync : IClipboardSync
             NativeMethods.CFRelease(typeStr);
 
             if (result == nint.Zero) return null;
-            return _echo.FilterHtml(NativeMethods.CfStringToManaged(result));
+            var html = NativeMethods.CfStringToManaged(result);
+            return OwnsCurrentClipboard(pasteboard) ? _echo.FilterHtml(html) : html;
         }
         catch (Exception ex)
         {
@@ -165,7 +175,7 @@ public sealed class MacClipboardSync : IClipboardSync
 
             var bytes = new byte[(int)length];
             Marshal.Copy(ptr, bytes, 0, (int)length);
-            return _echo.FilterRtf(bytes);
+            return OwnsCurrentClipboard(pasteboard) ? _echo.FilterRtf(bytes) : bytes;
         }
         catch (Exception ex)
         {
@@ -197,17 +207,59 @@ public sealed class MacClipboardSync : IClipboardSync
 
             // single clear, then write every representation atomically
             var clearSel = NativeMethods.sel_registerName("clearContents");
-            NativeMethods.objc_msgSend_noarg(pasteboard, clearSel);
+            var changeCount = NativeMethods.objc_msgSend_long(pasteboard, clearSel);
 
             if (text != null) WriteText(pasteboard, text);
             if (html != null) WriteHtml(pasteboard, html);
             if (rtf != null) WriteRtf(pasteboard, rtf);
             if (imagePng != null) WriteImagePng(pasteboard, imagePng);
+            Volatile.Write(ref _ownedChangeCount, changeCount);
         }
         catch (Exception ex)
         {
             _log.LogWarning(ex, "Failed to write clipboard");
         }
+    }
+
+    public bool HasFileClipboard()
+    {
+        using var pool = new ObjcAutoreleasePool();
+        try
+        {
+            var pasteboard = GetGeneralPasteboard();
+            if (pasteboard == nint.Zero) return false;
+            var types = NativeMethods.objc_msgSend_noarg(pasteboard, NativeMethods.sel_registerName("types"));
+            if (types == nint.Zero) return false;
+
+            var count = NativeMethods.objc_msgSend_long(types, NativeMethods.sel_registerName("count"));
+            var objectAtIndex = NativeMethods.sel_registerName("objectAtIndex:");
+            for (long i = 0; i < count; i++)
+            {
+                var type = NativeMethods.objc_msgSend_nuint(types, objectAtIndex, (nuint)i);
+                if (type == nint.Zero) continue;
+                var name = NativeMethods.CfStringToManaged(type);
+                if (name is PasteboardTypeFileUrl or PasteboardTypeLegacyFileNames) return true;
+            }
+            return false;
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Failed to inspect clipboard types");
+            return false;
+        }
+    }
+
+    public bool CanUseEchoFallback()
+    {
+        var pasteboard = GetGeneralPasteboard();
+        return pasteboard != nint.Zero && OwnsCurrentClipboard(pasteboard);
+    }
+
+    private bool OwnsCurrentClipboard(nint pasteboard)
+    {
+        var owned = Volatile.Read(ref _ownedChangeCount);
+        if (owned < 0) return false;
+        return NativeMethods.objc_msgSend_long(pasteboard, NativeMethods.sel_registerName("changeCount")) == owned;
     }
 
     private static void WriteText(nint pasteboard, string text)

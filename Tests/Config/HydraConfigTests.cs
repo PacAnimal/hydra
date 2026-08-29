@@ -27,6 +27,27 @@ public class HydraConfigTests
     private static string AsFile(string profilesJson) => $$"""{"profiles":{{profilesJson}}}""";
 
     [Test]
+    public void ClipboardSync_DefaultsToHydra_AndParsesSystem()
+    {
+        var defaults = HydraConfig.ParseAndValidate(AsFile($$"""[{"mode":"Master"{{Relay}}}]"""));
+        var system = HydraConfig.ParseAndValidate(AsFile($$"""[{"mode":"Master","clipboardSync":"System"{{Relay}}}]"""));
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(defaults[0].ClipboardSync, Is.EqualTo(ClipboardSyncMode.Hydra));
+            Assert.That(system[0].ClipboardSync, Is.EqualTo(ClipboardSyncMode.System));
+        }
+    }
+
+    [Test]
+    public void ClipboardSync_RejectsUnknownMode()
+    {
+        var json = AsFile($$"""[{"mode":"Master","clipboardSync":"Automatic"{{Relay}}}]""");
+
+        Assert.That(() => HydraConfig.ParseAndValidate(json), Throws.Exception);
+    }
+
+    [Test]
     public void Load_ReturnsValidConfig()
     {
         var file = HydraConfigFile.Load(ConfigFor("test.conf"));

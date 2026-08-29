@@ -143,4 +143,40 @@ public class ClipboardUtilsRichTests
             Assert.That(result.Rtf, Is.EqualTo(new byte[] { 1 }));
         }
     }
+
+    [Test]
+    public void ReadWithFallback_FileClipboard_DoesNotResurrectFallback()
+    {
+        var sync = new FakeClipboardSync { HasFileClipboardValue = true };
+        var fallback = new ClipboardSnapshot("stale", null, null);
+
+        var result = ClipboardUtils.ReadWithFallback(sync, fallback, Log, "read");
+
+        Assert.That(result, Is.EqualTo(new ClipboardSnapshot(null, null, null)));
+    }
+
+    [Test]
+    public void ReadWithFallback_ExternalOwner_DoesNotResurrectFallback()
+    {
+        var sync = new FakeClipboardSync { CanUseEchoFallbackValue = false };
+        var fallback = new ClipboardSnapshot("stale", null, null);
+
+        var result = ClipboardUtils.ReadWithFallback(sync, fallback, Log, "read");
+
+        Assert.That(result, Is.EqualTo(new ClipboardSnapshot(null, null, null)));
+    }
+
+    [Test]
+    public void TrySetClipboardPreservingFiles_FileClipboard_DoesNotOverwrite()
+    {
+        var sync = new FakeClipboardSync { HasFileClipboardValue = true };
+
+        var applied = ClipboardUtils.TrySetClipboardPreservingFiles(sync, new ClipboardSnapshot("incoming", null, null), Log, "test");
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(applied, Is.False);
+            Assert.That(sync.SetClipboardCallCount, Is.Zero);
+        }
+    }
 }

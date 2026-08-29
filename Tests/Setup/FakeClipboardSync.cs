@@ -18,6 +18,8 @@ public sealed class FakeClipboardSync : IClipboardSync
     public int GetImagePngCallCount { get; private set; }
     public int SetImagePngCallCount { get; private set; }
     public int SetClipboardCallCount { get; private set; }
+    public bool HasFileClipboardValue { get; set; }
+    public bool CanUseEchoFallbackValue { get; set; } = true;
 
     public string? GetText()
     {
@@ -66,6 +68,10 @@ public sealed class FakeClipboardSync : IClipboardSync
         GetRtfCallCount++;
         return Rtf;
     }
+
+    public bool HasFileClipboard() => HasFileClipboardValue;
+
+    public bool CanUseEchoFallback() => CanUseEchoFallbackValue;
 
     public void SetClipboard(ClipboardSnapshot contents)
     {
