@@ -76,8 +76,14 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, IStyxPass
         // membership list and reads as no change at all — a master then keeps stale geometry for it and never
         // re-sends the config it needs. Both halves go through the broadcaster's single-reader queue, in this
         // order, so every peer observes them that way round.
+        //
+        // Awaited, not queued. The displacing client can Send the instant this method returns, and Send
+        // dispatches straight to the target — so a queued departure notice could arrive *after* the
+        // newcomer's first payload, and the recipient would still be trusting whoever held the name a
+        // moment ago. Waiting for the delivery is what makes Styx.md 6.2's ordering cover the displacing
+        // peer's own traffic, which is what every client already assumes it does.
         if (registration.Kicked.Count > 0)
-            peers.QueueBroadcast(networkId, registration.OtherClients);
+            await peers.BroadcastAndWait(networkId, registration.OtherClients, Context.ConnectionAborted);
 
         // queue after throttle so Authenticated=true is sent to the caller before Peers arrives
         peers.QueueBroadcast(networkId);
