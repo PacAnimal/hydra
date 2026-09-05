@@ -24,6 +24,7 @@ public interface IHydraProfile
     bool RemoteOnly { get; }
     ClipboardSyncMode ClipboardSync { get; }
     bool SyncScreensaver { get; }
+    bool AllowSystemSleep { get; }
     bool ScreenLockPropagation { get; }
     bool AccelerateMouseWheel { get; }
     bool UnicodeKeyRepeat { get; }
@@ -56,6 +57,7 @@ public class HydraProfile(HydraConfigFile configFile, HydraConfig? activeProfile
     public bool RemoteOnly => _activeProfile?.RemoteOnly ?? false;
     public ClipboardSyncMode ClipboardSync => _activeProfile?.ClipboardSync ?? ClipboardSyncMode.Hydra;
     public bool SyncScreensaver => _activeProfile?.SyncScreensaver ?? true;
+    public bool AllowSystemSleep => _activeProfile?.AllowSystemSleep ?? false;
     public bool ScreenLockPropagation => _activeProfile?.ScreenLockPropagation ?? false;
     public bool AccelerateMouseWheel => _activeProfile?.AccelerateMouseWheel ?? true;
     public bool UnicodeKeyRepeat => _activeProfile?.UnicodeKeyRepeat ?? true;

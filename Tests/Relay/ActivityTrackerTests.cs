@@ -12,8 +12,16 @@ public class ActivityTrackerTests
     private static readonly IHydraProfile SlaveProfile =
         TransitionTestHelper.Profile("slave", new HydraConfig { Mode = Mode.Slave });
 
-    private static IHydraProfile MasterProfile(bool sync = true) =>
-        TransitionTestHelper.Profile("master", new HydraConfig { Mode = Mode.Master, SyncScreensaver = sync });
+    private static IHydraProfile MasterProfile(bool sync = true, bool allowSystemSleep = false) =>
+        TransitionTestHelper.Profile("master", new HydraConfig
+        {
+            Mode = Mode.Master,
+            SyncScreensaver = sync,
+            AllowSystemSleep = allowSystemSleep
+        });
+
+    private static IHydraProfile SleepableSlaveProfile =>
+        TransitionTestHelper.Profile("slave", new HydraConfig { Mode = Mode.Slave, AllowSystemSleep = true });
 
     private sealed class SpySender : IRelaySender
     {
@@ -178,6 +186,31 @@ public class ActivityTrackerTests
         await tracker.IncomingPing();
 
         Assert.That(sync.ResetIdleTimerCalled, Is.True);
+    }
+
+    [Test]
+    public async Task IncomingPing_WhenSystemSleepAllowed_DoesNotResetLocalIdleTimer()
+    {
+        var sync = new FakeScreenSaverSync();
+        var tracker = new ActivityTracker(SleepableSlaveProfile, new Lazy<IRelaySender>(() => new SpySender()),
+            new WorldState(), sync, NullLogger<ActivityTracker>.Instance);
+
+        await tracker.IncomingPing();
+
+        Assert.That(sync.ResetIdleTimerCalled, Is.False);
+    }
+
+    [Test]
+    public async Task RemoteActivity_WhenSystemSleepAllowed_DoesNotResetMasterIdleTimer()
+    {
+        var sync = new FakeScreenSaverSync();
+        var tracker = new ActivityTracker(MasterProfile(allowSystemSleep: true),
+            new Lazy<IRelaySender>(() => new SpySender()), new WorldState(), sync,
+            NullLogger<ActivityTracker>.Instance);
+
+        await tracker.RemoteActivity("slave1");
+
+        Assert.That(sync.ResetIdleTimerCalled, Is.False);
     }
 
     [Test]

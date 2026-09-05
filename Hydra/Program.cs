@@ -364,6 +364,18 @@ if (config != null)
         services.AddHostedService<IRelaySender, SlaveRelayConnection>();
     else
         services.AddHostedService<IRelaySender, MasterRelayConnection>();
+
+    if (profile.AllowSystemSleep)
+    {
+        services.AddSingleton<SystemSleepCoordinator>();
+        if (OperatingSystem.IsMacOS())
+            services.AddHostedService<MacSystemSleepMonitor>();
+        else if (OperatingSystem.IsWindows())
+            services.AddHostedService<WindowsSystemSleepMonitor>();
+        else if (OperatingSystem.IsLinux())
+            services.AddHostedService<LinuxSystemSleepMonitor>();
+    }
+
     services.AddSingleton<IActivityTracker, ActivityTracker>();
 }
 

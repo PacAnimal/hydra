@@ -16,6 +16,7 @@ See the [project README](../README.md) for installation and a quick-start guide.
 - [Clipboard sync](#clipboard-sync)
 - [File transfer](#file-transfer)
 - [Screensaver sync](#screensaver-sync)
+- [System sleep](#system-sleep)
 - [Remote-only mode](#remote-only-mode)
 - [Networking with Styx](#networking-with-styx)
 - [Building from source](#building-from-source)
@@ -65,6 +66,10 @@ CONFIG=/path/to/hydra.conf ./hydra
 - `remoteOnly` — `true` to forward all input to remote machines immediately at startup, with no local screen involved (see [Remote-only mode](#remote-only-mode))
 - `clipboardSync` — `Hydra` uses Hydra's cross-platform clipboard protocol (default). `System` makes a macOS master stand down for macOS peers so Universal Clipboard can operate without competing pasteboard writes; Hydra continues syncing with Windows and Linux peers.
 - `syncScreensaver` — `false` to disable screensaver synchronisation (default: `true`)
+- `allowSystemSleep` — `true` lets the operating system's normal idle policy put this machine fully to sleep. Hydra stops treating background peer activity as local activity, leaves the relay when a screen-count condition no longer matches, and closes the relay before OS suspend (default: `false`).
+- `screenLockPropagation` — propagate a Mac/Windows master's local lock to connected slaves (master only; default: `false`)
+- `accelerateMouseWheel` — apply the platform wheel-acceleration behavior (default: `true`)
+- `unicodeKeyRepeat` — repeat held printable keys through Unicode insertion where supported, avoiding the macOS press-and-hold accent UI (master preference; default: `true`)
 - `conditions` — optional object; if set, this profile only activates when **all** specified conditions are met (see [Network-aware config](#network-aware-config))
   - `ssid` — activates when connected to this WiFi network name (case-insensitive)
   - `screenCount` — activates when exactly this many screens are connected (integer ≥ 1)
@@ -419,6 +424,28 @@ When the screensaver activates on the master, Hydra:
 When the master wakes, it deactivates the screensaver on slaves and restores the cursor to the remote screen it was on before.
 
 Set `syncScreensaver: false` in a profile to disable this behaviour.
+
+## System sleep
+
+Set `allowSystemSleep: true` on a profile when the machine should follow its operating system's normal idle and suspend policy:
+
+```json
+{
+  "profiles": [
+    {
+      "profileName": "Home",
+      "mode": "Slave",
+      "allowSystemSleep": true
+    }
+  ]
+}
+```
+
+When enabled, background activity reported by other Hydra peers no longer resets this machine's local idle timer. If the active profile is conditioned on connected displays and those displays sleep or disappear, Hydra leaves the relay instead of remaining remotely wakeable. Immediately before an operating-system suspend, Hydra closes its relay connection; after resume, it reconnects automatically.
+
+The pre-sleep notification is provided by IOKit on macOS, power-mode notifications on Windows, and `systemd-logind` on Linux. Linux uses a bounded delay inhibitor while Hydra closes the relay. If the platform notification service is unavailable, Hydra logs a warning and the operating system still controls whether the machine sleeps.
+
+This option intentionally disables Hydra-based remote wake while the machine is asleep. Operating-system wake sources such as Wake-on-LAN, Power Nap, network maintenance, USB devices, and scheduled wakes remain separate system settings. The default is `false` for backward compatibility and to preserve Hydra's existing always-reachable behaviour.
 
 ## Remote-only mode
 

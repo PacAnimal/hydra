@@ -42,7 +42,8 @@ public sealed class ActivityTracker(IHydraProfile profile, Lazy<IRelaySender> re
     // should update that, so the lock-screen guard isn't fooled by incoming pings.
     public ValueTask IncomingPing()
     {
-        screenSaverSync.ResetIdleTimer();
+        if (!profile.AllowSystemSleep)
+            screenSaverSync.ResetIdleTimer();
         return ValueTask.CompletedTask;
     }
 
@@ -61,8 +62,11 @@ public sealed class ActivityTracker(IHydraProfile profile, Lazy<IRelaySender> re
         var last = Interlocked.Read(ref _lastSentTick);
         if (now - last < 5000) return;
         if (Interlocked.CompareExchange(ref _lastSentTick, now, last) != last) return;
-        log.LogDebug("Resetting local idle timer");
-        screenSaverSync.ResetIdleTimer();
+        if (!profile.AllowSystemSleep)
+        {
+            log.LogDebug("Resetting local idle timer");
+            screenSaverSync.ResetIdleTimer();
+        }
         // slave always broadcasts (master decides whether to act); master only broadcasts when syncScreensaver is on
         if (profile.Mode != Mode.Slave && !profile.SyncScreensaver) return;
         var peers = profile.Mode == Mode.Slave

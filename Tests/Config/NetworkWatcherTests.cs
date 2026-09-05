@@ -73,6 +73,30 @@ public class NetworkWatcherTests
         }
     }
 
+    [Test]
+    public async Task DisplaysSleep_WhenSystemSleepAllowed_LeavesRelayInsteadOfGoingDormant()
+    {
+        var sleepable = new HydraConfig
+        {
+            Mode = Mode.Slave,
+            ProfileName = "Work",
+            Conditions = new ConfigConditions { Ssid = WorkSsid, ScreenCount = 2, IsPluggedIn = true },
+            AllowSystemSleep = true
+        };
+        var h = new Harness(sleepable)
+        {
+            ScreenCount = 1
+        };
+
+        await h.Check();
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(h.Dormancy.IsDormant, Is.False);
+            Assert.That(h.Restarts, Is.EqualTo(1));
+        }
+    }
+
     // sleeping displays are the only mismatch our own input can undo — losing power means the machine was
     // unplugged and carried off, so it should drop off the relay at once
     [Test]

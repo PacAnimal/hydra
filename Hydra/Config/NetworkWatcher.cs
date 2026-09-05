@@ -159,13 +159,18 @@ internal sealed class NetworkWatcher : SimpleHostedService
             return;
         }
 
-        if (resolved == null && OnlyScreensLost(ssids, screenCount, isPluggedIn))
+        var onlyScreensLost = resolved == null && OnlyScreensLost(ssids, screenCount, isPluggedIn);
+        if (onlyScreensLost && !_activeConfig!.AllowSystemSleep)
         {
             if (!_dormancy.IsDormant)
                 _log.LogInformation("Screens no longer match {Profile} — going dormant: staying on the relay, refusing input until input wakes us", _activeConfig!.ProfileName ?? "<unnamed>");
             await _dormancy.Enter();
             return;
         }
+
+        if (onlyScreensLost)
+            _log.LogInformation("Screens no longer match {Profile} — system sleep is allowed, leaving the relay instead of remaining remotely wakeable",
+                _activeConfig!.ProfileName ?? "<unnamed>");
 
         var from = _activeConfig != null ? $"{_activeConfig.Mode}" : "idle";
         var to = resolved != null ? $"{resolved.Mode}" : "idle";

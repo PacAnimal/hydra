@@ -48,6 +48,19 @@ public class HydraConfigTests
     }
 
     [Test]
+    public void AllowSystemSleep_DefaultsOff_AndParsesTrue()
+    {
+        var defaults = HydraConfig.ParseAndValidate(AsFile($$"""[{"mode":"Slave"{{Relay}}}]"""));
+        var enabled = HydraConfig.ParseAndValidate(AsFile($$"""[{"mode":"Slave","allowSystemSleep":true{{Relay}}}]"""));
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(defaults[0].AllowSystemSleep, Is.False);
+            Assert.That(enabled[0].AllowSystemSleep, Is.True);
+        }
+    }
+
+    [Test]
     public void Load_ReturnsValidConfig()
     {
         var file = HydraConfigFile.Load(ConfigFor("test.conf"));

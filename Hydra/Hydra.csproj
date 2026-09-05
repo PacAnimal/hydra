@@ -36,6 +36,7 @@
         <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.12" />
         <PackageReference Include="Microsoft.AspNetCore.SignalR.Protocols.MessagePack" Version="10.0.12" />
         <PackageReference Include="System.Drawing.Common" Version="10.0.12" />
+        <PackageReference Include="Microsoft.Win32.SystemEvents" Version="10.0.12" />
         <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.12" />
         <PackageReference Include="TypedSignalR.Client" Version="3.6.0">
             <PrivateAssets>all</PrivateAssets>

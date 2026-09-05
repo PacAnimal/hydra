@@ -66,6 +66,9 @@ public class HydraConfig
     public bool RemoteOnly { get; init; }
     public ClipboardSyncMode ClipboardSync { get; init; } = ClipboardSyncMode.Hydra;
     public bool SyncScreensaver { get; init; } = true;
+    // When enabled, remote activity does not keep this machine awake and Hydra disconnects from the
+    // relay before system sleep. The legacy/default behaviour keeps sleeping displays remotely wakeable.
+    public bool AllowSystemSleep { get; init; } = false;
     public bool ScreenLockPropagation { get; init; } = false;  // master only (Mac/Windows) — propagate machine lock to connected slaves
     public bool AccelerateMouseWheel { get; init; } = true;
     // master only — action name to the chords bound to it, e.g. "toggleCursorLock": ["ScrollLock"].

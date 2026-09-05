@@ -143,6 +143,29 @@ public class StyxIntegrationTests
     }
 
     [Test]
+    public async Task HydraClient_SuspendClosesConnectionUntilResume()
+    {
+        var networkId = Guid.NewGuid();
+        var cfg = await StyxTestServer.BuildNetworkConfig(_factory!, networkId);
+
+        await using var client = new HydraTestClient(_factory!, TransitionTestHelper.Profile(
+            "sleeping-host", new HydraConfig { Mode = Mode.Master, NetworkConfig = cfg }));
+        await client.StartAsync(CancellationToken.None);
+        await client.WaitForReady();
+
+        using (var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5)))
+            await client.SuspendConnectionAsync(timeout.Token);
+
+        Assert.That(client.IsConnected, Is.False);
+        await Task.Delay(100);
+        Assert.That(client.IsConnected, Is.False, "suspended relay should not reconnect in the background");
+
+        client.ResumeConnection();
+        await client.WaitForReady();
+        Assert.That(client.IsConnected, Is.True);
+    }
+
+    [Test]
     public async Task TwoHydraClients_BidirectionalExchange()
     {
         var networkId = Guid.NewGuid();
