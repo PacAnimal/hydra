@@ -185,6 +185,25 @@ public class WinKeyResolverCharTests
                 "Shift+A must produce an uppercase character, not the base character");
         }
     }
+
+    [TestCase((uint)WinVirtualKey.A, 'a')]
+    [TestCase((uint)0x43 /* C */, 'c')]
+    [TestCase((uint)0x56 /* V */, 'v')]
+    [TestCase((uint)0x5A /* Z */, 'z')]
+    public void CtrlKey_ProducesAsciiShortcutCharacter(uint vk, char expectedChar)
+    {
+        var r = new WinKeyResolver();
+        Down(r, WinVirtualKey.LControl);
+        var events = Down(r, vk);
+        Assert.That(events, Is.Not.Null);
+        var charEvent = events!.FirstOrDefault(e => e.Character != null);
+        Assert.That(charEvent, Is.Not.Null, $"Ctrl+{expectedChar} must produce character event");
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(charEvent!.Character, Is.EqualTo(expectedChar));
+            Assert.That((charEvent.Modifiers & KeyModifiers.Control) != 0, Is.True);
+        }
+    }
 }
 
 // dead-key + shortcut-flush tests require ToUnicodeEx (Windows only) to produce dead key state.

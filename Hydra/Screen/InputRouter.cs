@@ -844,7 +844,7 @@ public class InputRouter(
             {
                 // repeats are master-driven: each OS auto-repeat is re-resolved (live modifier/dead-key state)
                 // and forwarded with IsRepeat set, so the slave injects the correct character every tick.
-                ForwardToVirtualScreen(st, MessageKind.KeyEvent, new KeyEventMessage(keyEvent.Type, keyEvent.Modifiers, keyEvent.Character, RemapKey(keyEvent.Key), IsRepeat: keyEvent.IsRepeat, UnicodeKeyRepeat: profile.UnicodeKeyRepeat));
+                ForwardToVirtualScreen(st, MessageKind.KeyEvent, new KeyEventMessage(keyEvent.Type, keyEvent.Modifiers, keyEvent.Character, RemapKey(keyEvent.Key), IsRepeat: keyEvent.IsRepeat, UnicodeKeyRepeat: profile.UnicodeKeyRepeat, VkCode: keyEvent.VkCode));
             }
         });
     }
