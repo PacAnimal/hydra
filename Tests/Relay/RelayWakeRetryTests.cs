@@ -44,6 +44,19 @@ public class RelayWakeRetryTests
     }
 
     [Test]
+    public async Task ExpiredWakeWindow_ReturnsToNormalRetryAfterEarlierFastObservation()
+    {
+        var relay = new WakeDelayRelay(TimeSpan.Zero, TimeSpan.FromMilliseconds(20));
+
+        relay.BeginSystemWake(1);
+        Assert.That(relay.Delay, Is.EqualTo(TimeSpan.FromSeconds(1)));
+
+        await Task.Delay(TimeSpan.FromMilliseconds(100));
+
+        Assert.That(relay.Delay, Is.EqualTo(TimeSpan.FromSeconds(15)));
+    }
+
+    [Test]
     public async Task EarlyWake_InterruptsExistingNormalReconnectDelay()
     {
         var relay = new WakeDelayRelay(TimeSpan.FromHours(1));

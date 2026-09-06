@@ -18,6 +18,7 @@ internal sealed class MacSystemSleepMonitor : IHostedService, IDisposable
     private Thread? _thread;
     private nint _runLoop;
     private uint _kernelPort;
+    private volatile bool _stopping;
 
     public MacSystemSleepMonitor(SystemSleepCoordinator coordinator, ILogger<MacSystemSleepMonitor> log)
     {
@@ -65,8 +66,21 @@ internal sealed class MacSystemSleepMonitor : IHostedService, IDisposable
             }
 
             var runLoop = NativeMethods.CFRunLoopGetCurrent();
-            _runLoop = runLoop;
             NativeMethods.CFRunLoopAddSource(runLoop, source, GetCfRunLoopCommonModes());
+            if (_stopping)
+            {
+                ready.TrySetResult(false);
+                return;
+            }
+            Interlocked.Exchange(ref _runLoop, runLoop);
+            // StopAsync may have checked _runLoop immediately before publication. Re-check after
+            // publishing so the worker cannot enter CFRunLoopRun after shutdown has already begun.
+            if (_stopping)
+            {
+                Interlocked.Exchange(ref _runLoop, nint.Zero);
+                ready.TrySetResult(false);
+                return;
+            }
             ready.TrySetResult(true);
             _log.LogInformation("Watching macOS system sleep and wake notifications");
             NativeMethods.CFRunLoopRun();
@@ -147,6 +161,7 @@ internal sealed class MacSystemSleepMonitor : IHostedService, IDisposable
 
     public Task StopAsync(CancellationToken cancellationToken)
     {
+        _stopping = true;
         var runLoop = Interlocked.Exchange(ref _runLoop, nint.Zero);
         if (runLoop != nint.Zero) NativeMethods.CFRunLoopStop(runLoop);
         var thread = _thread;
