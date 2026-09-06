@@ -564,6 +564,7 @@ internal static partial class NativeMethods
     // IOKit common power messages: err_system(0x38) | message.
     internal const uint KIOMessageCanSystemSleep = 0xe0000270;
     internal const uint KIOMessageSystemWillSleep = 0xe0000280;
+    internal const uint KIOMessageSystemWillPowerOn = 0xe0000320;
     internal const uint KIOMessageSystemHasPoweredOn = 0xe0000300;
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]

@@ -21,8 +21,14 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     private RelayEncryption? _encryption;
     private readonly Lock _connectionLock = new();
     private CancellationTokenSource? _connectionCancellation;
+    private CancellationTokenSource? _reconnectDelayCancellation;
     private bool _connectionIterationActive;
     private bool _connectionSuspended;
+    private long _fastReconnectUntil;
+    private long _wakeStateVersion;
+    private long _latestSleepGeneration;
+    private long _latestWakeGeneration;
+    private long _completedWakeGeneration;
     private TaskCompletionSource _resumeConnection = CompletedSignal();
     private TaskCompletionSource? _suspensionComplete;
     private readonly Lock _sendOrderLock = new();
@@ -38,6 +44,9 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
             new UnboundedChannelOptions { SingleReader = true, AllowSynchronousContinuations = false });
 
     protected virtual TimeSpan ReconnectDelay => TimeSpan.FromSeconds(Constants.ReconnectDelaySeconds);
+    protected virtual TimeSpan SystemWakeReconnectDelay => TimeSpan.FromSeconds(1);
+    protected virtual TimeSpan EarlySystemWakeReconnectWindow => TimeSpan.FromSeconds(30);
+    protected virtual TimeSpan SystemWakeReconnectGracePeriod => TimeSpan.FromSeconds(5);
 
     // RR5: ±25% jitter so peers that all dropped at once (e.g. a relay restart) don't reconnect in lockstep
     private static TimeSpan WithJitter(TimeSpan baseDelay)
@@ -101,16 +110,31 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         }
     }
 
-    public async ValueTask SuspendConnectionAsync(CancellationToken cancel = default)
+    public ValueTask SuspendConnectionAsync(CancellationToken cancel = default) =>
+        SuspendConnectionCoreAsync(null, cancel);
+
+    public ValueTask SuspendForSystemSleepAsync(long generation, CancellationToken cancel = default) =>
+        SuspendConnectionCoreAsync(generation, cancel);
+
+    private async ValueTask SuspendConnectionCoreAsync(long? generation, CancellationToken cancel)
     {
         Task suspension;
         CancellationTokenSource? connection;
         lock (_connectionLock)
         {
+            if (generation is { } sleepGeneration)
+            {
+                if (sleepGeneration < _latestSleepGeneration
+                    || sleepGeneration <= _completedWakeGeneration)
+                    return;
+                _latestSleepGeneration = sleepGeneration;
+            }
+
             if (!_connectionSuspended)
             {
                 _connectionSuspended = true;
                 _resumeConnection = NewSignal();
+                _fastReconnectUntil = 0;
             }
 
             if (!_connectionIterationActive) return;
@@ -138,6 +162,47 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
             resume = _resumeConnection;
         }
         resume.TrySetResult();
+    }
+
+    public void BeginSystemWake(long generation)
+    {
+        ApplySystemWake(generation, completed: false);
+    }
+
+    public void CompleteSystemWake(long generation)
+    {
+        ApplySystemWake(generation, completed: true);
+    }
+
+    private void ApplySystemWake(long generation, bool completed)
+    {
+        TaskCompletionSource? resume = null;
+        CancellationTokenSource? retryDelay;
+        lock (_connectionLock)
+        {
+            if (generation < _latestSleepGeneration
+                || generation < _latestWakeGeneration
+                || !completed && generation <= _completedWakeGeneration)
+                return;
+
+            _latestWakeGeneration = generation;
+            if (completed) _completedWakeGeneration = generation;
+            var window = completed ? SystemWakeReconnectGracePeriod : EarlySystemWakeReconnectWindow;
+            _fastReconnectUntil = Stopwatch.GetTimestamp()
+                + (long)(window.TotalSeconds * Stopwatch.Frequency);
+            _wakeStateVersion++;
+
+            if (_connectionSuspended)
+            {
+                _connectionSuspended = false;
+                resume = _resumeConnection;
+            }
+            retryDelay = _reconnectDelayCancellation;
+        }
+
+        resume?.TrySetResult();
+        try { retryDelay?.Cancel(); }
+        catch (ObjectDisposedException) { }
     }
 
     public async ValueTask SendReliableAsync(string[] targetHosts, byte[] payload, CancellationToken cancel = default)
@@ -259,6 +324,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         {
             await WaitUntilConnectionResumed(cancel).ConfigureAwait(false);
             if (!TryBeginConnectionIteration()) continue;
+            TimeSpan? reconnectDelay = null;
             try
             {
                 await Connect(netConfig, hostName, cancel);
@@ -273,15 +339,18 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
             }
             catch (OperationCanceledException)
             {
-                log.LogWarning("Relay connection lost — retrying in {ReconnectDelay}s", ReconnectDelay.TotalSeconds);
+                reconnectDelay = CurrentReconnectDelay();
+                log.LogWarning("Relay connection lost — retrying in {ReconnectDelay}s", reconnectDelay.Value.TotalSeconds);
             }
             catch (HttpRequestException ex)
             {
-                log.LogWarning("Relay connection failed — retrying in {ReconnectDelay}s: {Message}", ReconnectDelay.TotalSeconds, ex.InnerException?.Message ?? ex.Message);
+                reconnectDelay = CurrentReconnectDelay();
+                log.LogWarning("Relay connection failed — retrying in {ReconnectDelay}s: {Message}", reconnectDelay.Value.TotalSeconds, ex.InnerException?.Message ?? ex.Message);
             }
             catch (Exception ex)
             {
-                log.LogError(ex, "Relay connection failed — retrying in {ReconnectDelay}s", ReconnectDelay.TotalSeconds);
+                reconnectDelay = CurrentReconnectDelay();
+                log.LogError(ex, "Relay connection failed — retrying in {ReconnectDelay}s", reconnectDelay.Value.TotalSeconds);
             }
             finally
             {
@@ -310,7 +379,57 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
             }
 
             if (!cancel.IsCancellationRequested && !IsConnectionSuspended())
-                await Task.Delay(WithJitter(ReconnectDelay), cancel).ConfigureAwait(false);
+            {
+                var (delay, wakeStateVersion) = CurrentReconnectDelayState(reconnectDelay);
+                await DelayBeforeReconnect(WithJitter(delay), wakeStateVersion, cancel).ConfigureAwait(false);
+            }
+        }
+    }
+
+    protected TimeSpan CurrentReconnectDelay()
+        => CurrentReconnectDelayState().Delay;
+
+    protected long WakeStateVersion
+    {
+        get
+        {
+            lock (_connectionLock) return _wakeStateVersion;
+        }
+    }
+
+    private (TimeSpan Delay, long WakeStateVersion) CurrentReconnectDelayState(TimeSpan? preferred = null)
+    {
+        lock (_connectionLock)
+        {
+            var delay = Stopwatch.GetTimestamp() < _fastReconnectUntil
+                ? SystemWakeReconnectDelay
+                : preferred ?? ReconnectDelay;
+            return (delay, _wakeStateVersion);
+        }
+    }
+
+    protected async Task DelayBeforeReconnect(
+        TimeSpan delay,
+        long observedWakeStateVersion,
+        CancellationToken cancel)
+    {
+        using var delayCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancel);
+        lock (_connectionLock)
+        {
+            if (_wakeStateVersion != observedWakeStateVersion) return;
+            _reconnectDelayCancellation = delayCancellation;
+        }
+
+        try
+        {
+            await Task.Delay(delay, delayCancellation.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!cancel.IsCancellationRequested) { }
+        finally
+        {
+            lock (_connectionLock)
+                if (ReferenceEquals(_reconnectDelayCancellation, delayCancellation))
+                    _reconnectDelayCancellation = null;
         }
     }
 
@@ -334,6 +453,14 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     private bool IsConnectionSuspended()
     {
         lock (_connectionLock) return _connectionSuspended;
+    }
+
+    protected bool ConnectionSuspended
+    {
+        get
+        {
+            lock (_connectionLock) return _connectionSuspended;
+        }
     }
 
     private void EndConnectionIteration()

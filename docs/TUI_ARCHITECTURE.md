@@ -92,7 +92,7 @@ The TUI reports status, active profile, relay route, network adapters, embedded-
 
 Platform lifecycle behavior is intentionally different:
 
-- **macOS:** shutdown unloads but preserves the LaunchAgent; start can load the installed agent or launch the current executable. With **Allow System Sleep**, IOKit power notifications suspend the relay before sleep and reconnect it after wake.
+- **macOS:** shutdown unloads but preserves the LaunchAgent; start can load the installed agent or launch the current executable. With **Allow System Sleep**, IOKit power notifications suspend the relay before sleep, begin reconnecting during early wake with bounded retries, and return to the normal retry cadence after hardware wake completes.
 - **Windows:** a service-managed session child must not stop or replace the service. Stop/start remains an elevated service operation. With **Allow System Sleep**, the interactive session child handles suspend/resume power notifications.
 - **Linux:** Hydra does not own a service installer; report direct or externally supervised operation without assuming systemd. With **Allow System Sleep**, Hydra uses `systemd-logind` notifications and a bounded delay inhibitor when logind is available.
 

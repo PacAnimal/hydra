@@ -16,12 +16,14 @@ public class SystemSleepCoordinatorTests
         var coordinator = Make(enabled: false, relay);
 
         await coordinator.PrepareForSleepAsync(CancellationToken.None);
+        coordinator.BeginResumeAfterSleep();
         coordinator.ResumeAfterSleep();
 
         using (Assert.EnterMultipleScope())
         {
             Assert.That(relay.SuspendCount, Is.Zero);
-            Assert.That(relay.ResumeCount, Is.Zero);
+            Assert.That(relay.BeginWakeCount, Is.Zero);
+            Assert.That(relay.CompleteWakeCount, Is.Zero);
         }
     }
 
@@ -33,13 +35,16 @@ public class SystemSleepCoordinatorTests
 
         await coordinator.PrepareForSleepAsync(CancellationToken.None);
         await coordinator.PrepareForSleepAsync(CancellationToken.None);
+        coordinator.BeginResumeAfterSleep();
+        coordinator.BeginResumeAfterSleep();
         coordinator.ResumeAfterSleep();
         coordinator.ResumeAfterSleep();
 
         using (Assert.EnterMultipleScope())
         {
             Assert.That(relay.SuspendCount, Is.EqualTo(1));
-            Assert.That(relay.ResumeCount, Is.EqualTo(1));
+            Assert.That(relay.BeginWakeCount, Is.EqualTo(1));
+            Assert.That(relay.CompleteWakeCount, Is.EqualTo(1));
         }
     }
 
@@ -58,8 +63,66 @@ public class SystemSleepCoordinatorTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(relay.SuspendCount, Is.EqualTo(1));
-            Assert.That(relay.ResumeCount, Is.EqualTo(2),
-                "wake should be repeated after the racing suspension finishes");
+            Assert.That(relay.BeginWakeCount, Is.Zero);
+            Assert.That(relay.CompleteWakeCount, Is.EqualTo(2),
+                "completed wake should be repeated after the racing suspension finishes");
+        }
+    }
+
+    [Test]
+    public async Task EarlyWakeDuringRelayShutdown_IsReappliedAfterSuspensionCompletes()
+    {
+        var relay = new SleepRelay { BlockSuspension = true };
+        var coordinator = Make(enabled: true, relay);
+
+        var prepare = coordinator.PrepareForSleepAsync(CancellationToken.None);
+        await relay.SuspensionStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        coordinator.BeginResumeAfterSleep();
+        relay.AllowSuspensionToComplete.TrySetResult();
+        await prepare;
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(relay.SuspendCount, Is.EqualTo(1));
+            Assert.That(relay.BeginWakeCount, Is.EqualTo(2),
+                "early wake should be repeated after the racing suspension finishes");
+            Assert.That(relay.CompleteWakeCount, Is.Zero);
+        }
+    }
+
+    [Test]
+    public async Task CompletedWakeWithoutEarlyNotification_ResumesRelay()
+    {
+        var relay = new SleepRelay();
+        var coordinator = Make(enabled: true, relay);
+
+        await coordinator.PrepareForSleepAsync(CancellationToken.None);
+        coordinator.ResumeAfterSleep();
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(relay.BeginWakeCount, Is.Zero);
+            Assert.That(relay.CompleteWakeCount, Is.EqualTo(1));
+        }
+    }
+
+    [Test]
+    public async Task ConsecutiveSleepCycles_UseDistinctOrderedGenerations()
+    {
+        var relay = new SleepRelay();
+        var coordinator = Make(enabled: true, relay);
+
+        await coordinator.PrepareForSleepAsync(CancellationToken.None);
+        coordinator.BeginResumeAfterSleep();
+        coordinator.ResumeAfterSleep();
+        await coordinator.PrepareForSleepAsync(CancellationToken.None);
+        coordinator.BeginResumeAfterSleep();
+        coordinator.ResumeAfterSleep();
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(relay.SleepGenerations, Is.EqualTo(new long[] { 1, 2 }));
+            Assert.That(relay.WakeGenerations, Is.EqualTo(new long[] { 1, 1, 2, 2 }));
         }
     }
 
@@ -78,7 +141,10 @@ public class SystemSleepCoordinatorTests
         internal TaskCompletionSource AllowSuspensionToComplete { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal int SuspendCount { get; private set; }
-        internal int ResumeCount { get; private set; }
+        internal List<long> SleepGenerations { get; } = [];
+        internal int BeginWakeCount { get; private set; }
+        internal int CompleteWakeCount { get; private set; }
+        internal List<long> WakeGenerations { get; } = [];
         public bool IsConnected => true;
         public void Send(string[] targetHosts, byte[] payload) { }
         public async ValueTask SuspendConnectionAsync(CancellationToken cancel = default)
@@ -88,7 +154,21 @@ public class SystemSleepCoordinatorTests
             if (BlockSuspension)
                 await AllowSuspensionToComplete.Task.WaitAsync(cancel);
         }
-        public void ResumeConnection() => ResumeCount++;
+        public ValueTask SuspendForSystemSleepAsync(long generation, CancellationToken cancel = default)
+        {
+            SleepGenerations.Add(generation);
+            return SuspendConnectionAsync(cancel);
+        }
+        public void BeginSystemWake(long generation)
+        {
+            BeginWakeCount++;
+            WakeGenerations.Add(generation);
+        }
+        public void CompleteSystemWake(long generation)
+        {
+            CompleteWakeCount++;
+            WakeGenerations.Add(generation);
+        }
 #pragma warning disable CS0067
         public event Func<string[], Task>? PeersChanged;
         public event Func<string, MessageKind, ReadOnlyMemory<byte>, Task>? MessageReceived;

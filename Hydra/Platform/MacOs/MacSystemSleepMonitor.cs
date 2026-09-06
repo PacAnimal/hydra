@@ -120,6 +120,12 @@ internal sealed class MacSystemSleepMonitor : IHostedService, IDisposable
                 return;
             }
 
+            if (messageType == NativeMethods.KIOMessageSystemWillPowerOn)
+            {
+                _coordinator.BeginResumeAfterSleep();
+                return;
+            }
+
             if (messageType == NativeMethods.KIOMessageSystemHasPoweredOn)
                 _coordinator.ResumeAfterSleep();
         }

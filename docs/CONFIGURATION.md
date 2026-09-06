@@ -441,7 +441,7 @@ Set `allowSystemSleep: true` on a profile when the machine should follow its ope
 }
 ```
 
-When enabled, background activity reported by other Hydra peers no longer resets this machine's local idle timer. If the active profile is conditioned on connected displays and those displays sleep or disappear, Hydra leaves the relay instead of remaining remotely wakeable. Immediately before an operating-system suspend, Hydra closes its relay connection; after resume, it reconnects automatically.
+When enabled, background activity reported by other Hydra peers no longer resets this machine's local idle timer. If the active profile is conditioned on connected displays and those displays sleep or disappear, Hydra leaves the relay instead of remaining remotely wakeable. Immediately before an operating-system suspend, Hydra closes its relay connection; after resume, it reconnects automatically. On macOS, reconnection begins during the early wake phase with short bounded retries, then returns to the normal retry cadence after hardware wake completes.
 
 The pre-sleep notification is provided by IOKit on macOS, power-mode notifications on Windows, and `systemd-logind` on Linux. Linux uses a bounded delay inhibitor while Hydra closes the relay. If the platform notification service is unavailable, Hydra logs a warning and the operating system still controls whether the machine sleeps.
 
