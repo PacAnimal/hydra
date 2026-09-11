@@ -189,4 +189,32 @@ public class MacKeyResolverTests
         }
         finally { NativeMethods.CFRelease(ev); }
     }
+
+    [Test]
+    public void OptionSpace_ReleasesTheSpaceItPressed()
+    {
+        // the Option+Space shortcut returns early from ResolveCharacter, so this pins that the key is
+        // still tracked as held — without the key-up replay the slave would hold Space down forever.
+        var resolver = new MacKeyResolver();
+        var down = KeyDownEvent(MacVirtualKey.Space, NativeMethods.KCGEventFlagMaskAlternate);
+        var up = KeyDownEvent(MacVirtualKey.Space, NativeMethods.KCGEventFlagMaskAlternate);
+        try
+        {
+            resolver.Resolve(NativeMethods.KCGEventKeyDown, down);
+            var events = resolver.Resolve(NativeMethods.KCGEventKeyUp, up);
+
+            Assert.That(events, Is.Not.Null, "Option+Space must emit a key-up");
+            var keyEvent = events!.Single()!;
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(keyEvent.Type, Is.EqualTo(KeyEventType.KeyUp));
+                Assert.That(keyEvent.Character, Is.EqualTo(' '));
+            }
+        }
+        finally
+        {
+            NativeMethods.CFRelease(down);
+            NativeMethods.CFRelease(up);
+        }
+    }
 }
