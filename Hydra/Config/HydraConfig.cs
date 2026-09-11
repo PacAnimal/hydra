@@ -67,6 +67,10 @@ public class HydraConfig
     public bool SyncScreensaver { get; init; } = true;
     public bool ScreenLockPropagation { get; init; } = false;  // master only (Mac/Windows) — propagate machine lock to connected slaves
     public bool AccelerateMouseWheel { get; init; } = true;
+    // master only — action name to the chords bound to it, e.g. "toggleCursorLock": ["ScrollLock"].
+    // a listed array replaces that action's default entirely; see docs/CONFIGURATION.md for both lists.
+    public Dictionary<string, List<string>>? Hotkeys { get; init; }
+
     public int? DeadCorners { get; init; }  // pixel dead zone at screen corners; scaled by screen scale; per-host setting overrides this
 
     // master only — sent with each keypress so per-master preferences are honoured on shared slaves.

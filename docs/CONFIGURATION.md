@@ -61,6 +61,7 @@ CONFIG=/path/to/hydra.conf ./hydra
 - `screenDefinitions` — per-screen scale config (slave only; reported to master via ScreenInfo)
 - `mouseScale` — fallback cursor speed multiplier for all screens on this slave (slave only)
 - `deadCorners` — pixel dead zone at screen corners where transitions are blocked (default `0`, `50` is a reasonable starting value). Scaled by the screen's mouseScale. Can also be set per-host to override.
+- `hotkeys` — rebind Hydra's hotkeys, as action name to an array of chords (master only; see [Customising hotkeys](#customising-hotkeys))
 - `remoteOnly` — `true` to forward all input to remote machines immediately at startup, with no local screen involved (see [Remote-only mode](#remote-only-mode))
 - `syncScreensaver` — `false` to disable screensaver synchronisation (default: `true`)
 - `conditions` — optional object; if set, this profile only activates when **all** specified conditions are met (see [Network-aware config](#network-aware-config))
@@ -271,15 +272,17 @@ A common setup: at home your stationary desktop controls your laptop (the laptop
 
 ## Hotkeys
 
-All hotkeys use **Ctrl+Alt+Super** (Super = ⌘ on macOS, Win on Windows) plus one letter.
+By default every hotkey uses **Ctrl+Alt+Super** (Super = ⌘ on macOS, Win on Windows) plus one letter. All of
+them can be rebound — see [Customising hotkeys](#customising-hotkeys) below.
 
-| Hotkey | Action |
-|--------|--------|
-| `Ctrl+Alt+Super+L` | Toggle cursor lock — lock to current screen, or unlock to roam freely |
-| `Ctrl+Alt+Super+M` | Toggle relative mouse mode on the current remote screen (useful for games) |
-| `Ctrl+Alt+Super+C` | Copy selected files/folders to Hydra's cross-machine clipboard (macOS, Windows) |
-| `Ctrl+Alt+Super+V` | Paste previously copied files to the current machine |
-| `Ctrl+Alt+Super+K` | Lock every connected slave |
+| Default hotkey | Action name | Action |
+|--------|--------|--------|
+| `Ctrl+Alt+Super+L` | `toggleCursorLock` | Toggle cursor lock — lock to current screen, or unlock to roam freely |
+| `Ctrl+Alt+Super+M` | `toggleRelativeMouse` | Toggle relative mouse mode on the current remote screen (useful for games) |
+| `Ctrl+Alt+Super+C` | `copyFiles` | Copy selected files/folders to Hydra's cross-machine clipboard (macOS, Windows) |
+| `Ctrl+Alt+Super+V` | `pasteFiles` | Paste previously copied files to the current machine |
+| `Ctrl+Alt+Super+K` | `lockSlaves` | Lock every connected slave |
+| `Ctrl+Alt+Super+Z` | `missionControl` | Send Mission Control to the current remote screen (macOS slave) |
 
 **Lock all slaves:** `Ctrl+Alt+Super+K` sends a lock to every connected slave — the same action `screenLockPropagation` performs when the master's own machine locks. It is the only way to trigger it from a **remote-only master**, which has no screen of its own to lock and therefore never fires the underlying event. It is not gated on `screenLockPropagation`: that setting governs automatic propagation, while the hotkey is an explicit request. A slave that has seen local input more recently than the master still declines to lock, on the assumption that someone is sitting at it.
 
@@ -289,6 +292,61 @@ All hotkeys use **Ctrl+Alt+Super** (Super = ⌘ on macOS, Win on Windows) plus o
 - **Headless** (a Pi with no display), there is nothing to pass input *to*, so the hotkey keeps the meaning it has everywhere else: it confines the cursor to the current remote screen, and pressing it again lets the cursor roam between slaves. The OSD reads `Cursor lock: On` / `Cursor lock: Off`. Before this, unlocking on a headless master handed input to a local screen that did not exist and the keyboard and mouse went dead until the hotkey was pressed again.
 
 **Relative mouse:** relative mode sends mouse deltas instead of absolute coordinates — useful for games or 3D apps that capture the cursor. Toggled per-screen; an on-screen notification confirms the current state.
+
+### Customising hotkeys
+
+`hotkeys` is a **master** profile setting mapping an action name to the chords bound to it. Hotkeys are consumed
+on the master before anything is forwarded, so a slave never sees one and setting this on a slave profile does
+nothing.
+
+```json
+{
+  "mode": "Master",
+  "hotkeys": {
+    "toggleCursorLock": ["Ctrl+Alt+Super+L", "ScrollLock"],
+    "toggleRelativeMouse": ["F13"]
+  },
+  "hosts": [...]
+}
+```
+
+Each value is an **array**, so one action can have several chords — useful for keeping the default while adding
+something reachable one-handed. A listed array **replaces** that action's default entirely: to keep the default
+as well, list it, as `toggleCursorLock` does above. Actions you don't mention keep their defaults.
+
+**Writing a chord.** Join parts with `+`, in any order, case-insensitively: `Ctrl+Alt+Super+L`, `cmd+alt+ctrl+l`
+and `L+Ctrl+Alt+Super` are the same binding. Modifier names, with aliases:
+
+| Modifier | Accepted names |
+|----------|----------------|
+| Control | `ctrl`, `control` |
+| Alt / Option | `alt`, `opt`, `option` |
+| Shift | `shift` |
+| Super (⌘ / Win) | `super`, `win`, `windows`, `cmd`, `command`, `meta` |
+| AltGr | `altgr` |
+
+**The key itself** is either a single character (`l`, `4`, `/`) or one of these names:
+
+`BackSpace` `Tab` `Return` `Escape` `Delete` `Home` `End` `Insert` `PageUp` `PageDown`
+`Left` `Right` `Up` `Down` `F1`–`F20` `ScrollLock` `NumLock` `CapsLock`
+`KP_0`–`KP_9` `KP_Enter` `KP_Add` `KP_Subtract` `KP_Multiply` `KP_Divide` `KP_Decimal` `KP_Equal` `KP_Space` `KP_Tab`
+`AudioMute` `AudioVolumeUp` `AudioVolumeDown` `AudioPlay` `AudioStop` `AudioNext` `AudioPrev`
+`BrightnessUp` `BrightnessDown` `Eject` `MissionControl` `MoveToBeginningOfLine` `MoveToEndOfLine`
+
+To bind the `+` key itself, write it last: `Ctrl+Alt++`.
+
+**Two rules, both enforced at startup:**
+
+- A **named** key may be used on its own — `["ScrollLock"]` is the point of this feature.
+- A **single character** may not. Hydra consumes both the press and the release of a hotkey, so `["c"]` would
+  stop `c` ever being typed again. Give it at least one modifier.
+
+Modifier keys themselves (`Shift_L`, `Control_R`, `Alt_L`, `Super_L`, `AltGr`) cannot be bound, for the same
+reason. `ScrollLock`, `NumLock` and `CapsLock` can — they are toggles, and binding one is a deliberate choice.
+
+A binding Hydra cannot parse is logged as a warning at startup and ignored, and that action keeps its default,
+so a typo never leaves an action unreachable or stops Hydra starting. Lock states are not part of a chord:
+`Ctrl+Alt+Super+L` still fires with CapsLock on.
 
 ## Clipboard sync
 

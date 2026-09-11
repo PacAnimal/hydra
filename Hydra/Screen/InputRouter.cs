@@ -30,7 +30,6 @@ public class InputRouter(
     Func<long>? getTickCount = null)
     : IHostedService
 {
-    private const KeyModifiers LockHotkey = KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Super;
 
     private const int MaxMouseHz = 125; // should divide evenly by 1000
     private const int MinMouseIntervalMs = 1000 / MaxMouseHz;
@@ -679,11 +678,12 @@ public class InputRouter(
                 log.LogDebug("Key: {Type}{Label} mods={Modifiers}", keyEvent.Type, label, keyEvent.Modifiers);
 
             // consume both KeyDown and KeyUp for hotkeys so the slave never sees either half
-            var hotkeyConsumed = (keyEvent.Modifiers & LockHotkey) == LockHotkey && keyEvent.Character is 'l' or 'm' or 'c' or 'v' or 'z' or 'k';
+            var hotkeyAction = profile.Hotkeys.Match(keyEvent);
+            var hotkeyConsumed = hotkeyAction.HasValue;
             // !IsRepeat: an auto-repeat of a held hotkey must not re-fire the toggle every tick
             if (hotkeyConsumed && keyEvent.Type == KeyEventType.KeyDown && !keyEvent.IsRepeat)
             {
-                if (keyEvent.Character == 'l')
+                if (hotkeyAction == HotkeyAction.ToggleCursorLock)
                 {
                     // A remote-only master with no local screen has nowhere to pass input to: the
                     // old behaviour left the remote screen and OnMouseDelta then dropped every
@@ -735,7 +735,7 @@ public class InputRouter(
                         }
                     }
                 }
-                else if (keyEvent.Character == 'k')
+                else if (hotkeyAction == HotkeyAction.LockSlaves)
                 {
                     // Lock every connected slave on demand. On a remote-only master this is the only
                     // route to BroadcastLockScreen: that is otherwise driven by this machine's own
@@ -746,7 +746,7 @@ public class InputRouter(
                     log.LogInformation("Lock hotkey: locking all slaves");
                     await BroadcastLockScreen(st);
                 }
-                else if (keyEvent.Character == 'm' && st.Mouse.IsOnVirtualScreen && st.Mouse.CurrentScreen != null)
+                else if (hotkeyAction == HotkeyAction.ToggleRelativeMouse && st.Mouse.IsOnVirtualScreen && st.Mouse.CurrentScreen != null)
                 {
                     var screenName = st.Mouse.CurrentScreen.Name;
                     var isNowRelative = !st.RelativeMouseScreens.GetValueOrDefault(screenName);
@@ -754,7 +754,7 @@ public class InputRouter(
                     log.LogInformation("Mouse mode for '{Screen}': {Mode}", screenName, isNowRelative ? "relative" : "absolute");
                     ShowOsd(st, isNowRelative ? "Relative mouse: On" : "Relative mouse: Off");
                 }
-                else if (keyEvent.Character == 'c')
+                else if (hotkeyAction == HotkeyAction.CopyFiles)
                 {
                     if (_fileTransfer.FileTransferOngoing)
                     {
@@ -797,14 +797,14 @@ public class InputRouter(
                         relay.Send([st.Mouse.CurrentScreen.Host], queryPayload);
                     }
                 }
-                else if (keyEvent.Character == 'z' && st.Mouse.IsOnVirtualScreen && st.Mouse.CurrentScreen != null)
+                else if (hotkeyAction == HotkeyAction.MissionControl && st.Mouse.IsOnVirtualScreen && st.Mouse.CurrentScreen != null)
                 {
                     log.LogInformation("Mission Control hotkey: sending to {Host}", st.Mouse.CurrentScreen.Host);
                     var host = st.Mouse.CurrentScreen.Host;
                     relay.Send([host], MessageSerializer.Encode(MessageKind.KeyEvent, new KeyEventMessage(KeyEventType.KeyDown, KeyModifiers.None, null, SpecialKey.MissionControl)));
                     relay.Send([host], MessageSerializer.Encode(MessageKind.KeyEvent, new KeyEventMessage(KeyEventType.KeyUp, KeyModifiers.None, null, SpecialKey.MissionControl)));
                 }
-                else if (keyEvent.Character == 'v')
+                else if (hotkeyAction == HotkeyAction.PasteFiles)
                 {
                     if (_fileTransfer.FileTransferOngoing)
                     {

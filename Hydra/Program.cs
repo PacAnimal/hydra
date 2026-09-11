@@ -160,6 +160,9 @@ if (logFileSetting is { } logFile)
 var startupLog = await services.CreateLogger<HydraProfile>();
 startupLog.LogInformation("Active profile: {ProfileName}", profile.ProfileName ?? "<none>");
 
+foreach (var hotkeyError in profile.Hotkeys.Errors)
+    startupLog.LogWarning("Hotkey config: {Error}", hotkeyError);
+
 if (config?.EmbeddedStyxServer != null)
 {
     startupLog.LogInformation("Embedded Styx relay on port {Port}", config.EmbeddedStyxServer.Port);
