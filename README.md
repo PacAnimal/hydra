@@ -53,6 +53,8 @@ curl -L https://github.com/PacAnimal/hydra/releases/latest/download/hydra-osx-ar
 ```
 `--install` registers a LaunchAgent, clears the quarantine flag, and starts Hydra immediately. Grant Accessibility permission when prompted: System Settings → Privacy & Security → Accessibility → enable Hydra. To remove: `./hydra --uninstall`.
 
+Run `--install` *before* granting Accessibility. It signs the binary with a stable identity so the permission survives later updates and re-installs, but macOS records the permission against whatever identity the binary had at the moment you granted it — so if you granted it first, remove Hydra from the Accessibility list and add it again after installing.
+
 **Windows (x64):**
 
 Download [hydra-win-x64.zip](https://github.com/PacAnimal/hydra/releases/latest/download/hydra-win-x64.zip), extract, then run:

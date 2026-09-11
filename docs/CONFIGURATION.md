@@ -44,7 +44,8 @@ CONFIG=/path/to/hydra.conf ./hydra
 - `name` — this machine's name on the network. Optional — defaults to the machine's hostname without domain. Must match one of the host names for the master to identify its own screen.
 - `logLevel` — `trce`, `dbug`, `info`, `warn`, `fail`, or `crit`
 - `logFile` — path to a file where log output is also written (in addition to the console); relative paths are resolved from the config file's directory (default: none)
-- `logTruncate` — if `true`, truncate `logFile` to 0 bytes on each startup so it doesn't grow unbounded (default: `false`)
+- `sessionLogFile` — Windows service mode only: path to a file where the session child's log output is written. The service spawns a child process in the interactive session to run the input hooks and the relay, so this is the log that records what actually happened. Defaults to `logFile` with a `.session.log` extension, so it is only worth setting to move it elsewhere.
+- `logTruncate` — if `true`, truncate `logFile` and `sessionLogFile` to 0 bytes on each startup so they don't grow unbounded (default: `false`)
 - `autoUpdate` — `false` to disable automatic updates
 - `lockFile` — path to a lock file to prevent multiple instances (default: none)
 - `profiles` — array of profile objects (see below); at least one required

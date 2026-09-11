@@ -141,7 +141,12 @@ services.AddSingleton<IHydraProfile>(profile);
 
 services.AddSereneConsoleLogging(c => c.MinLogLevel = profile.LogLevel);
 
-var logFileSetting = RunMode.IsSessionChild ? configFile.SessionLogFile : configFile.LogFile;
+// the session child is where the input hooks and the relay actually run, so in service mode its log is
+// the only one that records a dropped connection or a hook failure. sessionLogFile is usually unset, so
+// fall back to a sibling of logFile rather than silently writing no file log at all.
+var logFileSetting = RunMode.IsSessionChild
+    ? configFile.SessionLogFile ?? (configFile.LogFile is { } mainLog ? Path.ChangeExtension(mainLog, ".session.log") : null)
+    : configFile.LogFile;
 if (logFileSetting is { } logFile)
 {
     var logPath = Path.IsPathRooted(logFile)

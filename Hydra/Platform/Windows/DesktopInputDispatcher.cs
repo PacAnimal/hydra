@@ -53,7 +53,7 @@ internal sealed class DesktopInputDispatcher : IDisposable
     {
         _log = log;
         _activeDesktop = NativeMethods.OpenInputDesktop(NativeMethods.DF_ALLOWOTHERACCOUNTHOOK, true, DesktopAccess);
-        _activeDesktopName = GetDesktopName(_activeDesktop);
+        _activeDesktopName = WindowsDesktop.Name(_activeDesktop);
         if (_activeDesktop == nint.Zero)
             _log.LogWarning("OpenInputDesktop failed at startup (error {Error})", Marshal.GetLastWin32Error());
         else
@@ -110,7 +110,7 @@ internal sealed class DesktopInputDispatcher : IDisposable
             return;
         }
 
-        var name = GetDesktopName(hDesk);
+        var name = WindowsDesktop.Name(hDesk);
         if (name == _activeDesktopName)
         {
             NativeMethods.CloseDesktop(hDesk);
@@ -514,16 +514,6 @@ internal sealed class DesktopInputDispatcher : IDisposable
             if (NativeMethods.SendInput(1, &input, sizeof(INPUT)) == 0)
                 _log.LogWarning("SendInput(scroll x) failed (error {Error})", Marshal.GetLastWin32Error());
         }
-    }
-
-    private static unsafe string GetDesktopName(nint hDesk)
-    {
-        if (hDesk == nint.Zero) return "";
-        const int bufSize = 128;
-        char* buf = stackalloc char[bufSize];
-        return NativeMethods.GetUserObjectInformationW(hDesk, NativeMethods.UOI_NAME, (nint)buf, bufSize * sizeof(char), out _)
-            ? new string(buf)
-            : "";
     }
 
     // resolves a char to a VK+shift pair without using the active layout, for shortcut injection only.

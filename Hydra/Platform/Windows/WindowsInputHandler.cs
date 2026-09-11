@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using Cathedral.Extensions;
 using Cathedral.Utils;
 using Hydra.Config;
 using Hydra.Keyboard;
@@ -103,6 +104,7 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
             }
 
             _currentDesktop = NativeMethods.GetThreadDesktop(_hookThreadId);
+            WarnIfNotOnInputDesktop();
             _shield.Create(profile.DebugShield);
             ready.TrySetResult(true);
 
@@ -164,6 +166,23 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
     }
 
     public ValueTask DisposeAsync() { StopEventTap(); return ValueTask.CompletedTask; }
+
+    // SetWindowsHookEx is desktop-scoped, and it reports success whichever desktop we are on. Started
+    // outside the interactive session -- Task Scheduler, a service without CreateProcessAsUser, a
+    // sandboxed launcher -- Hydra therefore logs screens, relay and peers exactly as usual and simply
+    // receives no input, because the cursor is moving on a desktop our hooks do not cover.
+    private void WarnIfNotOnInputDesktop()
+    {
+        var ours = WindowsDesktop.Name(_currentDesktop);
+        var input = WindowsDesktop.InputDesktopName();
+        if (ours.Length == 0 || input.Length == 0 || ours.EqualsIgnoreCase(input)) return;
+
+        log.LogWarning(
+            "Input hooks are installed on desktop '{Ours}' but input is going to '{Input}' -- no keyboard or mouse " +
+            "events will arrive. Run Hydra as a Windows service (--service), which launches the session child on the " +
+            "interactive desktop, or start it from an interactive logon session.",
+            ours, input);
+    }
 
     // called on the hook thread — checks if the desktop has changed and reinstalls hooks if needed
     private void CheckHookHealth()
