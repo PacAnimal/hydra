@@ -32,6 +32,7 @@ public enum SpecialKey : uint
     ScrollLock = 0x01FF14,
     Pause = 0x01FF13,
     PrintScreen = 0x01FF61,  // XK_Print
+    Menu = 0x01FF67,         // XK_Menu — the Applications / context-menu key
 
     // keypad
     KP_Space = 0x01FF80,

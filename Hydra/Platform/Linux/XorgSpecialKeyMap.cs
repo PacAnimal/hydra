@@ -35,6 +35,7 @@ internal sealed class XorgSpecialKeyMap : SpecialKeyMap
         { XorgVirtualKey.ScrollLock, SpecialKey.ScrollLock },
         { XorgVirtualKey.Pause, SpecialKey.Pause },
         { XorgVirtualKey.Print, SpecialKey.PrintScreen },
+        { XorgVirtualKey.Menu, SpecialKey.Menu },
 
         // keypad
         { XorgVirtualKey.KP_Space, SpecialKey.KP_Space },

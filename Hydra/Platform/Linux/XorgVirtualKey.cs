@@ -29,6 +29,7 @@ internal static class XorgVirtualKey
     internal const ulong ScrollLock = 0xFF14;
     internal const ulong Pause = 0xFF13;
     internal const ulong Print = 0xFF61;
+    internal const ulong Menu = 0xFF67;
 
     // keypad
     internal const ulong KP_Space = 0xFF80;

@@ -51,6 +51,7 @@ public class SpecialKeyTests
             Assert.That((uint)SpecialKey.AltGr, Is.EqualTo(0x01FE03u));
             Assert.That((uint)SpecialKey.Pause, Is.EqualTo(0x01FF13u));        // XK_Pause
             Assert.That((uint)SpecialKey.PrintScreen, Is.EqualTo(0x01FF61u));  // XK_Print
+            Assert.That((uint)SpecialKey.Menu, Is.EqualTo(0x01FF67u));         // XK_Menu
         }
     }
 
@@ -58,6 +59,7 @@ public class SpecialKeyTests
     // both directions -- the reverse map is what the slave injects from.
     [TestCase(SpecialKey.Pause)]
     [TestCase(SpecialKey.PrintScreen)]
+    [TestCase(SpecialKey.Menu)]
     [TestCase(SpecialKey.ScrollLock)]
     public void PcExtraKeys_RoundTripThroughWindowsAndX11Maps(SpecialKey key)
     {

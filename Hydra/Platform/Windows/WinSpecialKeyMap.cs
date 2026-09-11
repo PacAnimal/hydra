@@ -82,6 +82,7 @@ internal sealed class WinSpecialKeyMap : SpecialKeyMap
         { WinVirtualKey.Scroll, SpecialKey.ScrollLock },
         { WinVirtualKey.Pause, SpecialKey.Pause },
         { WinVirtualKey.Snapshot, SpecialKey.PrintScreen },
+        { WinVirtualKey.Apps, SpecialKey.Menu },
 
         // media keys
         { WinVirtualKey.VolumeMute, SpecialKey.AudioMute },

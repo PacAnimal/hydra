@@ -101,6 +101,8 @@ public class HotkeyParsingTests
     [TestCase("PrintScreen", SpecialKey.PrintScreen)]
     [TestCase("Ctrl+Pause", SpecialKey.Pause)]
     [TestCase("Alt+PrintScreen", SpecialKey.PrintScreen)]
+    [TestCase("Menu", SpecialKey.Menu)]
+    [TestCase("Shift+Menu", SpecialKey.Menu)]
     public void PcExtraKeys_AreBindable(string spec, SpecialKey expected)
     {
         Assert.That(Parse(spec).Key, Is.EqualTo(expected));

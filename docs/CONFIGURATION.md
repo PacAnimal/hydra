@@ -351,7 +351,7 @@ Names are case-insensitive. Any of them combines with any modifiers.
 | Navigation | `Home` `End` `PageUp` `PageDown` `Left` `Right` `Up` `Down` |
 | Function | `F1` `F2` `F3` `F4` `F5` `F6` `F7` `F8` `F9` `F10` `F11` `F12` `F13` `F14` `F15` `F16` `F17` `F18` `F19` `F20` |
 | Locks | `CapsLock` `NumLock` `ScrollLock` |
-| PC extras | `Pause` `PrintScreen` |
+| PC extras | `Pause` `PrintScreen` `Menu` |
 | Numpad | `KP_0` `KP_1` `KP_2` `KP_3` `KP_4` `KP_5` `KP_6` `KP_7` `KP_8` `KP_9` `KP_Enter` `KP_Add` `KP_Subtract` `KP_Multiply` `KP_Divide` `KP_Decimal` `KP_Equal` `KP_Space` `KP_Tab` |
 | Media | `AudioMute` `AudioVolumeUp` `AudioVolumeDown` `AudioPlay` `AudioStop` `AudioNext` `AudioPrev` |
 | System | `BrightnessUp` `BrightnessDown` `Eject` `MissionControl` |
@@ -373,11 +373,12 @@ only way, since a literal space is stripped as padding:
 The modifier keys themselves (`Shift_L`, `Shift_R`, `Control_L`, `Control_R`, `Alt_L`, `Alt_R`, `Super_L`,
 `Super_R`, `AltGr`) are not bindable as the key of a chord — use them as modifiers instead.
 
-`Pause` and `PrintScreen` are captured and injected natively on Windows and Linux. Apple keyboards have neither
-key and macOS has no virtual keycode for them, so a macOS *slave* receives them as F15 and F13 — the codes a PC
-keyboard reports on a Mac — and a macOS *master* cannot originate them at all.
+`Menu` is the Applications or context-menu key found on PC keyboards.
 
-Not currently available: the `Menu`/`Apps` key. Open an issue if you want it.
+`Pause`, `PrintScreen` and `Menu` are captured and injected natively on Windows and Linux. Apple keyboards have
+none of them and macOS has no virtual keycode for any, so a macOS *master* cannot originate them. A macOS
+*slave* receives `Pause` and `PrintScreen` as F15 and F13 — the codes a PC keyboard reports on a Mac — and
+ignores `Menu`, which has no macOS equivalent at all.
 
 ## Clipboard sync
 

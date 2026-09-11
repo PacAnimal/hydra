@@ -90,6 +90,7 @@ internal static class WinVirtualKey
     internal const int Scroll = 0x91;      // scroll lock
     internal const int Pause = 0x13;
     internal const int Snapshot = 0x2C;    // print screen
+    internal const int Apps = 0x5D;        // applications / context menu
 
     // modifiers — left and right variants
     internal const int LShift = 0xA0;
