@@ -42,7 +42,11 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
         _layoutNotificationCenter = NativeMethods.CFNotificationCenterGetDistributedCenter();
         if (_layoutNotificationCenter != nint.Zero)
         {
-            _layoutChangeCallback = (_, _, _, _, _) => { _charToVk = BuildCharToVkMap(); };
+            _layoutChangeCallback = (_, _, _, _, _) =>
+            {
+                _charToVk = BuildCharToVkMap();
+                _asciiCharToVk = BuildCharToVkMap(asciiCapable: true);
+            };
             var name = NativeMethods.MakeNsString("com.apple.Carbon.TISNotifySelectedKeyboardInputSourceChanged");
             NativeMethods.CFNotificationCenterAddObserver(_layoutNotificationCenter, 1, _layoutChangeCallback, name, nint.Zero,
                 NativeMethods.CFNotificationSuspensionBehaviorDeliverImmediately);
@@ -66,6 +70,11 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
 
     // char produced by each vk code (no modifiers) — rebuilt whenever keyboard layout changes
     private volatile Dictionary<char, ushort> _charToVk = BuildCharToVkMap();
+
+    // same map from the Latin-capable layout, consulted only for shortcuts the active layout cannot
+    // express: a Cmd+C arriving while a Cyrillic layout is active has no 'c' in _charToVk, and unicode
+    // injection would deliver the char without the keypress an app needs to recognise the shortcut.
+    private volatile Dictionary<char, ushort> _asciiCharToVk = BuildCharToVkMap(asciiCapable: true);
 
     public void MoveMouse(int x, int y)
     {
@@ -199,7 +208,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
                     PostCgKey(charVk, isDown, flags);
             }
             else if (!isAltGr && (flags & (NativeMethods.KCGEventFlagMaskCommand | NativeMethods.KCGEventFlagMaskControl)) != 0 &&
-                     _charToVk.TryGetValue(MapNonLatinShortcut(ch), out charVk))
+                     _asciiCharToVk.TryGetValue(ch, out charVk))
             {
                 if (!PostHidKey(charVk, isDown))
                     PostCgKey(charVk, isDown, flags);
@@ -527,11 +536,13 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
     // first pass: unshifted (ucMods=0); second pass: shifted (ucMods=2).
     // unshifted mappings take priority. this ensures shifted chars like '%' map to their
     // base vk (0x17 for '5'), so shortcuts like Cmd+Shift+5 inject the correct virtual key.
-    private static unsafe Dictionary<char, ushort> BuildCharToVkMap()
+    private static unsafe Dictionary<char, ushort> BuildCharToVkMap(bool asciiCapable = false)
     {
         var map = new Dictionary<char, ushort>();
 
-        var layoutSource = NativeMethods.TISCopyCurrentKeyboardLayoutInputSource();
+        var layoutSource = asciiCapable
+            ? NativeMethods.TISCopyCurrentASCIICapableKeyboardLayoutInputSource()
+            : NativeMethods.TISCopyCurrentKeyboardLayoutInputSource();
         if (layoutSource == nint.Zero) return map;
 
         try
@@ -712,19 +723,6 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
         if (_hidConnection != 0)
             _ = NativeMethods.IOObjectRelease(_hidConnection);
     }
-
-    private static char MapNonLatinShortcut(char c) => c switch
-    {
-        'й' or 'Й' => 'q', 'ц' or 'Ц' => 'w', 'у' or 'У' => 'e', 'к' or 'К' => 'r', 'е' or 'Е' => 't',
-        'н' or 'Н' => 'y', 'г' or 'Г' => 'u', 'ш' or 'Ш' => 'i', 'щ' or 'Щ' => 'o', 'з' or 'З' => 'p',
-        'х' or 'Х' => '[', 'ъ' or 'Ъ' => ']', 'ф' or 'Ф' => 'a', 'ы' or 'Ы' or 'і' or 'І' => 's',
-        'в' or 'В' => 'd', 'а' or 'А' => 'f', 'п' or 'П' => 'g', 'р' or 'Р' => 'h', 'о' or 'О' => 'j',
-        'л' or 'Л' => 'k', 'д' or 'Д' => 'l', 'ж' or 'Ж' => ';', 'э' or 'Э' or 'є' or 'Є' => '\'',
-        'я' or 'Я' => 'z', 'ч' or 'Ч' => 'x', 'с' or 'С' => 'c', 'м' or 'М' => 'v', 'и' or 'И' => 'b',
-        'т' or 'Т' => 't', 'ь' or 'Ь' => 'm', 'б' or 'Б' => ',', 'ю' or 'Ю' => '.', 'ё' or 'Ё' => '`',
-        'ї' or 'Ї' => ']', 'ў' or 'Ў' => 'u', 'ґ' or 'Ґ' => '\\',
-        _ => c,
-    };
 
     private record MoveEvent(int EventType, int Button);
 }

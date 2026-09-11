@@ -359,6 +359,11 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial nint TISCopyCurrentKeyboardLayoutInputSource();
 
+    // the Latin-capable layout macOS keeps alongside a non-Latin one, for resolving shortcut chars
+    [LibraryImport(Carbon)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint TISCopyCurrentASCIICapableKeyboardLayoutInputSource();
+
     [LibraryImport(Carbon)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial nint TISGetInputSourceProperty(nint inputSource, nint propertyKey);

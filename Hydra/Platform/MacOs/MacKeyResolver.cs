@@ -229,8 +229,11 @@ internal sealed class MacKeyResolver
                 classified = KeyResolver.ClassifyChar((char)chars[0]);
             }
 
-            if (isCommand && classified.Ch.HasValue && classified.Ch.Value > 0x7F)
-                classified = KeyResolver.ClassifyChar(MapMacShortcutAscii(vkCode, classified.Ch.Value));
+            // a shortcut resolved on a non-Latin layout carries a char no slave can act on. re-resolve the
+            // same physical key through the Latin-capable layout macOS keeps alongside it, so the slave
+            // receives the base ASCII the user's muscle memory means (Cmd+С on Cyrillic → Cmd+C).
+            if (isCommand && classified.Ch is > (char)0x7F && TranslateInAsciiLayout(vkCode) is { } asciiCh)
+                classified = KeyResolver.ClassifyChar(asciiCh);
 
             if (!classified.Ch.HasValue && !classified.Key.HasValue) return null;
 
@@ -284,18 +287,43 @@ internal sealed class MacKeyResolver
     internal static bool DetectAltGr(char? character, bool isCommand, bool optionHeld) =>
         optionHeld && !isCommand && character.HasValue;
 
-    // maps macOS ANSI keycodes to base ASCII keys when a shortcut modifier (Command/Control) is held on a non-Latin layout
-    private static char MapMacShortcutAscii(int vkCode, char rawChar) => vkCode switch
+    // resolves a physical key through the Latin-capable layout instead of the active one.
+    // returns null when there is no such layout or the key yields nothing printable there.
+    private static unsafe char? TranslateInAsciiLayout(int vkCode)
     {
-        0x00 => 'a', 0x0B => 'b', 0x08 => 'c', 0x02 => 'd', 0x0E => 'e', 0x03 => 'f',
-        0x05 => 'g', 0x04 => 'h', 0x22 => 'i', 0x26 => 'j', 0x28 => 'k', 0x25 => 'l',
-        0x2E => 'm', 0x2D => 'n', 0x1F => 'o', 0x23 => 'p', 0x0C => 'q', 0x0F => 'r',
-        0x01 => 's', 0x11 => 't', 0x20 => 'u', 0x09 => 'v', 0x0D => 'w', 0x07 => 'x',
-        0x10 => 'y', 0x06 => 'z',
-        0x12 => '1', 0x13 => '2', 0x14 => '3', 0x15 => '4', 0x17 => '5',
-        0x16 => '6', 0x1A => '7', 0x1C => '8', 0x19 => '9', 0x1D => '0',
-        0x29 => ';', 0x18 => '=', 0x2B => ',', 0x1B => '-', 0x2F => '.',
-        0x2C => '/', 0x32 => '`', 0x21 => '[', 0x2A => '\\', 0x1E => ']', 0x27 => '\'',
-        _ => rawChar,
-    };
+        var source = NativeMethods.TISCopyCurrentASCIICapableKeyboardLayoutInputSource();
+        if (source == nint.Zero) return null;
+
+        try
+        {
+            var layoutData = NativeMethods.TISGetInputSourceProperty(source, TisPropertyUnicodeKeyLayoutData);
+            if (layoutData == nint.Zero) return null;
+
+            var layoutPtr = NativeMethods.CFDataGetBytePtr(layoutData);
+            if (layoutPtr == nint.Zero) return null;
+
+            // level 0 with dead keys suppressed: the unmodified base character of the key
+            uint deadKeyState = 0;
+            ushort* chars = stackalloc ushort[2];
+            var status = NativeMethods.UCKeyTranslate(
+                layoutPtr,
+                (ushort)(vkCode & 0xFFu),
+                NativeMethods.KUCKeyActionDown,
+                0,
+                NativeMethods.LMGetKbdType(),
+                1,
+                ref deadKeyState,
+                2,
+                out var count,
+                chars);
+
+            if (status != 0 || count == 0) return null;
+            var ch = (char)chars[0];
+            return ch >= 0x20 && ch <= 0x7F ? ch : null;
+        }
+        finally
+        {
+            NativeMethods.CFRelease(source);
+        }
+    }
 }

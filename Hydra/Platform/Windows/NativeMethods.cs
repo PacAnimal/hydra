@@ -266,6 +266,16 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     internal static partial short VkKeyScanW(ushort ch);
 
+    // same as VkKeyScanW but against a named layout instead of the calling thread's active one
+    [LibraryImport(User32, EntryPoint = "VkKeyScanExW")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial short VkKeyScanExW(ushort ch, nint dwhkl);
+
+    // enumerates the layouts loaded in this session; pass a null buffer to query the count
+    [LibraryImport(User32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static unsafe partial int GetKeyboardLayoutList(int nBuff, nint* lpList);
+
     // ToUnicodeEx wFlags bit 2: do not change the kernel keyboard state (Win10 1607+). dead keys still
     // resolve (return -1 with the spacing form in the buffer) but are never armed/consumed in the global
     // buffer — Hydra tracks dead keys itself, so kernel state must stay untouched to avoid cross-keypress

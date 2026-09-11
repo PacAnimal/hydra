@@ -63,7 +63,7 @@ public class HydraConfig
     public EmbeddedStyxServerConfig? EmbeddedStyxServer { get; init; }  // run an embedded Styx server on this machine
 
     public bool HideCursor { get; init; } = false;  // master only — hide cursor on inactivity
-    public bool RemoteOnly { get; init; } = false;
+    public bool RemoteOnly { get; init; }
     public bool SyncScreensaver { get; init; } = true;
     public bool ScreenLockPropagation { get; init; } = false;  // master only (Mac/Windows) — propagate machine lock to connected slaves
     public bool AccelerateMouseWheel { get; init; } = true;

@@ -19,12 +19,18 @@ internal sealed class XorgKeyResolver
 
     internal KeyEvent?[]? Resolve(int evType, uint keycode, uint state, nint display)
     {
-        // resolve using the active layout: group from Xkb state bits, level from Shift/AltGr.
-        // in shortcut context (Ctrl/Super held), fall back to base group 0 so non-Latin layouts resolve ASCII keys.
+        // resolve using the active layout: group from Xkb state bits, level from Shift/AltGr
         var isShortcut = (state & (NativeMethods.Mod4Mask | NativeMethods.ControlMask)) != 0;
-        var group = (isShortcut && ExtractGroup(state) != 0) ? 0 : ExtractGroup(state);
+        var group = ExtractGroup(state);
         var level = ComputeLevel(state);
         var keysym = NativeMethods.XkbKeycodeToKeysym(display, keycode, group, level);
+
+        // shortcut on a non-Latin group: re-resolve in group 0 so the slave receives a base ASCII char
+        // it can turn into a keypress. gated on the keysym actually being non-ASCII — a second *Latin*
+        // group (Dvorak, AZERTY) keeps its own mapping, so Ctrl+J there stays Ctrl+J and does not
+        // silently become Ctrl+C. keysyms at 0xFF00+ (F-keys, modifiers) are group-independent.
+        if (isShortcut && group != 0 && keysym is > 0x7F and < 0xFF00)
+            keysym = NativeMethods.XkbKeycodeToKeysym(display, keycode, 0, level);
 
         // fall back to base keysym (0,0) for modifier keys and unmapped levels
         if (keysym == 0)

@@ -201,7 +201,7 @@ public class WinKeyResolverCharTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(charEvent!.Character, Is.EqualTo(expectedChar));
-            Assert.That((charEvent.Modifiers & KeyModifiers.Control) != 0, Is.True);
+            Assert.That(charEvent.Modifiers.HasFlag(KeyModifiers.Control), Is.True);
         }
     }
 }
