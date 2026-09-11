@@ -88,6 +88,8 @@ internal static class WinVirtualKey
     internal const int Capital = 0x14;     // caps lock
     internal const int Numlock = 0x90;
     internal const int Scroll = 0x91;      // scroll lock
+    internal const int Pause = 0x13;
+    internal const int Snapshot = 0x2C;    // print screen
 
     // modifiers — left and right variants
     internal const int LShift = 0xA0;

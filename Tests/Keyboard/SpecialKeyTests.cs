@@ -1,4 +1,6 @@
 using Hydra.Keyboard;
+using Hydra.Platform.Linux;
+using Hydra.Platform.Windows;
 
 namespace Tests.Keyboard;
 
@@ -47,6 +49,28 @@ public class SpecialKeyTests
             Assert.That((uint)SpecialKey.Shift_L, Is.EqualTo(0x01FFE1u));
             Assert.That((uint)SpecialKey.Delete, Is.EqualTo(0x01FFFFu));
             Assert.That((uint)SpecialKey.AltGr, Is.EqualTo(0x01FE03u));
+            Assert.That((uint)SpecialKey.Pause, Is.EqualTo(0x01FF13u));        // XK_Pause
+            Assert.That((uint)SpecialKey.PrintScreen, Is.EqualTo(0x01FF61u));  // XK_Print
+        }
+    }
+
+    // Pause/PrintScreen were added later than the rest, so pin that both platform maps carry them in
+    // both directions -- the reverse map is what the slave injects from.
+    [TestCase(SpecialKey.Pause)]
+    [TestCase(SpecialKey.PrintScreen)]
+    [TestCase(SpecialKey.ScrollLock)]
+    public void PcExtraKeys_RoundTripThroughWindowsAndX11Maps(SpecialKey key)
+    {
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(WinSpecialKeyMap.Instance.Reverse.TryGetValue(key, out var vk), Is.True, $"no Windows VK for {key}");
+            Assert.That(WinSpecialKeyMap.Instance.TryGet(vk, out var backFromVk) ? backFromVk : default, Is.EqualTo(key));
+
+            Assert.That(XorgSpecialKeyMap.Instance.Reverse.TryGetValue(key, out var keysym), Is.True, $"no X11 keysym for {key}");
+            Assert.That(XorgSpecialKeyMap.Instance.TryGet(keysym, out var backFromKeysym) ? backFromKeysym : default, Is.EqualTo(key));
+
+            // the enum encodes the X11 keysym, so the two must agree
+            Assert.That(keysym, Is.EqualTo((ulong)key & 0xFFFF), $"{key} disagrees with its own keysym encoding");
         }
     }
 

@@ -97,6 +97,15 @@ public class HotkeyParsingTests
             $"SpecialKey.{name} can be bound but is missing from the Bindable keys list in docs/CONFIGURATION.md");
     }
 
+    [TestCase("Pause", SpecialKey.Pause)]
+    [TestCase("PrintScreen", SpecialKey.PrintScreen)]
+    [TestCase("Ctrl+Pause", SpecialKey.Pause)]
+    [TestCase("Alt+PrintScreen", SpecialKey.PrintScreen)]
+    public void PcExtraKeys_AreBindable(string spec, SpecialKey expected)
+    {
+        Assert.That(Parse(spec).Key, Is.EqualTo(expected));
+    }
+
     [TestCase("Ctrl+ScrollLock", SpecialKey.ScrollLock)]
     [TestCase("ScrollLock", SpecialKey.ScrollLock)]
     [TestCase("NumLock", SpecialKey.NumLock)]

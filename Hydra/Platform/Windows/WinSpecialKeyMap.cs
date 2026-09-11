@@ -80,6 +80,8 @@ internal sealed class WinSpecialKeyMap : SpecialKeyMap
         { WinVirtualKey.Capital, SpecialKey.CapsLock },
         { WinVirtualKey.Numlock, SpecialKey.NumLock },
         { WinVirtualKey.Scroll, SpecialKey.ScrollLock },
+        { WinVirtualKey.Pause, SpecialKey.Pause },
+        { WinVirtualKey.Snapshot, SpecialKey.PrintScreen },
 
         // media keys
         { WinVirtualKey.VolumeMute, SpecialKey.AudioMute },

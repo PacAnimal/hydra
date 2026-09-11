@@ -2,10 +2,10 @@
 namespace Hydra.Keyboard;
 
 // named identifiers for non-printable keys.
-// backing values encode the X11 MISCELLANY keysym with a flag bit: (keysym | 0x01000000).
-// this keeps all values above the Unicode maximum (0x10FFFF), making them easy to
-// distinguish from char/unicode codepoints. on Linux, a MISCELLANY keysym maps
-// mechanically: (SpecialKey)(keysym | 0x01000000).
+// values in the 0x01FExx/0x01FFxx block are an X11 MISCELLANY keysym with bit 16 set
+// (keysym | 0x010000), so XK_BackSpace 0xFF08 becomes 0x01FF08 and the keysym is the low
+// 16 bits. media, platform and editing intents (0xE0xx/0xE1xx) are Hydra's own numbering
+// and reach a keysym or VK only through a per-platform map.
 public enum SpecialKey : uint
 {
     // tty
@@ -27,9 +27,11 @@ public enum SpecialKey : uint
     Insert = 0x01FF63,
 
     // misc
-    AltGr = 0x01FE03,    // ISO_Level3_Shift (keysym 0xFE03 | 0x01000000)
+    AltGr = 0x01FE03,    // ISO_Level3_Shift (keysym 0xFE03 | 0x010000)
     NumLock = 0x01FF7F,
     ScrollLock = 0x01FF14,
+    Pause = 0x01FF13,
+    PrintScreen = 0x01FF61,  // XK_Print
 
     // keypad
     KP_Space = 0x01FF80,

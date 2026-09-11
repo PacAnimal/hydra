@@ -273,16 +273,9 @@ public sealed class XorgOutputHandler : IPlatformOutput, ICursor
 
     private static ulong SpecialKeyToKeysym(SpecialKey key)
     {
-        // media keys and other non-MISCELLANY keys: reverse map via XorgSpecialKeyMap
-        if (XorgSpecialKeyMap.Instance.Reverse.TryGetValue(key, out var keysym))
-            return keysym;
-
-        // MISCELLANY keys: SpecialKey value encodes (keysym | 0x01000000), strip the flag
-        var raw = (uint)key;
-        if ((raw & 0xFF000000u) == 0x01000000u)
-            return raw & 0x00FFFFFFu;
-
-        return 0;
+        // every key Hydra can inject on X11 is in the map, including the MISCELLANY block whose enum
+        // values already carry the keysym; 0 means "no keysym", which the caller treats as unsupported
+        return XorgSpecialKeyMap.Instance.Reverse.TryGetValue(key, out var keysym) ? keysym : 0;
     }
 
     private void SyncLockState(KeyModifiers mods)

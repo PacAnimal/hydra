@@ -93,14 +93,18 @@ internal sealed class MacSpecialKeyMap : SpecialKeyMap
     // output-only overrides: keys that need a different VK (and optional extra flags) when synthesizing output.
     // MoveToBeginningOfLine/MoveToEndOfLine are sent by Win/Linux masters in place of Home/End.
     // on Mac, line start/end is Command+Left/Right, not the native Home/End keys (Fn+Left/Right = document nav).
-    // ScrollLock: F14 is the Mac equivalent (no dedicated ScrollLock key on Apple keyboards).
+    // ScrollLock/PrintScreen/Pause: Apple keyboards have none of these, and macOS has no virtual keycode
+    // for them. A PC keyboard attached to a Mac reports them as F13/F14/F15, so injection follows that
+    // convention. Nothing maps the other way: on a Mac master F13-F15 are genuinely F13-F15.
     // KP_Tab/KP_Space: no distinct numpad VK on Mac — map to regular Tab/Space.
     internal static readonly IReadOnlyDictionary<SpecialKey, (ushort Vk, ulong ExtraFlags)> OutputOverrides =
         new Dictionary<SpecialKey, (ushort Vk, ulong ExtraFlags)>
         {
             { SpecialKey.MoveToBeginningOfLine, ((ushort)MacVirtualKey.LeftArrow,  NativeMethods.KCGEventFlagMaskCommand) },
             { SpecialKey.MoveToEndOfLine,       ((ushort)MacVirtualKey.RightArrow, NativeMethods.KCGEventFlagMaskCommand) },
+            { SpecialKey.PrintScreen,           ((ushort)MacVirtualKey.F13, 0UL) },
             { SpecialKey.ScrollLock,            ((ushort)MacVirtualKey.F14, 0UL) },
+            { SpecialKey.Pause,                 ((ushort)MacVirtualKey.F15, 0UL) },
             { SpecialKey.KP_Tab,                ((ushort)MacVirtualKey.Tab, 0UL) },
             { SpecialKey.KP_Space,              ((ushort)MacVirtualKey.Space, 0UL) },
         };
