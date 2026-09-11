@@ -6,6 +6,7 @@ namespace Tests.Setup;
 
 public static class TestLog
 {
+    internal static readonly string SolutionRoot = FindSolutionRoot(AppContext.BaseDirectory);
     public static readonly string LogFilePath = ComputeLogFilePath();
     public static readonly ILoggerFactory Factory = CreateTestLoggerFactory();
 
@@ -17,8 +18,6 @@ public static class TestLog
         Directory.CreateDirectory(outputDir);
         return Path.Combine(outputDir, $"{unixTime}.log");
     }
-
-    internal static string SolutionRoot => FindSolutionRoot(AppContext.BaseDirectory);
 
     private static string FindSolutionRoot(string startPath)
     {

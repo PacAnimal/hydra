@@ -8,6 +8,9 @@ namespace Tests.Config;
 [TestFixture]
 public class HotkeyParsingTests
 {
+    private static readonly string ConfigurationDocs =
+        File.ReadAllText(Path.Combine(TestLog.SolutionRoot, "docs", "CONFIGURATION.md"));
+
     private static HotkeyBinding Parse(string spec)
     {
         Assert.That(HotkeyBinding.TryParse(spec, out var binding, out var error), Is.True, $"'{spec}' should parse but: {error}");
@@ -90,8 +93,7 @@ public class HotkeyParsingTests
     [TestCaseSource(nameof(BindableSpecialKeys))]
     public void EveryBindableSpecialKey_IsDocumented(string name)
     {
-        var docs = File.ReadAllText(Path.Combine(TestLog.SolutionRoot, "docs", "CONFIGURATION.md"));
-        Assert.That(docs, Does.Contain($"`{name}`"),
+        Assert.That(ConfigurationDocs, Does.Contain($"`{name}`"),
             $"SpecialKey.{name} can be bound but is missing from the Bindable keys list in docs/CONFIGURATION.md");
     }
 
