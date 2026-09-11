@@ -57,10 +57,18 @@ internal static class KeyResolver
         where TKey : notnull
     {
         keyDownId.Remove(key, out var downVal);
-        if (downVal?.Ch.HasValue == true) return KeyEvent.Char(KeyEventType.KeyUp, downVal.Ch.Value, mods);
-        if (downVal?.Key.HasValue == true) return KeyEvent.Special(KeyEventType.KeyUp, downVal.Key.Value, mods);
+        if (downVal?.Ch.HasValue == true) return KeyEvent.Char(KeyEventType.KeyUp, downVal.Ch.Value, mods, downVal.VkCode);
+        if (downVal?.Key.HasValue == true) return KeyEvent.Special(KeyEventType.KeyUp, downVal.Key.Value, mods, downVal.VkCode);
+        if (downVal?.VkCode.HasValue == true) return new KeyEvent(KeyEventType.KeyUp, mods) { VkCode = downVal.VkCode };
         return null;
     }
 }
 
-internal record CharClassification(char? Ch, SpecialKey? Key);
+internal record CharClassification(char? Ch, SpecialKey? Key, ushort? VkCode = null)
+{
+    internal void Deconstruct(out char? ch, out SpecialKey? key)
+    {
+        ch = Ch;
+        key = Key;
+    }
+}

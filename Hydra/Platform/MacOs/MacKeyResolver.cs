@@ -229,6 +229,9 @@ internal sealed class MacKeyResolver
                 classified = KeyResolver.ClassifyChar((char)chars[0]);
             }
 
+            if (isCommand && classified.Ch.HasValue && classified.Ch.Value > 0x7F)
+                classified = KeyResolver.ClassifyChar(MapMacShortcutAscii(vkCode, classified.Ch.Value));
+
             if (!classified.Ch.HasValue && !classified.Key.HasValue) return null;
 
             // detect AltGr: option was held and produced a printable character (not a keyboard shortcut)
@@ -281,4 +284,18 @@ internal sealed class MacKeyResolver
     internal static bool DetectAltGr(char? character, bool isCommand, bool optionHeld) =>
         optionHeld && !isCommand && character.HasValue;
 
+    // maps macOS ANSI keycodes to base ASCII keys when a shortcut modifier (Command/Control) is held on a non-Latin layout
+    private static char MapMacShortcutAscii(int vkCode, char rawChar) => vkCode switch
+    {
+        0x00 => 'a', 0x0B => 'b', 0x08 => 'c', 0x02 => 'd', 0x0E => 'e', 0x03 => 'f',
+        0x05 => 'g', 0x04 => 'h', 0x22 => 'i', 0x26 => 'j', 0x28 => 'k', 0x25 => 'l',
+        0x2E => 'm', 0x2D => 'n', 0x1F => 'o', 0x23 => 'p', 0x0C => 'q', 0x0F => 'r',
+        0x01 => 's', 0x11 => 't', 0x20 => 'u', 0x09 => 'v', 0x0D => 'w', 0x07 => 'x',
+        0x10 => 'y', 0x06 => 'z',
+        0x12 => '1', 0x13 => '2', 0x14 => '3', 0x15 => '4', 0x17 => '5',
+        0x16 => '6', 0x1A => '7', 0x1C => '8', 0x19 => '9', 0x1D => '0',
+        0x29 => ';', 0x18 => '=', 0x2B => ',', 0x1B => '-', 0x2F => '.',
+        0x2C => '/', 0x32 => '`', 0x21 => '[', 0x2A => '\\', 0x1E => ']', 0x27 => '\'',
+        _ => rawChar,
+    };
 }

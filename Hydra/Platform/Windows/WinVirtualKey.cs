@@ -26,6 +26,25 @@ internal static class WinVirtualKey
     internal const int LWin = 0x5B;
     internal const int RWin = 0x5C;
 
+    // letters and digits
+    internal const int A = 0x41;
+    internal const int Z = 0x5A;
+    internal const int D0 = 0x30;
+    internal const int D9 = 0x39;
+
+    // OEM punctuation
+    internal const int Oem1 = 0xBA;      // ;:
+    internal const int OemPlus = 0xBB;   // =+
+    internal const int OemComma = 0xBC;  // ,<
+    internal const int OemMinus = 0xBD;  // -_
+    internal const int OemPeriod = 0xBE; // .>
+    internal const int Oem2 = 0xBF;      // /?
+    internal const int Oem3 = 0xC0;      // `~
+    internal const int Oem4 = 0xDB;      // [{
+    internal const int Oem5 = 0xDC;      // \|
+    internal const int Oem6 = 0xDD;      // ]}
+    internal const int Oem7 = 0xDE;      // '"
+
     // numpad
     internal const int Numpad0 = 0x60;
     internal const int Numpad1 = 0x61;

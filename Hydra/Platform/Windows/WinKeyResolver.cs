@@ -93,9 +93,9 @@ internal sealed class WinKeyResolver
         {
             var kpKey = (SpecialKey)((uint)SpecialKey.KP_0 + (vk - WinVirtualKey.Numpad0));
             if (_keyDownId.ContainsKey(vk))
-                return Combine(flushed, null, KeyEvent.Special(KeyEventType.KeyDown, kpKey, mods) with { IsRepeat = true });
-            _keyDownId[vk] = new CharClassification(null, kpKey);
-            return Combine(flushed, FlushPendingDeadKey(), KeyEvent.Special(KeyEventType.KeyDown, kpKey, mods));
+                return Combine(flushed, null, KeyEvent.Special(KeyEventType.KeyDown, kpKey, mods, (ushort)vk) with { IsRepeat = true });
+            _keyDownId[vk] = new CharClassification(null, kpKey, (ushort)vk);
+            return Combine(flushed, FlushPendingDeadKey(), KeyEvent.Special(KeyEventType.KeyDown, kpKey, mods, (ushort)vk));
         }
         // numpad decimal/separator: use ToUnicodeEx for locale-correct char ('.' on US, ',' on European layouts)
         if (vk == WinVirtualKey.Decimal)
@@ -105,8 +105,8 @@ internal sealed class WinKeyResolver
             var decEvent = ResolveCharacter(vk, info.scanCode, info.flags, mods);
             // always store (even sentinel) so auto-repeat is suppressed on subsequent events
             _keyDownId[vk] = decEvent is not null
-                ? new CharClassification(decEvent[0].Character, decEvent[0].Key)
-                : new CharClassification(null, null);
+                ? new CharClassification(decEvent[0].Character, decEvent[0].Key, (ushort)vk)
+                : new CharClassification(null, null, (ushort)vk);
             return Combine(flushed, FlushPendingDeadKey(), decEvent);
         }
 
@@ -114,9 +114,9 @@ internal sealed class WinKeyResolver
         if (vk == WinVirtualKey.Return && (info.flags & NativeMethods.LLKHF_EXTENDED) != 0)
         {
             if (_keyDownId.ContainsKey(KpEnterTrackingVk))
-                return Combine(flushed, null, KeyEvent.Special(KeyEventType.KeyDown, SpecialKey.KP_Enter, mods) with { IsRepeat = true });
-            _keyDownId[KpEnterTrackingVk] = new CharClassification(null, SpecialKey.KP_Enter);
-            return Combine(flushed, FlushPendingDeadKey(), KeyEvent.Special(KeyEventType.KeyDown, SpecialKey.KP_Enter, mods));
+                return Combine(flushed, null, KeyEvent.Special(KeyEventType.KeyDown, SpecialKey.KP_Enter, mods, (ushort)vk) with { IsRepeat = true });
+            _keyDownId[KpEnterTrackingVk] = new CharClassification(null, SpecialKey.KP_Enter, (ushort)vk);
+            return Combine(flushed, FlushPendingDeadKey(), KeyEvent.Special(KeyEventType.KeyDown, SpecialKey.KP_Enter, mods, (ushort)vk));
         }
 
         if (WinSpecialKeyMap.Instance.TryGet((ulong)vk, out var specialKey))
@@ -129,7 +129,7 @@ internal sealed class WinKeyResolver
             {
                 // modifiers don't repeat-type; other held specials (arrows, F-keys) forward a repeat
                 if (specialKey.IsModifier()) return Events(flushed, null);
-                return Combine(flushed, null, KeyEvent.Special(KeyEventType.KeyDown, specialKey, mods) with { IsRepeat = true });
+                return Combine(flushed, null, KeyEvent.Special(KeyEventType.KeyDown, specialKey, mods, (ushort)vk) with { IsRepeat = true });
             }
             // modifier keys are transparent to dead key composition (Shift while dead key pending stays armed).
             // non-modifier special keys (Tab, Escape, arrows, F-keys, etc.) abort composition: flush spacing form.
@@ -142,8 +142,8 @@ internal sealed class WinKeyResolver
                 return Combine(flushed, flushedDead, (KeyEvent?)null);
             }
 
-            _keyDownId[vk] = new CharClassification(null, specialKey);
-            return Combine(flushed, flushedDead, KeyEvent.Special(KeyEventType.KeyDown, specialKey, mods));
+            _keyDownId[vk] = new CharClassification(null, specialKey, (ushort)vk);
+            return Combine(flushed, flushedDead, KeyEvent.Special(KeyEventType.KeyDown, specialKey, mods, (ushort)vk));
         }
 
         // character key auto-repeat: re-resolve with current modifier state and forward as a repeat
@@ -300,11 +300,14 @@ internal sealed class WinKeyResolver
             }
         }
 
+        if ((mods & (KeyModifiers.Control | KeyModifiers.Super)) != 0 && rawChar > 0x7F)
+            rawChar = MapShortcutAscii(vk, rawChar);
+
         var classified = KeyResolver.ClassifyChar(rawChar);
         if (classified.Ch.HasValue)
-            return [KeyEvent.Char(KeyEventType.KeyDown, classified.Ch.Value, mods) with { IsRepeat = true }];
+            return [KeyEvent.Char(KeyEventType.KeyDown, classified.Ch.Value, mods, (ushort)vk) with { IsRepeat = true }];
         if (classified.Key.HasValue)
-            return [KeyEvent.Special(KeyEventType.KeyDown, classified.Key.Value, mods) with { IsRepeat = true }];
+            return [KeyEvent.Special(KeyEventType.KeyDown, classified.Key.Value, mods, (ushort)vk) with { IsRepeat = true }];
         return null;
     }
 
@@ -379,6 +382,9 @@ internal sealed class WinKeyResolver
             }
         }
 
+        if ((mods & (KeyModifiers.Control | KeyModifiers.Super)) != 0 && rawChar > 0x7F)
+            rawChar = MapShortcutAscii(vk, rawChar);
+
         var classified = KeyResolver.ClassifyChar(rawChar);
         if (!classified.Ch.HasValue && !classified.Key.HasValue) return null;
 
@@ -395,12 +401,12 @@ internal sealed class WinKeyResolver
 
         if (ch.HasValue)
         {
-            _keyDownId[vk] = new CharClassification(ch, null);
-            return [KeyEvent.Char(KeyEventType.KeyDown, ch.Value, mods)];
+            _keyDownId[vk] = new CharClassification(ch, null, (ushort)vk);
+            return [KeyEvent.Char(KeyEventType.KeyDown, ch.Value, mods, (ushort)vk)];
         }
 
-        _keyDownId[vk] = new CharClassification(null, classified.Key);
-        return [KeyEvent.Special(KeyEventType.KeyDown, classified.Key!.Value, mods)];
+        _keyDownId[vk] = new CharClassification(null, classified.Key, (ushort)vk);
+        return [KeyEvent.Special(KeyEventType.KeyDown, classified.Key!.Value, mods, (ushort)vk)];
     }
 
     // yields key-up events for every currently held key; called before Reset() on desktop change
@@ -411,9 +417,11 @@ internal sealed class WinKeyResolver
         foreach (var (_, classification) in _keyDownId)
         {
             if (classification.Ch.HasValue)
-                yield return KeyEvent.Char(KeyEventType.KeyUp, classification.Ch.Value, mods);
+                yield return KeyEvent.Char(KeyEventType.KeyUp, classification.Ch.Value, mods, classification.VkCode);
             else if (classification.Key.HasValue)
-                yield return KeyEvent.Special(KeyEventType.KeyUp, classification.Key.Value, mods);
+                yield return KeyEvent.Special(KeyEventType.KeyUp, classification.Key.Value, mods, classification.VkCode);
+            else if (classification.VkCode.HasValue)
+                yield return new KeyEvent(KeyEventType.KeyUp, mods) { VkCode = classification.VkCode };
             // sentinel (null, null) = dead key placeholder → no event needed
         }
     }
@@ -507,4 +515,23 @@ internal sealed class WinKeyResolver
             or WinVirtualKey.LControl or WinVirtualKey.RControl
             or WinVirtualKey.LMenu or WinVirtualKey.RMenu
             or WinVirtualKey.LWin or WinVirtualKey.RWin;
+
+    // maps non-Latin layout characters back to their base ASCII keys during shortcut combinations (Ctrl/Super held).
+    private static char MapShortcutAscii(int vk, char rawChar) => vk switch
+    {
+        >= WinVirtualKey.A and <= WinVirtualKey.Z => (char)('a' + (vk - WinVirtualKey.A)),
+        >= WinVirtualKey.D0 and <= WinVirtualKey.D9 => (char)('0' + (vk - WinVirtualKey.D0)),
+        WinVirtualKey.Oem1 => ';',
+        WinVirtualKey.OemPlus => '=',
+        WinVirtualKey.OemComma => ',',
+        WinVirtualKey.OemMinus => '-',
+        WinVirtualKey.OemPeriod => '.',
+        WinVirtualKey.Oem2 => '/',
+        WinVirtualKey.Oem3 => '`',
+        WinVirtualKey.Oem4 => '[',
+        WinVirtualKey.Oem5 => '\\',
+        WinVirtualKey.Oem6 => ']',
+        WinVirtualKey.Oem7 => '\'',
+        _ => rawChar,
+    };
 }

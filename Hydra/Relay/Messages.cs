@@ -56,7 +56,7 @@ public record SlaveLogMessage(int Level, string Category, string Message, string
 // preference: when set, Mac slaves inject repeated characters via keycode-less unicode (avoiding the
 // press-and-hold accent popup) rather than re-pressing the physical key. travelling per-keypress lets a
 // shared slave honour each master's own preference.
-public record KeyEventMessage(KeyEventType Type, KeyModifiers Modifiers, char? Character, SpecialKey? Key, bool IsRepeat = false, bool UnicodeKeyRepeat = true);
+public record KeyEventMessage(KeyEventType Type, KeyModifiers Modifiers, char? Character, SpecialKey? Key, bool IsRepeat = false, bool UnicodeKeyRepeat = true, ushort? VkCode = null);
 public record MouseButtonMessage(MouseButton Button, bool IsPressed);
 public record MouseScrollMessage(short XDelta, short YDelta);
 public record EnterScreenMessage(string Screen, int X, int Y, int Width, int Height);

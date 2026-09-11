@@ -19,8 +19,10 @@ internal sealed class XorgKeyResolver
 
     internal KeyEvent?[]? Resolve(int evType, uint keycode, uint state, nint display)
     {
-        // resolve using the active layout: group from Xkb state bits, level from Shift/AltGr
-        var group = ExtractGroup(state);
+        // resolve using the active layout: group from Xkb state bits, level from Shift/AltGr.
+        // in shortcut context (Ctrl/Super held), fall back to base group 0 so non-Latin layouts resolve ASCII keys.
+        var isShortcut = (state & (NativeMethods.Mod4Mask | NativeMethods.ControlMask)) != 0;
+        var group = (isShortcut && ExtractGroup(state) != 0) ? 0 : ExtractGroup(state);
         var level = ComputeLevel(state);
         var keysym = NativeMethods.XkbKeycodeToKeysym(display, keycode, group, level);
 
@@ -76,7 +78,6 @@ internal sealed class XorgKeyResolver
         // shortcut context (Ctrl/Super held): if the base key is a dead key, clear any pending dead
         // state and emit the spacing form (e.g. Ctrl+` → `) so the shortcut fires with the correct base char.
         // dead keys with no spacing form (e.g. XK_dead_belowdot) are dropped to avoid producing garbage.
-        var isShortcut = (state & (NativeMethods.Mod4Mask | NativeMethods.ControlMask)) != 0;
         if (isShortcut && DeadKeyLookup(keysym) is { Combining: not '\0' } deadShortcut)
         {
             // check spacing form before clearing pending state — a dead key with no spacing form (e.g.
