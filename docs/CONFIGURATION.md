@@ -325,15 +325,8 @@ and `L+Ctrl+Alt+Super` are the same binding. Modifier names, with aliases:
 | Super (⌘ / Win) | `super`, `win`, `windows`, `cmd`, `command`, `meta` |
 | AltGr | `altgr` |
 
-**The key itself** is either a single character (`l`, `4`, `/`) or one of these names:
-
-`BackSpace` `Tab` `Return` `Escape` `Delete` `Home` `End` `Insert` `PageUp` `PageDown`
-`Left` `Right` `Up` `Down` `F1`–`F20` `ScrollLock` `NumLock` `CapsLock`
-`KP_0`–`KP_9` `KP_Enter` `KP_Add` `KP_Subtract` `KP_Multiply` `KP_Divide` `KP_Decimal` `KP_Equal` `KP_Space` `KP_Tab`
-`AudioMute` `AudioVolumeUp` `AudioVolumeDown` `AudioPlay` `AudioStop` `AudioNext` `AudioPrev`
-`BrightnessUp` `BrightnessDown` `Eject` `MissionControl` `MoveToBeginningOfLine` `MoveToEndOfLine`
-
-To bind the `+` key itself, write it last: `Ctrl+Alt++`.
+**The key itself** is either a single character (`l`, `4`, `/`, `å`) or one of the names in
+[Bindable keys](#bindable-keys) below — so `Ctrl+Home`, `Alt+PageDown`, `Win+F1` and `Ctrl+Shift+End` all work.
 
 **Two rules, both enforced at startup:**
 
@@ -347,6 +340,40 @@ reason. `ScrollLock`, `NumLock` and `CapsLock` can — they are toggles, and bin
 A binding Hydra cannot parse is logged as a warning at startup and ignored, and that action keeps its default,
 so a typo never leaves an action unreachable or stops Hydra starting. Lock states are not part of a chord:
 `Ctrl+Alt+Super+L` still fires with CapsLock on.
+
+### Bindable keys
+
+Names are case-insensitive. Any of them combines with any modifiers.
+
+| Group | Names |
+|-------|-------|
+| Editing | `BackSpace` `Tab` `Return` `Escape` `Delete` `Insert` |
+| Navigation | `Home` `End` `PageUp` `PageDown` `Left` `Right` `Up` `Down` |
+| Function | `F1` `F2` `F3` `F4` `F5` `F6` `F7` `F8` `F9` `F10` `F11` `F12` `F13` `F14` `F15` `F16` `F17` `F18` `F19` `F20` |
+| Locks | `CapsLock` `NumLock` `ScrollLock` |
+| Numpad | `KP_0` `KP_1` `KP_2` `KP_3` `KP_4` `KP_5` `KP_6` `KP_7` `KP_8` `KP_9` `KP_Enter` `KP_Add` `KP_Subtract` `KP_Multiply` `KP_Divide` `KP_Decimal` `KP_Equal` `KP_Space` `KP_Tab` |
+| Media | `AudioMute` `AudioVolumeUp` `AudioVolumeDown` `AudioPlay` `AudioStop` `AudioNext` `AudioPrev` |
+| System | `BrightnessUp` `BrightnessDown` `Eject` `MissionControl` |
+| macOS text | `MoveToBeginningOfLine` `MoveToEndOfLine` |
+
+Punctuation and space can be written literally or by name — the name is clearer, and for `Space` it is the
+only way, since a literal space is stripped as padding:
+
+| Name | Key | | Name | Key |
+|------|-----|-|------|-----|
+| `Space` | space | | `Grave`, `Backtick` | `` ` `` |
+| `Plus` | `+` | | `Equal`, `Equals` | `=` |
+| `Minus` | `-` | | `Semicolon` | `;` |
+| `Comma` | `,` | | `Quote`, `Apostrophe` | `'` |
+| `Period`, `Dot` | `.` | | `BracketLeft` | `[` |
+| `Slash` | `/` | | `BracketRight` | `]` |
+| `Backslash` | `\` | | | |
+
+The modifier keys themselves (`Shift_L`, `Shift_R`, `Control_L`, `Control_R`, `Alt_L`, `Alt_R`, `Super_L`,
+`Super_R`, `AltGr`) are not bindable as the key of a chord — use them as modifiers instead.
+
+Not currently available: `Pause`/`Break`, `PrintScreen` and the `Menu`/`Apps` key. Hydra has no cross-platform
+representation for them yet; open an issue if you want one.
 
 ## Clipboard sync
 

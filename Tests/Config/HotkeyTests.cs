@@ -99,6 +99,25 @@ public class HotkeyTests
         }
     }
 
+    [TestCase("Ctrl+Home", SpecialKey.Home, KeyModifiers.Control)]
+    [TestCase("Alt+PageDown", SpecialKey.PageDown, KeyModifiers.Alt)]
+    [TestCase("Win+F1", SpecialKey.F1, KeyModifiers.Super)]
+    [TestCase("Ctrl+Shift+End", SpecialKey.End, KeyModifiers.Control | KeyModifiers.Shift)]
+    [TestCase("Alt+Up", SpecialKey.Up, KeyModifiers.Alt)]
+    [TestCase("Super+KP_5", SpecialKey.KP_5, KeyModifiers.Super)]
+    [TestCase("Ctrl+AudioMute", SpecialKey.AudioMute, KeyModifiers.Control)]
+    [TestCase("Alt+Insert", SpecialKey.Insert, KeyModifiers.Alt)]
+    [TestCase("Ctrl+Alt+F12", SpecialKey.F12, KeyModifiers.Control | KeyModifiers.Alt)]
+    public void NamedKeys_CombineWithModifiers(string spec, SpecialKey key, KeyModifiers mods)
+    {
+        var hotkeys = HotkeyBindings.Build(new() { ["lockSlaves"] = [spec] });
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(hotkeys.Errors, Is.Empty, $"'{spec}' should parse");
+            Assert.That(hotkeys.Match(Special(key, mods)), Is.EqualTo(HotkeyAction.LockSlaves));
+        }
+    }
+
     [Test]
     public void ActionNameIsCaseInsensitive()
     {

@@ -40,6 +40,29 @@ public sealed record HotkeyBinding(KeyModifiers Modifiers, SpecialKey? Key, char
         ["altgr"] = KeyModifiers.AltGr,
     };
 
+    // keys the master reports as characters, which therefore have no SpecialKey name. spelling them out
+    // is the only way to write some of them ("Ctrl+Space") and far clearer for the rest ("Ctrl+Plus").
+    private static readonly Dictionary<string, char> CharacterNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["space"] = ' ',
+        ["plus"] = '+',
+        ["minus"] = '-',
+        ["comma"] = ',',
+        ["period"] = '.',
+        ["dot"] = '.',
+        ["slash"] = '/',
+        ["backslash"] = '\\',
+        ["semicolon"] = ';',
+        ["apostrophe"] = '\'',
+        ["quote"] = '\'',
+        ["grave"] = '`',
+        ["backtick"] = '`',
+        ["equal"] = '=',
+        ["equals"] = '=',
+        ["bracketleft"] = '[',
+        ["bracketright"] = ']',
+    };
+
     public bool Matches(KeyEvent ev)
     {
         if ((ev.Modifiers & ~LockStates) != Modifiers) return false;
@@ -82,7 +105,11 @@ public sealed record HotkeyBinding(KeyModifiers Modifiers, SpecialKey? Key, char
             return false;
         }
 
-        if (Enum.TryParse<SpecialKey>(keyToken, ignoreCase: true, out var special))
+        // Enum.TryParse also accepts the underlying number, so "4" would parse as (SpecialKey)4 rather
+        // than the character '4'. require a name, and one that is actually defined.
+        if (!char.IsAsciiDigit(keyToken[0])
+            && Enum.TryParse<SpecialKey>(keyToken, ignoreCase: true, out var special)
+            && Enum.IsDefined(special))
         {
             // SpecialKey.IsModifier() also covers the lock keys, and ScrollLock is the single most
             // requested binding here, so only the keys that exist to modify another key are refused.
@@ -96,21 +123,30 @@ public sealed record HotkeyBinding(KeyModifiers Modifiers, SpecialKey? Key, char
             return true;
         }
 
+        if (CharacterNames.TryGetValue(keyToken, out var namedChar))
+            return Printable(mods, namedChar, keyToken, out binding, out error);
+
         if (keyToken.Length != 1)
         {
             error = $"has no key named '{keyToken}' -- see the key list in docs/CONFIGURATION.md";
             return false;
         }
 
-        // a bare printable key is consumed on both key-down and key-up, so binding one would eat every
-        // press of it while Hydra runs. named keys (ScrollLock, Pause, F13) are the point and stay legal.
+        return Printable(mods, keyToken[0], keyToken, out binding, out error);
+    }
+
+    // a printable key is consumed on both key-down and key-up, so binding one bare would eat every press
+    // of it while Hydra runs. named keys (ScrollLock, F13) are the point of this and stay legal alone.
+    private static bool Printable(KeyModifiers mods, char ch, string keyToken, out HotkeyBinding? binding, out string? error)
+    {
+        binding = null;
+        error = null;
         if (mods == KeyModifiers.None)
         {
             error = $"binds '{keyToken}' with no modifiers, which would stop that character ever being typed";
             return false;
         }
-
-        binding = new HotkeyBinding(mods, null, char.ToLowerInvariant(keyToken[0]));
+        binding = new HotkeyBinding(mods, null, char.ToLowerInvariant(ch));
         return true;
     }
 

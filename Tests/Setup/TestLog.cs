@@ -12,11 +12,13 @@ public static class TestLog
     private static string ComputeLogFilePath()
     {
         var unixTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-        var solutionRoot = FindSolutionRoot(AppContext.BaseDirectory);
+        var solutionRoot = SolutionRoot;
         var outputDir = Path.Combine(solutionRoot, "test-output");
         Directory.CreateDirectory(outputDir);
         return Path.Combine(outputDir, $"{unixTime}.log");
     }
+
+    internal static string SolutionRoot => FindSolutionRoot(AppContext.BaseDirectory);
 
     private static string FindSolutionRoot(string startPath)
     {
