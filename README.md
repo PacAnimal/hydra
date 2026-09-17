@@ -80,6 +80,12 @@ chmod +x hydra
 
 All releases are [self-contained](https://github.com/PacAnimal/hydra/releases) — no .NET runtime installation required.
 
+> **Priority:** a stuttering cursor is usually a loaded machine rather than a bad link, so Hydra runs above
+> normal priority — `--install` asks launchd for it on macOS (`ProcessType: Interactive` plus `Nice`), and on
+> Windows the service and its session child take it themselves at startup. On Linux, where install is by hand,
+> put `Nice=-10` in the systemd unit: systemd applies it with privilege, which a process running as a normal
+> user cannot do for itself.
+
 > **Linux with display:** Requires X11 with XInput2. Wayland is not yet supported.
 
 > **Linux headless (no display):** See [Remote-only / Raspberry Pi setup](docs/CONFIGURATION.md#headless-linux-no-display-server).

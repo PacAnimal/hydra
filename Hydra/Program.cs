@@ -46,6 +46,11 @@ if (args.Contains("--uninstall"))
     return;
 }
 
+// raise our own scheduling priority before doing anything else, so that a machine busy with something
+// else still delivers input promptly. Runs before the service branch below so the service host, the
+// session child and the plain agent all get it.
+var priorityResult = ProcessPriority.Raise();
+
 if (OperatingSystem.IsWindows())
 {
     if (args.Contains("--service")) { ServiceHost.Run(args); return; }
@@ -159,6 +164,7 @@ if (logFileSetting is { } logFile)
 
 var startupLog = await services.CreateLogger<HydraProfile>();
 startupLog.LogInformation("Active profile: {ProfileName}", profile.ProfileName ?? "<none>");
+startupLog.LogInformation("Process priority: {Priority}", priorityResult);
 
 foreach (var hotkeyError in profile.Hotkeys.Errors)
     startupLog.LogWarning("Hotkey config: {Error}", hotkeyError);

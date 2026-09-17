@@ -126,13 +126,17 @@ internal static partial class AgentCommands
             throw new InvalidOperationException($"launchctl {args} failed (exit {proc.ExitCode}): {output}{error}");
     }
 
-    private static string GeneratePlist(string exePath, string workingDir, string logDir)
+    internal static string GeneratePlist(string exePath, string workingDir, string logDir)
     {
         var exe = SecurityElement.Escape(exePath);
         var wd = SecurityElement.Escape(workingDir);
         var stdout = SecurityElement.Escape(Path.Combine(logDir, "hydra.stdout.log"));
         var stderr = SecurityElement.Escape(Path.Combine(logDir, "hydra.stderr.log"));
 
+        // ProcessType and Nice are the whole reason this agent can keep up on a loaded machine. Without
+        // ProcessType launchd classifies us as a background job and throttles our CPU and I/O; Nice is
+        // privileged and launchd is the only one in a position to apply it on our behalf — the process
+        // itself runs as the user and cannot. ProcessPriority.Raise() then only matches what we hold.
         return $"""
             <?xml version="1.0" encoding="UTF-8"?>
             <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -156,6 +160,10 @@ internal static partial class AgentCommands
                 <string>{wd}</string>
                 <key>ThrottleInterval</key>
                 <integer>5</integer>
+                <key>ProcessType</key>
+                <string>Interactive</string>
+                <key>Nice</key>
+                <integer>{ProcessPriority.UnixNice}</integer>
             </dict>
             </plist>
             """;
