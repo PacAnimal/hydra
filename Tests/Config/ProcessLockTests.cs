@@ -1,4 +1,5 @@
 using Hydra.Platform;
+using Tests.Setup;
 
 namespace Tests.Config;
 
@@ -7,15 +8,10 @@ public class ProcessLockTests
 {
     private string _path = null!;
 
+    // Acquire uses OpenOrCreate, so the path need not exist — and it must not live in the raw temp dir,
+    // where nothing ever sweeps it up
     [SetUp]
-    public void SetUp() => _path = Path.GetTempFileName();
-
-    [TearDown]
-    public void TearDown()
-    {
-        if (File.Exists(_path))
-            File.Delete(_path);
-    }
+    public void SetUp() => _path = Path.Combine(TestPaths.FreshFixtureRoot(nameof(ProcessLockTests)), "hydra.lock");
 
     [Test]
     public void Acquire_WritesCurrentPid()

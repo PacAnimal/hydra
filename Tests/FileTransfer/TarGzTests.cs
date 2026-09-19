@@ -1,6 +1,7 @@
 using System.Formats.Tar;
 using System.IO.Compression;
 using Hydra.FileTransfer;
+using Tests.Setup;
 
 namespace Tests.FileTransfer;
 
@@ -13,15 +14,7 @@ public class TarGzStreamerTests
     [SetUp]
     public void SetUp()
     {
-        _tempRoot = Path.Combine(Path.GetTempPath(), "hydra-test-" + Guid.NewGuid());
-        Directory.CreateDirectory(_tempRoot);
-    }
-
-    [TearDown]
-    public void TearDown()
-    {
-        try { Directory.Delete(_tempRoot, recursive: true); }
-        catch { /* best effort */ }
+        _tempRoot = TestPaths.FreshFixtureRoot(nameof(TarGzStreamerTests));
     }
 
     [Test]
@@ -177,15 +170,7 @@ public class TarGzExtractorTests
     [SetUp]
     public void SetUp()
     {
-        _tempRoot = Path.Combine(Path.GetTempPath(), "hydra-test-" + Guid.NewGuid());
-        Directory.CreateDirectory(_tempRoot);
-    }
-
-    [TearDown]
-    public void TearDown()
-    {
-        try { Directory.Delete(_tempRoot, recursive: true); }
-        catch { /* best effort */ }
+        _tempRoot = TestPaths.FreshFixtureRoot(nameof(TarGzExtractorTests));
     }
 
     [Test]

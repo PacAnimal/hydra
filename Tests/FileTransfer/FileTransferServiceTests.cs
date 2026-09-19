@@ -20,8 +20,7 @@ public class FileTransferServiceTests
     {
         _dialog = new FakeFileTransferDialog();
         _relay = new FakeRelay();
-        _tempRoot = Path.Combine(Path.GetTempPath(), "hydra-test-" + Guid.NewGuid());
-        Directory.CreateDirectory(_tempRoot);
+        _tempRoot = TestPaths.FreshFixtureRoot(nameof(FileTransferServiceTests));
         _service = new FileTransferService(_dialog, new FakeDropTargetResolver(_tempRoot), NullLogger<FileTransferService>.Instance);
     }
 
@@ -29,7 +28,6 @@ public class FileTransferServiceTests
     public void TearDown()
     {
         _service.Dispose();
-        try { Directory.Delete(_tempRoot, recursive: true); } catch { /* best effort */ }
     }
 
     // -- helpers --

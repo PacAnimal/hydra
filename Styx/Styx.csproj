@@ -25,8 +25,8 @@
     </PropertyGroup>
 
     <ItemGroup>
-        <PackageReference Include="Cathedral" Version="0.0.465" />
-        <PackageReference Include="Microsoft.AspNetCore.SignalR.Protocols.MessagePack" Version="10.0.11" />
+        <PackageReference Include="Cathedral" Version="0.0.469" />
+        <PackageReference Include="Microsoft.AspNetCore.SignalR.Protocols.MessagePack" Version="10.0.12" />
     </ItemGroup>
 
     <ItemGroup>

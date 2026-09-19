@@ -22,11 +22,13 @@ internal static partial class ProcessPriority
     internal const int UnixNice = -10;
     private const int PrioProcess = 0;
 
-    [LibraryImport("libc", SetLastError = true)]
-    private static partial int setpriority(int which, uint who, int prio);
+    // EntryPoint spelled out because libc exports these lowercase; without it LibraryImport would look
+    // for the C# name and every call would throw EntryPointNotFoundException.
+    [LibraryImport("libc", EntryPoint = "setpriority", SetLastError = true)]
+    private static partial int SetPriority(int which, uint who, int prio);
 
-    [LibraryImport("libc", SetLastError = true)]
-    private static partial int getpriority(int which, uint who);
+    [LibraryImport("libc", EntryPoint = "getpriority", SetLastError = true)]
+    private static partial int GetPriority(int which, uint who);
 
     /// <summary>Raises the current process, returning what it managed, for the startup log.</summary>
     internal static string Raise()
@@ -57,10 +59,10 @@ internal static partial class ProcessPriority
         // Unix equivalents) gets it outright. An unprivileged macOS agent does not — there launchd is
         // the one that can, from the Nice key AgentCommands writes into the plist, and this call then
         // only has to match a value we already hold, which is permitted.
-        if (setpriority(PrioProcess, 0, UnixNice) == 0)
+        if (SetPriority(PrioProcess, 0, UnixNice) == 0)
             return $"nice {UnixNice}";
 
         var errno = Marshal.GetLastPInvokeError();
-        return $"unchanged (nice {getpriority(PrioProcess, 0)}, setpriority errno {errno})";
+        return $"unchanged (nice {GetPriority(PrioProcess, 0)}, setpriority errno {errno})";
     }
 }
