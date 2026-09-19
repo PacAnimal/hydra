@@ -126,10 +126,21 @@ internal static partial class RelayAddressPreference
     private static NetworkInterface? FindInterfaceByIndex(int index, AddressFamily family) =>
         NetworkInterface.GetAllNetworkInterfaces().FirstOrDefault(network =>
         {
-            var properties = network.GetIPProperties();
-            return family == AddressFamily.InterNetwork
-                ? properties.GetIPv4Properties().Index == index
-                : properties.GetIPv6Properties().Index == index;
+            try
+            {
+                var properties = network.GetIPProperties();
+                return family == AddressFamily.InterNetwork
+                    ? properties.GetIPv4Properties().Index == index
+                    : properties.GetIPv6Properties().Index == index;
+            }
+            catch (NetworkInformationException)
+            {
+                // This interface doesn't support the queried address family (IPv6 disabled on an
+                // Ethernet adapter, a Teredo/ISATAP tunnel with no IPv4 side, etc.) — skip just this
+                // one interface rather than letting the exception abort the whole search, which would
+                // silently discard preference ordering for every interface via the outer catch-all.
+                return false;
+            }
         });
 
     internal static IReadOnlyDictionary<string, int> ParseMacServiceOrder(string output)
@@ -237,9 +248,11 @@ internal static partial class RelayAddressPreference
             {
                 if (!process.HasExited) process.Kill(entireProcessTree: true);
             }
-            catch (InvalidOperationException)
+            catch (Exception)
             {
-                // The process exited between HasExited and Kill.
+                // Best-effort cleanup — the process may have exited between HasExited and Kill, or
+                // Kill itself may fail for other reasons. Either way this must not replace the
+                // cancellation being propagated below with an unrelated exception from the cleanup.
             }
             throw;
         }

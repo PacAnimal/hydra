@@ -89,6 +89,25 @@ public class RelaySocketConnectorTests
     }
 
     [Test]
+    public void ParseWindowsInterfaceMetrics_RealInterfaceResolution_SkipsUnsupportedFamilyWithoutThrowing()
+    {
+        // Exercises the real FindInterfaceByIndex (no fake resolver): some local interfaces commonly
+        // don't support one address family (IPv6 disabled, an IPv4-less tunnel adapter, etc.), and
+        // that must be skipped per-interface rather than aborting the whole lookup. Real indices vary
+        // per machine, so this only asserts it never throws — the regression it guards against is a
+        // NetworkInformationException escaping and discarding every interface's preference, not a
+        // specific mapping.
+        const string output = """
+            1|10
+            2|20
+            3|30
+            999999|40
+            """;
+
+        Assert.DoesNotThrow(() => RelayAddressPreference.ParseWindowsInterfaceMetrics(output));
+    }
+
+    [Test]
     public async Task ConnectAsync_FirstAddressFails_FallsBackToNextAddress()
     {
         using var listener = new TcpListener(IPAddress.Loopback, 0);
