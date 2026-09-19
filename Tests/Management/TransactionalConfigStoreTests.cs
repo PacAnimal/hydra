@@ -27,12 +27,12 @@ public class TransactionalConfigStoreTests
 
         var after = await store.SaveAsync(before.Revision, Valid("Work"), CancellationToken.None);
 
-        Assert.Multiple(() =>
+        using (Assert.EnterMultipleScope())
         {
             Assert.That(after.Revision, Is.Not.EqualTo(before.Revision));
             Assert.That(File.ReadAllText(_path), Does.Contain("Work"));
             Assert.That(TransactionalConfigStore.Validate(after.Json).Valid, Is.True);
-        });
+        }
     }
 
     [Test]

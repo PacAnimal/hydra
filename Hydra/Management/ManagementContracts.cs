@@ -68,9 +68,11 @@ public sealed record HydraStatusSnapshot(
     bool IsIdle,
     bool RelayConnected,
     RelayConnectionStatus? RelayConnection,
-    List<NetworkAdapterStatus> ActiveNetworkAdapters,
-    List<EmbeddedRelayPeerStatus> EmbeddedRelayPeers,
-    List<PeerLatencyStatus> PeerLatency,
+    // Nullable: a TUI newer than the daemon it's talking to reads a status response from before these
+    // fields existed, and JSON deserialization leaves a missing field null rather than throwing.
+    List<NetworkAdapterStatus>? ActiveNetworkAdapters,
+    List<EmbeddedRelayPeerStatus>? EmbeddedRelayPeers,
+    List<PeerLatencyStatus>? PeerLatency,
     bool Dormant,
     List<ScreenStatus> LocalScreens,
     List<PeerStatus> Peers,

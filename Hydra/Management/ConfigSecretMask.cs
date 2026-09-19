@@ -46,10 +46,9 @@ internal static class ConfigSecretMask
         }
         else if (edited is JsonArray editedArray)
         {
-            var sourceArray = source as JsonArray;
             for (var i = 0; i < editedArray.Count; i++)
                 if (editedArray[i] != null)
-                    RestoreNode(editedArray[i]!, sourceArray != null && i < sourceArray.Count ? sourceArray[i] : null);
+                    RestoreNode(editedArray[i]!, source is JsonArray sourceArray && i < sourceArray.Count ? sourceArray[i] : null);
         }
     }
 

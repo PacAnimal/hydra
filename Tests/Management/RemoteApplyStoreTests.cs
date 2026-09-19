@@ -70,8 +70,11 @@ public class RemoteApplyStoreTests
 
         await store.RollbackAsync(CancellationToken.None);
 
-        Assert.That(await File.ReadAllTextAsync(_configPath), Is.EqualTo(_original));
-        Assert.That(await store.GetStateAsync(), Is.Null);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(await File.ReadAllTextAsync(_configPath), Is.EqualTo(_original));
+            Assert.That(await store.GetStateAsync(), Is.Null);
+        }
     }
 
     [Test]

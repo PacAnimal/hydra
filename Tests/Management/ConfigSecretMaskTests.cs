@@ -20,13 +20,13 @@ public class ConfigSecretMaskTests
     {
         var masked = ConfigSecretMask.Mask(Source);
 
-        Assert.Multiple(() =>
+        using (Assert.EnterMultipleScope())
         {
             Assert.That(masked, Does.Not.Contain("relay-secret"));
             Assert.That(masked, Does.Not.Contain("password-secret"));
             Assert.That(masked, Does.Contain(ConfigSecretMask.Placeholder));
             Assert.That(masked, Does.Contain("unknown"));
-        });
+        }
     }
 
     [Test]
@@ -38,11 +38,11 @@ public class ConfigSecretMaskTests
 
         var restored = JsonNode.Parse(ConfigSecretMask.Restore(edited, Source))!;
         var profile = restored["profiles"]![0]!;
-        Assert.Multiple(() =>
+        using (Assert.EnterMultipleScope())
         {
             Assert.That(profile["networkConfig"]!.GetValue<string>(), Is.EqualTo("relay-secret"));
             Assert.That(profile["embeddedStyx"]!["password"]!.GetValue<string>(), Is.EqualTo("replacement"));
             Assert.That(restored["unknown"]!["keep"]!.GetValue<bool>(), Is.True);
-        });
+        }
     }
 }

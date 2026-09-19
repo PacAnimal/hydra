@@ -25,6 +25,8 @@ public class ManagementFramingTests
         BinaryPrimitives.WriteInt32BigEndian(header, ManagementProtocol.MaxMessageBytes + 1);
         using var stream = new MemoryStream(header);
 
+        // Assert.That invokes the delegate synchronously before returning, well before stream is disposed.
+        // ReSharper disable once AccessToDisposedClosure
         Assert.That(async () => await ManagementFraming.ReadAsync<ManagementRequest>(stream, CancellationToken.None),
             Throws.TypeOf<InvalidDataException>());
     }

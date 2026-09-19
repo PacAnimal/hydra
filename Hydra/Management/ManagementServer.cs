@@ -135,7 +135,7 @@ internal sealed class ManagementServer(
             catch (Exception ex)
             {
                 try { await ManagementFraming.WriteAsync(stream, ManagementResponse.Fail(ex.Message), CancellationToken.None); }
-                catch { }
+                catch { /* best-effort failure notice — the client may already be gone (closed pipe, process exit) */ }
                 log.LogDebug(ex, "Management request failed");
             }
         }

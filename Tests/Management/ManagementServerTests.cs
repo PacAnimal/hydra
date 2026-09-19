@@ -17,13 +17,13 @@ public class ManagementServerTests
 
         var response = await server.DispatchAsync(new ManagementRequest("hydra.shutdown"), CancellationToken.None);
 
-        Assert.Multiple(() =>
+        using (Assert.EnterMultipleScope())
         {
             Assert.That(response.Success, Is.True);
             Assert.That(ManagementJson.Deserialize<CommandResult>(response.Json),
                 Is.EqualTo(new CommandResult(accepted, message)));
             Assert.That(lifetime.ShutdownRequests, Is.EqualTo(1));
-        });
+        }
     }
 
     private sealed class FakeLifetime(CommandResult shutdownResult) : IHydraLifetimeController

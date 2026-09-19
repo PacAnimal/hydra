@@ -92,10 +92,13 @@ public class WorldState : IWorldState
     public async ValueTask<List<PeerRuntimeSnapshot>> GetPeerRuntimeSnapshot()
     {
         using var m = await _master.WaitForDisposable();
-        return [.. m.Value.KnownPeers.Order(StringComparer.OrdinalIgnoreCase).Select(name => new PeerRuntimeSnapshot(
+        var knownPeers = m.Value.KnownPeers;
+        var peerPlatforms = m.Value.PeerPlatforms;
+        var peerScreens = m.Value.PeerScreens;
+        return [.. knownPeers.Order(StringComparer.OrdinalIgnoreCase).Select(name => new PeerRuntimeSnapshot(
             name,
-            m.Value.PeerPlatforms.GetValueOrDefault(name),
-            m.Value.PeerScreens.TryGetValue(name, out var screens) ? [.. screens] : []))];
+            peerPlatforms.GetValueOrDefault(name),
+            peerScreens.TryGetValue(name, out var screens) ? [.. screens] : []))];
     }
 
     public ILogger GetOrCreateSlaveLogger(string category, ILoggerFactory factory) =>

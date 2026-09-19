@@ -69,9 +69,9 @@ internal sealed class RemoteManagementService(
 
     private async Task<string> InvokeAuthorizedAsync<T>(string host, string operation, T payload, CancellationToken cancel)
     {
-        var credential = await store.GetTargetAsync(host, cancel)
+        var (controllerId, secret) = await store.GetTargetAsync(host, cancel)
             ?? throw new InvalidOperationException($"Remote host '{host}' is not paired.");
-        return await InvokeAsync(host, credential.ControllerId, credential.Secret, operation, payload, credential.Secret, cancel);
+        return await InvokeAsync(host, controllerId, secret, operation, payload, secret, cancel);
     }
 
     private async Task<string> InvokeAsync<T>(string host, string controllerId, string signingSecret,
@@ -143,10 +143,10 @@ internal sealed class RemoteManagementService(
         if (request.Version != RemoteManagementProtocol.Version || !Fresh(request.TimestampUnixMs))
             return;
 
-        string? secret = null;
-        RemotePairPayload? pair = null;
+        string? secret;
         if (request.Operation == "pair")
         {
+            RemotePairPayload pair;
             try { pair = ManagementJson.Deserialize<RemotePairPayload>(request.Json); }
             catch { return; }
             if (!RemoteManagementCrypto.VerifyRequest(request, pair.PairingCode))

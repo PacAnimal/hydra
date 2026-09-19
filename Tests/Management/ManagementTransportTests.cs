@@ -32,12 +32,12 @@ public class ManagementTransportTests
         {
             var hello = await new ManagementClient(configPath).HelloAsync(timeout.Token);
             await server;
-            Assert.Multiple(() =>
+            using (Assert.EnterMultipleScope())
             {
                 Assert.That(hello.ProtocolVersion, Is.EqualTo(ManagementProtocol.Version));
                 Assert.That(hello.InstanceId, Is.EqualTo(endpoint.InstanceId));
                 Assert.That(hello.ProcessId, Is.EqualTo(42));
-            });
+            }
         }
         finally
         {
@@ -86,17 +86,17 @@ public class ManagementTransportTests
         await using var pipe = new NamedPipeServerStream(name, PipeDirection.InOut, 1,
             PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
         await pipe.WaitForConnectionAsync(cancel);
-        await RespondAsync(pipe, instanceId, cancel, expectShutdown);
+        await RespondAsync(pipe, instanceId, expectShutdown, cancel);
     }
 
     private static async Task ServeSocketAsync(Socket listener, string instanceId, CancellationToken cancel, bool expectShutdown = false)
     {
         using var socket = await listener.AcceptAsync(cancel);
         await using var stream = new NetworkStream(socket, ownsSocket: false);
-        await RespondAsync(stream, instanceId, cancel, expectShutdown);
+        await RespondAsync(stream, instanceId, expectShutdown, cancel);
     }
 
-    private static async Task RespondAsync(Stream stream, string instanceId, CancellationToken cancel, bool expectShutdown)
+    private static async Task RespondAsync(Stream stream, string instanceId, bool expectShutdown, CancellationToken cancel)
     {
         var request = await ManagementFraming.ReadAsync<ManagementRequest>(stream, cancel);
         if (expectShutdown)

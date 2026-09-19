@@ -13,13 +13,13 @@ public class HydraProcessLauncherTests
 
         var startInfo = HydraProcessLauncher.CreateDirectStartInfo(executablePath, configPath);
 
-        Assert.Multiple(() =>
+        using (Assert.EnterMultipleScope())
         {
             Assert.That(startInfo.FileName, Is.EqualTo(executablePath));
             Assert.That(startInfo.WorkingDirectory, Is.EqualTo(workingDirectory));
             Assert.That(startInfo.Environment["CONFIG"], Is.EqualTo(configPath));
             Assert.That(startInfo.RedirectStandardOutput, Is.True);
             Assert.That(startInfo.RedirectStandardError, Is.True);
-        });
+        }
     }
 }

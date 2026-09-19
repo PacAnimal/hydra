@@ -214,7 +214,7 @@ public class InputRouter(
         return tcs.Task;
     }
 
-    internal Task<RouterStatus?> GetManagementStatusAsync() => RunFence<RouterStatus?>(st =>
+    internal Task<RouterStatus?> GetManagementStatusAsync() => RunFence(st =>
     {
         var current = st.Mouse.CurrentScreen;
         return new RouterStatus(

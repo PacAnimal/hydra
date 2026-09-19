@@ -7,17 +7,21 @@ namespace Tests.Relay;
 [TestFixture]
 public class RelayLatencyServiceTests
 {
+    private static readonly string[] RemoteOnly = ["remote"];
+
     [Test]
     public async Task PeerProbe_ResponseRecordsRtt()
     {
         long now = 100;
         var relay = new FakeRelay();
+        // now is mutated below to advance the fake clock the service reads through this closure.
+        // ReSharper disable once AccessToModifiedClosure
         var service = new RelayLatencyService(relay, () => now);
         await service.StartAsync(CancellationToken.None);
 
         await relay.FirePeersChanged("remote");
-        var sent = relay.Sent.Single(item => item.Kind == MessageKind.LatencyProbe);
-        var probe = sent.Json.FromSaneJson<LatencyProbeMessage>()!;
+        var (_, _, json) = relay.Sent.Single(item => item.Kind == MessageKind.LatencyProbe);
+        var probe = json.FromSaneJson<LatencyProbeMessage>()!;
 
         now = 137;
         await relay.FireMessageReceived("remote", MessageKind.LatencyProbeResponse,
@@ -46,12 +50,12 @@ public class RelayLatencyServiceTests
         await relay.FireMessageReceived("remote", MessageKind.LatencyProbe,
             new LatencyProbeMessage(42).ToSaneJson());
 
-        var response = relay.Sent.Single();
+        var (targets, kind, json) = relay.Sent.Single();
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.Targets, Is.EqualTo(new[] { "remote" }));
-            Assert.That(response.Kind, Is.EqualTo(MessageKind.LatencyProbeResponse));
-            Assert.That(response.Json.FromSaneJson<LatencyProbeResponseMessage>()!.Sequence, Is.EqualTo(42));
+            Assert.That(targets, Is.EqualTo(RemoteOnly));
+            Assert.That(kind, Is.EqualTo(MessageKind.LatencyProbeResponse));
+            Assert.That(json.FromSaneJson<LatencyProbeResponseMessage>()!.Sequence, Is.EqualTo(42));
         }
 
         await service.StopAsync(CancellationToken.None);
@@ -62,6 +66,8 @@ public class RelayLatencyServiceTests
     {
         long now = 100;
         var relay = new FakeRelay();
+        // now is mutated below to advance the fake clock the service reads through this closure.
+        // ReSharper disable once AccessToModifiedClosure
         var service = new RelayLatencyService(relay, () => now);
         await service.StartAsync(CancellationToken.None);
         await relay.FirePeersChanged("remote");

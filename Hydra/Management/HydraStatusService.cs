@@ -114,7 +114,10 @@ internal sealed class HydraStatusService(
             if (parsed.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6 && parsed.ScopeId > 0)
             {
                 var scoped = NetworkInterface.GetAllNetworkInterfaces().FirstOrDefault(network =>
-                    network.GetIPProperties().GetIPv6Properties()?.Index == parsed.ScopeId);
+                {
+                    try { return network.GetIPProperties().GetIPv6Properties().Index == parsed.ScopeId; }
+                    catch (NetworkInformationException) { return false; } // interface has no IPv6 side — skip it, not the whole search
+                });
                 if (scoped != null) return scoped;
             }
             return NetworkInterface.GetAllNetworkInterfaces().FirstOrDefault(network =>

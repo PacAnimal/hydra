@@ -31,7 +31,7 @@ public class GuidedConfigDocumentTests
         using var parsed = System.Text.Json.JsonDocument.Parse(result);
         var rootJson = parsed.RootElement;
         var profileJson = rootJson.GetProperty("profiles")[0];
-        Assert.Multiple(() =>
+        using (Assert.EnterMultipleScope())
         {
             Assert.That(rootJson.GetProperty("name").GetString(), Is.EqualTo("after"));
             Assert.That(rootJson.GetProperty("unknownRoot").GetProperty("keep").GetBoolean(), Is.True);
@@ -41,7 +41,7 @@ public class GuidedConfigDocumentTests
             Assert.That(profileJson.GetProperty("conditions").GetProperty("ssid").GetString(), Is.EqualTo("Home WiFi"));
             Assert.That(profileJson.GetProperty("conditions").GetProperty("screenCount").GetInt32(), Is.EqualTo(2));
             Assert.That(profileJson.GetProperty("hideCursor").GetBoolean(), Is.True);
-        });
+        }
     }
 
     [Test]
@@ -54,11 +54,11 @@ public class GuidedConfigDocumentTests
         document.WriteProfile(0, profile);
         var result = document.ToJson();
 
-        Assert.Multiple(() =>
+        using (Assert.EnterMultipleScope())
         {
             Assert.That(result, Does.Not.Contain("conditions"));
             Assert.That(result, Does.Not.Contain("embeddedStyx"));
-        });
+        }
     }
 
     [TestCase("1.25", 1.25)]

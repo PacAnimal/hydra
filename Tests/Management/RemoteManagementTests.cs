@@ -199,7 +199,7 @@ public class RemoteManagementTests
         await remote.StopAsync(CancellationToken.None);
     }
 
-    private RemoteManagementService Service(IRelaySender relay, RemoteManagementStore store, string configPath,
+    private static RemoteManagementService Service(IRelaySender relay, RemoteManagementStore store, string configPath,
         FakeLifetimeController? lifetime = null)
     {
         var runtime = new HydraRuntimeInfo(configPath, DateTimeOffset.UtcNow);

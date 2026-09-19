@@ -30,6 +30,20 @@ internal static class RemoteManagementCrypto
     internal static string HashPairingCode(string code) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(code))).ToLowerInvariant();
 
+    // hex is fixed-width per input length, so a straight byte compare here carries no timing signal
+    // beyond what the hex decode itself does — same fixed-time guarantee as FixedEquals, hex form
+    internal static bool HashesEqual(string left, string right)
+    {
+        try
+        {
+            return CryptographicOperations.FixedTimeEquals(Convert.FromHexString(left), Convert.FromHexString(right));
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+    }
+
     private static string Sign(string secret, params string[] fields)
     {
         var key = FromBase64Url(secret);

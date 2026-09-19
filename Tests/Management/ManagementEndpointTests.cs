@@ -12,12 +12,12 @@ public class ManagementEndpointTests
         var again = ManagementEndpoint.ForConfig(Path.Combine(TestContext.CurrentContext.WorkDirectory, "one", "hydra.conf"));
         var second = ManagementEndpoint.ForConfig(Path.Combine(TestContext.CurrentContext.WorkDirectory, "two", "hydra.conf"));
 
-        Assert.Multiple(() =>
+        using (Assert.EnterMultipleScope())
         {
             Assert.That(first, Is.EqualTo(again));
             Assert.That(second.InstanceId, Is.Not.EqualTo(first.InstanceId));
             Assert.That(first.InstanceId, Has.Length.EqualTo(12));
-        });
+        }
     }
 
     [Test]
@@ -42,12 +42,12 @@ public class ManagementEndpointTests
         var mode = File.GetUnixFileMode(directory);
 #pragma warning restore CA1416
 
-        Assert.Multiple(() =>
+        using (Assert.EnterMultipleScope())
         {
             Assert.That(endpoint.IsNamedPipe, Is.False);
             Assert.That(mode & (UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute
                 | UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute), Is.EqualTo(UnixFileMode.None));
-        });
+        }
     }
 
     [Test]
@@ -64,7 +64,10 @@ public class ManagementEndpointTests
             Assert.That(await endpoint.RemoveStaleUnixSocketAsync(CancellationToken.None), Is.False);
         }
 
-        Assert.That(await endpoint.RemoveStaleUnixSocketAsync(CancellationToken.None), Is.True);
-        Assert.That(File.Exists(endpoint.Address), Is.False);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(await endpoint.RemoveStaleUnixSocketAsync(CancellationToken.None), Is.True);
+            Assert.That(File.Exists(endpoint.Address), Is.False);
+        }
     }
 }

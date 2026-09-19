@@ -37,7 +37,7 @@ internal sealed class RemoteManagementStore
         {
             var hash = RemoteManagementCrypto.HashPairingCode(code);
             var match = state.PairingCodes.FirstOrDefault(item => item.ExpiresAt > DateTimeOffset.UtcNow
-                && item.Hash.Equals(hash, StringComparison.Ordinal));
+                && RemoteManagementCrypto.HashesEqual(item.Hash, hash));
             if (match == null) return;
             consumed = true;
             state.PairingCodes.Remove(match);
@@ -46,11 +46,11 @@ internal sealed class RemoteManagementStore
         return consumed;
     }
 
-    internal async Task<(string ControllerId, string Secret)> CreateTargetCredentialAsync(CancellationToken cancel)
+    internal async Task<TargetCredential> CreateTargetCredentialAsync(CancellationToken cancel)
     {
         var controllerId = "";
         await MutateAsync(state => controllerId = state.ControllerId, cancel);
-        return (controllerId, RemoteManagementCrypto.RandomSecret());
+        return new TargetCredential(controllerId, RemoteManagementCrypto.RandomSecret());
     }
 
     internal Task SaveTargetAsync(string host, string secret, CancellationToken cancel) => MutateAsync(state =>
@@ -59,11 +59,11 @@ internal sealed class RemoteManagementStore
         state.Targets.Add(new StoredRemoteTarget(host, secret));
     }, cancel);
 
-    internal async Task<(string ControllerId, string Secret)?> GetTargetAsync(string host, CancellationToken cancel)
+    internal async Task<TargetCredential?> GetTargetAsync(string host, CancellationToken cancel)
     {
         var state = await ReadAsync(cancel);
         var target = state.Targets.FirstOrDefault(item => item.Host.Equals(host, StringComparison.OrdinalIgnoreCase));
-        return target == null ? null : (state.ControllerId, target.Secret);
+        return target == null ? null : new TargetCredential(state.ControllerId, target.Secret);
     }
 
     internal Task SaveControllerAsync(string id, string secret, CancellationToken cancel) => MutateAsync(state =>
@@ -120,14 +120,24 @@ internal sealed class RemoteManagementStore
         if (new FileInfo(_path).LinkTarget != null)
             throw new IOException("Hydra remote-management state cannot be a symbolic link.");
         var json = await File.ReadAllTextAsync(_path, cancel);
-        var state = ManagementJson.Deserialize<RemoteManagementState>(json);
+        var persisted = ManagementJson.Deserialize<PersistedState>(json);
         return new RemoteManagementState(
-            string.IsNullOrWhiteSpace(state.ControllerId) ? RemoteManagementCrypto.RandomSecret(18) : state.ControllerId,
-            state.Targets ?? [],
-            state.Controllers ?? [],
-            state.PairingCodes ?? [],
-            state.ReplayNonces ?? []);
+            string.IsNullOrWhiteSpace(persisted.ControllerId) ? RemoteManagementCrypto.RandomSecret(18) : persisted.ControllerId,
+            persisted.Targets ?? [],
+            persisted.Controllers ?? [],
+            persisted.PairingCodes ?? [],
+            persisted.ReplayNonces ?? []);
     }
+
+    // A field added after this file format shipped, or a hand-edited sidecar, deserializes as null
+    // rather than throwing — unlike RemoteManagementState, which every other caller can rely on being
+    // fully populated once ReadUnlockedAsync has normalized it.
+    private sealed record PersistedState(
+        string? ControllerId,
+        List<StoredRemoteTarget>? Targets,
+        List<StoredRemoteController>? Controllers,
+        List<StoredPairingCode>? PairingCodes,
+        List<StoredReplayNonce>? ReplayNonces);
 
     private async Task<FileStream> AcquireMutationLockAsync(CancellationToken cancel)
     {
@@ -181,3 +191,5 @@ internal sealed class RemoteManagementStore
 
     private static RemoteManagementState Empty() => new(RemoteManagementCrypto.RandomSecret(18), [], [], [], []);
 }
+
+internal sealed record TargetCredential(string ControllerId, string Secret);

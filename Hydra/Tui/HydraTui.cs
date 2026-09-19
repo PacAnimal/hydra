@@ -9,7 +9,7 @@ using Terminal.Gui.Input;
 using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
 
-namespace Hydra;
+namespace Hydra.Tui;
 
 internal static class HydraTui
 {
@@ -47,24 +47,31 @@ internal static class HydraTui
         using IApplication app = Application.Create();
         app.Init();
         Button.DefaultShadow = ShadowStyles.None;
-        using var window = new Window { Title = "Hydra Control Center", BorderStyle = Terminal.Gui.Drawing.LineStyle.Rounded };
+        using var window = new Window();
+        window.Title = "Hydra Control Center";
+        window.BorderStyle = Terminal.Gui.Drawing.LineStyle.Rounded;
         using var controller = new TuiController(app, window, configPath);
         controller.Build();
-        ConsoleCancelEventHandler cancelHandler = (_, e) =>
-        {
-            e.Cancel = true;
-            app.Invoke(window.RequestStop);
-        };
-        Console.CancelKeyPress += cancelHandler;
+        var requestStop = window.RequestStop;
+        Console.CancelKeyPress += CancelHandler;
         try
         {
             app.Run(window);
         }
         finally
         {
-            Console.CancelKeyPress -= cancelHandler;
+            Console.CancelKeyPress -= CancelHandler;
         }
         return Task.CompletedTask;
+
+        // Unsubscribed in the finally block above before app/window are disposed at method end, so this
+        // local function never runs against a disposed instance.
+        void CancelHandler(object? sender, ConsoleCancelEventArgs e)
+        {
+            e.Cancel = true;
+            // ReSharper disable once AccessToDisposedClosure
+            app.Invoke(requestStop);
+        }
     }
 
     private sealed class TuiController(IApplication app, Window window, string configPath) : IDisposable
@@ -117,7 +124,6 @@ internal static class HydraTui
         private int _guidedProfileIndex;
         private readonly List<(View Button, FrameView Content, string Name)> _tabs = [];
         private readonly List<(Button Button, FrameView Content, string Name)> _formSections = [];
-        private int _activeTab;
 
         private readonly TextField _rootName = new();
         private readonly TextField _rootLogLevel = new();
@@ -209,7 +215,6 @@ internal static class HydraTui
         private void SelectTab(int index)
         {
             if (index < 0 || index >= _tabs.Count) return;
-            _activeTab = index;
             for (var i = 0; i < _tabs.Count; i++)
             {
                 var selected = i == index;
@@ -239,7 +244,7 @@ internal static class HydraTui
             _reconnect.Accepting += (_, e) =>
             {
                 e.Handled = true;
-                _ = RunCommandAsync(() => _client.ReconnectRelayAsync(_cancel.Token), CommandKind.ReconnectRelay);
+                Forget(RunCommandAsync(() => _client.ReconnectRelayAsync(_cancel.Token), CommandKind.ReconnectRelay));
             };
             _restart.X = Pos.Right(_reconnect) + 2;
             _restart.Y = Pos.Top(_reconnect);
@@ -247,7 +252,7 @@ internal static class HydraTui
             {
                 e.Handled = true;
                 if (MessageBox.Query(app, "Restart Hydra", "Restart the running Hydra process?", "Restart", "Cancel") == 0)
-                    _ = RunCommandAsync(() => _client.RestartHydraAsync(_cancel.Token), CommandKind.RestartHydra);
+                    Forget(RunCommandAsync(() => _client.RestartHydraAsync(_cancel.Token), CommandKind.RestartHydra));
             };
             _shutdown.X = Pos.Right(_restart) + 2;
             _shutdown.Y = Pos.Top(_restart);
@@ -257,7 +262,7 @@ internal static class HydraTui
                 if (MessageBox.Query(app, "Shutdown Hydra",
                         "Stop Hydra and disconnect all peers? You can start it again later.",
                         "Shutdown", "Cancel") == 0)
-                    _ = RunCommandAsync(() => _client.ShutdownHydraAsync(_cancel.Token), CommandKind.ShutdownHydra);
+                    Forget(RunCommandAsync(() => _client.ShutdownHydraAsync(_cancel.Token), CommandKind.ShutdownHydra));
             };
             _start.X = Pos.Right(_shutdown) + 2;
             _start.Y = Pos.Top(_shutdown);
@@ -266,7 +271,7 @@ internal static class HydraTui
                 e.Handled = true;
                 if (MessageBox.Query(app, "Start Hydra",
                         "Start Hydra with the current configuration?", "Start", "Cancel") == 0)
-                    _ = StartHydraAsync();
+                    Forget(StartHydraAsync());
             };
             tab.Add(_reconnect, _restart, _shutdown, _start);
             return tab;
@@ -300,7 +305,7 @@ internal static class HydraTui
             var validate = new Button { Text = "_Validate", X = 1, Y = Pos.AnchorEnd(2) };
             validate.Accepting += (_, e) => { e.Handled = true; ValidateConfig(); };
             var reload = new Button { Text = "Re_load", X = Pos.Right(validate) + 2, Y = Pos.Top(validate) };
-            reload.Accepting += (_, e) => { e.Handled = true; _ = LoadConfigAsync(); };
+            reload.Accepting += (_, e) => { e.Handled = true; Forget(LoadConfigAsync()); };
             _revealSecrets.X = Pos.Right(reload) + 2; _revealSecrets.Y = Pos.Top(validate);
             _revealSecrets.Accepting += (_, e) =>
             {
@@ -308,9 +313,9 @@ internal static class HydraTui
                 ToggleSecrets(_revealSecrets);
             };
             var save = new Button { Text = "_Save", X = Pos.Right(_revealSecrets) + 2, Y = Pos.Top(validate) };
-            save.Accepting += (_, e) => { e.Handled = true; _ = SaveConfigAsync(restart: false); };
+            save.Accepting += (_, e) => { e.Handled = true; Forget(SaveConfigAsync(restart: false)); };
             var apply = new Button { Text = "Save && _Restart", X = Pos.Right(save) + 2, Y = Pos.Top(validate) };
-            apply.Accepting += (_, e) => { e.Handled = true; _ = SaveConfigAsync(restart: true); };
+            apply.Accepting += (_, e) => { e.Handled = true; Forget(SaveConfigAsync(restart: true)); };
             _configText.Add(_config);
             tab.Add(_formModeButton, _textModeButton, _configForm, _configText, helpPanel,
                 validate, reload, _revealSecrets, save, apply);
@@ -336,13 +341,13 @@ internal static class HydraTui
             _remotePairingCode.X = 57; _remotePairingCode.Y = 0; _remotePairingCode.Width = 34;
 
             var pair = new Button { Text = "_Pair", X = 1, Y = 2 };
-            pair.Accepting += (_, e) => { e.Handled = true; _ = PairRemoteAsync(); };
+            pair.Accepting += (_, e) => { e.Handled = true; Forget(PairRemoteAsync()); };
             var load = new Button { Text = "_Load Config", X = Pos.Right(pair) + 2, Y = 2 };
-            load.Accepting += (_, e) => { e.Handled = true; _ = LoadRemoteConfigAsync(); };
+            load.Accepting += (_, e) => { e.Handled = true; Forget(LoadRemoteConfigAsync()); };
             var validate = new Button { Text = "_Validate", X = Pos.Right(load) + 2, Y = 2 };
-            validate.Accepting += (_, e) => { e.Handled = true; _ = ValidateRemoteConfigAsync(); };
+            validate.Accepting += (_, e) => { e.Handled = true; Forget(ValidateRemoteConfigAsync()); };
             var apply = new Button { Text = "Save && _Apply", X = Pos.Right(validate) + 2, Y = 2 };
-            apply.Accepting += (_, e) => { e.Handled = true; _ = ApplyRemoteConfigAsync(); };
+            apply.Accepting += (_, e) => { e.Handled = true; Forget(ApplyRemoteConfigAsync()); };
             _remoteStatus.X = Pos.Right(apply) + 3; _remoteStatus.Y = 2; _remoteStatus.Width = Dim.Fill(1);
 
             _remoteConfig.X = 0; _remoteConfig.Y = 4; _remoteConfig.Width = Dim.Fill(); _remoteConfig.Height = Dim.Fill();
@@ -909,7 +914,7 @@ internal static class HydraTui
                 if (restart && _connected)
                     await WaitForRestartAsync(previousStatus);
                 else
-                    SetCommandBusy(false, restart ? "Configuration saved. Start Hydra to apply it." : "Configuration saved.", "Accent");
+                    SetCommandBusy(false, restart ? "Configuration saved. Start Hydra to apply it." : "Configuration saved.");
             }
             catch (Exception ex)
             {
@@ -1084,6 +1089,10 @@ internal static class HydraTui
         private static bool IsChecked(CheckBox box) => box.Value == CheckState.Checked;
         private static void SetChecked(CheckBox box, bool value) => box.Value = value ? CheckState.Checked : CheckState.UnChecked;
 
+        // Discarding a fire-and-forget task as "_ = task" inside a (_, e) => event handler would reassign
+        // the handler's own discarded sender parameter instead of the task — this sinks it by name instead.
+        private static void Forget(Task _) { }
+
         private void ToggleSecrets(Button button)
         {
             if (_configWithSecrets == null) return;
@@ -1177,7 +1186,7 @@ internal static class HydraTui
                         app.Invoke(() =>
                         {
                             Render(status, new ManagementLogPage(_logCursor, _logCursor, []));
-                            SetCommandBusy(false, "Hydra is already running; Start was not needed.", "Accent");
+                            SetCommandBusy(false, "Hydra is already running; Start was not needed.");
                         });
                         return;
                     }
@@ -1240,7 +1249,7 @@ internal static class HydraTui
                     {
                         _connection.Text = "○ Hydra is stopped — use Start Hydra to launch it";
                         _diagnostics.Text = FormatDiagnostics();
-                        SetCommandBusy(false, "Hydra stopped. Use Start Hydra to launch it.", "Accent");
+                        SetCommandBusy(false, "Hydra stopped. Use Start Hydra to launch it.");
                     });
                     return;
                 }
@@ -1286,7 +1295,7 @@ internal static class HydraTui
                     app.Invoke(() =>
                     {
                         Render(status, new ManagementLogPage(_logCursor, _logCursor, []));
-                        SetCommandBusy(false, message(status), "Accent");
+                        SetCommandBusy(false, message(status));
                     });
                     return;
                 }

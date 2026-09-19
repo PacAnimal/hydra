@@ -20,10 +20,17 @@ internal sealed class HydraLifetimeController(
         _ = Task.Run(async () =>
         {
             await Task.Delay(350);
-            if (OperatingSystem.IsWindows() && RunMode.IsSessionChild)
-                lifetime.StopApplication();
-            else
-                ProcessRestart.Restart();
+            try
+            {
+                if (OperatingSystem.IsWindows() && RunMode.IsSessionChild)
+                    lifetime.StopApplication();
+                else
+                    ProcessRestart.Restart();
+            }
+            catch (Exception ex)
+            {
+                log.LogError(ex, "Failed to restart Hydra after a management request");
+            }
         });
     }
 

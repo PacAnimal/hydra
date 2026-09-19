@@ -29,11 +29,11 @@ public class XlibInitializationGateTests
             return 0;
         });
 
-        Assert.Multiple(() =>
+        using (Assert.EnterMultipleScope())
         {
             Assert.That(gate.TryInitialize(), Is.False);
             Assert.That(gate.TryInitialize(), Is.False);
             Assert.That(calls, Is.EqualTo(1));
-        });
+        }
     }
 }

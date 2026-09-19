@@ -24,7 +24,7 @@ internal sealed class RelayLatencyService(
     private readonly Func<long> _getTickCount = getTickCount ?? (() => Environment.TickCount64);
     private readonly Lock _lock = new();
     private readonly HashSet<string> _peers = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<(string Host, long Sequence), long> _pending = new();
+    private readonly Dictionary<(string Host, long Sequence), long> _pending = [];
     private readonly Dictionary<string, PeerState> _states = new(StringComparer.OrdinalIgnoreCase);
     private long _sequence;
 

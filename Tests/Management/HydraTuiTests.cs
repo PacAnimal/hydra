@@ -1,4 +1,5 @@
 using Hydra.Management;
+using Hydra.Tui;
 
 namespace Tests.Management;
 
@@ -10,7 +11,7 @@ public class HydraTuiTests
         var previous = Status(processId: 10, uptime: 120);
         var current = Status(processId: 11, uptime: 1);
 
-        Assert.That(global::Hydra.HydraTui.HasRestarted(previous, current), Is.True);
+        Assert.That(HydraTui.HasRestarted(previous, current), Is.True);
     }
 
     [Test]
@@ -19,7 +20,7 @@ public class HydraTuiTests
         var previous = Status(processId: 10, uptime: 120);
         var current = Status(processId: 10, uptime: 1);
 
-        Assert.That(global::Hydra.HydraTui.HasRestarted(previous, current), Is.True);
+        Assert.That(HydraTui.HasRestarted(previous, current), Is.True);
     }
 
     [Test]
@@ -28,33 +29,33 @@ public class HydraTuiTests
         var previous = Status(processId: 10, uptime: 120);
         var current = Status(processId: 10, uptime: 121);
 
-        Assert.That(global::Hydra.HydraTui.HasRestarted(previous, current), Is.False);
+        Assert.That(HydraTui.HasRestarted(previous, current), Is.False);
     }
 
     [Test]
     public void StartIsAvailableAfterAConfirmedShutdown()
     {
-        Assert.That(global::Hydra.HydraTui.CanStartHydra(
+        Assert.That(HydraTui.CanStartHydra(
             connected: false, shutdownConfirmed: true, commandBusy: false), Is.True);
     }
 
     [Test]
     public void StartIsUnavailableForAnUnconfirmedManagementFailure()
     {
-        Assert.That(global::Hydra.HydraTui.CanStartHydra(
+        Assert.That(HydraTui.CanStartHydra(
             connected: false, shutdownConfirmed: false, commandBusy: false), Is.False);
     }
 
     [Test]
     public void StartIsUnavailableWhileConnectedOrBusy()
     {
-        Assert.Multiple(() =>
+        using (Assert.EnterMultipleScope())
         {
-            Assert.That(global::Hydra.HydraTui.CanStartHydra(
+            Assert.That(HydraTui.CanStartHydra(
                 connected: true, shutdownConfirmed: true, commandBusy: false), Is.False);
-            Assert.That(global::Hydra.HydraTui.CanStartHydra(
+            Assert.That(HydraTui.CanStartHydra(
                 connected: false, shutdownConfirmed: true, commandBusy: true), Is.False);
-        });
+        }
     }
 
     [Test]
@@ -66,8 +67,8 @@ public class HydraTuiTests
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(global::Hydra.HydraTui.HasRelayReconnected(previous, oldConnection), Is.False);
-            Assert.That(global::Hydra.HydraTui.HasRelayReconnected(previous, newConnection), Is.True);
+            Assert.That(HydraTui.HasRelayReconnected(previous, oldConnection), Is.False);
+            Assert.That(HydraTui.HasRelayReconnected(previous, newConnection), Is.True);
         }
     }
 
