@@ -52,10 +52,23 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         if (_server == null || _encryption == null) return;
         lock (_sendOrderLock)
         {
-            if (IsAbsoluteMovePayload(payload))
+            if (payload.Length > 0 && payload[0] == (byte)MessageKind.MouseMove)
             {
                 if (_openMovementBatch?.TryAppendAbsolute(targetHosts, payload) == true) return;
                 var movement = MovementBatch.CreateAbsolute(targetHosts, payload);
+                _openMovementBatch = movement;
+                _sendQueue.Writer.TryWrite(new OutboundMessage(targetHosts, payload, null, movement, CancellationToken.None));
+                return;
+            }
+
+            // Fallback for a delta that reaches the generic Send() instead of SendMouseDelta (e.g. an
+            // IRelaySender decorator that forwards Send but not SendMouseDelta) — decodes once here so it
+            // still coalesces instead of silently losing batching. InputRouter, the actual hot path, never
+            // hits this: it calls SendMouseDelta directly and never encodes/decodes at all to accumulate.
+            if (payload.Length > 0 && payload[0] == (byte)MessageKind.MouseMoveDelta && TryDecodeDelta(payload, out var dx, out var dy))
+            {
+                if (_openMovementBatch?.TryAppendDelta(targetHosts, dx, dy) == true) return;
+                var movement = MovementBatch.CreateDelta(targetHosts, dx, dy);
                 _openMovementBatch = movement;
                 _sendQueue.Writer.TryWrite(new OutboundMessage(targetHosts, payload, null, movement, CancellationToken.None));
                 return;
@@ -391,9 +404,6 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         catch (System.Text.Json.JsonException) { return false; }
     }
 
-    private static bool IsAbsoluteMovePayload(byte[] payload) =>
-        payload.Length > 0 && payload[0] == (byte)MessageKind.MouseMove;
-
     // Coalesces same-target movement queued faster than the drain loop can send it: an absolute move
     // keeps only the latest position, a delta accumulates — either way only one message crosses the
     // wire per burst instead of one per input event. Deltas arrive and stay as ints; only Snapshot()
@@ -414,16 +424,19 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         internal static MovementBatch CreateDelta(string[] targets, int dx, int dy) =>
             new(targets, MessageKind.MouseMoveDelta) { _dx = dx, _dy = dy };
 
+        private bool Matches(MessageKind kind, string[] targets) =>
+            _kind == kind && _targets.SequenceEqual(targets);
+
         internal bool TryAppendAbsolute(string[] targets, byte[] payload)
         {
-            if (_kind != MessageKind.MouseMove || !_targets.SequenceEqual(targets)) return false;
+            if (!Matches(MessageKind.MouseMove, targets)) return false;
             _absolutePayload = payload;
             return true;
         }
 
         internal bool TryAppendDelta(string[] targets, int dx, int dy)
         {
-            if (_kind != MessageKind.MouseMoveDelta || !_targets.SequenceEqual(targets)) return false;
+            if (!Matches(MessageKind.MouseMoveDelta, targets)) return false;
             _dx = (int)Math.Clamp((long)_dx + dx, int.MinValue, int.MaxValue);
             _dy = (int)Math.Clamp((long)_dy + dy, int.MinValue, int.MaxValue);
             return true;

@@ -23,5 +23,7 @@ internal sealed class CoalescingBatch<TKind, TNum>(TKind kind, bool accumulate)
         else { _x = x; _y = y; }
     }
 
-    public (TNum X, TNum Y) Snapshot() => (_x, _y);
+    public CoalescingSample<TNum> Snapshot() => new(_x, _y);
 }
+
+internal readonly record struct CoalescingSample<TNum>(TNum X, TNum Y) where TNum : struct, INumber<TNum>;

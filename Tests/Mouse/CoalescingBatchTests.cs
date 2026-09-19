@@ -14,7 +14,7 @@ public class CoalescingBatchTests
         batch.Add(10, 20);
         batch.Add(100, 200);
 
-        Assert.That(batch.Snapshot(), Is.EqualTo((100, 200)));
+        Assert.That(batch.Snapshot(), Is.EqualTo(new CoalescingSample<int>(100, 200)));
     }
 
     [Test]
@@ -26,7 +26,7 @@ public class CoalescingBatchTests
         batch.Add(10, 20);
         batch.Add(-3, 5);
 
-        Assert.That(batch.Snapshot(), Is.EqualTo((8, 27)));
+        Assert.That(batch.Snapshot(), Is.EqualTo(new CoalescingSample<int>(8, 27)));
     }
 
     [Test]
@@ -74,7 +74,7 @@ public class CoalescingBatchTests
     {
         var batch = new CoalescingBatch<bool, int>(true, accumulate: false);
 
-        Assert.That(batch.Snapshot(), Is.EqualTo((0, 0)));
+        Assert.That(batch.Snapshot(), Is.EqualTo(new CoalescingSample<int>(0, 0)));
     }
 
     private enum Kind { Absolute, Delta }

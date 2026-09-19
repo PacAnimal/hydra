@@ -199,6 +199,38 @@ public class StyxIntegrationTests
     }
 
     [Test]
+    public async Task TwoHydraClients_DeltaViaGenericSend_StillDeliversCorrectly()
+    {
+        var networkId = Guid.NewGuid();
+        var cfg = await StyxTestServer.BuildNetworkConfig(_factory!, networkId);
+
+        await using var sender = new HydraTestClient(_factory!, TransitionTestHelper.Profile("sender", new HydraConfig { Mode = Mode.Master, NetworkConfig = cfg }));
+        await using var receiver = new HydraTestClient(_factory!, TransitionTestHelper.Profile("receiver", new HydraConfig { Mode = Mode.Master, NetworkConfig = cfg }));
+
+        await sender.StartAsync(CancellationToken.None);
+        await receiver.StartAsync(CancellationToken.None);
+        await sender.WaitForReady();
+        await receiver.WaitForReady();
+
+        // A caller that reaches an already-encoded MouseMoveDelta payload through the generic Send()
+        // instead of SendMouseDelta (e.g. an IRelaySender decorator that forwards Send but not
+        // SendMouseDelta) must still be handled correctly, not just delivered unbatched by accident.
+        sender.Send(["receiver"], MessageSerializer.Encode(MessageKind.MouseMoveDelta, new MouseMoveDeltaMessage(4, 6)));
+
+        var (source, kind, json) = await receiver.WaitForMessage();
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(source, Is.EqualTo("sender"));
+            Assert.That(kind, Is.EqualTo(MessageKind.MouseMoveDelta));
+            var decoded = json.FromSaneJson<MouseMoveDeltaMessage>();
+            Assert.That(decoded, Is.Not.Null);
+            Assert.That(decoded!.Dx, Is.EqualTo(4));
+            Assert.That(decoded.Dy, Is.EqualTo(6));
+        }
+    }
+
+    [Test]
     public async Task TwoHydraClients_RapidMouseDeltas_SumSurvivesRegardlessOfHowMuchCoalesces()
     {
         var networkId = Guid.NewGuid();
