@@ -4,13 +4,13 @@ namespace Hydra.Platform.MacOs;
 
 // BetterDisplay owns its display state, combined brightness range, and OSD. When it is running,
 // use its documented DistributedNotificationCenter integration instead of bypassing it with DDC.
-internal sealed class MacBetterDisplayController
+internal static class MacBetterDisplayController
 {
     private const string ProcessName = "BetterDisplay";
     private const string RequestName = "pro.betterdisplay.BetterDisplay.request";
     private static readonly nint Center = NativeMethods.CFNotificationCenterGetDistributedCenter();
 
-    internal bool TryAdjustMainDisplayBrightness(bool increase)
+    internal static bool TryAdjustMainDisplayBrightness(bool increase)
     {
         if (Center == nint.Zero || !IsRunning()) return false;
 

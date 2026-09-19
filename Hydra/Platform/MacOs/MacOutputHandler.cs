@@ -10,7 +10,6 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
 {
     private readonly ILogger<MacOutputHandler> _log;
     private readonly MacBrightnessController _brightness;
-    private readonly MacAudioController _audio;
     private readonly MacMediaRemoteController _mediaRemote;
 
     private double _mouseX;
@@ -42,7 +41,6 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
     {
         _log = log;
         _brightness = new MacBrightnessController();
-        _audio = new MacAudioController();
         _mediaRemote = new MacMediaRemoteController();
         // rebuild char→vk map whenever the user switches keyboard layout mid-session
         _layoutNotificationCenter = NativeMethods.CFNotificationCenterGetDistributedCenter();
@@ -241,7 +239,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
             {
                 if (isDown)
                 {
-                    var changed = _brightness.TryAdjustMainDisplay(key2 == SpecialKey.BrightnessUp, out var brightness);
+                    var changed = _brightness.TryAdjustMainDisplay(key2 == SpecialKey.BrightnessUp, out _);
                     if (!changed)
                     {
                         // Preserve the historical event path for displays that do not expose DDC/CI.
@@ -256,13 +254,13 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
             }
             else if (key2 is SpecialKey.AudioVolumeUp or SpecialKey.AudioVolumeDown)
             {
-                if (isDown && !_audio.TryAdjustVolume(key2 == SpecialKey.AudioVolumeUp)
+                if (isDown && !MacAudioController.TryAdjustVolume(key2 == SpecialKey.AudioVolumeUp)
                     && GetNxMediaKeyType(key2) is >= 0 and var volumeNxType)
                     PostNsMediaKey((uint)volumeNxType, true);
             }
             else if (key2 == SpecialKey.AudioMute)
             {
-                if (isDown && !_audio.TryToggleMute() && GetNxMediaKeyType(key2) is >= 0 and var muteNxType)
+                if (isDown && !MacAudioController.TryToggleMute() && GetNxMediaKeyType(key2) is >= 0 and var muteNxType)
                     PostNsMediaKey((uint)muteNxType, true);
             }
             else if (key2 is SpecialKey.AudioPlay or SpecialKey.AudioNext or SpecialKey.AudioPrev)

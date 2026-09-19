@@ -8,6 +8,8 @@ namespace Hydra.Platform.MacOs;
 internal sealed class MacBrightnessController
 {
     private const string DisplayServices = "/System/Library/PrivateFrameworks/DisplayServices.framework/DisplayServices";
+    // matches Apple's own "IOKit" capitalization, not the standard identifier casing rule
+    // ReSharper disable once InconsistentNaming
     private const string IOKit = "/System/Library/Frameworks/IOKit.framework/IOKit";
     private const int KernSuccess = 0;
     private const uint DdcDisplayAddress = 0x37;
@@ -31,10 +33,9 @@ internal sealed class MacBrightnessController
     private delegate nint CreateWithServiceDelegate(nint allocator, uint service);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private unsafe delegate int I2cDelegate(nint avService, uint address, uint senderAddress, byte* data, uint length);
+    private unsafe delegate int I2CDelegate(nint avService, uint address, uint senderAddress, byte* data, uint length);
 
-    private readonly object _gate = new();
-    private readonly MacBetterDisplayController _betterDisplay = new();
+    private readonly Lock _gate = new();
     private readonly nint _displayServicesHandle = LoadLibrary(DisplayServices);
     private readonly nint _ioKitHandle = LoadLibrary(IOKit);
     private readonly GetBrightnessDelegate? _getDisplayBrightness;
@@ -42,8 +43,8 @@ internal sealed class MacBrightnessController
     private readonly CanChangeBrightnessDelegate? _canChangeDisplayBrightness;
     private readonly BrightnessChangedDelegate? _displayBrightnessChanged;
     private readonly CreateWithServiceDelegate? _createWithService;
-    private readonly I2cDelegate? _readI2c;
-    private readonly I2cDelegate? _writeI2c;
+    private readonly I2CDelegate? _readI2C;
+    private readonly I2CDelegate? _writeI2C;
     private bool _isAvailable;
 
     internal MacBrightnessController()
@@ -53,8 +54,8 @@ internal sealed class MacBrightnessController
         _canChangeDisplayBrightness = LoadDelegate<CanChangeBrightnessDelegate>(_displayServicesHandle, "DisplayServicesCanChangeBrightness");
         _displayBrightnessChanged = LoadDelegate<BrightnessChangedDelegate>(_displayServicesHandle, "DisplayServicesBrightnessChanged");
         _createWithService = LoadDelegate<CreateWithServiceDelegate>(_ioKitHandle, "IOAVServiceCreateWithService");
-        _readI2c = LoadDelegate<I2cDelegate>(_ioKitHandle, "IOAVServiceReadI2C");
-        _writeI2c = LoadDelegate<I2cDelegate>(_ioKitHandle, "IOAVServiceWriteI2C");
+        _readI2C = LoadDelegate<I2CDelegate>(_ioKitHandle, "IOAVServiceReadI2C");
+        _writeI2C = LoadDelegate<I2CDelegate>(_ioKitHandle, "IOAVServiceWriteI2C");
     }
 
     internal bool IsAvailable => _isAvailable;
@@ -64,7 +65,7 @@ internal sealed class MacBrightnessController
         normalizedBrightness = 0;
         lock (_gate)
         {
-            if (_betterDisplay.TryAdjustMainDisplayBrightness(increase))
+            if (MacBetterDisplayController.TryAdjustMainDisplayBrightness(increase))
             {
                 _isAvailable = true;
                 return true;
@@ -96,10 +97,10 @@ internal sealed class MacBrightnessController
         return true;
     }
 
-    private unsafe bool TryAdjustDdc(uint displayId, bool increase, out float normalizedBrightness)
+    private bool TryAdjustDdc(uint displayId, bool increase, out float normalizedBrightness)
     {
         normalizedBrightness = 0;
-        if (_createWithService is null || _readI2c is null || _writeI2c is null) return false;
+        if (_createWithService is null || _readI2C is null || _writeI2C is null) return false;
         // A built-in display is handled by DisplayServices; generic external monitors use DDC/CI.
         if (NativeMethods.CGDisplayIsBuiltin(displayId) != 0) return false;
 
@@ -129,10 +130,10 @@ internal sealed class MacBrightnessController
                     }
                     finally { NativeMethods.CFRelease(avService); }
                 }
-                finally { NativeMethods.IOObjectRelease(service); }
+                finally { _ = NativeMethods.IOObjectRelease(service); }
             }
         }
-        finally { NativeMethods.IOObjectRelease(iterator); }
+        finally { _ = NativeMethods.IOObjectRelease(iterator); }
 
         return false;
     }
@@ -143,7 +144,7 @@ internal sealed class MacBrightnessController
         var request = CreateGetBrightnessRequest();
         fixed (byte* requestPtr = request)
         {
-            if (_writeI2c!(avService, DdcDisplayAddress, DdcHostAddress, requestPtr, (uint)request.Length) != KernSuccess)
+            if (_writeI2C!(avService, DdcDisplayAddress, DdcHostAddress, requestPtr, (uint)request.Length) != KernSuccess)
                 return false;
         }
 
@@ -151,7 +152,7 @@ internal sealed class MacBrightnessController
         var reply = new byte[11];
         fixed (byte* replyPtr = reply)
         {
-            if (_readI2c!(avService, DdcDisplayAddress, DdcHostAddress, replyPtr, (uint)reply.Length) != KernSuccess)
+            if (_readI2C!(avService, DdcDisplayAddress, DdcHostAddress, replyPtr, (uint)reply.Length) != KernSuccess)
                 return false;
         }
         return TryParseBrightnessReply(reply, out current, out max);
@@ -161,7 +162,7 @@ internal sealed class MacBrightnessController
     {
         var request = CreateSetBrightnessRequest(value);
         fixed (byte* requestPtr = request)
-            return _writeI2c!(avService, DdcDisplayAddress, DdcHostAddress, requestPtr, (uint)request.Length) == KernSuccess;
+            return _writeI2C!(avService, DdcDisplayAddress, DdcHostAddress, requestPtr, (uint)request.Length) == KernSuccess;
     }
 
     internal static byte[] CreateGetBrightnessRequest()

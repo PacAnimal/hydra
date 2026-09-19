@@ -4,7 +4,7 @@ namespace Hydra.Platform.MacOs;
 
 // CoreAudio is the public API behind macOS's default output volume. It avoids the synthetic
 // NX_SYSDEFINED path, which current macOS releases no longer accept from ordinary user processes.
-internal sealed class MacAudioController
+internal static class MacAudioController
 {
     private const int KernSuccess = 0;
     private const uint UInt32Size = sizeof(uint);
@@ -26,7 +26,7 @@ internal sealed class MacAudioController
         NativeMethods.KAudioObjectPropertyScopeOutput,
         NativeMethods.KAudioObjectPropertyElementMain);
 
-    internal bool TryAdjustVolume(bool increase)
+    internal static bool TryAdjustVolume(bool increase)
     {
         if (TryAdjustVolumeWithCoreAudio(increase)) return true;
 
@@ -37,7 +37,7 @@ internal sealed class MacAudioController
         return TryAdjustVolumeWithAppleScript(increase);
     }
 
-    internal bool TryToggleMute()
+    internal static bool TryToggleMute()
     {
         if (!TryGetDefaultOutputDevice(out var device)) return false;
         var size = UInt32Size;
