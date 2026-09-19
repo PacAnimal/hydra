@@ -45,7 +45,6 @@ internal sealed class MacBrightnessController
     private readonly CreateWithServiceDelegate? _createWithService;
     private readonly I2CDelegate? _readI2C;
     private readonly I2CDelegate? _writeI2C;
-    private bool _isAvailable;
 
     internal MacBrightnessController()
     {
@@ -58,27 +57,17 @@ internal sealed class MacBrightnessController
         _writeI2C = LoadDelegate<I2CDelegate>(_ioKitHandle, "IOAVServiceWriteI2C");
     }
 
-    internal bool IsAvailable => _isAvailable;
-
     internal bool TryAdjustMainDisplay(bool increase, out float normalizedBrightness)
     {
         normalizedBrightness = 0;
         lock (_gate)
         {
             if (MacBetterDisplayController.TryAdjustMainDisplayBrightness(increase))
-            {
-                _isAvailable = true;
                 return true;
-            }
 
             var displayId = NativeMethods.CGMainDisplayID();
-            if (TryAdjustDisplayServices(displayId, increase, out normalizedBrightness)
-                || TryAdjustDdc(displayId, increase, out normalizedBrightness))
-            {
-                _isAvailable = true;
-                return true;
-            }
-            return false;
+            return TryAdjustDisplayServices(displayId, increase, out normalizedBrightness)
+                || TryAdjustDdc(displayId, increase, out normalizedBrightness);
         }
     }
 

@@ -68,11 +68,12 @@ public sealed class MacClipboardSync : IClipboardSync
         Volatile.Write(ref _ownedChangeCount, changeCount);
     }
 
-    public string? GetPrimaryText()
-    {
-        var pasteboard = GetGeneralPasteboard();
-        return pasteboard != nint.Zero && OwnsCurrentClipboard(pasteboard) ? _storedPrimaryText : null;
-    }
+    // _storedPrimaryText mirrors an X11-style primary selection relayed from another peer — it is never
+    // written to the general NSPasteboard, so the pasteboard's ownership/changeCount says nothing about
+    // whether this value is stale. Gating it on OwnsCurrentClipboard() only happened to work when the
+    // most recent write was a SetClipboard call (which touches both at once); a plain local copy after
+    // that would advance the pasteboard's changeCount and make this spuriously return null.
+    public string? GetPrimaryText() => _storedPrimaryText;
 
     public void SetPrimaryText(string text) => _storedPrimaryText = text;
 

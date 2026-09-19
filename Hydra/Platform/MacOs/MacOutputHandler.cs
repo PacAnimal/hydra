@@ -11,6 +11,11 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
     private readonly ILogger<MacOutputHandler> _log;
     private readonly MacBrightnessController _brightness;
     private readonly MacMediaRemoteController _mediaRemote;
+    // Keys whose most recent down event fell back to legacy NX injection, so the matching up event
+    // mirrors it. The API-based paths (DisplayServices/DDC, CoreAudio, MediaRemote) are one-shot
+    // adjustments with nothing to do on release; only the legacy NX path models a real press/release
+    // pair and needs both ends sent, or the OS can see an unpaired down with no up.
+    private readonly HashSet<SpecialKey> _legacyMediaKeysDown = [];
 
     private double _mouseX;
     private double _mouseY;
@@ -236,39 +241,15 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
                 if (isDown) System.Diagnostics.Process.Start("open", ["-a", "Mission Control"]);
             }
             else if (key2 is SpecialKey.BrightnessUp or SpecialKey.BrightnessDown)
-            {
-                if (isDown)
-                {
-                    var changed = _brightness.TryAdjustMainDisplay(key2 == SpecialKey.BrightnessUp, out _);
-                    if (!changed)
-                    {
-                        // Preserve the historical event path for displays that do not expose DDC/CI.
-                        if (GetNxMediaKeyType(key2) is >= 0 and var brightnessNxType)
-                            PostNsMediaKey((uint)brightnessNxType, true);
-                    }
-                }
-                else if (!_brightness.IsAvailable && GetNxMediaKeyType(key2) is >= 0 and var brightnessNxType)
-                {
-                    PostNsMediaKey((uint)brightnessNxType, false);
-                }
-            }
+                HandleMediaKeyWithLegacyFallback(key2, isDown,
+                    () => _brightness.TryAdjustMainDisplay(key2 == SpecialKey.BrightnessUp, out _));
             else if (key2 is SpecialKey.AudioVolumeUp or SpecialKey.AudioVolumeDown)
-            {
-                if (isDown && !MacAudioController.TryAdjustVolume(key2 == SpecialKey.AudioVolumeUp)
-                    && GetNxMediaKeyType(key2) is >= 0 and var volumeNxType)
-                    PostNsMediaKey((uint)volumeNxType, true);
-            }
+                HandleMediaKeyWithLegacyFallback(key2, isDown,
+                    () => MacAudioController.TryAdjustVolume(key2 == SpecialKey.AudioVolumeUp));
             else if (key2 == SpecialKey.AudioMute)
-            {
-                if (isDown && !MacAudioController.TryToggleMute() && GetNxMediaKeyType(key2) is >= 0 and var muteNxType)
-                    PostNsMediaKey((uint)muteNxType, true);
-            }
+                HandleMediaKeyWithLegacyFallback(key2, isDown, MacAudioController.TryToggleMute);
             else if (key2 is SpecialKey.AudioPlay or SpecialKey.AudioNext or SpecialKey.AudioPrev)
-            {
-                var sent = !isDown || _mediaRemote.TrySend(key2);
-                if (!sent && GetNxMediaKeyType(key2) is >= 0 and var mediaNxType)
-                    PostNsMediaKey((uint)mediaNxType, isDown);
-            }
+                HandleMediaKeyWithLegacyFallback(key2, isDown, () => _mediaRemote.TrySend(key2));
             // media keys require NX_SYSDEFINED injection via NSEvent — regular NX_KEYDOWN with the VK
             // produces wrong results (volume VKs hit wrong keys in the regular keycode space).
             else if (GetNxMediaKeyType(key2) is >= 0 and var nxType)
@@ -402,6 +383,24 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
     private static readonly nint NsEventClass = NativeMethods.objc_getClass("NSEvent");
     private static readonly nint SelOtherEvent = NativeMethods.sel_registerName("otherEventWithType:location:modifierFlags:timestamp:windowNumber:context:subtype:data1:data2:");
     private static readonly nint SelCgEvent = NativeMethods.sel_registerName("CGEvent");
+
+    // tries the real API on a down press; on release, replays legacy NX injection only if the down
+    // press actually used it (never re-invokes tryApi, which would repeat a stateful adjustment).
+    private void HandleMediaKeyWithLegacyFallback(SpecialKey key, bool isDown, Func<bool> tryApi)
+    {
+        if (isDown)
+        {
+            if (!tryApi() && GetNxMediaKeyType(key) is >= 0 and var nxType)
+            {
+                _legacyMediaKeysDown.Add(key);
+                PostNsMediaKey((uint)nxType, true);
+            }
+        }
+        else if (_legacyMediaKeysDown.Remove(key) && GetNxMediaKeyType(key) is >= 0 and var nxType)
+        {
+            PostNsMediaKey((uint)nxType, false);
+        }
+    }
 
     // inject a media key via [NSEvent otherEventWithType:NSSystemDefined subtype:8 ...] → CGEventPost.
     // mirrors barrier/deskflow's fakeNativeMediaKey(): NX_SYSDEFINED is the only reliable path for
