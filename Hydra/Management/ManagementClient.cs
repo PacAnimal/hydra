@@ -3,7 +3,7 @@ using System.Net.Sockets;
 
 namespace Hydra.Management;
 
-internal sealed class ManagementClient(string configPath)
+internal sealed class ManagementClient(string configPath) : IManagementClient
 {
     private readonly ManagementEndpoint _endpoint = ManagementEndpoint.ForConfig(configPath);
 
@@ -17,20 +17,20 @@ internal sealed class ManagementClient(string configPath)
         return ManagementJson.Deserialize<T>(response.Json);
     }
 
-    internal Task<ServerHello> HelloAsync(CancellationToken cancel = default) => InvokeAsync<ServerHello>("hello", cancel: cancel);
-    internal Task<HydraStatusSnapshot> GetStatusAsync(CancellationToken cancel = default) => InvokeAsync<HydraStatusSnapshot>("status", cancel: cancel);
-    internal Task<ManagementLogPage> GetLogsAsync(long after, CancellationToken cancel = default) => InvokeAsync<ManagementLogPage>("logs", after, cancel);
-    internal Task<ConfigDocument> GetConfigAsync(CancellationToken cancel = default) => InvokeAsync<ConfigDocument>("config.get", cancel: cancel);
-    internal Task<ConfigValidation> ValidateConfigAsync(string json, CancellationToken cancel = default) => InvokeAsync<ConfigValidation>("config.validate", json, cancel);
-    internal Task<ConfigDocument> SaveConfigAsync(SaveConfigRequest request, CancellationToken cancel = default) => InvokeAsync<ConfigDocument>("config.save", request, cancel);
-    internal Task<CommandResult> ReconnectRelayAsync(CancellationToken cancel = default) => InvokeAsync<CommandResult>("relay.reconnect", cancel: cancel);
-    internal Task<CommandResult> RestartHydraAsync(CancellationToken cancel = default) => InvokeAsync<CommandResult>("hydra.restart", cancel: cancel);
-    internal Task<CommandResult> ShutdownHydraAsync(CancellationToken cancel = default) => InvokeAsync<CommandResult>("hydra.shutdown", cancel: cancel);
-    internal Task<RemotePairResult> PairRemoteAsync(RemotePairRequest request, CancellationToken cancel = default) => InvokeAsync<RemotePairResult>("remote.pair", request, cancel);
-    internal Task<RemoteConfigDocument> GetRemoteConfigAsync(string host, CancellationToken cancel = default) => InvokeAsync<RemoteConfigDocument>("remote.config.get", new RemoteHostRequest(host), cancel);
-    internal Task<ConfigValidation> ValidateRemoteConfigAsync(RemoteValidateRequest request, CancellationToken cancel = default) => InvokeAsync<ConfigValidation>("remote.config.validate", request, cancel);
-    internal Task<RemoteApplyAccepted> ApplyRemoteConfigAsync(RemoteApplyRequest request, CancellationToken cancel = default) => InvokeAsync<RemoteApplyAccepted>("remote.config.apply", request, cancel);
-    internal Task<CommandResult> ConfirmRemoteConfigAsync(RemoteConfirmRequest request, CancellationToken cancel = default) => InvokeAsync<CommandResult>("remote.config.confirm", request, cancel);
+    public Task<ServerHello> HelloAsync(CancellationToken cancel = default) => InvokeAsync<ServerHello>("hello", cancel: cancel);
+    public Task<HydraStatusSnapshot> GetStatusAsync(CancellationToken cancel = default) => InvokeAsync<HydraStatusSnapshot>("status", cancel: cancel);
+    public Task<ManagementLogPage> GetLogsAsync(long after, CancellationToken cancel = default) => InvokeAsync<ManagementLogPage>("logs", after, cancel);
+    public Task<ConfigDocument> GetConfigAsync(CancellationToken cancel = default) => InvokeAsync<ConfigDocument>("config.get", cancel: cancel);
+    public Task<ConfigValidation> ValidateConfigAsync(string json, CancellationToken cancel = default) => InvokeAsync<ConfigValidation>("config.validate", json, cancel);
+    public Task<ConfigDocument> SaveConfigAsync(SaveConfigRequest request, CancellationToken cancel = default) => InvokeAsync<ConfigDocument>("config.save", request, cancel);
+    public Task<CommandResult> ReconnectRelayAsync(CancellationToken cancel = default) => InvokeAsync<CommandResult>("relay.reconnect", cancel: cancel);
+    public Task<CommandResult> RestartHydraAsync(CancellationToken cancel = default) => InvokeAsync<CommandResult>("hydra.restart", cancel: cancel);
+    public Task<CommandResult> ShutdownHydraAsync(CancellationToken cancel = default) => InvokeAsync<CommandResult>("hydra.shutdown", cancel: cancel);
+    public Task<RemotePairResult> PairRemoteAsync(RemotePairRequest request, CancellationToken cancel = default) => InvokeAsync<RemotePairResult>("remote.pair", request, cancel);
+    public Task<RemoteConfigDocument> GetRemoteConfigAsync(string host, CancellationToken cancel = default) => InvokeAsync<RemoteConfigDocument>("remote.config.get", new RemoteHostRequest(host), cancel);
+    public Task<ConfigValidation> ValidateRemoteConfigAsync(RemoteValidateRequest request, CancellationToken cancel = default) => InvokeAsync<ConfigValidation>("remote.config.validate", request, cancel);
+    public Task<RemoteApplyAccepted> ApplyRemoteConfigAsync(RemoteApplyRequest request, CancellationToken cancel = default) => InvokeAsync<RemoteApplyAccepted>("remote.config.apply", request, cancel);
+    public Task<CommandResult> ConfirmRemoteConfigAsync(RemoteConfirmRequest request, CancellationToken cancel = default) => InvokeAsync<CommandResult>("remote.config.confirm", request, cancel);
 
     private async Task<Stream> ConnectAsync(CancellationToken cancel)
     {

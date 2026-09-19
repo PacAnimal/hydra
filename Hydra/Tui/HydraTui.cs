@@ -5,6 +5,7 @@ using Hydra.Management;
 using Hydra.Platform;
 using Terminal.Gui.App;
 using Terminal.Gui.Editor;
+using Terminal.Gui.Editor.Highlighting;
 using Terminal.Gui.Input;
 using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
@@ -28,29 +29,45 @@ internal static class HydraTui
 
     internal static Task RunAsync(string[] args)
     {
+        var demo = args.Any(a => a.Equals("--demo", StringComparison.OrdinalIgnoreCase));
+        var color = args.Any(a => a.Equals("--color", StringComparison.OrdinalIgnoreCase));
         string? explicitConfig = null;
         for (var i = 0; i < args.Length; i++)
             if (args[i] == "--config" && i + 1 < args.Length)
                 explicitConfig = args[++i];
 
         string configPath;
-        try
+        IManagementClient client;
+        if (demo)
         {
-            configPath = HydraConfigFile.ResolvePath(explicitConfig ?? Environment.GetEnvironmentVariable("CONFIG"));
+            // A design-preview mode: renders this same UI against fabricated data (see
+            // MockManagementClient) instead of a live daemon, so the TUI can be reviewed or
+            // screenshotted without a running Hydra, a real config, or a real machine identity.
+            configPath = explicitConfig ?? Path.Combine(Path.GetTempPath(), $"hydra-demo-{Guid.NewGuid():N}.conf");
+            try { File.WriteAllText(configPath, MockManagementClient.DemoConfigJson); }
+            catch (IOException) { /* only used as a fallback for offline config editing in demo mode */ }
+            client = new MockManagementClient();
         }
-        catch (Exception ex)
+        else
         {
-            Console.Error.WriteLine(ex.Message);
-            return Task.CompletedTask;
+            try
+            {
+                configPath = HydraConfigFile.ResolvePath(explicitConfig ?? Environment.GetEnvironmentVariable("CONFIG"));
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine(ex.Message);
+                return Task.CompletedTask;
+            }
+            client = new ManagementClient(configPath);
         }
 
         using IApplication app = Application.Create();
         app.Init();
-        Button.DefaultShadow = ShadowStyles.None;
         using var window = new Window();
-        window.Title = "Hydra Control Center";
+        window.Title = demo ? "Hydra Control Center (Demo)" : "Hydra Control Center";
         window.BorderStyle = Terminal.Gui.Drawing.LineStyle.Rounded;
-        using var controller = new TuiController(app, window, configPath);
+        using var controller = new TuiController(app, window, configPath, client, color);
         controller.Build();
         var requestStop = window.RequestStop;
         Console.CancelKeyPress += CancelHandler;
@@ -74,34 +91,44 @@ internal static class HydraTui
         }
     }
 
-    private sealed class TuiController(IApplication app, Window window, string configPath) : IDisposable
+    // internal (not private) so its pure formatting helpers are reachable from Tests via
+    // InternalsVisibleTo — see FormatOverview/FormatPeers and their tests.
+    internal sealed class TuiController(IApplication app, Window window, string configPath, IManagementClient client, bool color = false) : IDisposable
     {
-        private readonly ManagementClient _client = new(configPath);
+        // Terminal.Gui already renders in real 24-bit color by default (borders, the active tab,
+        // the status bar); --color additionally tints the connection line by actual state, since
+        // that default theme otherwise never distinguishes "connected" from "stopped" by color.
+        private static readonly Terminal.Gui.Drawing.Scheme ConnectedScheme = new(new Terminal.Gui.Drawing.Attribute(
+            new Terminal.Gui.Drawing.Color(Terminal.Gui.Drawing.ColorName16.BrightGreen), new Terminal.Gui.Drawing.Color(Terminal.Gui.Drawing.ColorName16.Black)));
+        private static readonly Terminal.Gui.Drawing.Scheme DisconnectedScheme = new(new Terminal.Gui.Drawing.Attribute(
+            new Terminal.Gui.Drawing.Color(Terminal.Gui.Drawing.ColorName16.BrightRed), new Terminal.Gui.Drawing.Color(Terminal.Gui.Drawing.ColorName16.Black)));
+
+        private readonly IManagementClient _client = client;
         private readonly TransactionalConfigStore _offlineStore = new(new HydraRuntimeInfo(configPath, DateTimeOffset.UtcNow));
         private readonly CancellationTokenSource _cancel = new();
-        private readonly Editor _overview = ReadOnlyEditor();
-        private readonly Editor _peers = ReadOnlyEditor();
-        private readonly Editor _logs = ReadOnlyEditor();
-        private readonly Editor _config = new() { WordWrap = false, ViewportSettings = ViewportSettingsFlags.HasVerticalScrollBar | ViewportSettingsFlags.HasHorizontalScrollBar };
+        private readonly Editor _overview = ReadOnlyEditor(RegexHighlightingDefinition.Status);
+        private readonly Editor _peers = ReadOnlyEditor(RegexHighlightingDefinition.Status);
+        private readonly Editor _logs = ReadOnlyEditor(RegexHighlightingDefinition.Logs);
+        private readonly Editor _config = new() { WordWrap = false, ViewportSettings = ViewportSettingsFlags.HasVerticalScrollBar | ViewportSettingsFlags.HasHorizontalScrollBar, HighlightingDefinition = HighlightingManager.Instance.GetDefinition("Json") };
         private readonly FrameView _configForm = new() { BorderStyle = Terminal.Gui.Drawing.LineStyle.None };
         private readonly FrameView _configText = new() { BorderStyle = Terminal.Gui.Drawing.LineStyle.None, Visible = false };
         private readonly Label _configHelp = new() { Text = "Move focus or hover over an option to see what it does.", X = 1, Y = 0, Width = Dim.Fill(1), Height = 2 };
-        private readonly Button _formModeButton = new() { Text = "_Form" };
-        private readonly Button _textModeButton = new() { Text = "_Text" };
-        private readonly Button _previousProfile = new() { Text = "_Previous", Enabled = false };
-        private readonly Button _nextProfile = new() { Text = "_Next", Enabled = false };
-        private readonly Button _revealSecrets = new() { Text = "_Reveal Secrets", Visible = false };
-        private readonly Editor _diagnostics = ReadOnlyEditor();
+        private readonly Button _formModeButton = new() { ShadowStyle = ShadowStyles.None, Text = "_Form" };
+        private readonly Button _textModeButton = new() { ShadowStyle = ShadowStyles.None, Text = "_Text" };
+        private readonly Button _previousProfile = new() { ShadowStyle = ShadowStyles.None, Text = "_Previous", Enabled = false };
+        private readonly Button _nextProfile = new() { ShadowStyle = ShadowStyles.None, Text = "_Next", Enabled = false };
+        private readonly Button _revealSecrets = new() { ShadowStyle = ShadowStyles.None, Text = "_Reveal Secrets", Visible = false };
+        private readonly Editor _diagnostics = ReadOnlyEditor(RegexHighlightingDefinition.Status);
         private readonly TextField _remoteHost = new();
         private readonly TextField _remotePairingCode = new() { Secret = true };
-        private readonly Editor _remoteConfig = new() { WordWrap = false, ViewportSettings = ViewportSettingsFlags.HasVerticalScrollBar | ViewportSettingsFlags.HasHorizontalScrollBar };
+        private readonly Editor _remoteConfig = new() { WordWrap = false, ViewportSettings = ViewportSettingsFlags.HasVerticalScrollBar | ViewportSettingsFlags.HasHorizontalScrollBar, HighlightingDefinition = HighlightingManager.Instance.GetDefinition("Json") };
         private readonly Label _remoteStatus = new() { Text = "Select a peer, pair it locally, then load its redacted configuration." };
         private readonly Label _connection = new() { Text = "Connecting…", X = 1, Y = 0, Width = Dim.Fill(), SchemeName = "Accent" };
         private readonly Label _activity = new() { Text = "Ready", X = 1, Y = Pos.AnchorEnd(2), Width = Dim.Fill(), SchemeName = "Base" };
-        private readonly Button _reconnect = new() { Text = "_Reconnect Relay", Enabled = false };
-        private readonly Button _restart = new() { Text = "_Restart Hydra", Enabled = false };
-        private readonly Button _shutdown = new() { Text = "_Shutdown Hydra", Enabled = false };
-        private readonly Button _start = new() { Text = "_Start Hydra", Enabled = false };
+        private readonly Button _reconnect = new() { ShadowStyle = ShadowStyles.None, Text = "_Reconnect Relay", Enabled = false };
+        private readonly Button _restart = new() { ShadowStyle = ShadowStyles.None, Text = "_Restart Hydra", Enabled = false };
+        private readonly Button _shutdown = new() { ShadowStyle = ShadowStyles.None, Text = "_Shutdown Hydra", Enabled = false };
+        private readonly Button _start = new() { ShadowStyle = ShadowStyles.None, Text = "_Start Hydra", Enabled = false };
         private readonly Queue<string> _visibleLogs = new();
         private ConfigDocument? _configDocument;
         private RemoteConfigDocument? _remoteConfigDocument;
@@ -302,9 +329,9 @@ internal static class HydraTui
 
             var helpPanel = new FrameView { Title = "Option Help", X = 0, Y = Pos.AnchorEnd(6), Width = Dim.Fill(), Height = 3 };
             helpPanel.Add(_configHelp);
-            var validate = new Button { Text = "_Validate", X = 1, Y = Pos.AnchorEnd(2) };
+            var validate = new Button { ShadowStyle = ShadowStyles.None, Text = "_Validate", X = 1, Y = Pos.AnchorEnd(2) };
             validate.Accepting += (_, e) => { e.Handled = true; ValidateConfig(); };
-            var reload = new Button { Text = "Re_load", X = Pos.Right(validate) + 2, Y = Pos.Top(validate) };
+            var reload = new Button { ShadowStyle = ShadowStyles.None, Text = "Re_load", X = Pos.Right(validate) + 2, Y = Pos.Top(validate) };
             reload.Accepting += (_, e) => { e.Handled = true; Forget(LoadConfigAsync()); };
             _revealSecrets.X = Pos.Right(reload) + 2; _revealSecrets.Y = Pos.Top(validate);
             _revealSecrets.Accepting += (_, e) =>
@@ -312,9 +339,9 @@ internal static class HydraTui
                 e.Handled = true;
                 ToggleSecrets(_revealSecrets);
             };
-            var save = new Button { Text = "_Save", X = Pos.Right(_revealSecrets) + 2, Y = Pos.Top(validate) };
+            var save = new Button { ShadowStyle = ShadowStyles.None, Text = "_Save", X = Pos.Right(_revealSecrets) + 2, Y = Pos.Top(validate) };
             save.Accepting += (_, e) => { e.Handled = true; Forget(SaveConfigAsync(restart: false)); };
-            var apply = new Button { Text = "Save && _Restart", X = Pos.Right(save) + 2, Y = Pos.Top(validate) };
+            var apply = new Button { ShadowStyle = ShadowStyles.None, Text = "Save && _Restart", X = Pos.Right(save) + 2, Y = Pos.Top(validate) };
             apply.Accepting += (_, e) => { e.Handled = true; Forget(SaveConfigAsync(restart: true)); };
             _configText.Add(_config);
             tab.Add(_formModeButton, _textModeButton, _configForm, _configText, helpPanel,
@@ -340,13 +367,13 @@ internal static class HydraTui
             var codeLabel = new Label { Text = "Pairing code", X = 42, Y = 0 };
             _remotePairingCode.X = 57; _remotePairingCode.Y = 0; _remotePairingCode.Width = 34;
 
-            var pair = new Button { Text = "_Pair", X = 1, Y = 2 };
+            var pair = new Button { ShadowStyle = ShadowStyles.None, Text = "_Pair", X = 1, Y = 2 };
             pair.Accepting += (_, e) => { e.Handled = true; Forget(PairRemoteAsync()); };
-            var load = new Button { Text = "_Load Config", X = Pos.Right(pair) + 2, Y = 2 };
+            var load = new Button { ShadowStyle = ShadowStyles.None, Text = "_Load Config", X = Pos.Right(pair) + 2, Y = 2 };
             load.Accepting += (_, e) => { e.Handled = true; Forget(LoadRemoteConfigAsync()); };
-            var validate = new Button { Text = "_Validate", X = Pos.Right(load) + 2, Y = 2 };
+            var validate = new Button { ShadowStyle = ShadowStyles.None, Text = "_Validate", X = Pos.Right(load) + 2, Y = 2 };
             validate.Accepting += (_, e) => { e.Handled = true; Forget(ValidateRemoteConfigAsync()); };
-            var apply = new Button { Text = "Save && _Apply", X = Pos.Right(validate) + 2, Y = 2 };
+            var apply = new Button { ShadowStyle = ShadowStyles.None, Text = "Save && _Apply", X = Pos.Right(validate) + 2, Y = 2 };
             apply.Accepting += (_, e) => { e.Handled = true; Forget(ApplyRemoteConfigAsync()); };
             _remoteStatus.X = Pos.Right(apply) + 3; _remoteStatus.Y = 2; _remoteStatus.Width = Dim.Fill(1);
 
@@ -615,6 +642,7 @@ internal static class HydraTui
                 var captured = index;
                 var button = new Button
                 {
+                    ShadowStyle = ShadowStyles.None,
                     Text = $"_{sections[index].Item1}",
                     X = previous == null ? 1 : Pos.Right(previous) + 1,
                     Y = 0,
@@ -768,12 +796,12 @@ internal static class HydraTui
                     SetLiveControls(false);
                     if (_shutdownConfirmed)
                     {
-                        _connection.Text = "○ Hydra is stopped — use Start Hydra to launch it";
+                        SetConnectionStatus("○ Hydra is stopped — use Start Hydra to launch it", connected: false);
                         _diagnostics.Text = FormatDiagnostics();
                     }
                     else
                     {
-                        _connection.Text = "○ Management unavailable — Hydra may still be running; configuration editing remains available";
+                        SetConnectionStatus("○ Management unavailable — Hydra may still be running; configuration editing remains available", connected: false);
                         _diagnostics.Text = FormatDiagnostics(ex);
                     }
                 });
@@ -792,7 +820,7 @@ internal static class HydraTui
                 SetText(_logs, "");
             }
             SetLiveControls(true);
-            SetText(_connection, $"● Connected  │  Hydra {status.Version}  │  {status.HostName}  │  {status.ProfileName ?? "idle"} / {status.Mode}");
+            SetConnectionStatus($"● Connected  │  Hydra {status.Version}  │  {status.HostName}  │  {status.ProfileName ?? "idle"} / {status.Mode}", connected: true);
             SetText(_overview, FormatOverview(status));
             SetText(_peers, FormatPeers(status));
             if (page.Entries.Count > 0)
@@ -811,6 +839,12 @@ internal static class HydraTui
         private static void SetText(View view, string value)
         {
             if (view.Text != value) view.Text = value;
+        }
+
+        private void SetConnectionStatus(string text, bool connected)
+        {
+            SetText(_connection, text);
+            if (color) _connection.SetScheme(connected ? ConnectedScheme : DisconnectedScheme);
         }
 
         private async Task LoadConfigAsync()
@@ -1247,7 +1281,7 @@ internal static class HydraTui
                     _shutdownConfirmed = true;
                     app.Invoke(() =>
                     {
-                        _connection.Text = "○ Hydra is stopped — use Start Hydra to launch it";
+                        SetConnectionStatus("○ Hydra is stopped — use Start Hydra to launch it", connected: false);
                         _diagnostics.Text = FormatDiagnostics();
                         SetCommandBusy(false, "Hydra stopped. Use Start Hydra to launch it.");
                     });
@@ -1348,7 +1382,7 @@ internal static class HydraTui
 
         private enum CommandKind { ReconnectRelay, RestartHydra, ShutdownHydra }
 
-        private static string FormatOverview(HydraStatusSnapshot s)
+        internal static string FormatOverview(HydraStatusSnapshot s)
         {
             var route = s.Router == null ? "n/a" : s.Router.IsRemote ? $"{s.Router.ActiveHost}/{s.Router.ActiveScreen}" : "local";
             var relay = s.RelayConnection;
@@ -1430,7 +1464,7 @@ internal static class HydraTui
             _ => "unknown"
         };
 
-        private static string FormatPeers(HydraStatusSnapshot s)
+        internal static string FormatPeers(HydraStatusSnapshot s)
         {
             var output = new StringBuilder();
             output.AppendLine("LOCAL SCREENS");
@@ -1463,11 +1497,12 @@ internal static class HydraTui
 
         private static string ShortCategory(string category) => category.Length <= 24 ? category : category[^24..];
 
-        private static Editor ReadOnlyEditor() => new()
+        private static Editor ReadOnlyEditor(IHighlightingDefinition? highlighting = null) => new()
         {
             ReadOnly = true,
             WordWrap = false,
-            ViewportSettings = ViewportSettingsFlags.HasVerticalScrollBar | ViewportSettingsFlags.HasHorizontalScrollBar
+            ViewportSettings = ViewportSettingsFlags.HasVerticalScrollBar | ViewportSettingsFlags.HasHorizontalScrollBar,
+            HighlightingDefinition = highlighting
         };
 
         public void Dispose()

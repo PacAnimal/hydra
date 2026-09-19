@@ -1,0 +1,16 @@
+{
+  "name": "hydra-tui-screenshot",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Captures a real `hydra tui` terminal session and renders it to a PNG for docs/README use.",
+  "scripts": {
+    "capture": "node capture.mjs",
+    "screenshot": "node screenshot.mjs",
+    "shoot": "node capture.mjs && node screenshot.mjs"
+  },
+  "devDependencies": {
+    "node-pty": "^1.1.0",
+    "playwright": "^1.48.0"
+  }
+}

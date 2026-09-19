@@ -29,6 +29,11 @@ jobs:
 
   build:
     needs: test
+    # Publishing a container image only makes sense from the repo that owns the registry
+    # namespace it publishes to. A fork inherits none of the parent repo's variables, so this
+    # is off by default there and only needs enabling once, on this repo, via a repository
+    # variable (Settings → Secrets and variables → Actions → Variables): PUBLISH_HYDRA_WEB_CONFIG=true.
+    if: ${{ vars.PUBLISH_HYDRA_WEB_CONFIG == 'true' }}
     runs-on: ubuntu-latest
 
     permissions:
@@ -59,4 +64,4 @@ jobs:
           file: HydraWebConfig/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name == 'push' }}
-          tags: ghcr.io/pacanimal/hydra-web-config:latest
+          tags: ghcr.io/${{ github.repository_owner }}/hydra-web-config:latest

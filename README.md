@@ -97,30 +97,10 @@ Open Hydra's local cross-platform TUI in another terminal:
 ```bash
 ./hydra tui
 ./hydra tui --config /path/to/hydra.conf
+./hydra tui --color   # tint the connection line green/red by actual state
 ```
 
-```text
-┌─ hydra tui — desktop (Master) ────────────────────────────────────────────────────┐
-│ [Overview] Peers & Screens  Logs  Configuration  Remote  Diagnostics  Help         │
-├─────────────────────────────────────────────────────────────────────────────────┤
-│  Runtime                                                                          │
-│    Process        48213              Profile      Office                        │
-│    Uptime         2:14:07             Mode         Master                        │
-│    Config         ~/hydra.conf                                                   │
-│                                                                                    │
-│  Health                              Routing                                     │
-│    Relay state    connected            Active route  laptop → right edge         │
-│    Dormant        no                   Screen lock   unlocked                    │
-│    Local screens  2                    Mouse mode    absolute                    │
-│    Peers          1                                                              │
-│                                                                                    │
-│  Connection                                                                       │
-│    relay.c-net.org:5000 · en0 (Wi-Fi) · attempts 1 · ↑ 812 KiB  ↓ 3.4 MiB         │
-│                                                                                    │
-│  [ Reconnect Relay ]   [ Restart Hydra ]   [ Shutdown Hydra ]   [ Start Hydra ]   │
-└────────────────────────────────────────────────────────────────────────────────┘
-  Esc to quit · Tab to move focus · this instance only — closing the TUI never stops Hydra
-```
+![Hydra terminal control center, showing a connected relay, a peer, and live traffic counters](docs/assets/hydra-tui-demo.png)
 
 The control center shows the running process, active profile, relay, screens, peers, current routing state, exact relay network interface/socket, peer RTT/jitter, adapter traffic/error counters, embedded-relay peer interfaces, and a bounded live log. It can request a relay reconnect or Hydra restart, and can validate and atomically save `hydra.conf`; accepted actions show live progress in the bottom activity line without blocking refreshes behind a success dialog. The Configuration tab has a sectioned form for common settings and a complete JSON text editor; switching between them preserves advanced fields. Selected tabs and form sections use persistent colour independent of focus, and empty optional fields show their effective default or inherited value. Hovering an option or moving keyboard focus to it displays contextual help. Configuration editing remains available when Hydra is offline. Relay passwords and `networkConfig` values are hidden unless you explicitly reveal them in Text mode.
 

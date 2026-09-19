@@ -1,0 +1,41 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Hydra TUI render</title>
+<script src="https://unpkg.com/@xterm/xterm@5.5.0/lib/xterm.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/@xterm/xterm@5.5.0/css/xterm.css" />
+<style>
+  /* #wrap's steel-blue is deliberately loud: screenshot.mjs crops to #term alone, so this frame
+     should never appear in a captured PNG — if one shows up bordered in this color, the crop broke. */
+  html, body { margin: 0; background: #0c0c0c; }
+  body { padding: 24px; display: flex; justify-content: center; }
+  #wrap { display: inline-block; padding: 10px; background: #3a5a78; border-radius: 8px; }
+</style>
+</head>
+<body>
+<div id="wrap"><div id="term"></div></div>
+<script>
+  (async function () {
+    const meta = await fetch('meta.json').then((r) => r.json()).catch(() => ({ cols: 130, rows: 42 }));
+    const term = new Terminal({
+      cols: meta.cols,
+      rows: meta.rows,
+      fontFamily: 'Menlo, "SF Mono", Consolas, "Liberation Mono", monospace',
+      fontSize: 13,
+      lineHeight: 1.0,
+      theme: { background: '#0c0c0c' },
+      allowProposedApi: true,
+    });
+    term.open(document.getElementById('term'));
+
+    const b64 = await fetch('capture.b64').then((r) => r.text());
+    const binary = atob(b64.trim());
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    term.write(bytes);
+    window.__renderDone = true;
+  })();
+</script>
+</body>
+</html>
