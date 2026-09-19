@@ -66,7 +66,7 @@ internal sealed class DesktopInputDispatcher : IDisposable
     {
         _log = log;
         _activeDesktop = NativeMethods.OpenInputDesktop(NativeMethods.DF_ALLOWOTHERACCOUNTHOOK, true, DesktopAccess);
-        _activeDesktopName = GetDesktopName(_activeDesktop);
+        _activeDesktopName = WindowsDesktop.Name(_activeDesktop);
         if (_activeDesktop == nint.Zero)
             _log.LogWarning("OpenInputDesktop failed at startup (error {Error})", Marshal.GetLastWin32Error());
         else
@@ -138,7 +138,7 @@ internal sealed class DesktopInputDispatcher : IDisposable
             return;
         }
 
-        var name = GetDesktopName(hDesk);
+        var name = WindowsDesktop.Name(hDesk);
         lock (_desktopLock)
         {
             if (_disposed)
@@ -343,9 +343,15 @@ internal sealed class DesktopInputDispatcher : IDisposable
 
         if (msg.Character is { } ch)
         {
-            var scan = NativeMethods.VkKeyScanW(ch); // char implicit-converts to ushort
             var isAltGr = (msg.Modifiers & KeyModifiers.AltGr) != 0;
             var isSuper = (msg.Modifiers & KeyModifiers.Super) != 0;
+            var shortcutContext = (msg.Modifiers & (KeyModifiers.Control | KeyModifiers.Super)) != 0;
+
+            var scan = NativeMethods.VkKeyScanW(ch); // char implicit-converts to ushort
+            // a shortcut has to arrive as WM_KEYDOWN carrying a real VK — KEYEVENTF_UNICODE delivers
+            // WM_CHAR, which no app treats as a shortcut. when the active layout cannot map the char
+            // (Cyrillic active, master sent a base-ASCII shortcut char) resolve the VK elsewhere.
+            if (scan == -1 && shortcutContext) scan = ScanOutsideActiveLayout(ch);
 
             // use vk injection for all chars that map to a key+optional-shift combo on the slave's layout.
             // this gives correct key-hold semantics (GetKeyState works) and proper WM_KEYDOWN for shortcuts.
@@ -357,7 +363,6 @@ internal sealed class DesktopInputDispatcher : IDisposable
             // exception: Ctrl/Super shortcuts always use VK injection (Shift is intentional there).
             var needsShift = (scan >> 8) == 1;
             var slaveUnshifted = (scan >> 8) == 0;
-            var shortcutContext = (msg.Modifiers & (KeyModifiers.Control | KeyModifiers.Super)) != 0;
             var shiftMismatch = slaveUnshifted && (msg.Modifiers & KeyModifiers.Shift) != 0 && !shortcutContext;
             if (!isAltGr && scan != -1 && !shiftMismatch && (slaveUnshifted || (needsShift && (msg.Modifiers & KeyModifiers.Shift) != 0)))
             {
@@ -605,14 +610,32 @@ internal sealed class DesktopInputDispatcher : IDisposable
         }
     }
 
-    private static unsafe string GetDesktopName(nint hDesk)
+    // resolves a char to a VK+shift pair without using the active layout, for shortcut injection only.
+    // tries every layout loaded in the session, then falls back to the VK codes the standard range
+    // fixes for ASCII (VK_A..VK_Z == 'A'..'Z', VK_0..VK_9 == '0'..'9') so a slave with no Latin
+    // layout installed at all still gets working shortcuts.
+    private static unsafe short ScanOutsideActiveLayout(char ch)
     {
-        if (hDesk == nint.Zero) return "";
-        const int bufSize = 128;
-        char* buf = stackalloc char[bufSize];
-        return NativeMethods.GetUserObjectInformationW(hDesk, NativeMethods.UOI_NAME, (nint)buf, bufSize * sizeof(char), out _)
-            ? new string(buf)
-            : "";
+        var count = NativeMethods.GetKeyboardLayoutList(0, null);
+        if (count > 0)
+        {
+            var layouts = stackalloc nint[count];
+            count = NativeMethods.GetKeyboardLayoutList(count, layouts);
+            for (var i = 0; i < count; i++)
+            {
+                var scan = NativeMethods.VkKeyScanExW(ch, layouts[i]);
+                if (scan != -1) return scan;
+            }
+        }
+
+        // high byte 0 = no Shift required, which is what a shortcut char wants
+        var upper = char.ToUpperInvariant(ch);
+        return upper switch
+        {
+            >= 'A' and <= 'Z' => (short)upper,
+            >= '0' and <= '9' => (short)upper,
+            _ => -1,
+        };
     }
 }
 
