@@ -128,8 +128,8 @@ internal static partial class RelayAddressPreference
         {
             var properties = network.GetIPProperties();
             return family == AddressFamily.InterNetwork
-                ? properties.GetIPv4Properties()?.Index == index
-                : properties.GetIPv6Properties()?.Index == index;
+                ? properties.GetIPv4Properties().Index == index
+                : properties.GetIPv6Properties().Index == index;
         });
 
     internal static IReadOnlyDictionary<string, int> ParseMacServiceOrder(string output)
@@ -220,7 +220,8 @@ internal static partial class RelayAddressPreference
         };
         foreach (var argument in arguments) startInfo.ArgumentList.Add(argument);
 
-        using var process = new Process { StartInfo = startInfo };
+        using var process = new Process();
+        process.StartInfo = startInfo;
         if (!process.Start()) return null;
         try
         {

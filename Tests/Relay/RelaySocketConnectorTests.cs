@@ -26,7 +26,7 @@ public class RelaySocketConnectorTests
             address => interfaces.GetValueOrDefault(address),
             new Dictionary<string, int> { ["en7"] = 1, ["en0"] = 7 });
 
-        Assert.That(ordered, Is.EqualTo(new[] { ethernetFirst, ethernetSecond, wifiFirst, unknown }));
+        Assert.That(ordered, Is.EqualTo([ethernetFirst, ethernetSecond, wifiFirst, unknown]));
     }
 
     [Test]
@@ -103,8 +103,11 @@ public class RelaySocketConnectorTests
             CancellationToken.None);
         using var accepted = await accepting.WaitAsync(TimeSpan.FromSeconds(1));
 
-        Assert.That(connected.Connected, Is.True);
-        Assert.That(((IPEndPoint)connected.RemoteEndPoint!).Address, Is.EqualTo(IPAddress.Loopback));
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(connected.Connected, Is.True);
+            Assert.That(((IPEndPoint)connected.RemoteEndPoint!).Address, Is.EqualTo(IPAddress.Loopback));
+        }
     }
 
     [Test]
