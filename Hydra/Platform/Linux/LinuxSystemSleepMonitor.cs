@@ -8,7 +8,7 @@ namespace Hydra.Platform.Linux;
 
 // systemd-logind emits PrepareForSleep before and after suspend. A delay inhibitor keeps the
 // pre-suspend window open until Hydra has disconnected the relay (or logind's own deadline expires).
-internal sealed class LinuxSystemSleepMonitor : IHostedService, IDisposable
+internal sealed partial class LinuxSystemSleepMonitor : IHostedService, IDisposable
 {
     private const ulong PollIntervalMicroseconds = 1_000_000;
     private static readonly TimeSpan RelayCloseTimeout = TimeSpan.FromSeconds(5);
@@ -85,8 +85,8 @@ internal sealed class LinuxSystemSleepMonitor : IHostedService, IDisposable
         finally
         {
             ReleaseDelayInhibitor();
-            if (slot != nint.Zero) SystemdNative.sd_bus_slot_unref(slot);
-            if (bus != nint.Zero) SystemdNative.sd_bus_unref(bus);
+            if (slot != nint.Zero) _ = SystemdNative.sd_bus_slot_unref(slot);
+            if (bus != nint.Zero) _ = SystemdNative.sd_bus_unref(bus);
             ready.TrySetResult(false);
         }
     }
@@ -170,8 +170,8 @@ internal sealed class LinuxSystemSleepMonitor : IHostedService, IDisposable
             finally
             {
                 SystemdNative.sd_bus_error_free(ref error);
-                if (reply != nint.Zero) SystemdNative.sd_bus_message_unref(reply);
-                if (call != nint.Zero) SystemdNative.sd_bus_message_unref(call);
+                if (reply != nint.Zero) _ = SystemdNative.sd_bus_message_unref(reply);
+                if (call != nint.Zero) _ = SystemdNative.sd_bus_message_unref(call);
             }
         }
     }
@@ -210,7 +210,7 @@ internal sealed class LinuxSystemSleepMonitor : IHostedService, IDisposable
         throw new Win32Exception(-result, detail == null ? operation : $"{operation}: {detail}");
     }
 
-    private static class SystemdNative
+    private static partial class SystemdNative
     {
         private const string LibSystemd = "libsystemd.so.0";
 
@@ -219,37 +219,44 @@ internal sealed class LinuxSystemSleepMonitor : IHostedService, IDisposable
         {
             internal nint Name;
             internal nint Message;
-            private int _needFree;
+            private readonly int _needFree;
         }
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         internal delegate int BusMessageHandler(nint message, nint userData, nint error);
 
-        [DllImport(LibSystemd, CallingConvention = CallingConvention.Cdecl)]
-        internal static extern int sd_bus_default_system(out nint bus);
+        [LibraryImport(LibSystemd)]
+        [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
+        internal static partial int sd_bus_default_system(out nint bus);
 
-        [DllImport(LibSystemd, CallingConvention = CallingConvention.Cdecl)]
-        internal static extern int sd_bus_add_match(
+        [LibraryImport(LibSystemd)]
+        [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
+        internal static partial int sd_bus_add_match(
             nint bus,
             out nint slot,
             [MarshalAs(UnmanagedType.LPUTF8Str)] string match,
             BusMessageHandler callback,
             nint userData);
 
-        [DllImport(LibSystemd, CallingConvention = CallingConvention.Cdecl)]
-        internal static extern int sd_bus_process(nint bus, nint message);
+        [LibraryImport(LibSystemd)]
+        [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
+        internal static partial int sd_bus_process(nint bus, nint message);
 
-        [DllImport(LibSystemd, CallingConvention = CallingConvention.Cdecl)]
-        internal static extern int sd_bus_wait(nint bus, ulong timeoutMicroseconds);
+        [LibraryImport(LibSystemd)]
+        [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
+        internal static partial int sd_bus_wait(nint bus, ulong timeoutMicroseconds);
 
-        [DllImport(LibSystemd, CallingConvention = CallingConvention.Cdecl)]
-        internal static extern nint sd_bus_slot_unref(nint slot);
+        [LibraryImport(LibSystemd)]
+        [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
+        internal static partial nint sd_bus_slot_unref(nint slot);
 
-        [DllImport(LibSystemd, CallingConvention = CallingConvention.Cdecl)]
-        internal static extern nint sd_bus_unref(nint bus);
+        [LibraryImport(LibSystemd)]
+        [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
+        internal static partial nint sd_bus_unref(nint bus);
 
-        [DllImport(LibSystemd, CallingConvention = CallingConvention.Cdecl)]
-        internal static extern int sd_bus_message_new_method_call(
+        [LibraryImport(LibSystemd)]
+        [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
+        internal static partial int sd_bus_message_new_method_call(
             nint bus,
             out nint message,
             [MarshalAs(UnmanagedType.LPUTF8Str)] string destination,
@@ -257,33 +264,42 @@ internal sealed class LinuxSystemSleepMonitor : IHostedService, IDisposable
             [MarshalAs(UnmanagedType.LPUTF8Str)] string interfaceName,
             [MarshalAs(UnmanagedType.LPUTF8Str)] string member);
 
-        [DllImport(LibSystemd, CallingConvention = CallingConvention.Cdecl)]
-        internal static extern int sd_bus_message_append_basic(
+        [LibraryImport(LibSystemd)]
+        [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
+        internal static partial int sd_bus_message_append_basic(
             nint message,
             byte type,
             [MarshalAs(UnmanagedType.LPUTF8Str)] string value);
 
-        [DllImport(LibSystemd, CallingConvention = CallingConvention.Cdecl)]
-        internal static extern int sd_bus_call(
+        [LibraryImport(LibSystemd)]
+        [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
+        internal static partial int sd_bus_call(
             nint bus,
             nint message,
             ulong timeoutMicroseconds,
             ref SdBusError error,
             out nint reply);
 
-        [DllImport(LibSystemd, CallingConvention = CallingConvention.Cdecl)]
-        internal static extern int sd_bus_message_read_basic(nint message, byte type, out int value);
+        [LibraryImport(LibSystemd)]
+        [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
+        internal static partial int sd_bus_message_read_basic(nint message, byte type, out int value);
 
-        [DllImport(LibSystemd, CallingConvention = CallingConvention.Cdecl)]
-        internal static extern nint sd_bus_message_get_bus(nint message);
+        [LibraryImport(LibSystemd)]
+        [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
+        internal static partial nint sd_bus_message_get_bus(nint message);
 
-        [DllImport(LibSystemd, CallingConvention = CallingConvention.Cdecl)]
-        internal static extern nint sd_bus_message_unref(nint message);
+        [LibraryImport(LibSystemd)]
+        [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
+        internal static partial nint sd_bus_message_unref(nint message);
 
-        [DllImport(LibSystemd, CallingConvention = CallingConvention.Cdecl)]
-        internal static extern void sd_bus_error_free(ref SdBusError error);
+        [LibraryImport(LibSystemd)]
+        [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
+        internal static partial void sd_bus_error_free(ref SdBusError error);
 
-        [DllImport("libc", SetLastError = true, CallingConvention = CallingConvention.Cdecl)]
-        internal static extern int dup(int oldFileDescriptor);
+        // matches the POSIX libc function's own name
+        // ReSharper disable once InconsistentNaming
+        [LibraryImport("libc", SetLastError = true)]
+        [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
+        internal static partial int dup(int oldFileDescriptor);
     }
 }
