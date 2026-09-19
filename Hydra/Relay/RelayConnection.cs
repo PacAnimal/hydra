@@ -111,18 +111,6 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         }
     }
 
-    // Manual reconnect (TUI command): cancels whichever Connect() attempt is currently in flight so the
-    // Execute loop's reconnect-delay-then-retry immediately kicks in, without touching suspend state.
-    public bool RequestReconnect()
-    {
-        lock (_connectionLock)
-        {
-            if (_connectionCancellation == null || _connectionCancellation.IsCancellationRequested) return false;
-            _connectionCancellation.Cancel();
-            return true;
-        }
-    }
-
     public ValueTask SuspendConnectionAsync(CancellationToken cancel = default) =>
         SuspendConnectionCoreAsync(null, cancel);
 
@@ -218,6 +206,8 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         catch (ObjectDisposedException) { }
     }
 
+    // Manual reconnect (TUI command): cancels whichever Connect() attempt is currently in flight so the
+    // Execute loop's reconnect-delay-then-retry immediately kicks in, without touching suspend state.
     public bool RequestReconnect()
     {
         lock (_connectionLock)
