@@ -45,7 +45,7 @@ public class InputRouter(
             new UnboundedChannelOptions { SingleReader = true, AllowSynchronousContinuations = false });
     private Task? _consumerTask;
     private readonly Lock _mouseBatchLock = new();
-    private MouseInputBatch? _openMouseBatch;
+    private CoalescingBatch<MouseInputKind, double>? _openMouseBatch;
     private int _postedMouseBatchCount;
 
     internal int PostedMouseBatchCount => Volatile.Read(ref _postedMouseBatchCount);
@@ -890,7 +890,6 @@ public class InputRouter(
         if (!relay.IsConnected || st.Mouse.CurrentScreen == null) return;
 
         var screen = st.Mouse.CurrentScreen;
-        byte[] payload;
 
         if (st.RelativeMouseScreens.GetValueOrDefault(screen.Name))
         {
@@ -902,18 +901,17 @@ public class InputRouter(
             st.PendingDy -= intDy;
             if (profile.DebugMouse)
                 log.LogInformation("[mouse] delta to {Host}: dx={Dx} dy={Dy}", screen.Host, intDx, intDy);
-            payload = MessageSerializer.Encode(MessageKind.MouseMoveDelta, new MouseMoveDeltaMessage(intDx, intDy));
-        }
-        else
-        {
-            // absolute mode: send current virtual position, discard accumulated deltas
-            st.PendingDx = 0;
-            st.PendingDy = 0;
-            if (profile.DebugMouse)
-                log.LogInformation("[mouse] move to {Host}: screen={Screen} x={X} y={Y}", screen.Host, screen.Name, (int)st.Mouse.X, (int)st.Mouse.Y);
-            payload = MessageSerializer.Encode(MessageKind.MouseMove, new MouseMoveMessage(screen.Name, (int)st.Mouse.X, (int)st.Mouse.Y));
+            st.LastMouseSendTick = now;
+            relay.SendMouseDelta([screen.Host], intDx, intDy);
+            return;
         }
 
+        // absolute mode: send current virtual position, discard accumulated deltas
+        st.PendingDx = 0;
+        st.PendingDy = 0;
+        if (profile.DebugMouse)
+            log.LogInformation("[mouse] move to {Host}: screen={Screen} x={X} y={Y}", screen.Host, screen.Name, (int)st.Mouse.X, (int)st.Mouse.Y);
+        var payload = MessageSerializer.Encode(MessageKind.MouseMove, new MouseMoveMessage(screen.Name, (int)st.Mouse.X, (int)st.Mouse.Y));
         st.LastMouseSendTick = now;
         relay.Send([screen.Host], payload);
     }
@@ -1160,9 +1158,9 @@ public class InputRouter(
     {
         lock (_mouseBatchLock)
         {
-            if (_openMouseBatch == null || _openMouseBatch.Kind != kind)
+            if (_openMouseBatch == null || !_openMouseBatch.Matches(kind))
             {
-                var batch = new MouseInputBatch(kind);
+                var batch = new CoalescingBatch<MouseInputKind, double>(kind, accumulate: kind == MouseInputKind.Delta);
                 _openMouseBatch = batch;
                 if (!_commands.Writer.TryWrite(st => ProcessMouseBatch(st, batch)))
                 {
@@ -1181,29 +1179,30 @@ public class InputRouter(
         lock (_mouseBatchLock) _openMouseBatch = null;
     }
 
-    private async ValueTask ProcessMouseBatch(LocalMasterState st, MouseInputBatch batch)
+    private async ValueTask ProcessMouseBatch(LocalMasterState st, CoalescingBatch<MouseInputKind, double> batch)
     {
-        MouseInputSample sample;
+        double x, y;
+        var kind = batch.Kind;
         lock (_mouseBatchLock)
         {
             if (ReferenceEquals(_openMouseBatch, batch)) _openMouseBatch = null;
-            sample = batch.Snapshot();
+            (x, y) = batch.Snapshot();
         }
 
         st.LastInputTick = _getTickCount();
         await activityTracker.LocalActivity();
 
-        if (sample.Kind == MouseInputKind.Absolute)
+        if (kind == MouseInputKind.Absolute)
         {
             if (st.Layout is null || st.ActiveLocalScreen is null) return;
             if (!st.Mouse.IsOnVirtualScreen)
-                await HandleRealScreenMove(st, sample.X, sample.Y);
+                await HandleRealScreenMove(st, x, y);
             else
-                await HandleVirtualScreenMove(st, sample.X, sample.Y);
+                await HandleVirtualScreenMove(st, x, y);
             return;
         }
 
-        await HandleMouseDelta(st, sample.X, sample.Y);
+        await HandleMouseDelta(st, x, y);
     }
 
     private async ValueTask HandleMouseDelta(LocalMasterState st, double dx, double dy)
@@ -1271,32 +1270,6 @@ public class InputRouter(
     }
 
     private enum MouseInputKind { Absolute, Delta }
-
-    private readonly record struct MouseInputSample(MouseInputKind Kind, double X, double Y);
-
-    private sealed class MouseInputBatch(MouseInputKind kind)
-    {
-        private double _x;
-        private double _y;
-
-        public MouseInputKind Kind { get; } = kind;
-
-        public void Add(double x, double y)
-        {
-            if (Kind == MouseInputKind.Absolute)
-            {
-                _x = x;
-                _y = y;
-            }
-            else
-            {
-                _x += x;
-                _y += y;
-            }
-        }
-
-        public MouseInputSample Snapshot() => new(Kind, _x, _y);
-    }
 
     // evdev cross-host transitions; called from consumer, so st access is safe
     private async ValueTask HandleEvdevCrossHostTransitionAsync(LocalMasterState st, ScreenRect leavingScreen, EdgeHit hit)

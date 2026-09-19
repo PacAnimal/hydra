@@ -52,19 +52,33 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         if (_server == null || _encryption == null) return;
         lock (_sendOrderLock)
         {
-            if (IsMovementPayload(payload))
+            if (IsAbsoluteMovePayload(payload))
             {
-                if (_openMovementBatch?.TryAppend(targetHosts, payload) == true) return;
-                if (MovementBatch.TryCreate(targetHosts, payload, out var movement))
-                {
-                    _openMovementBatch = movement;
-                    _sendQueue.Writer.TryWrite(new OutboundMessage(targetHosts, payload, null, movement, CancellationToken.None));
-                    return;
-                }
+                if (_openMovementBatch?.TryAppendAbsolute(targetHosts, payload) == true) return;
+                var movement = MovementBatch.CreateAbsolute(targetHosts, payload);
+                _openMovementBatch = movement;
+                _sendQueue.Writer.TryWrite(new OutboundMessage(targetHosts, payload, null, movement, CancellationToken.None));
+                return;
             }
 
             _openMovementBatch = null;
             _sendQueue.Writer.TryWrite(new OutboundMessage(targetHosts, payload, null, null, CancellationToken.None));
+        }
+    }
+
+    // The caller already has dx/dy as ints (see IRelaySender.SendMouseDelta) — accumulating them here
+    // costs one addition per event instead of a JSON decode, and Snapshot() encodes only once, right
+    // before a batch actually goes out.
+    public void SendMouseDelta(string[] targetHosts, int dx, int dy)
+    {
+        OnSent(targetHosts, MessageSerializer.Encode(MessageKind.MouseMoveDelta, new MouseMoveDeltaMessage(dx, dy)));
+        if (_server == null || _encryption == null) return;
+        lock (_sendOrderLock)
+        {
+            if (_openMovementBatch?.TryAppendDelta(targetHosts, dx, dy) == true) return;
+            var movement = MovementBatch.CreateDelta(targetHosts, dx, dy);
+            _openMovementBatch = movement;
+            _sendQueue.Writer.TryWrite(new OutboundMessage(targetHosts, [], null, movement, CancellationToken.None));
         }
     }
 
@@ -339,62 +353,77 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         return true;
     }
 
+    // Test-only: production code no longer decodes bytes for delta coalescing (see SendMouseDelta) —
+    // this exists purely so tests can assert on the wire-encoded result of the same coalescing rules.
     internal static bool TryCoalesceMovement(byte[] current, byte[] next, out byte[] combined)
     {
         combined = current;
-        if (!MovementBatch.TryCreate([], current, out var movement) || !movement.TryAppend([], next))
+        if (current.Length == 0 || next.Length == 0 || current[0] != next[0]) return false;
+
+        if (current[0] == (byte)MessageKind.MouseMove)
+        {
+            combined = next;
+            return true;
+        }
+
+        if (current[0] != (byte)MessageKind.MouseMoveDelta) return false;
+        if (!TryDecodeDelta(current, out var dx1, out var dy1) || !TryDecodeDelta(next, out var dx2, out var dy2))
             return false;
+
+        var movement = MovementBatch.CreateDelta([], dx1, dy1);
+        movement.TryAppendDelta([], dx2, dy2);
         combined = movement.Snapshot();
         return true;
     }
 
-    private static bool IsMovementPayload(byte[] payload) => payload.Length > 0
-        && payload[0] is (byte)MessageKind.MouseMove or (byte)MessageKind.MouseMoveDelta;
+    private static bool TryDecodeDelta(byte[] payload, out int dx, out int dy)
+    {
+        dx = dy = 0;
+        try
+        {
+            var delta = System.Text.Json.JsonSerializer.Deserialize<MouseMoveDeltaMessage>(
+                payload.AsSpan(1), Cathedral.Config.SaneJson.Options);
+            if (delta == null) return false;
+            dx = delta.Dx;
+            dy = delta.Dy;
+            return true;
+        }
+        catch (System.Text.Json.JsonException) { return false; }
+    }
 
-    // coalesces same-target movement queued faster than the drain loop can send it: absolute moves
-    // keep only the latest position, deltas accumulate — either way only one message crosses the wire
-    // per burst instead of one per input event.
+    private static bool IsAbsoluteMovePayload(byte[] payload) =>
+        payload.Length > 0 && payload[0] == (byte)MessageKind.MouseMove;
+
+    // Coalesces same-target movement queued faster than the drain loop can send it: an absolute move
+    // keeps only the latest position, a delta accumulates — either way only one message crosses the
+    // wire per burst instead of one per input event. Deltas arrive and stay as ints; only Snapshot()
+    // ever encodes, once, right before the batch actually goes out.
     private sealed class MovementBatch
     {
         private readonly MessageKind _kind;
         private readonly string[] _targets;
-        private byte[] _absolutePayload;
+        private byte[] _absolutePayload = [];
         private int _dx;
         private int _dy;
 
-        private MovementBatch(string[] targets, byte[] payload, MessageKind kind, int dx = 0, int dy = 0)
-        {
-            _targets = targets;
-            _absolutePayload = payload;
-            _kind = kind;
-            _dx = dx;
-            _dy = dy;
-        }
+        private MovementBatch(string[] targets, MessageKind kind) => (_targets, _kind) = (targets, kind);
 
-        internal static bool TryCreate(string[] targets, byte[] payload, out MovementBatch movement)
+        internal static MovementBatch CreateAbsolute(string[] targets, byte[] payload) =>
+            new(targets, MessageKind.MouseMove) { _absolutePayload = payload };
+
+        internal static MovementBatch CreateDelta(string[] targets, int dx, int dy) =>
+            new(targets, MessageKind.MouseMoveDelta) { _dx = dx, _dy = dy };
+
+        internal bool TryAppendAbsolute(string[] targets, byte[] payload)
         {
-            movement = null!;
-            if (payload.Length == 0) return false;
-            if (payload[0] == (byte)MessageKind.MouseMove)
-            {
-                movement = new MovementBatch(targets, payload, MessageKind.MouseMove);
-                return true;
-            }
-            if (payload[0] != (byte)MessageKind.MouseMoveDelta || !TryDecodeDelta(payload, out var dx, out var dy))
-                return false;
-            movement = new MovementBatch(targets, payload, MessageKind.MouseMoveDelta, dx, dy);
+            if (_kind != MessageKind.MouseMove || !_targets.SequenceEqual(targets)) return false;
+            _absolutePayload = payload;
             return true;
         }
 
-        internal bool TryAppend(string[] targets, byte[] payload)
+        internal bool TryAppendDelta(string[] targets, int dx, int dy)
         {
-            if (!_targets.SequenceEqual(targets) || payload.Length == 0 || payload[0] != (byte)_kind) return false;
-            if (_kind == MessageKind.MouseMove)
-            {
-                _absolutePayload = payload;
-                return true;
-            }
-            if (!TryDecodeDelta(payload, out var dx, out var dy)) return false;
+            if (_kind != MessageKind.MouseMoveDelta || !_targets.SequenceEqual(targets)) return false;
             _dx = (int)Math.Clamp((long)_dx + dx, int.MinValue, int.MaxValue);
             _dy = (int)Math.Clamp((long)_dy + dy, int.MinValue, int.MaxValue);
             return true;
@@ -403,21 +432,6 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         internal byte[] Snapshot() => _kind == MessageKind.MouseMove
             ? _absolutePayload
             : MessageSerializer.Encode(MessageKind.MouseMoveDelta, new MouseMoveDeltaMessage(_dx, _dy));
-
-        private static bool TryDecodeDelta(byte[] payload, out int dx, out int dy)
-        {
-            dx = dy = 0;
-            try
-            {
-                var delta = System.Text.Json.JsonSerializer.Deserialize<MouseMoveDeltaMessage>(
-                    payload.AsSpan(1), Cathedral.Config.SaneJson.Options);
-                if (delta == null) return false;
-                dx = delta.Dx;
-                dy = delta.Dy;
-                return true;
-            }
-            catch (System.Text.Json.JsonException) { return false; }
-        }
     }
 
     private sealed record OutboundMessage(

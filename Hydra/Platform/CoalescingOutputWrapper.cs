@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Hydra.Mouse;
 using Hydra.Relay;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -14,7 +15,7 @@ public sealed class CoalescingOutputWrapper : IPlatformOutput
 {
     private readonly IPlatformOutput _inner;
     private readonly Lock _moveLock = new();
-    private MoveBatch? _openMoveBatch;
+    private CoalescingBatch<bool, int>? _openMoveBatch;
     private readonly BlockingCollection<Action> _actions = [];
     private readonly Thread? _drainThread;
     private readonly ILogger<CoalescingOutputWrapper> _log;
@@ -57,9 +58,9 @@ public sealed class CoalescingOutputWrapper : IPlatformOutput
         lock (_moveLock)
         {
             if (_disposed) return;
-            if (_openMoveBatch == null || _openMoveBatch.Absolute != absolute)
+            if (_openMoveBatch == null || !_openMoveBatch.Matches(absolute))
             {
-                var batch = new MoveBatch(absolute);
+                var batch = new CoalescingBatch<bool, int>(absolute, accumulate: !absolute);
                 _openMoveBatch = batch;
                 if (_actions.TryAdd(() => FlushMove(batch))) RecordPendingDepth();
             }
@@ -96,16 +97,15 @@ public sealed class CoalescingOutputWrapper : IPlatformOutput
         }
     }
 
-    private void FlushMove(MoveBatch batch)
+    private void FlushMove(CoalescingBatch<bool, int> batch)
     {
-        (int X, int Y) move;
         lock (_moveLock)
         {
             if (ReferenceEquals(_openMoveBatch, batch)) _openMoveBatch = null;
-            move = batch.Snapshot();
         }
-        if (batch.Absolute) _inner.MoveMouse(move.X, move.Y);
-        else _inner.MoveMouseRelative(move.X, move.Y);
+        var (x, y) = batch.Snapshot();
+        if (batch.Kind) _inner.MoveMouse(x, y);
+        else _inner.MoveMouseRelative(x, y);
     }
 
     private void Drain()
@@ -197,21 +197,5 @@ public sealed class CoalescingOutputWrapper : IPlatformOutput
             DrainPending(); // manual mode: flush the queue inline so a pending move is still delivered
             DisposeInner();
         }
-    }
-
-    private sealed class MoveBatch(bool absolute)
-    {
-        private int _x;
-        private int _y;
-
-        public bool Absolute { get; } = absolute;
-
-        public void Add(int x, int y)
-        {
-            if (Absolute) { _x = x; _y = y; }
-            else { _x += x; _y += y; }
-        }
-
-        public (int X, int Y) Snapshot() => (_x, _y);
     }
 }

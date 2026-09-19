@@ -1,3 +1,4 @@
+using Cathedral.Extensions;
 using Hydra.Config;
 using Hydra.Relay;
 using Tests.Setup;
@@ -164,6 +165,94 @@ public class StyxIntegrationTests
         beta.Send(["alpha"], MessageSerializer.Encode(MessageKind.MouseMove, new MouseMoveMessage("", 3, 4)));
         var (fromBeta, _, _) = await alpha.WaitForMessage();
         Assert.That(fromBeta, Is.EqualTo("beta"));
+    }
+
+    [Test]
+    public async Task TwoHydraClients_SendMouseDelta_DeliversAsMouseMoveDelta()
+    {
+        var networkId = Guid.NewGuid();
+        var cfg = await StyxTestServer.BuildNetworkConfig(_factory!, networkId);
+
+        await using var sender = new HydraTestClient(_factory!, TransitionTestHelper.Profile("sender", new HydraConfig { Mode = Mode.Master, NetworkConfig = cfg }));
+        await using var receiver = new HydraTestClient(_factory!, TransitionTestHelper.Profile("receiver", new HydraConfig { Mode = Mode.Master, NetworkConfig = cfg }));
+
+        await sender.StartAsync(CancellationToken.None);
+        await receiver.StartAsync(CancellationToken.None);
+        await sender.WaitForReady();
+        await receiver.WaitForReady();
+
+        // exercises IRelaySender.SendMouseDelta end to end through a real RelayConnection: the caller
+        // passes ints, not a pre-encoded payload, so this proves the encode-on-send path is wired up.
+        sender.SendMouseDelta(["receiver"], 17, -9);
+
+        var (source, kind, json) = await receiver.WaitForMessage();
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(source, Is.EqualTo("sender"));
+            Assert.That(kind, Is.EqualTo(MessageKind.MouseMoveDelta));
+            var decoded = json.FromSaneJson<MouseMoveDeltaMessage>();
+            Assert.That(decoded, Is.Not.Null);
+            Assert.That(decoded!.Dx, Is.EqualTo(17));
+            Assert.That(decoded.Dy, Is.EqualTo(-9));
+        }
+    }
+
+    [Test]
+    public async Task TwoHydraClients_RapidMouseDeltas_SumSurvivesRegardlessOfHowMuchCoalesces()
+    {
+        var networkId = Guid.NewGuid();
+        var cfg = await StyxTestServer.BuildNetworkConfig(_factory!, networkId);
+
+        await using var sender = new HydraTestClient(_factory!, TransitionTestHelper.Profile("sender", new HydraConfig { Mode = Mode.Master, NetworkConfig = cfg }));
+        await using var receiver = new HydraTestClient(_factory!, TransitionTestHelper.Profile("receiver", new HydraConfig { Mode = Mode.Master, NetworkConfig = cfg }));
+
+        await sender.StartAsync(CancellationToken.None);
+        await receiver.StartAsync(CancellationToken.None);
+        await sender.WaitForReady();
+        await receiver.WaitForReady();
+
+        // How many of these collapse into one wire message depends on real thread scheduling against the
+        // live drain loop — that's inherent to best-effort coalescing, not something a test can pin down.
+        // What must always hold regardless: every dx/dy sent is accounted for exactly once on arrival,
+        // and coalescing can only ever reduce the message count, never inflate it.
+        const int sendCount = 200;
+        var expectedDx = 0;
+        var expectedDy = 0;
+        for (var i = 1; i <= sendCount; i++)
+        {
+            sender.SendMouseDelta(["receiver"], i, -i);
+            expectedDx += i;
+            expectedDy -= i;
+        }
+
+        var receivedDx = 0;
+        var receivedDy = 0;
+        var messageCount = 0;
+        while (true)
+        {
+            (string Source, MessageKind Kind, string Json) msg;
+            try { msg = await receiver.WaitForNextMessage(messageCount == 0 ? 5000 : 1000); }
+            catch (TimeoutException) { break; }
+
+            Assert.That(msg.Kind, Is.EqualTo(MessageKind.MouseMoveDelta));
+            var decoded = msg.Json.FromSaneJson<MouseMoveDeltaMessage>();
+            Assert.That(decoded, Is.Not.Null);
+            receivedDx += decoded!.Dx;
+            receivedDy += decoded.Dy;
+            messageCount++;
+        }
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(messageCount, Is.GreaterThan(0), "expected at least one delivered message");
+            Assert.That(messageCount, Is.LessThanOrEqualTo(sendCount),
+                "coalescing must never produce more messages than were sent");
+            Assert.That(receivedDx, Is.EqualTo(expectedDx),
+                "no dx may be lost or duplicated across however many messages the batching produced");
+            Assert.That(receivedDy, Is.EqualTo(expectedDy),
+                "no dy may be lost or duplicated across however many messages the batching produced");
+        }
     }
 
     [Test]

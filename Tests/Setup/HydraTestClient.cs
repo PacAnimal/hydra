@@ -17,6 +17,7 @@ public sealed class HydraTestClient(WebApplicationFactory<global::Styx.Program> 
 
     private readonly SemaphoreSlim _readySignal = new(0);
     private readonly NotificationQueue<string[]> _peers = new();
+    private readonly NotificationQueue<(string Source, MessageKind Kind, string Json)> _messages = new();
     private readonly SemaphoreSlim _receiveSignal = new(0);
     private readonly SemaphoreSlim _kickSignal = new(0);
 
@@ -38,7 +39,9 @@ public sealed class HydraTestClient(WebApplicationFactory<global::Styx.Program> 
 
     protected override Task OnReceive(string sourceHost, MessageKind kind, ReadOnlyMemory<byte> body)
     {
-        _lastMessage = (sourceHost, kind, Encoding.UTF8.GetString(body.Span));
+        var message = (sourceHost, kind, Encoding.UTF8.GetString(body.Span));
+        _lastMessage = message;
+        _messages.Push(message);
         _receiveSignal.Release();
         return Task.CompletedTask;
     }
@@ -72,6 +75,11 @@ public sealed class HydraTestClient(WebApplicationFactory<global::Styx.Program> 
             throw new TimeoutException("Timed out waiting for message");
         return _lastMessage!.Value;
     }
+
+    // pops the next message in arrival order — unlike WaitForMessage/_lastMessage, a burst of several
+    // messages arriving before the test reads any of them is never collapsed down to just the last one.
+    public Task<(string Source, MessageKind Kind, string Json)> WaitForNextMessage(int timeoutMs = 15000) =>
+        _messages.Next(timeoutMs, "message");
 
     public async Task<string> WaitForKick(int timeoutMs = 15000)
     {
