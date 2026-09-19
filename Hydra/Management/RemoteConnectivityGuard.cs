@@ -28,6 +28,7 @@ internal static class RemoteConnectivityGuard
             var before = currentProfiles[i] as JsonObject ?? [];
             var after = candidateProfiles[i] as JsonObject ?? [];
             Compare(before, after, "profileName", $"profile {i + 1} name", changed);
+            Compare(before, after, "mode", $"profile {i + 1} mode", changed);
             Compare(before, after, "networkConfig", $"profile {i + 1} networkConfig", changed);
             Compare(before, after, "embeddedStyx", $"profile {i + 1} embedded relay client", changed);
             Compare(before, after, "embeddedStyxServer", $"profile {i + 1} embedded relay server", changed);

@@ -104,6 +104,24 @@ public class RemoteApplyStoreTests
     }
 
     [Test]
+    public void ModeChange_IsRejectedBeforeAnyWrite()
+    {
+        const string original = """
+            {
+              "name": "remote",
+              "profiles": [{ "mode": "Slave", "networkConfig": "relay-secret" }]
+            }
+            """;
+        File.WriteAllText(_configPath, original);
+        var (store, config) = CreateStore();
+        var candidate = ConfigSecretMask.Mask(original).Replace("\"mode\": \"Slave\"", "\"mode\": \"Master\"");
+
+        Assert.That(async () => await store.BeginAsync((await config.ReadAsync()).Revision, candidate, CancellationToken.None),
+            Throws.TypeOf<InvalidOperationException>().With.Message.Contains("connectivity changes"));
+        Assert.That(File.Exists(Path.Combine(_root, ".hydra-remote-apply.json")), Is.False);
+    }
+
+    [Test]
     public async Task ExpiredMarker_RestoresBackupBeforeInvalidConfigBootstrap()
     {
         var marker = new RemoteApplyMarker(Guid.NewGuid(), TransactionalConfigStore.Revision("{"), TransactionalConfigStore.Revision(_original),
