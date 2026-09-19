@@ -51,9 +51,13 @@ public class ClientRegistry(ILogger<ClientRegistry> log) : IClientRegistry
         return ValueTask.CompletedTask;
     }
 
+    // _mutationLock only orders compound writes across both dictionaries; ConcurrentDictionary is
+    // safe to read without it, so lookups stay wait-free instead of taking a lock on every relay send.
+    // ReSharper disable once InconsistentlySynchronizedField
     public ValueTask<string?> GetConnectionId(Guid networkId, string hostName) =>
         ValueTask.FromResult(_byNetworkHost.GetValueOrDefault(HostKey(networkId, hostName)));
 
+    // ReSharper disable once InconsistentlySynchronizedField
     public ValueTask<ClientIdentity?> GetIdentity(string connectionId) =>
         ValueTask.FromResult(_byConnection.TryGetValue(connectionId, out var identity) ? identity : null);
 
@@ -88,6 +92,7 @@ public class ClientRegistry(ILogger<ClientRegistry> log) : IClientRegistry
     private List<NetworkClient> OnNetwork(Guid networkId, string? excludeConnectionId)
     {
         var result = new List<NetworkClient>();
+        // ReSharper disable once InconsistentlySynchronizedField
         foreach (var (connectionId, identity) in _byConnection)
         {
             if (identity.NetworkId == networkId && connectionId != excludeConnectionId)

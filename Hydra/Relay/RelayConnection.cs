@@ -58,13 +58,13 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
                 if (MovementBatch.TryCreate(targetHosts, payload, out var movement))
                 {
                     _openMovementBatch = movement;
-                    _sendQueue.Writer.TryWrite(new OutboundMessage(targetHosts, payload, null, CancellationToken.None, movement));
+                    _sendQueue.Writer.TryWrite(new OutboundMessage(targetHosts, payload, null, movement, CancellationToken.None));
                     return;
                 }
             }
 
             _openMovementBatch = null;
-            _sendQueue.Writer.TryWrite(new OutboundMessage(targetHosts, payload, null, CancellationToken.None, null));
+            _sendQueue.Writer.TryWrite(new OutboundMessage(targetHosts, payload, null, null, CancellationToken.None));
         }
     }
 
@@ -78,7 +78,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         lock (_sendOrderLock)
         {
             _openMovementBatch = null;
-            if (!_sendQueue.Writer.TryWrite(new OutboundMessage(targetHosts, payload, completion, cancel, null)))
+            if (!_sendQueue.Writer.TryWrite(new OutboundMessage(targetHosts, payload, completion, null, cancel)))
                 throw new InvalidOperationException("Relay send queue is closed");
         }
 
@@ -424,6 +424,6 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         string[] Targets,
         byte[] Payload,
         TaskCompletionSource? Completion,
-        CancellationToken Cancel,
-        MovementBatch? Movement);
+        MovementBatch? Movement,
+        CancellationToken Cancel);
 }

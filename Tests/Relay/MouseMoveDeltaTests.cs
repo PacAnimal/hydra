@@ -72,9 +72,12 @@ public class MouseMoveDeltaTests
             new MouseMoveDeltaMessage(int.MaxValue, int.MinValue));
         var second = MessageSerializer.Encode(MessageKind.MouseMoveDelta, new MouseMoveDeltaMessage(1, -1));
 
-        Assert.That(RelayConnection.TryCoalesceMovement(first, second, out var payload), Is.True);
-        Assert.That(MessageSerializer.Decode(payload).Deserialize<MouseMoveDeltaMessage>(),
-            Is.EqualTo(new MouseMoveDeltaMessage(int.MaxValue, int.MinValue)));
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(RelayConnection.TryCoalesceMovement(first, second, out var payload), Is.True);
+            Assert.That(MessageSerializer.Decode(payload).Deserialize<MouseMoveDeltaMessage>(),
+                Is.EqualTo(new MouseMoveDeltaMessage(int.MaxValue, int.MinValue)));
+        }
     }
 
     [Test]

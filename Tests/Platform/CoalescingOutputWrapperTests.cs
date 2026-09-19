@@ -54,8 +54,11 @@ public class CoalescingOutputWrapperTests
         for (var i = 0; i < 10_000; i++)
             _wrapper.MoveMouse(i, i);
 
-        Assert.That(_wrapper.PendingActionCount, Is.EqualTo(1));
-        Assert.That(_wrapper.MaxPendingActionCount, Is.EqualTo(1));
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(_wrapper.PendingActionCount, Is.EqualTo(1));
+            Assert.That(_wrapper.MaxPendingActionCount, Is.EqualTo(1));
+        }
         Drain();
         Assert.That(_inner.Events.OfType<MoveEvent>().Single().X, Is.EqualTo(9_999));
     }
@@ -122,9 +125,12 @@ public class CoalescingOutputWrapperTests
         _wrapper.MoveMouse(30, 40);
         Drain();
 
-        Assert.That(_inner.Events[0], Is.EqualTo(new MoveEvent(10, 20, Absolute: true)));
-        Assert.That(_inner.Events[1], Is.InstanceOf<KeyEvent>());
-        Assert.That(_inner.Events[2], Is.EqualTo(new MoveEvent(30, 40, Absolute: true)));
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(_inner.Events[0], Is.EqualTo(new MoveEvent(10, 20, Absolute: true)));
+            Assert.That(_inner.Events[1], Is.InstanceOf<KeyEvent>());
+            Assert.That(_inner.Events[2], Is.EqualTo(new MoveEvent(30, 40, Absolute: true)));
+        }
     }
 
     [Test]
