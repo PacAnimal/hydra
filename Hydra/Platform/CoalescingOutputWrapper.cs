@@ -114,6 +114,10 @@ public sealed class CoalescingOutputWrapper : IPlatformOutput
         {
             foreach (var action in _actions.GetConsumingEnumerable()) ExecuteAction(action);
         }
+        catch (InvalidOperationException)
+        {
+            // benign: CompleteAdding raced with enumeration start during Dispose
+        }
         catch (Exception ex)
         {
             RecordFault(ex, "Output drain stopped unexpectedly");

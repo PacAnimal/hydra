@@ -55,6 +55,24 @@ public class ClientRegistryTests
     }
 
     [Test]
+    public async Task RegisterKickingDuplicates_MatchesExistingHostNameCaseInsensitively()
+    {
+        var registry = new ClientRegistry(NullLogger<ClientRegistry>.Instance);
+        var network = Guid.NewGuid();
+        await registry.Register("a", network, "Laptop", "10.0.0.1");
+
+        var result = await registry.RegisterKickingDuplicates("b", network, "LAPTOP", "10.0.0.2");
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Kicked, Is.EqualTo(["a"]),
+                "the displaced connection must be reported as kicked, not silently dropped");
+            Assert.That(await registry.GetIdentity("a"), Is.Null);
+            Assert.That(await registry.GetConnectionId(network, "laptop"), Is.EqualTo("b"));
+        }
+    }
+
+    [Test]
     public async Task ConcurrentDuplicateRegistrations_LeaveOneConsistentEntry()
     {
         var registry = new ClientRegistry(NullLogger<ClientRegistry>.Instance);

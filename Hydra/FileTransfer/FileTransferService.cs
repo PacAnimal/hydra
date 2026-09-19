@@ -619,8 +619,11 @@ public sealed class FileTransferService : IDisposable
 
             await RunSendCoreAsync(paths, names, totalBytes, startTick, targetHost, relay, cancel);
         }
-        catch (OperationCanceledException) when (cancel.IsCancellationRequested)
+        catch (OperationCanceledException)
         {
+            // Reached for our own cancellation and for a chunk send cancelled by the relay's own
+            // internal token on disconnect — both mean the same thing here: stop gracefully, not a
+            // genuine transfer failure.
             _log.LogInformation("Transfer cancelled");
             _dialog.Close();
         }
@@ -666,8 +669,11 @@ public sealed class FileTransferService : IDisposable
             _dialog.ShowCompleted();
             _log.LogInformation("Transfer complete: {Bytes} compressed bytes sent", ByteSize.FromBytes(totalSent));
         }
-        catch (OperationCanceledException) when (cancel.IsCancellationRequested)
+        catch (OperationCanceledException)
         {
+            // Reached for our own cancellation and for a chunk send cancelled by the relay's own
+            // internal token on disconnect — both mean the same thing here: stop gracefully, not a
+            // genuine transfer failure.
             _log.LogInformation("Transfer cancelled");
             _dialog.Close();
         }

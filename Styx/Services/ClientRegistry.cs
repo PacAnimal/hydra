@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using Cathedral.Extensions;
 
 namespace Styx.Services;
 
@@ -67,15 +66,15 @@ public class ClientRegistry(ILogger<ClientRegistry> log) : IClientRegistry
         RegistrationResult result;
         lock (_mutationLock)
         {
-            var found = _byConnection
-                .Where(kv => kv.Value.NetworkId == networkId
-                    && kv.Value.HostName.EqualsOrdinal(hostName)
-                    && kv.Key != connectionId)
-                .Select(kv => kv.Key)
-                .ToList();
-            foreach (var id in found)
+            // Look up the same case-insensitive key Register() below will evict by — a case-sensitive
+            // scan here could miss a duplicate that Register() then silently displaces without it ever
+            // appearing in Kicked, leaving the displaced connection never told it lost the name.
+            var found = new List<string>();
+            if (_byNetworkHost.TryGetValue(HostKey(networkId, hostName), out var previousConnectionId)
+                && previousConnectionId != connectionId)
             {
-                Remove(id);
+                found.Add(previousConnectionId);
+                Remove(previousConnectionId);
                 log.LogInformation("Kicked duplicate \"{HostName}\" from network {NetworkId}", hostName, networkId);
             }
             var others = OnNetwork(networkId, connectionId);
