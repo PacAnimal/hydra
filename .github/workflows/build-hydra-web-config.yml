@@ -8,7 +8,7 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v7
@@ -34,7 +34,7 @@ jobs:
     # is off by default there and only needs enabling once, on this repo, via a repository
     # variable (Settings → Secrets and variables → Actions → Variables): PUBLISH_HYDRA_WEB_CONFIG=true.
     if: ${{ vars.PUBLISH_HYDRA_WEB_CONFIG == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     permissions:
       contents: read
