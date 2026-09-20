@@ -43,6 +43,16 @@ describe('serialize', () => {
     expect(json.autoUpdate).toBe(false)
   })
 
+  it('omits managementListener when true (default)', () => {
+    const json = JSON.parse(serialize(state({ mode: 'Master' }, { managementListener: true })))
+    expect(json.managementListener).toBeUndefined()
+  })
+
+  it('includes managementListener when false', () => {
+    const json = JSON.parse(serialize(state({ mode: 'Master' }, { managementListener: false })))
+    expect(json.managementListener).toBe(false)
+  })
+
   it('omits empty hosts array', () => {
     const json = JSON.parse(serialize(state({ mode: 'Master', hosts: [] })))
     expect(json.profiles[0].hosts).toBeUndefined()

@@ -97,6 +97,7 @@ export function serialize(state: FormState): string {
   const out: Record<string, unknown> = {}
   if (state.name?.trim()) out.name = state.name.trim()
   if (state.autoUpdate === false) out.autoUpdate = false
+  if (state.managementListener === false) out.managementListener = false
   if (state.logLevel && state.logLevel !== 'info') out.logLevel = state.logLevel
   if (state.lockFile?.trim()) out.lockFile = state.lockFile.trim()
   if (state.logFile?.trim()) out.logFile = state.logFile.trim()

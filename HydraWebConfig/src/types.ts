@@ -90,6 +90,7 @@ export interface HydraProfile {
 export interface FormState {
   name?: string
   autoUpdate?: boolean
+  managementListener?: boolean
   logLevel?: LogLevel
   lockFile?: string
   logFile?: string

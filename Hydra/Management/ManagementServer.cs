@@ -2,6 +2,7 @@ using System.IO.Pipes;
 using System.Net.Sockets;
 using System.Reflection;
 using System.Runtime.Versioning;
+using Hydra.Config;
 using Hydra.Platform;
 using Hydra.Platform.Windows;
 using Hydra.Relay;
@@ -12,6 +13,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace Hydra.Management;
 
 internal sealed class ManagementServer(
+    IHydraProfile profile,
     HydraRuntimeInfo runtime,
     HydraStatusService status,
     TransactionalConfigStore config,
@@ -23,8 +25,15 @@ internal sealed class ManagementServer(
     private readonly ManagementEndpoint _endpoint = ManagementEndpoint.ForConfig(runtime.ConfigPath);
     private Socket? _unixListener;
 
-    protected override Task ExecuteAsync(CancellationToken stoppingToken) =>
-        OperatingSystem.IsWindows() ? RunNamedPipeAsync(stoppingToken) : RunUnixSocketAsync(stoppingToken);
+    protected override Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        if (!profile.ManagementListener)
+        {
+            log.LogInformation("Hydra management endpoint disabled (managementListener: false)");
+            return Task.CompletedTask;
+        }
+        return OperatingSystem.IsWindows() ? RunNamedPipeAsync(stoppingToken) : RunUnixSocketAsync(stoppingToken);
+    }
 
     [SupportedOSPlatform("windows")]
     private async Task RunNamedPipeAsync(CancellationToken cancel)

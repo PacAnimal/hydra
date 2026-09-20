@@ -34,6 +34,11 @@ public class HydraConfigFile
     public bool DebugShield { get; init; } = false;
     public bool DebugMouse { get; init; } = false;
 
+    // local management socket/named pipe listener (currently used by `hydra tui`, but not specific
+    // to it) — set to false to disable it entirely, e.g. on a machine where local/remote management
+    // is never wanted
+    public bool ManagementListener { get; init; } = true;
+
     public List<HydraConfig> Profiles { get; init; } = [];
 
     // convenience method for single-profile scenarios (tests, simple setups)

@@ -67,7 +67,7 @@ export function useHydraConfig() {
 
   const current = state.profiles[state.activeIndex] ?? state.profiles[0]
 
-  const updateRoot = useCallback((patch: Partial<Pick<FormState, 'name' | 'autoUpdate' | 'logLevel' | 'lockFile' | 'logFile' | 'sessionLogFile'>>) => {
+  const updateRoot = useCallback((patch: Partial<Pick<FormState, 'name' | 'autoUpdate' | 'managementListener' | 'logLevel' | 'lockFile' | 'logFile' | 'sessionLogFile'>>) => {
     push(s => ({ ...s, ...patch }))
   }, [push])
 

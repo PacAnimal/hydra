@@ -48,7 +48,7 @@ Run the TUI in a separate terminal while Hydra is running:
 ./hydra tui --config /path/to/hydra.conf
 ```
 
-`--config` must identify the same canonical config path as the daemon you want to manage. The TUI connects through a local-only Unix socket on macOS/Linux or a restricted named pipe on Windows; it does not expose a network management port.
+`--config` must identify the same canonical config path as the daemon you want to manage. The TUI connects through a local-only Unix socket on macOS/Linux or a restricted named pipe on Windows; it does not expose a network management port. This listener is on by default; set `"managementListener": false` in `hydra.conf` to disable it on a machine where local/remote management is never wanted — `hydra tui` then has nothing to connect to. `hydra pair` is unaffected: it writes its one-time code straight to the sidecar file, without going through this listener.
 
 The views provide runtime status, the exact interface and socket selected by the live relay connection, the actual inbound interface for clients of an embedded relay, relay traffic counters, known peers and screens, bounded live logs, configuration editing, diagnostics, and keyboard help. Runtime controls include relay reconnect, confirmed Hydra restart, and confirmed Hydra shutdown; after shutdown is confirmed, **Start Hydra** becomes available. The configuration view has **Form** and **Text** modes; the active mode and form section use a persistent accent colour that is independent of keyboard or mouse focus. Form mode divides global, profile, relay, and behaviour settings into separate sections; Text mode exposes the complete JSON including hosts, neighbours, and screen definitions. Empty optional form fields show their effective inherited/default value beside the field without writing that value into the configuration. Hovering an option or moving keyboard focus to it updates the help panel at the bottom. Profile navigation is disabled at the first/last profile and when only one profile exists. Switching modes round-trips through the same document and preserves fields not shown by the form. The view uses Hydra's canonical parser and validator, detects external file changes, and writes through a validated sibling temporary file before replacing the original. **Save** changes the file only; **Save & Restart** also asks the running daemon to restart. Accepted save, reconnect, restart, and shutdown actions report progress and completion in the bottom activity line instead of blocking the refreshed UI behind a success dialog.
 
@@ -91,6 +91,7 @@ Use `Esc` to close the TUI. It does not change Hydra's running state.
 - `profile` — force the named `profileName` regardless of conditions; intended for diagnosis and controlled overrides
 - `debugShield` — enable verbose cursor-shield diagnostics (default: `false`)
 - `debugMouse` — enable verbose mouse-routing diagnostics (default: `false`)
+- `managementListener` — `false` to disable the local management socket/named pipe that `hydra tui` connects to (default: `true`)
 - `profiles` — array of profile objects (see below); at least one required
 
 **Per-profile** (inside a `profiles` entry):

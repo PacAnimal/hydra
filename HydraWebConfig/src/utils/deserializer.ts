@@ -169,6 +169,7 @@ export function deserialize(json: string): FormState {
   return {
     name: optStr(root.name),
     autoUpdate: optBool(root.autoUpdate),
+    managementListener: optBool(root.managementListener),
     logLevel: coerceLogLevel(root.logLevel),
     lockFile: optStr(root.lockFile),
     logFile: optStr(root.logFile),

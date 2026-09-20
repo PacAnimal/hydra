@@ -11,6 +11,7 @@ public interface IHydraProfile
     bool AutoUpdate { get; }
     bool DebugShield { get; }
     bool DebugMouse { get; }
+    bool ManagementListener { get; }
 
     // active profile settings
     string? ProfileName { get; }
@@ -45,6 +46,7 @@ public class HydraProfile(HydraConfigFile configFile, HydraConfig? activeProfile
     public bool AutoUpdate { get; } = configFile.AutoUpdate;
     public bool DebugShield { get; } = configFile.DebugShield;
     public bool DebugMouse { get; } = configFile.DebugMouse;
+    public bool ManagementListener { get; } = configFile.ManagementListener;
 
     public string? ProfileName => _activeProfile?.ProfileName;
     public Mode Mode => _activeProfile?.Mode ?? Mode.Slave;

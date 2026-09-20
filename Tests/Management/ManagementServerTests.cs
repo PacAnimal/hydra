@@ -11,6 +11,7 @@ public class ManagementServerTests
     {
         var lifetime = new FakeLifetime(new CommandResult(accepted, message));
         var server = new ManagementServer(
+            null!,
             new HydraRuntimeInfo(Path.Combine(TestContext.CurrentContext.WorkDirectory,
                 $"server-{Guid.NewGuid():N}.conf"), DateTimeOffset.UtcNow),
             null!, null!, null!, lifetime, null!, NullLogger<ManagementServer>.Instance);

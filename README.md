@@ -61,6 +61,8 @@ Edit `hydra.conf` from a sectioned form or the raw JSON. Pair and manage a remot
 
 Closing the TUI does not stop Hydra — `Esc` just quits the TUI.
 
+The local socket/named pipe the TUI connects through is on by default. Set `"managementListener": false` in `hydra.conf` to disable it on a machine that should never be managed this way.
+
 ---
 
 ## Install

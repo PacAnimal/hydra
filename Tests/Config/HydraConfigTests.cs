@@ -176,6 +176,22 @@ public class HydraConfigTests
     }
 
     [Test]
+    public void Load_ManagementListener_DefaultsToTrue()
+    {
+        var json = AsFile($$"""[{ "mode": "Slave"{{Relay}} }]""");
+        var file = HydraConfigFile.Parse(json, "<test>");
+        Assert.That(file.ManagementListener, Is.True);
+    }
+
+    [Test]
+    public void Load_ManagementListener_CanBeDisabled()
+    {
+        var json = $$"""{"managementListener":false,"profiles":[{"mode":"Master"{{Relay}}}]}""";
+        var file = HydraConfigFile.Parse(json, "<test>");
+        Assert.That(file.ManagementListener, Is.False);
+    }
+
+    [Test]
     public void ScreenDefinition_Validation_ThrowsWhenNoMatchCriteria()
     {
         var json = AsFile($$"""[{ "mode": "Slave", "screenDefinitions": [{ "mouseScale": 1.5 }]{{Relay}} }]""");

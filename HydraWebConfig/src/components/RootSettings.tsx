@@ -4,7 +4,7 @@ const LOG_LEVELS: LogLevel[] = ['trace', 'debug', 'info', 'warn', 'error', 'crit
 
 interface Props {
   state: FormState
-  onChange: (patch: Partial<Pick<FormState, 'name' | 'autoUpdate' | 'logLevel' | 'lockFile' | 'logFile' | 'sessionLogFile'>>) => void
+  onChange: (patch: Partial<Pick<FormState, 'name' | 'autoUpdate' | 'managementListener' | 'logLevel' | 'lockFile' | 'logFile' | 'sessionLogFile'>>) => void
 }
 
 export function RootSettings({ state, onChange }: Props) {
@@ -73,6 +73,14 @@ export function RootSettings({ state, onChange }: Props) {
             onChange={e => onChange({ autoUpdate: e.target.checked ? undefined : false })}
           />
           Auto Update
+        </label>
+        <label className="checkbox-label">
+          <input
+            type="checkbox"
+            checked={state.managementListener !== false}
+            onChange={e => onChange({ managementListener: e.target.checked ? undefined : false })}
+          />
+          TUI Listener
         </label>
       </div>
     </div>

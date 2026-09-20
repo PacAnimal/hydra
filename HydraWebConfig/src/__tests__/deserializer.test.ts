@@ -68,6 +68,16 @@ describe('deserialize', () => {
     expect(state.autoUpdate).toBeUndefined()
   })
 
+  it('parses root managementListener: false', () => {
+    const state = deserialize(asFile('[{"mode":"Master"}]', '"managementListener":false'))
+    expect(state.managementListener).toBe(false)
+  })
+
+  it('leaves managementListener undefined when absent', () => {
+    const state = deserialize(asFile('[{"mode":"Master"}]'))
+    expect(state.managementListener).toBeUndefined()
+  })
+
   it('parses hosts and neighbours', () => {
     const json = asFile(JSON.stringify([{
       mode: 'Master',
