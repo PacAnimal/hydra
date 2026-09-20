@@ -112,11 +112,30 @@ public static class TarGzStreamer
         }
     }
 
+    // TarWriter's own string-path overload opens its FileStream internally and only disposes it AFTER
+    // WriteEntryAsync returns successfully — if that write throws (a cancelled transfer, most commonly),
+    // the stream leaks. Windows locks are strict enough that a leaked read handle blocks deleting the
+    // file afterward; POSIX tolerates it silently. Own the stream ourselves so a cancelled write can't
+    // leak it, regardless of how the write completes.
     private static async Task AddFileAsync(TarWriter tar, string filePath, string entryName, CancellationToken cancel)
     {
-        try { await tar.WriteEntryAsync(filePath, entryName, cancel); }
+        FileStream? stream = null;
+        try
+        {
+            stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 1, FileOptions.Asynchronous);
+            var entry = new GnuTarEntry(TarEntryType.RegularFile, entryName)
+            {
+                DataStream = stream,
+                ModificationTime = new DateTimeOffset(File.GetLastWriteTimeUtc(filePath), TimeSpan.Zero),
+            };
+            await tar.WriteEntryAsync(entry, cancel);
+        }
         catch (IOException) { /* skip inaccessible */ }
         catch (UnauthorizedAccessException) { /* skip inaccessible */ }
+        finally
+        {
+            if (stream != null) await stream.DisposeAsync();
+        }
     }
 
     // write-only stream that buffers incoming bytes into ProgressBufferSize chunks and reports the
