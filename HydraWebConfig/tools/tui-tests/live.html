@@ -1,0 +1,63 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Hydra TUI live harness</title>
+<script src="xterm.js"></script>
+<style>
+  html, body { margin: 0; background: #0c0c0c; }
+  #term { padding: 4px; }
+</style>
+</head>
+<body>
+<div id="term"></div>
+<script>
+  const params = new URLSearchParams(location.search);
+  const cols = Number(params.get('cols') || 130);
+  const rows = Number(params.get('rows') || 42);
+
+  const term = new Terminal({
+    cols,
+    rows,
+    fontFamily: 'Menlo, "SF Mono", Consolas, monospace',
+    fontSize: 13,
+    lineHeight: 1.0,
+    theme: { background: '#0c0c0c' },
+    allowProposedApi: true,
+  });
+  term.open(document.getElementById('term'));
+
+  // The harness (Node side) already receives fully UTF-8-decoded strings from node-pty's
+  // onData, so writing the string straight through needs no further byte-level decoding.
+  window.__writeToTerm = (chunk) => term.write(chunk);
+
+  // Plain-text dump of the current screen, one line per row — this is what tests assert on
+  // instead of parsing raw ANSI or comparing screenshots pixel-by-pixel.
+  window.__screenText = () => {
+    const lines = [];
+    for (let i = 0; i < term.rows; i++) {
+      lines.push(term.buffer.active.getLine(i)?.translateToString(true) ?? '');
+    }
+    return lines.join('\n');
+  };
+
+  // Foreground colour of the cell under a given row/col, as a packed 24-bit RGB int (or null
+  // for the theme default / a palette index we're not using) — lets tests assert on *which*
+  // highlighting rule fired for a span, not just its text. Defensive: xterm's cell color API
+  // is a lower-level surface than the buffer text API above, so a version bump here degrades
+  // to "no color asserted" rather than breaking every test.
+  window.__cellColor = (row, col) => {
+    try {
+      const cell = term.buffer.active.getLine(row)?.getCell(col);
+      if (!cell || cell.isFgDefault() || !cell.isFgRGB()) return null;
+      return cell.getFgColor();
+    } catch {
+      return null;
+    }
+  };
+
+  window.__term = term;
+  window.__termReady = true;
+</script>
+</body>
+</html>

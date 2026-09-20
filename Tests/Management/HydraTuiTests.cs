@@ -213,6 +213,66 @@ public class HydraTuiTests
         Assert.That(peers, Does.Contain("○ laptop"));
     }
 
+    [Test]
+    public void DiagnosticsReportsUnavailableAndUnknownWhenNothingHasEverConnected()
+    {
+        // The very first Diagnostics render, before any status poll has ever succeeded — every
+        // optional field must fall back gracefully rather than throw on a null revision/snapshot.
+        var diagnostics = HydraTui.TuiController.FormatDiagnostics(
+            connected: false, configPath: "/etc/hydra.conf", configRevision: null, lastSnapshot: null, logCursor: 0);
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(diagnostics, Does.Contain("Management     unavailable"));
+            Assert.That(diagnostics, Does.Contain("Config rev     unknown"));
+            Assert.That(diagnostics, Does.Contain("Last snapshot  none"));
+            Assert.That(diagnostics, Does.Contain("Last error     none"));
+        }
+    }
+
+    [Test]
+    public void DiagnosticsReportsConnectedStateAndTheTriggeringError()
+    {
+        var snapshot = DateTimeOffset.UtcNow;
+
+        var diagnostics = HydraTui.TuiController.FormatDiagnostics(
+            connected: true, configPath: "/etc/hydra.conf", configRevision: "rev-7",
+            lastSnapshot: snapshot, logCursor: 42, error: new InvalidOperationException("relay unreachable"));
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(diagnostics, Does.Contain("Management     connected"));
+            Assert.That(diagnostics, Does.Contain("Config rev     rev-7"));
+            Assert.That(diagnostics, Does.Contain("Log cursor     42"));
+            Assert.That(diagnostics, Does.Contain("Last error     relay unreachable"));
+        }
+    }
+
+    [Test]
+    public void ShortCategoryLeavesACategoryThatAlreadyFitsUnchanged()
+    {
+        Assert.That(HydraTui.TuiController.ShortCategory("Hydra.Config"), Is.EqualTo("Hydra.Config"));
+    }
+
+    [Test]
+    public void ShortCategoryDropsWholeNamespaceSegmentsRatherThanCuttingMidWord()
+    {
+        // The namespace prefix is the least useful part of a long category name — but dropping it a
+        // raw character at a time can slice through a word (e.g. "ra.Relay.RelayConnection", missing
+        // "Hyd"). It must drop whole leading segments instead, so the result always reads cleanly.
+        var truncated = HydraTui.TuiController.ShortCategory("Hydra.Platform.MacOs.MacScreenDetector");
+
+        Assert.That(truncated, Is.EqualTo("MacOs.MacScreenDetector"));
+    }
+
+    [Test]
+    public void ShortCategoryFallsBackToRawTruncationWhenTheLastSegmentAloneIsStillTooLong()
+    {
+        var truncated = HydraTui.TuiController.ShortCategory("Hydra.SomeExtremelyLongClassNameThatAloneExceedsTheBudget");
+
+        Assert.That(truncated, Has.Length.EqualTo(24));
+    }
+
     private static HydraStatusSnapshot Status(int processId, long uptime, long? relayAttempts = null) => new(
         DateTimeOffset.UtcNow, "0.0.0", processId, uptime, "config", "revision", "host", "profile",
         Hydra.Config.Mode.Master, false, relayAttempts != null,

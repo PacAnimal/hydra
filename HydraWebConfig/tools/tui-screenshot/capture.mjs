@@ -11,21 +11,23 @@
 // around one. The only flakiness left to retry around is the TUI draw itself occasionally not
 // happening on the first attempt under a synthetic pty — see README.md.
 
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pty from 'node-pty';
+import { findDefaultBinary, replyFor, isRealTui } from './pty-helpers.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, '..', '..', '..');
 
 const args = parseArgs(process.argv.slice(2));
-const HYDRA_BIN = args.bin ?? findDefaultBinary();
+const HYDRA_BIN = args.bin ?? findDefaultBinary(REPO_ROOT);
 const OUT_DIR = resolve(args.out ?? join(__dirname, 'output'));
 const COLS = Number(args.cols ?? 130);
 const ROWS = Number(args.rows ?? 42);
 const TUI_ATTEMPTS = Number(args.tuiAttempts ?? 5);
 const TUI_CAPTURE_MS = Number(args.tuiCaptureMs ?? 4000);
+const GOTO = typeof args.goto === 'string' ? args.goto : null;
 
 mkdirSync(OUT_DIR, { recursive: true });
 
@@ -41,46 +43,8 @@ function parseArgs(argv) {
   return out;
 }
 
-function findDefaultBinary() {
-  const candidates = [
-    join(REPO_ROOT, 'Hydra', 'bin', 'Release', 'net10.0', 'Hydra'),
-    join(REPO_ROOT, 'Hydra', 'bin', 'Debug', 'net10.0', 'Hydra'),
-  ];
-  const hit = candidates.find(existsSync);
-  if (!hit) {
-    console.error(
-      'Could not find a built Hydra binary. Run "dotnet build Hydra.sln" (or --configuration Release) ' +
-        'from the repo root first, or pass --bin /path/to/Hydra explicitly.\nLooked for:\n' +
-        candidates.map((c) => `  ${c}`).join('\n'),
-    );
-    process.exit(1);
-  }
-  return hit;
-}
-
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
-}
-
-// Terminal.Gui asks the terminal a handful of capability questions on startup (cursor
-// position, window size in chars, foreground/background colour, Kitty keyboard protocol
-// support, primary device attributes). A pty with nothing on the other end never answers,
-// so it retries forever without drawing anything. This mimics a well-behaved terminal.
-function replyFor(buf) {
-  const replies = [];
-  if (/\x1b\[6n/.test(buf)) replies.push('\x1b[1;1R');
-  if (/\x1b\[18t/.test(buf)) replies.push(`\x1b[8;${ROWS};${COLS}t`);
-  if (/\x1b\]10;\?\x1b\\/.test(buf)) replies.push('\x1b]10;rgb:e0e0/e0e0/e0e0\x1b\\');
-  if (/\x1b\]11;\?\x1b\\/.test(buf)) replies.push('\x1b]11;rgb:1e1e/1e1e/1e1e\x1b\\');
-  if (/\x1b\[\?u/.test(buf)) replies.push('\x1b[?0u');
-  if (/\x1b\[0c/.test(buf)) replies.push('\x1b[?62;1;2;6;9;15;18;21;22c');
-  return replies.join('');
-}
-
-function isRealTui(bytes) {
-  // Genuine Terminal.Gui entry writes the alt-screen sequence as its first bytes.
-  // Anything else at the start means the process never got that far.
-  return bytes.slice(0, 20).includes('\x1b[?1049h');
 }
 
 async function captureTui() {
@@ -97,9 +61,13 @@ async function captureTui() {
       let out = '';
       term.onData((data) => {
         out += data;
-        const reply = replyFor(data);
+        const reply = replyFor(data, COLS, ROWS);
         if (reply) term.write(reply);
       });
+
+      // --goto <letter> jumps to another tab via its Alt-mnemonic, once the initial draw has
+      // definitely happened, so the capture ends on that tab instead of Overview.
+      if (GOTO) setTimeout(() => term.write(`\x1b${GOTO}`), Math.min(1500, TUI_CAPTURE_MS / 2));
 
       setTimeout(() => {
         try {

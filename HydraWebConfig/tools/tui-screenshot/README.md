@@ -44,6 +44,7 @@ Useful flags for `capture.mjs`:
 | `--cols`, `--rows` | 130, 42 | terminal size |
 | `--tui-attempts` | 5 | retry budget for the TUI actually drawing (see below) |
 | `--tui-capture-ms` | 4000 | how long to record once the TUI starts drawing |
+| `--goto <letter>` | none (stays on Overview) | jumps to another tab via its Alt-mnemonic (e.g. `--goto c` for Configuration) partway through the capture window |
 
 ## Why this needs retry logic at all
 

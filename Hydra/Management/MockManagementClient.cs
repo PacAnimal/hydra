@@ -4,9 +4,14 @@ namespace Hydra.Management;
 
 // Backs `hydra tui --demo`: a design-preview / screenshot mode that renders the real TUI
 // against fabricated data instead of a live daemon, so the UI can be shown or captured
-// without ever touching a real network, a real config, or a real machine's identity. Every
-// address below is drawn from RFC 5737's reserved documentation ranges (192.0.2.0/24,
-// 198.51.100.0/24) — safe to publish, never a route anyone can actually reach.
+// without ever touching a real network, a real config, or a real machine's identity.
+//
+// Local-network addresses (the Wi-Fi/VPN adapters, the embedded-relay peer) use ordinary
+// RFC 1918 / RFC 4193 private-use space (192.168.0.0/16, 10.0.0.0/8, fd00::/8) — the same
+// ranges millions of real home and office networks reuse, so they look like a genuine LAN
+// without identifying any specific one. The relay server's own address stays in RFC 5737's
+// reserved documentation range (192.0.2.0/24) since that represents a public, internet-facing
+// endpoint — the one place a realistic-looking address risks resembling an actual reachable host.
 internal sealed class MockManagementClient : IManagementClient
 {
     private static readonly DateTimeOffset StartedAt = DateTimeOffset.UtcNow;
@@ -54,18 +59,18 @@ internal sealed class MockManagementClient : IManagementClient
             IsIdle: false,
             RelayConnected: true,
             new RelayConnectionStatus(
-                "en0", "Wi-Fi", "192.0.2.10", 51830,
+                "en0", "Wi-Fi", "192.168.1.42", 51830,
                 "relay.example.com", "192.0.2.1", 5000,
                 connectedAt, 2, 5_180 + drift, 7_040 + drift * 2, 2_600_000 + drift * 400, 9_100_000 + drift * 1300),
             [
-                new NetworkAdapterStatus("en0", "Wi-Fi", ["192.0.2.10", "2001:db8:1::10"], true, 866_000_000,
+                new NetworkAdapterStatus("en0", "Wi-Fi", ["192.168.1.42", "fd7a:8b3c::42"], true, 866_000_000,
                     4_100_000_000 + drift * 9_000, 312_000_000 + drift * 600, 0, 0, 0, 0),
-                new NetworkAdapterStatus("utun4", "VPN / tunnel", ["198.51.100.4"], false, 0,
+                new NetworkAdapterStatus("utun4", "VPN / tunnel", ["10.8.0.14"], false, 0,
                     2_900_000_000 + drift * 3_000, 2_700_000_000 + drift * 3_000, 0, 0, 0, 0),
             ],
             [
                 new EmbeddedRelayPeerStatus("desktop", "127.0.0.1", "127.0.0.1", "lo0", "Loopback"),
-                new EmbeddedRelayPeerStatus("laptop", "192.0.2.20", "192.0.2.10", "en0", "Wi-Fi"),
+                new EmbeddedRelayPeerStatus("laptop", "192.168.1.55", "192.168.1.42", "en0", "Wi-Fi"),
             ],
             [new PeerLatencyStatus("laptop", 2.1, 6.8, 24.0, 1.9, 340 + uptime, 0, DateTimeOffset.UtcNow)],
             Dormant: false,

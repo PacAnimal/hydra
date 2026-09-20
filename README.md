@@ -1,6 +1,6 @@
 # Hydra
 
-**A modern, cross-platform software KVM** — share one keyboard and mouse across Mac, Windows, and Linux by moving the cursor to the edge of the screen. A spiritual successor to Synergy and Barrier, with end to end encryption, support for online relays to bridge networks or VPN connections, and sending key input as pre-resolved Unicode characters to eliminate keyboard layout issues.
+**A modern, cross-platform software KVM** — share one keyboard and mouse across Mac, Windows, and Linux by moving the cursor to the edge of the screen. A spiritual successor to Synergy and Barrier: end-to-end encrypted, works across networks and VPNs through an optional relay, and types correctly across keyboard layouts.
 
 [![License: GPL v2](https://img.shields.io/badge/License-GPL_v2-blue.svg)](LICENSE)
 [![Latest release](https://img.shields.io/github/v/release/PacAnimal/hydra)](https://github.com/PacAnimal/hydra/releases/latest)
@@ -27,17 +27,17 @@
 
 ---
 
-## A day in the life
+## In practice
 
-**The commuting laptop.** Walk into the office, dock your laptop, and Hydra activates your Office profile automatically — cursor flows between screens, files copy across with one hotkey. Unplug at 5pm: the dock-detected profile drops. Get home and join the home WiFi: Hydra silently switches to your Home profile, where the same laptop now controls a mini-PC plugged into the TV. At a coffee shop with neither network: Hydra idles silently — there's nothing to connect to.
+**Commuting laptop.** Dock at the office and Hydra switches to your Office profile — cursor flows between screens, files copy across with one hotkey. Unplug, get home, join the home WiFi: Hydra switches to Home, where the same laptop now drives a mini-PC on the TV. No network at a coffee shop — Hydra just idles.
 
-**The Raspberry Pi as a wireless keyboard.** A headless Pi tucked behind the TV runs Hydra in remote-only mode. Plug any USB keyboard and mouse into it, and they instantly control your Mac across the room — no display server, no Xorg, just evdev and a network cable.
+**Headless Pi as a wireless keyboard.** Run Hydra in remote-only mode on a Pi behind the TV. Plug in any USB keyboard and mouse and they control your Mac across the room — no display server, no Xorg, just evdev and a network cable.
 
-**Typing foreign characters across layouts.** Norwegian master, US slave — type `å` on the master and `å` arrives correctly on the slave, even though the slave's keyboard has no key for it. Hydra resolves characters to Unicode on the master before transmission; dead-key composition (`' + a` → `á`) works the same way. No "force all machines to use the same layout" workarounds needed.
+**Cross-layout typing.** Norwegian master, US slave — type `å` and `å` arrives on the slave, even though its keyboard has no such key. Hydra resolves characters to Unicode on the master before sending; dead keys (`' + a` → `á`) work the same way.
 
-**The shared office screen.** A 98-inch display on the conference room wall runs as a slave. Any of the five people around the table can slide their cursor onto it — whoever gets there first takes control. Put up a diagram, hand off to a colleague, pass it back — no cables, no HDMI switches, no "can you share your screen?" interruptions.
+**Shared office screen.** A wall display runs as a slave. Whoever slides their cursor onto it first takes control — no cables, no HDMI switches, no "can you share your screen?"
 
-**The VPN problem, solved.** Your work laptop is on the corporate VPN; it can't see your personal machine sitting right next to it on the LAN. Drop a Styx container on a cheap VPS, paste the relay config into both machines' `hydra.conf`, and they connect through the relay as if they were on the same network — end-to-end encrypted, no port forwarding, no changes to the VPN.
+**Cross-network via relay.** Your work laptop is on the VPN and can't see your personal machine on the same LAN. Drop a Styx container on a cheap VPS, paste the relay config into both `hydra.conf` files, and they connect through it — end-to-end encrypted, no port forwarding.
 
 ---
 
@@ -53,7 +53,7 @@ curl -L https://github.com/PacAnimal/hydra/releases/latest/download/hydra-osx-ar
 ```
 `--install` registers a LaunchAgent, clears the quarantine flag, and starts Hydra immediately. Grant Accessibility permission when prompted: System Settings → Privacy & Security → Accessibility → enable Hydra. To remove: `./hydra --uninstall`.
 
-Run `--install` *before* granting Accessibility. It signs the binary with a stable identity so the permission survives later updates and re-installs, but macOS records the permission against whatever identity the binary had at the moment you granted it — so if you granted it first, remove Hydra from the Accessibility list and add it again after installing.
+Run `--install` *before* granting Accessibility — macOS ties the permission to the binary's identity at the moment you grant it, so granting first means removing and re-adding Hydra from the Accessibility list afterward.
 
 **Windows (x64):**
 
@@ -80,11 +80,8 @@ chmod +x hydra
 
 All releases are [self-contained](https://github.com/PacAnimal/hydra/releases) — no .NET runtime installation required.
 
-> **Priority:** a stuttering cursor is usually a loaded machine rather than a bad link, so Hydra runs above
-> normal priority — `--install` asks launchd for it on macOS (`ProcessType: Interactive` plus `Nice`), and on
-> Windows the service and its session child take it themselves at startup. On Linux, where install is by hand,
-> put `Nice=-10` in the systemd unit: systemd applies it with privilege, which a process running as a normal
-> user cannot do for itself.
+> **Priority:** Hydra runs above normal process priority so a busy machine doesn't stutter the cursor.
+> `--install` handles this automatically on macOS and Windows; on Linux, add `Nice=-10` to your systemd unit.
 
 > **Linux with display:** Requires X11 with XInput2. Wayland is not yet supported.
 
@@ -102,15 +99,13 @@ Open Hydra's local cross-platform TUI in another terminal:
 
 ![Hydra terminal control center, showing a connected relay, a peer, and live traffic counters](docs/assets/hydra-tui-demo.png)
 
-The control center shows the running process, active profile, relay, screens, peers, current routing state, exact relay network interface/socket, peer RTT/jitter, adapter traffic/error counters, embedded-relay peer interfaces, and a bounded live log. It can request a relay reconnect or Hydra restart, and can validate and atomically save `hydra.conf`; accepted actions show live progress in the bottom activity line without blocking refreshes behind a success dialog. The Configuration tab has a sectioned form for common settings and a complete JSON text editor; switching between them preserves advanced fields. Selected tabs and form sections use persistent colour independent of focus, and empty optional fields show their effective default or inherited value. Hovering an option or moving keyboard focus to it displays contextual help. Configuration editing remains available when Hydra is offline. Relay passwords and `networkConfig` values are hidden unless you explicitly reveal them in Text mode.
+Process, profile, relay, peers, network interfaces, and live traffic at a glance — reconnect or restart with one keypress.
 
-The Overview tab also provides a confirmed **Shutdown Hydra** action. On macOS, it unloads but preserves the current LaunchAgent so its `KeepAlive` setting does not immediately relaunch Hydra. Windows service-managed sessions must instead be stopped through Windows Services or an elevated terminal.
+![Hydra terminal control center's Configuration tab, showing the sectioned form for common settings](docs/assets/hydra-tui-config-demo.png)
 
-After the TUI confirms shutdown, **Start Hydra** becomes available. It starts the installed macOS LaunchAgent when available, or launches the current executable directly with the selected configuration. A generic management connection failure does not enable Start because Hydra may still be running.
+Edit `hydra.conf` from a sectioned form or the raw JSON. Pair and manage a remote peer over the encrypted relay from the same screen.
 
-The local management endpoint remains machine-local. The Remote tab can manage an explicitly paired online peer through Hydra's end-to-end encrypted relay. On the peer, run `./hydra pair` to generate a single-use 10-minute code, then enter its host name and code in the controlling TUI. Remote configurations are redacted at the source. A remote apply keeps a restrictive last-known-good backup and rolls back automatically unless the restarted peer reconnects on the candidate revision and the controller confirms it within 90 seconds. Relay, hostname, and profile-activation changes remain local-only because they could remove the recovery path.
-
-Closing the TUI does not stop Hydra. Use `Esc` to quit the TUI.
+Closing the TUI does not stop Hydra — `Esc` just quits the TUI.
 
 ---
 
@@ -194,4 +189,5 @@ The easiest way to set up multi-machine layouts, Styx relay configs, and network
 
 - [Configuration reference](docs/CONFIGURATION.md) — all config fields, screen layout options, network-aware profiles, hotkeys, Styx setup, and building from source
 - [TUI architecture](docs/TUI_ARCHITECTURE.md) — management boundaries, security invariants, platform lifecycle behavior, and validation expectations
+- [TUI hotkeys](docs/HOTKEYS.md) — every keyboard shortcut in the terminal control center, tab by tab
 - [Styx protocol](Styx.md) — the relay's wire protocol, for implementing your own client or server against it

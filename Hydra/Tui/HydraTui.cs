@@ -103,6 +103,15 @@ internal static class HydraTui
         private static readonly Terminal.Gui.Drawing.Scheme DisconnectedScheme = new(new Terminal.Gui.Drawing.Attribute(
             new Terminal.Gui.Drawing.Color(Terminal.Gui.Drawing.ColorName16.BrightRed), new Terminal.Gui.Drawing.Color(Terminal.Gui.Drawing.ColorName16.Black)));
 
+        // The built-in "Accent" scheme derives from Base with no hue of its own, so a selected
+        // mode/section button just goes flat grey — this gives the selected one a real color
+        // instead, and field captions their own consistent color so the Configuration form isn't
+        // pure grey-on-black.
+        private static readonly Terminal.Gui.Drawing.Scheme SelectedButtonScheme = new(new Terminal.Gui.Drawing.Attribute(
+            new Terminal.Gui.Drawing.Color(Terminal.Gui.Drawing.ColorName16.Black), new Terminal.Gui.Drawing.Color(Terminal.Gui.Drawing.ColorName16.BrightCyan)));
+        private static readonly Terminal.Gui.Drawing.Scheme FieldCaptionScheme = new(new Terminal.Gui.Drawing.Attribute(
+            new Terminal.Gui.Drawing.Color(Terminal.Gui.Drawing.ColorName16.BrightCyan), new Terminal.Gui.Drawing.Color(Terminal.Gui.Drawing.ColorName16.Black)));
+
         private readonly IManagementClient _client = client;
         private readonly TransactionalConfigStore _offlineStore = new(new HydraRuntimeInfo(configPath, DateTimeOffset.UtcNow));
         private readonly CancellationTokenSource _cancel = new();
@@ -114,20 +123,22 @@ internal static class HydraTui
         private readonly FrameView _configText = new() { BorderStyle = Terminal.Gui.Drawing.LineStyle.None, Visible = false };
         private readonly Label _configHelp = new() { Text = "Move focus or hover over an option to see what it does.", X = 1, Y = 0, Width = Dim.Fill(1), Height = 2 };
         private readonly Button _formModeButton = new() { ShadowStyle = ShadowStyles.None, Text = "_Form" };
-        private readonly Button _textModeButton = new() { ShadowStyle = ShadowStyles.None, Text = "_Text" };
-        private readonly Button _previousProfile = new() { ShadowStyle = ShadowStyles.None, Text = "_Previous", Enabled = false };
+        private readonly Button _textModeButton = new() { ShadowStyle = ShadowStyles.None, Text = "Te_xt" };
+        private readonly Button _previousProfile = new() { ShadowStyle = ShadowStyles.None, Text = "Pr_evious", Enabled = false };
         private readonly Button _nextProfile = new() { ShadowStyle = ShadowStyles.None, Text = "_Next", Enabled = false };
-        private readonly Button _revealSecrets = new() { ShadowStyle = ShadowStyles.None, Text = "_Reveal Secrets", Visible = false };
-        private readonly Editor _diagnostics = ReadOnlyEditor(RegexHighlightingDefinition.Status);
+        private readonly Button _revealSecrets = new() { ShadowStyle = ShadowStyles.None, Text = "Reveal _Secrets", Visible = false };
+        // no highlighter: every line here is a flat "Label   Value" row with no indent to distinguish
+        // a header from data, so the Status ruleset's no-indent-means-header rule would color it all
+        private readonly Editor _diagnostics = ReadOnlyEditor();
         private readonly TextField _remoteHost = new();
         private readonly TextField _remotePairingCode = new() { Secret = true };
         private readonly Editor _remoteConfig = new() { WordWrap = false, ViewportSettings = ViewportSettingsFlags.HasVerticalScrollBar | ViewportSettingsFlags.HasHorizontalScrollBar, HighlightingDefinition = HighlightingManager.Instance.GetDefinition("Json") };
         private readonly Label _remoteStatus = new() { Text = "Select a peer, pair it locally, then load its redacted configuration." };
         private readonly Label _connection = new() { Text = "Connecting…", X = 1, Y = 0, Width = Dim.Fill(), SchemeName = "Accent" };
         private readonly Label _activity = new() { Text = "Ready", X = 1, Y = Pos.AnchorEnd(2), Width = Dim.Fill(), SchemeName = "Base" };
-        private readonly Button _reconnect = new() { ShadowStyle = ShadowStyles.None, Text = "_Reconnect Relay", Enabled = false };
-        private readonly Button _restart = new() { ShadowStyle = ShadowStyles.None, Text = "_Restart Hydra", Enabled = false };
-        private readonly Button _shutdown = new() { ShadowStyle = ShadowStyles.None, Text = "_Shutdown Hydra", Enabled = false };
+        private readonly Button _reconnect = new() { ShadowStyle = ShadowStyles.None, Text = "R_econnect Relay", Enabled = false };
+        private readonly Button _restart = new() { ShadowStyle = ShadowStyles.None, Text = "Res_tart Hydra", Enabled = false };
+        private readonly Button _shutdown = new() { ShadowStyle = ShadowStyles.None, Text = "Shutdo_wn Hydra", Enabled = false };
         private readonly Button _start = new() { ShadowStyle = ShadowStyles.None, Text = "_Start Hydra", Enabled = false };
         private readonly Queue<string> _visibleLogs = new();
         private ConfigDocument? _configDocument;
@@ -149,8 +160,8 @@ internal static class HydraTui
         private int _resetVisibleLogs;
         private GuidedConfigDocument? _guidedConfig;
         private int _guidedProfileIndex;
-        private readonly List<(View Button, FrameView Content, string Name)> _tabs = [];
         private readonly List<(Button Button, FrameView Content, string Name)> _formSections = [];
+        private TabStrip _mainTabs = null!; // assigned in Build(), which always runs before any use
 
         private readonly TextField _rootName = new();
         private readonly TextField _rootLogLevel = new();
@@ -183,50 +194,32 @@ internal static class HydraTui
         internal void Build()
         {
             window.Add(_connection, _activity);
-            var navigation = new View { X = 1, Y = 1, Width = Dim.Fill(), Height = 2 };
+            _mainTabs = new TabStrip
+            {
+                X = 0,
+                Y = 1,
+                Width = Dim.Fill(),
+                Height = Dim.Fill(4)
+            };
             var contents = new[]
             {
                 ("Overview", BuildOverviewTab()),
-                ("Peers & Screens", BuildTextTab("Peers & Screens", _peers)),
-                ("Logs", BuildTextTab("Logs", _logs)),
+                ("Peers & Screens", BuildTextTab(_peers)),
+                ("Logs", BuildTextTab(_logs)),
                 ("Configuration", BuildConfigTab()),
                 ("Remote", BuildRemoteConfigTab()),
-                ("Diagnostics", BuildTextTab("Diagnostics", _diagnostics)),
+                ("Diagnostics", BuildTextTab(_diagnostics)),
                 ("Help", BuildHelpTab())
             };
-            View? previous = null;
-            for (var index = 0; index < contents.Length; index++)
-            {
-                var button = new View
-                {
-                    Title = $"_{contents[index].Item1}",
-                    X = previous == null ? 0 : Pos.Right(previous),
-                    Y = 0,
-                    Width = contents[index].Item1.Length + 4,
-                    Height = 2,
-                    BorderStyle = Terminal.Gui.Drawing.LineStyle.Rounded,
-                    CanFocus = false,
-                    MouseHighlightStates = MouseState.None
-                };
-                navigation.Add(button);
-                var content = contents[index].Item2;
-                content.X = 0;
-                content.Y = 3;
-                content.Width = Dim.Fill();
-                content.Height = Dim.Fill(4);
-                content.Visible = false;
-                window.Add(content);
-                _tabs.Add((button, content, contents[index].Item1));
-                previous = button;
-            }
-            window.Add(navigation);
+            foreach (var (name, content) in contents)
+                _mainTabs.AddTab($"_{name}", content);
+            window.Add(_mainTabs);
             app.Mouse.MouseEvent += HandleMainTabMouse;
-            SelectTab(0);
 
             var status = new StatusBar([
                 new Shortcut(Application.GetDefaultKey(Command.Quit), "Quit", () => window.RequestStop()),
                 new Shortcut(Key.F5, "Refresh", () => _ = RefreshAsync()),
-                new Shortcut(Key.F1, "Help", () => SelectTab(_tabs.Count - 1))
+                new Shortcut(Key.F1, "Help", () => _mainTabs.Select(contents.Length - 1))
             ]);
             window.Add(status);
 
@@ -239,32 +232,15 @@ internal static class HydraTui
             _ = RefreshAsync();
         }
 
-        private void SelectTab(int index)
-        {
-            if (index < 0 || index >= _tabs.Count) return;
-            for (var i = 0; i < _tabs.Count; i++)
-            {
-                var selected = i == index;
-                _tabs[i].Content.Visible = selected;
-                _tabs[i].Button.SchemeName = selected ? "Accent" : "Base";
-            }
-        }
-
         private void HandleMainTabMouse(object? sender, Terminal.Gui.Input.Mouse mouse)
         {
-            if (!mouse.Flags.HasFlag(MouseFlags.LeftButtonPressed)) return;
-            for (var index = 0; index < _tabs.Count; index++)
-            {
-                if (!_tabs[index].Button.FrameToScreen().Contains(mouse.ScreenPosition)) continue;
-                mouse.Handled = true;
-                SelectTab(index);
-                return;
-            }
+            if (!mouse.IsPressed) return;
+            if (_mainTabs.TrySelectAt(mouse.ScreenPosition)) mouse.Handled = true;
         }
 
         private FrameView BuildOverviewTab()
         {
-            var tab = BuildTextTab("_Overview", _overview);
+            var tab = BuildTextTab(_overview);
             _overview.Height = Dim.Fill(3);
             _reconnect.X = 1;
             _reconnect.Y = Pos.AnchorEnd(2);
@@ -306,7 +282,7 @@ internal static class HydraTui
 
         private FrameView BuildConfigTab()
         {
-            var tab = new FrameView { Title = "Configuration", Width = Dim.Fill(), Height = Dim.Fill() };
+            var tab = new FrameView { Width = Dim.Fill(), Height = Dim.Fill(), BorderStyle = Terminal.Gui.Drawing.LineStyle.None };
             _formModeButton.X = 1; _formModeButton.Y = 0;
             _textModeButton.X = Pos.Right(_formModeButton) + 1; _textModeButton.Y = 0;
             _formModeButton.CanFocus = true;
@@ -331,7 +307,7 @@ internal static class HydraTui
             helpPanel.Add(_configHelp);
             var validate = new Button { ShadowStyle = ShadowStyles.None, Text = "_Validate", X = 1, Y = Pos.AnchorEnd(2) };
             validate.Accepting += (_, e) => { e.Handled = true; ValidateConfig(); };
-            var reload = new Button { ShadowStyle = ShadowStyles.None, Text = "Re_load", X = Pos.Right(validate) + 2, Y = Pos.Top(validate) };
+            var reload = new Button { ShadowStyle = ShadowStyles.None, Text = "Reload", X = Pos.Right(validate) + 2, Y = Pos.Top(validate) };
             reload.Accepting += (_, e) => { e.Handled = true; Forget(LoadConfigAsync()); };
             _revealSecrets.X = Pos.Right(reload) + 2; _revealSecrets.Y = Pos.Top(validate);
             _revealSecrets.Accepting += (_, e) =>
@@ -339,9 +315,9 @@ internal static class HydraTui
                 e.Handled = true;
                 ToggleSecrets(_revealSecrets);
             };
-            var save = new Button { ShadowStyle = ShadowStyles.None, Text = "_Save", X = Pos.Right(_revealSecrets) + 2, Y = Pos.Top(validate) };
+            var save = new Button { ShadowStyle = ShadowStyles.None, Text = "S_ave", X = Pos.Right(_revealSecrets) + 2, Y = Pos.Top(validate) };
             save.Accepting += (_, e) => { e.Handled = true; Forget(SaveConfigAsync(restart: false)); };
-            var apply = new Button { ShadowStyle = ShadowStyles.None, Text = "Save && _Restart", X = Pos.Right(save) + 2, Y = Pos.Top(validate) };
+            var apply = new Button { ShadowStyle = ShadowStyles.None, Text = "Save && Restar_t", X = Pos.Right(save) + 2, Y = Pos.Top(validate) };
             apply.Accepting += (_, e) => { e.Handled = true; Forget(SaveConfigAsync(restart: true)); };
             _configText.Add(_config);
             tab.Add(_formModeButton, _textModeButton, _configForm, _configText, helpPanel,
@@ -361,15 +337,17 @@ internal static class HydraTui
 
         private FrameView BuildRemoteConfigTab()
         {
-            var tab = new FrameView { Title = "Remote Configuration", Width = Dim.Fill(), Height = Dim.Fill() };
+            var tab = new FrameView { Width = Dim.Fill(), Height = Dim.Fill(), BorderStyle = Terminal.Gui.Drawing.LineStyle.None };
             var hostLabel = new Label { Text = "Peer host", X = 1, Y = 0 };
+            hostLabel.SetScheme(FieldCaptionScheme);
             _remoteHost.X = 15; _remoteHost.Y = 0; _remoteHost.Width = 24;
             var codeLabel = new Label { Text = "Pairing code", X = 42, Y = 0 };
+            codeLabel.SetScheme(FieldCaptionScheme);
             _remotePairingCode.X = 57; _remotePairingCode.Y = 0; _remotePairingCode.Width = 34;
 
-            var pair = new Button { ShadowStyle = ShadowStyles.None, Text = "_Pair", X = 1, Y = 2 };
+            var pair = new Button { ShadowStyle = ShadowStyles.None, Text = "Pa_ir", X = 1, Y = 2 };
             pair.Accepting += (_, e) => { e.Handled = true; Forget(PairRemoteAsync()); };
-            var load = new Button { ShadowStyle = ShadowStyles.None, Text = "_Load Config", X = Pos.Right(pair) + 2, Y = 2 };
+            var load = new Button { ShadowStyle = ShadowStyles.None, Text = "Load Co_nfig", X = Pos.Right(pair) + 2, Y = 2 };
             load.Accepting += (_, e) => { e.Handled = true; Forget(LoadRemoteConfigAsync()); };
             var validate = new Button { ShadowStyle = ShadowStyles.None, Text = "_Validate", X = Pos.Right(load) + 2, Y = 2 };
             validate.Accepting += (_, e) => { e.Handled = true; Forget(ValidateRemoteConfigAsync()); };
@@ -631,10 +609,13 @@ internal static class HydraTui
 
             var sections = new[]
             {
-                ("Global", global),
-                ("Profile", profile),
-                ("Relay", relay),
-                ("Behaviour", behavior)
+                ("Global", "_Global", global),
+                // "Profile" and "Relay" have their mnemonics moved off 'P'/'R' — the always-live
+                // top-level tab strip ("_Peers & Screens", "_Remote") already owns those letters,
+                // and this section row stays reachable for as long as the Configuration tab does
+                ("Profile", "Prof_ile", profile),
+                ("Relay", "Rela_y", relay),
+                ("Behaviour", "_Behaviour", behavior)
             };
             Button? previous = null;
             for (var index = 0; index < sections.Length; index++)
@@ -643,15 +624,15 @@ internal static class HydraTui
                 var button = new Button
                 {
                     ShadowStyle = ShadowStyles.None,
-                    Text = $"_{sections[index].Item1}",
+                    Text = sections[index].Item2,
                     X = previous == null ? 1 : Pos.Right(previous) + 1,
                     Y = 0,
                     CanFocus = true,
                     MouseHighlightStates = MouseState.None
                 };
                 button.Accepting += (_, e) => { e.Handled = true; SelectFormSection(captured); };
-                _configForm.Add(button, sections[index].Item2);
-                _formSections.Add((button, sections[index].Item2, sections[index].Item1));
+                _configForm.Add(button, sections[index].Item3);
+                _formSections.Add((button, sections[index].Item3, sections[index].Item1));
                 previous = button;
             }
             SelectFormSection(0);
@@ -664,7 +645,10 @@ internal static class HydraTui
             {
                 var selected = i == index;
                 _formSections[i].Content.Visible = selected;
-                _formSections[i].Button.SchemeName = selected ? "Accent" : "Base";
+                // Same reasoning as the main tab strip: disable contents, not the page itself, so a
+                // background section's own hotkeys never fire while it isn't the one on screen.
+                TabStrip.SetDescendantsEnabled(_formSections[i].Content, selected);
+                _formSections[i].Button.SetScheme(selected ? SelectedButtonScheme : null);
             }
             _formSections[index].Button.SetFocus();
         }
@@ -691,6 +675,7 @@ internal static class HydraTui
         private void AddFieldAt(View parent, string label, TextField field, int labelX, int fieldX, int y, int width, string help)
         {
             var caption = new Label { Text = label, X = labelX, Y = y, Width = fieldX - labelX - 1 };
+            caption.SetScheme(FieldCaptionScheme);
             field.X = fieldX;
             field.Y = y;
             field.Width = width;
@@ -714,9 +699,10 @@ internal static class HydraTui
             view.HasFocusChanged += (_, e) => { if (e.CurrentValue) Show(); };
         }
 
-        private static FrameView BuildTextTab(string title, Editor editor)
+        // no border/title here — Tabs draws the frame and tab caption itself
+        private static FrameView BuildTextTab(Editor editor)
         {
-            var tab = new FrameView { Title = title, Width = Dim.Fill(), Height = Dim.Fill() };
+            var tab = new FrameView { Width = Dim.Fill(), Height = Dim.Fill(), BorderStyle = Terminal.Gui.Drawing.LineStyle.None };
             editor.X = 0;
             editor.Y = 0;
             editor.Width = Dim.Fill();
@@ -754,7 +740,7 @@ internal static class HydraTui
                 When the daemon is unavailable, configuration remains available but live controls are disabled.
                 Start Hydra is enabled only after this TUI confirms a shutdown.
                 """;
-            return BuildTextTab("_Help", help);
+            return BuildTextTab(help);
         }
 
         private async Task RefreshAsync()
@@ -1008,9 +994,9 @@ internal static class HydraTui
             _configForm.Visible = guided;
             _configText.Visible = !guided;
             _formModeButton.Text = "_Form";
-            _textModeButton.Text = "_Text";
-            _formModeButton.SchemeName = guided ? "Accent" : "Base";
-            _textModeButton.SchemeName = guided ? "Base" : "Accent";
+            _textModeButton.Text = "Te_xt";
+            _formModeButton.SetScheme(guided ? SelectedButtonScheme : null);
+            _textModeButton.SetScheme(guided ? null : SelectedButtonScheme);
             _revealSecrets.Visible = !guided;
             _configHelp.Text = guided
                 ? "Form mode: Move focus or hover over an option to see what it does."
@@ -1138,7 +1124,7 @@ internal static class HydraTui
                     _config.Text = ConfigSecretMask.Mask(_config.Text);
                     _configMaskFailed = false;
                     _secretsRevealed = false;
-                    button.Text = "_Reveal Secrets";
+                    button.Text = "Reveal _Secrets";
                 }
                 else
                 {
@@ -1148,7 +1134,7 @@ internal static class HydraTui
                         ? _configWithSecrets
                         : ConfigSecretMask.Restore(_config.Text, _configWithSecrets);
                     _secretsRevealed = true;
-                    button.Text = "_Hide Secrets";
+                    button.Text = "Hide _Secrets";
                 }
             }
             catch (Exception ex)
@@ -1467,11 +1453,11 @@ internal static class HydraTui
         internal static string FormatPeers(HydraStatusSnapshot s)
         {
             var output = new StringBuilder();
-            output.AppendLine("LOCAL SCREENS");
+            output.AppendLine("Local Screens");
             foreach (var screen in s.LocalScreens)
                 output.AppendLine($"  {screen.Name,-28} {screen.Width,5}×{screen.Height,-5} scale {screen.MouseScale}");
             if (s.LocalScreens.Count == 0) output.AppendLine("  (none detected)");
-            output.AppendLine().AppendLine("PEERS");
+            output.AppendLine().AppendLine("Peers");
             foreach (var peer in s.Peers)
             {
                 output.AppendLine($"  {(peer.Connected ? "●" : "○")} {peer.Name}  [{peer.Platform}]  {peer.Screens.Count} screen(s)");
@@ -1482,20 +1468,37 @@ internal static class HydraTui
             return output.ToString();
         }
 
-        private string FormatDiagnostics(Exception? error = null) => $"""
-            Management     {(_connected ? "connected" : "unavailable")}
+        private string FormatDiagnostics(Exception? error = null) => FormatDiagnostics(
+            _connected, configPath, _configDocument?.Revision ?? _lastStatus?.ConfigRevision,
+            _lastStatus?.CapturedAt, _logCursor, error);
+
+        internal static string FormatDiagnostics(bool connected, string configPath, string? configRevision,
+            DateTimeOffset? lastSnapshot, long logCursor, Exception? error = null) => $"""
+            Management     {(connected ? "connected" : "unavailable")}
             Protocol       {ManagementProtocol.Version}
             Config path    {configPath}
-            Config rev     {_configDocument?.Revision ?? _lastStatus?.ConfigRevision ?? "unknown"}
-            Last snapshot  {_lastStatus?.CapturedAt.ToLocalTime().ToString("O") ?? "none"}
-            Log cursor     {_logCursor}
+            Config rev     {configRevision ?? "unknown"}
+            Last snapshot  {lastSnapshot?.ToLocalTime().ToString("O") ?? "none"}
+            Log cursor     {logCursor}
             Last error     {error?.Message ?? "none"}
 
             The management endpoint is local-only. Secrets, clipboard data, typed characters and
             file-transfer content are not included in status or the TUI log buffer.
             """;
 
-        private static string ShortCategory(string category) => category.Length <= 24 ? category : category[^24..];
+        // Drops leading namespace segments (not raw characters) until it fits, so a long category
+        // reads as "Relay.RelayConnection" rather than a mid-word fragment like "ra.RelayConnection".
+        internal static string ShortCategory(string category)
+        {
+            if (category.Length <= 24) return category;
+            var segments = category.Split('.');
+            for (var start = 1; start < segments.Length; start++)
+            {
+                var candidate = string.Join('.', segments[start..]);
+                if (candidate.Length <= 24) return candidate;
+            }
+            return category[^24..];
+        }
 
         private static Editor ReadOnlyEditor(IHighlightingDefinition? highlighting = null) => new()
         {

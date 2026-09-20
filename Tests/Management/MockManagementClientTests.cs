@@ -22,24 +22,35 @@ public class MockManagementClientTests
     }
 
     [Test]
-    public async Task StatusUsesOnlyReservedDocumentationAddresses()
+    public async Task StatusUsesOnlyPrivateOrReservedAddressesNeverARealPublicOne()
     {
         // Everything this backs (design-preview mode, screenshots) can end up published, so
-        // nothing it reports may look like it could route anywhere real — RFC 5737 exists
-        // exactly for this: 192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24, and the 2001:db8::/32
-        // IPv6 equivalent are permanently reserved and guaranteed never publicly routable.
+        // nothing it reports may look like it could identify or route to a real host. Local-network
+        // fields (this machine's own adapters, the embedded-relay peer) use ordinary RFC 1918 /
+        // RFC 4193 private-use space — safe because millions of real LANs share it, so it can never
+        // point at one specific network. The relay's own address is the one field representing a
+        // public, internet-facing endpoint, so it alone must stay in RFC 5737's reserved
+        // documentation range (guaranteed to never be a real, reachable host).
         var client = new MockManagementClient();
 
         var status = await client.GetStatusAsync();
 
-        var addresses = new List<string> { status.RelayConnection!.LocalAddress, status.RelayConnection.RemoteAddress };
-        addresses.AddRange(status.ActiveNetworkAdapters!.SelectMany(adapter => adapter.Addresses));
-        addresses.AddRange(status.EmbeddedRelayPeers!.SelectMany(peer => new[] { peer.LocalAddress, peer.RemoteAddress }));
+        var localAddresses = new List<string> { status.RelayConnection!.LocalAddress };
+        localAddresses.AddRange(status.ActiveNetworkAdapters!.SelectMany(adapter => adapter.Addresses));
+        localAddresses.AddRange(status.EmbeddedRelayPeers!.SelectMany(peer => new[] { peer.LocalAddress, peer.RemoteAddress }));
 
-        Assert.That(addresses, Has.All.Matches<string>(address =>
-            address.StartsWith("192.0.2.") || address.StartsWith("198.51.100.") || address.StartsWith("203.0.113.")
-            || address.StartsWith("2001:db8:") || address is "127.0.0.1"));
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(localAddresses, Has.All.Matches<string>(IsPrivateOrLoopback));
+            Assert.That(status.RelayConnection.RemoteAddress, Does.StartWith("192.0.2."),
+                "the relay's own address represents a public endpoint and must stay non-routable documentation space");
+        }
     }
+
+    private static bool IsPrivateOrLoopback(string address) =>
+        address.StartsWith("192.168.") || address.StartsWith("10.") || address is "127.0.0.1"
+        || address.StartsWith("fd") || address.StartsWith("fc")
+        || Enumerable.Range(16, 16).Any(n => address.StartsWith($"172.{n}."));
 
     [Test]
     public async Task ConnectedForGrowsWithUptimeInsteadOfLookingLikeAFreshProcess()
