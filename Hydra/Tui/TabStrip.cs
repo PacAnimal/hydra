@@ -150,10 +150,13 @@ internal sealed class TabStrip : View
         }
 
         // Row 2: the content box's own top edge — open (blank) under the selected tab, a normal
-        // line with a junction everywhere else.
+        // line with a junction everywhere else. Column 0 is special: it's also the box's own left
+        // wall, which keeps going for the rest of the box's height, so when tab 0 is closed here
+        // this needs a three-way junction (up into the tab wall, right into its closed bottom,
+        // down into the wall below) — a plain corner would leave the wall below disconnected.
         var lastEntry = _entries.Count - 1;
         Move(0, 2);
-        AddRune(_selected == 0 ? '│' : '╰');
+        AddRune(_selected == 0 ? '│' : '├');
         for (var i = 0; i < _entries.Count; i++)
         {
             var leftOpen = i == _selected;
