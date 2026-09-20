@@ -72,7 +72,7 @@ internal sealed class TabStrip : View
         {
             e.Width = e.PlainTitle.Length + 2; // one space of padding either side of the label
             e.Start = x;
-            x += e.Width;
+            x += e.Width + 1; // +1 for the '╮'/'│' border glyph OnDrawingContent draws after this tab
         }
     }
 
