@@ -41,6 +41,28 @@
 
 ---
 
+## Terminal control center
+
+Open Hydra's local cross-platform TUI in another terminal:
+
+```bash
+./hydra tui
+./hydra tui --config /path/to/hydra.conf
+./hydra tui --color   # tint the connection line green/red by actual state
+```
+
+![Hydra terminal control center, showing a connected relay, a peer, and live traffic counters](docs/assets/hydra-tui-demo.png)
+
+Process, profile, relay, peers, network interfaces, and live traffic at a glance — reconnect or restart with one keypress.
+
+![Hydra terminal control center's Configuration tab, showing the sectioned form for common settings](docs/assets/hydra-tui-config-demo.png)
+
+Edit `hydra.conf` from a sectioned form or the raw JSON. Pair and manage a remote peer over the encrypted relay from the same screen.
+
+Closing the TUI does not stop Hydra — `Esc` just quits the TUI.
+
+---
+
 ## Install
 
 Run the binary directly to try Hydra out, or use `--install` to set it up as a service / LaunchAgent that auto-starts on login and survives reboots.
@@ -86,26 +108,6 @@ All releases are [self-contained](https://github.com/PacAnimal/hydra/releases) �
 > **Linux with display:** Requires X11 with XInput2. Wayland is not yet supported.
 
 > **Linux headless (no display):** See [Remote-only / Raspberry Pi setup](docs/CONFIGURATION.md#headless-linux-no-display-server).
-
-### Terminal control center
-
-Open Hydra's local cross-platform TUI in another terminal:
-
-```bash
-./hydra tui
-./hydra tui --config /path/to/hydra.conf
-./hydra tui --color   # tint the connection line green/red by actual state
-```
-
-![Hydra terminal control center, showing a connected relay, a peer, and live traffic counters](docs/assets/hydra-tui-demo.png)
-
-Process, profile, relay, peers, network interfaces, and live traffic at a glance — reconnect or restart with one keypress.
-
-![Hydra terminal control center's Configuration tab, showing the sectioned form for common settings](docs/assets/hydra-tui-config-demo.png)
-
-Edit `hydra.conf` from a sectioned form or the raw JSON. Pair and manage a remote peer over the encrypted relay from the same screen.
-
-Closing the TUI does not stop Hydra — `Esc` just quits the TUI.
 
 ---
 
