@@ -281,7 +281,8 @@ export function LayoutCanvas({ items, onChange }: Props) {
   const onPointerUp = useCallback(() => {
     if (!drag || !ghost) { setDrag(null); setGhost(null); return }
     if (!ghost.overlapping) {
-      let { x, y, w, h } = ghost
+      let { x, y } = ghost
+      const { w, h } = ghost
       // auto-snap to nearest side when the dropped position would be floating
       if (ghost.disconnected) {
         const snapped = snapToNearestSide({ x, y, w, h }, items, drag.id)
