@@ -13,6 +13,13 @@ internal sealed class TransactionalConfigStore(HydraRuntimeInfo runtime)
     /// read this file, so an unlocked read here is a read racing another program's save. On Windows it does
     /// not merely read a stale copy: the reader's handle refuses the saver's replace and the SAVE fails, so
     /// a user's config edit is lost because something else happened to be reading.
+    ///
+    /// <para><b>THIS lock has no portable test, and that is not an oversight to be fixed by trying harder.</b>
+    /// Its only symptom is a refused replace, which is a Windows behaviour — a POSIX rename ignores open
+    /// handles, so removing this acquisition changes nothing any mac or linux lane can observe. Measured:
+    /// it passes 5 of 5 with the acquisition deleted. The SAVE side's lock is different and is covered
+    /// everywhere by <c>ConcurrentSavesLoseNoEdit</c>, because a lost update needs no platform to be
+    /// visible. Do not read that test as cover for this line.</para>
     /// </summary>
     internal async Task<ConfigDocument> ReadAsync(CancellationToken cancel = default)
     {
@@ -80,7 +87,10 @@ internal sealed class TransactionalConfigStore(HydraRuntimeInfo runtime)
             }
             catch
             {
-                await PrivateFile.Write(runtime.ConfigPath, current, mode, cancel);
+                // NOT the caller's token: a rollback that puts the previous config back is not something to
+                // abandon because whoever asked has stopped waiting. The alternative is leaving hydra.conf
+                // holding content we just decided was unloadable.
+                await PrivateFile.Write(runtime.ConfigPath, current, mode, CancellationToken.None);
                 throw;
             }
 

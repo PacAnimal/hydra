@@ -178,8 +178,13 @@ public class TransactionalConfigStoreTests
                 var name = $"{tag}{i}";
                 // Retry on a losing revision check — that refusal is the lock WORKING, and the edit is only
                 // lost if it never lands at all.
-                while (true)
+                // BOUNDED. Unbounded, this spins for ever if the revision can never match, and this project
+                // sets no NUnit timeout — so the lane would hang rather than fail, taking everything behind
+                // it.
+                for (var attempt = 0; ; attempt++)
                 {
+                    Assert.That(attempt, Is.LessThan(200),
+                        $"{name} never landed in 200 attempts — a save is being refused for a reason retrying cannot fix");
                     var current = await store.ReadAsync();
                     // Appended to the host NAME: an edit that accumulates and stays valid. Adding profiles
                     // does not — only one may be default — and the point here is concurrency, not schema.
@@ -213,25 +218,34 @@ public class TransactionalConfigStoreTests
         Assert.That(missing, Is.Empty,
             "an edit was written and then silently overwritten — two savers passed the same revision check, which is what the cross-process lock is for");
     }
+
     /// <summary>
-    /// Taking the lock twice on one call stack fails AT ONCE and says what happened.
+    /// A wait that runs out against a lock THIS process holds says so, instead of a file-sharing error that
+    /// names nothing.
     ///
-    /// <para>It is exclusive and not re-entrant, so a second take waits for itself for the whole budget and
-    /// then throws "the process cannot access the file" — five seconds, naming nothing. That has already
-    /// happened here once, when rollback called a read that took the lock rollback was holding, and two
-    /// more call sites sit one edit away from it.</para>
+    /// <para>The lock is exclusive and not re-entrant, so a caller taking it twice waits for itself for the
+    /// whole budget — which happened here once, when rollback called a read that took the lock rollback was
+    /// holding, and two more call sites sit one edit away from it. The wait itself is not avoidable from a
+    /// process-wide record: it cannot tell that case from two honest callers here contending, and
+    /// contention is the common one. So the DIAGNOSIS is what is tested, not the speed — this says "says
+    /// so" rather than "immediately", because it is not immediate.</para>
     /// </summary>
     [Test]
-    public async Task TakingTheConfigLockTwiceOnOneStackSaysSoImmediately()
+    public async Task AWaitAgainstALockThisProcessHoldsSaysSo()
     {
         var lockPath = ConfigFileLock.ConfigPathFor(_path);
         await using var held = await ConfigFileLock.Acquire(lockPath, CancellationToken.None);
 
         // A short budget, because the point is WHICH error it ends with, not how long it waits for it.
-        var again = Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        var again = Assert.ThrowsAsync<TimeoutException>(async () =>
             await ConfigFileLock.Acquire(lockPath, TimeSpan.FromMilliseconds(200), CancellationToken.None));
 
-        Assert.That(again!.Message, Does.Contain("not re-entrant"),
-            "a second take on the same stack must name the problem, not time out with a message about file sharing");
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(again!.Message, Does.Contain("waiting for a lock it already took"),
+                "the message must offer re-entrancy as a cause, since that is the one the caller can fix");
+            Assert.That(again.Message, Does.Contain("another operation here is still working"),
+                "and must not ACCUSE the caller of it — ordinary in-process contention reaches this too");
+        }
     }
 }

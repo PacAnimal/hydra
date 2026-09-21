@@ -36,33 +36,42 @@ public class PrivateFileTests
 
         await PrivateFile.Write(_path, "{\"secret\":\"value\"}", Private, CancellationToken.None);
 
-        // The destination's mode comes from the TEMP, via the rename — nothing chmods it afterwards. So
-        // this failing means the write ran through a temp at the umask default, which is a complete copy of
-        // the secrets readable by anyone for the length of the write and after any crash.
+        // Cathedral stamps the mode on its temp at open(2) and the rename carries it, so this failing
+        // means the mode never reached it — the handler was built without one, and the file was written
+        // through a temp at the process umask: a complete copy of the secrets readable by anyone for the
+        // length of the write, and after any crash.
         Assert.That(ModeOf(_path), Is.EqualTo(Private),
-            "the file was written through a temp this type did not prepare, so it was world-readable while it was being written");
+            "the mode never reached the handler, so the file was written through a temp at the process umask — a complete copy readable by anyone");
     }
 
     /// <summary>
-    /// The temp file we prepared is the one the write used.
+    /// A file whose own mode has no write bit can still be REPLACED, and stays read-only.
     ///
-    /// <para><b>This is the test the permissions depend on.</b> A rename takes the SOURCE file's mode, and
-    /// Cathedral's <c>DiskFileHandler</c> creates its temp under the process umask — 0644 — which left a
-    /// complete copy of every controller secret world-readable for the whole write AND after any crash,
-    /// under a deterministic name in a directory that sits beside the binary. <c>PrivateFile</c> creates
-    /// that temp itself first, at 0600, so <c>File.Create</c> truncates rather than replaces it and the
-    /// mode carries through. If Cathedral ever renames its temp, ours is left behind untouched — which is
-    /// exactly what this asserts, because the alternative is the permissions quietly reverting.</para>
+    /// <para><b>0400 and 0440 are ordinary hardening for a config holding secrets — the hardening this type
+    /// exists to encourage.</b> Replacing a file has never needed write permission ON the file; a rename
+    /// needs it on the directory. So stamping the target's mode onto our own temp must not make that temp
+    /// unwritable to us, which is exactly what the first cut did: File.Create on our own 0400 temp failed
+    /// with permission denied and every write path broke.</para>
+    ///
+    /// <para>Worse than a failed save, and the reason this is a test rather than a note: RollbackAsync and
+    /// the startup restore propagate the same mode, so on a hardened config the automatic rollback of an
+    /// unconfirmed remote apply fails, retries every few seconds for ever, and leaves a distant machine on
+    /// a candidate nobody confirmed — the precise outcome the remote-apply machinery exists to prevent.</para>
     /// </summary>
     [Test]
-    public async Task TheTempFileIsTheOneWePreparedAndItIsPrivate()
+    public async Task AReadOnlyFileCanStillBeReplacedAndStaysReadOnly()
     {
         if (OperatingSystem.IsWindows()) Assert.Ignore("unix permissions");
 
-        await PrivateFile.Write(_path, "{\"secret\":\"value\"}", Private, CancellationToken.None);
+        const UnixFileMode readOnly = UnixFileMode.UserRead;
+        await PrivateFile.Write(_path, "{\"first\":true}", readOnly, CancellationToken.None);
 
-        Assert.That(File.Exists(PrivateFile.TempPathFor(_path)), Is.False,
-            "the temp file this type prepared at 0600 was not the one the write promoted — Cathedral is using a different name, so the write ran through a 0644 temp");
+        await PrivateFile.Write(_path, "{\"second\":true}", readOnly, CancellationToken.None);
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(await File.ReadAllTextAsync(_path), Does.Contain("second"), "the replacement never landed");
+            Assert.That(ModeOf(_path), Is.EqualTo(readOnly), "the file came back writable");
+        }
     }
-
 }

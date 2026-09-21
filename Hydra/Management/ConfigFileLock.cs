@@ -82,11 +82,15 @@ internal static class ConfigFileLock
                 HeldHere[full] = 0;
                 return new Holder(stream, full);
             }
-            catch (IOException) when (DateTimeOffset.UtcNow < deadline)
+            catch (IOException)
             {
                 // Disposed here or the handle leaks until finalisation, still holding the lock.
                 if (stream != null) await stream.DisposeAsync();
-                await Task.Delay(Poll, cancel);
+                // The deadline is decided BELOW, not in an exception filter. Evaluated in the filter, an
+                // IOException arriving just as the budget expired matched neither this clause nor the
+                // named throws, and escaped as the raw "the process cannot access the file" — under
+                // exactly the load that makes the diagnosis worth having.
+                if (DateTimeOffset.UtcNow < deadline) await Task.Delay(Poll, cancel);
             }
             catch
             {
@@ -99,10 +103,15 @@ internal static class ConfigFileLock
             // WHICH failure this is matters more than the fact of it. Our own process holding the lock is
             // a bug on this call stack — almost always a path that took it and then called something that
             // takes it again — and is fixed in the code. Another process holding it is a busy machine.
+            // Careful what this claims. A process-wide record cannot tell re-entrancy from two honest
+            // callers here contending — and contention is the COMMON case (a status poll every couple of
+            // seconds against a save), while re-entrancy is rare. Naming only the rare one would be a false
+            // accusation most of the times it fired, and a false instruction with it.
             if (HeldHere.ContainsKey(full))
-                throw new InvalidOperationException(
-                    $"Waited {budget.TotalSeconds:0.##}s for the Hydra lock {Path.GetFileName(full)}, which THIS process already holds. " +
-                    "It is not re-entrant: a caller that holds it must use the Unlocked read rather than taking it again.");
+                throw new TimeoutException(
+                    $"Waited {budget.TotalSeconds:0.##}s for the Hydra lock {Path.GetFileName(full)}, which THIS process holds on some stack. " +
+                    "Either another operation here is still working, or this call stack is waiting for a lock it already took — " +
+                    "the lock is not re-entrant, and a caller that holds it must use the Unlocked read instead.");
 
             throw new TimeoutException(
                 $"Waited {budget.TotalSeconds:0.##}s for the Hydra lock {Path.GetFileName(full)} and another process still holds it. " +
