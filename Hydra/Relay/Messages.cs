@@ -137,7 +137,7 @@ public enum PeerPlatform : byte { Unknown = 0, Linux = 1, MacOS = 2, Windows = 3
 /// Compare <see cref="MessageKind"/>, which is numbered and therefore carries "15, 16 reserved (formerly
 /// used; do not reuse)" for ever. Do not "tidy" this into an enum array later: both reasons would be lost.</para>
 /// </param>
-public record ScreenInfoMessage(List<ScreenInfoEntry> Screens, PeerPlatform? Platform = null, string[]? Capabilities = null);
+public record ScreenInfoMessage(List<ScreenInfoEntry> Screens, PeerPlatform? Platform = null, string?[]? Capabilities = null);
 
 /// <summary>
 /// Something a peer can do that its peers must not assume.
@@ -201,8 +201,12 @@ public static class PeerCapabilities
     /// <para><b>Ignoring is the whole point.</b> A name we do not recognise comes from a NEWER peer
     /// advertising something this build has never heard of — which is normal, and must cost nothing. Parsing
     /// strictly would throw away the message it arrived on.</para>
+    ///
+    /// <para>The ELEMENT is nullable because this array is deserialised from a peer's message: JSON
+    /// <c>["KeyEventBatch", null]</c> is valid and lands a null in it, whatever the type says. The guard
+    /// below is real, and annotating it away would make it look dead.</para>
     /// </summary>
-    public static IReadOnlySet<PeerCapability> Parse(string[]? names)
+    public static IReadOnlySet<PeerCapability> Parse(string?[]? names)
     {
         if (names is not { Length: > 0 }) return FrozenSet<PeerCapability>.Empty;
 

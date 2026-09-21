@@ -886,7 +886,7 @@ public class InputRouter(
             {
                 // repeats are master-driven: each OS auto-repeat is re-resolved (live modifier/dead-key state)
                 // and forwarded with IsRepeat set, so the slave injects the correct character every tick.
-                ForwardToVirtualScreen(st, MessageKind.KeyEvent, new KeyEventMessage(keyEvent.Type, keyEvent.Modifiers, keyEvent.Character, RemapKey(keyEvent.Key), IsRepeat: keyEvent.IsRepeat, UnicodeKeyRepeat: profile.UnicodeKeyRepeat));
+                ForwardKeyToVirtualScreen(st, new KeyEventMessage(keyEvent.Type, keyEvent.Modifiers, keyEvent.Character, RemapKey(keyEvent.Key), IsRepeat: keyEvent.IsRepeat, UnicodeKeyRepeat: profile.UnicodeKeyRepeat));
             }
         });
     }
@@ -978,6 +978,17 @@ public class InputRouter(
         if (target == null) return;
         var payload = MessageSerializer.Encode(kind, message);
         relay.Send([target], payload);
+    }
+
+    /// <summary>
+    /// The key twin of <see cref="ForwardToVirtualScreen{T}"/>, handing the event over TYPED so the relay
+    /// can append it to an open bundle without decoding a payload we would only just have encoded.
+    /// </summary>
+    private void ForwardKeyToVirtualScreen(LocalMasterState st, KeyEventMessage message)
+    {
+        var target = st.Mouse.CurrentScreen?.Host;
+        if (target == null) return;
+        relay.SendKeyEvent([target], message);
     }
 
     private void OnMouseMove(double x, double y)

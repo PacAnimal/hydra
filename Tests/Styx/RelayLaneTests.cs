@@ -60,6 +60,30 @@ public class RelayLaneTests
         MessageSerializer.Encode(MessageKind.KeyEvent, new KeyEventMessage(KeyEventType.KeyDown, KeyModifiers.None, (char)('a' + n % 26), null));
     private static byte[] Chunk(int n, int bytes = 8) => MessageSerializer.Encode(MessageKind.FileTransferChunk, new FileTransferChunkMessage(n, new byte[bytes]));
 
+    /// <summary>
+    /// The next message, or a failure that NAMES what never came.
+    ///
+    /// <para>The two tests using this are about a message arriving WHILE another is parked, so the
+    /// regression they guard against shows up as nothing arriving at all — and a bare read reports that as
+    /// "Timed out waiting for message", which says something is slow rather than that the two lanes have
+    /// become one queue again. Measured: with the lanes collapsed both failed on that bare timeout.</para>
+    ///
+    /// <para>A sentinel is no help here, unlike everywhere else in these fixtures: with one queue it would
+    /// be stuck behind the very item that is parked. Naming the expectation is all there is.</para>
+    /// </summary>
+    private static async Task<(string Source, MessageKind Kind, string Json)> NextOrFail(HydraTestClient receiver, string what)
+    {
+        try
+        {
+            return await receiver.WaitForNextMessage();
+        }
+        catch (TimeoutException)
+        {
+            Assert.Fail(what);
+            throw;
+        }
+    }
+
     /// <summary>The X of a MouseMove, which is how an input message carries its position in the burst.</summary>
     private static int PositionOf(string json) =>
         System.Text.Json.JsonDocument.Parse(json).RootElement.GetProperty("x").GetInt32();
@@ -193,14 +217,15 @@ public class RelayLaneTests
 
         sender.Send(["receiver"], Move(1));
 
-        var (Source, Kind, Json) = await receiver.WaitForNextMessage();
-        Assert.That(Kind, Is.EqualTo(MessageKind.MouseMove),
+        var (_, kind, _) = await NextOrFail(receiver,
+            "nothing arrived at all while the chunk was parked — the keystroke is queued behind it, so the lanes are one queue again");
+        Assert.That(kind, Is.EqualTo(MessageKind.MouseMove),
             "the keystroke was sent second and must arrive first — the whole point of taking bulk off the input lane");
 
         sender.ReleaseLane();
 
-        var second = await receiver.WaitForNextMessage();
-        Assert.That(second.Kind, Is.EqualTo(MessageKind.FileTransferChunk), "and the chunk still arrives once released");
+        var (_, secondKind, _) = await receiver.WaitForNextMessage();
+        Assert.That(secondKind, Is.EqualTo(MessageKind.FileTransferChunk), "and the chunk still arrives once released");
         await stalled.WaitAsync(Bound);
     }
 
@@ -266,8 +291,9 @@ public class RelayLaneTests
 
         sender.Send(["receiver"], MessageSerializer.Encode(MessageKind.FileTransferAbort, new FileTransferAbortMessage("cancelled")));
 
-        var (Source, Kind, Json) = await receiver.WaitForNextMessage();
-        Assert.That(Kind, Is.EqualTo(MessageKind.FileTransferAbort));
+        var (_, kind, _) = await NextOrFail(receiver,
+            "the abort never arrived while the chunk it cancels was parked — it is queued behind the backlog it exists to stop");
+        Assert.That(kind, Is.EqualTo(MessageKind.FileTransferAbort));
 
         sender.ReleaseLane();
         await held.WaitAsync(Bound);
@@ -383,5 +409,26 @@ public class RelayLaneTests
         {
             Assert.Fail($"Timed out waiting for {what}");
         }
+    }
+
+    /// <summary>
+    /// The relay must dispatch at least as many of one connection's invocations at once as that connection
+    /// has lanes.
+    ///
+    /// <para><b>Nothing else in this file can see this.</b> Every lane test here parks on the client's own
+    /// encrypt gate, so they all stay green with the relay dispatching one invocation at a time — and at
+    /// one, a 256 KiB chunk's invocation occupies the only slot and the keystroke behind it is not even
+    /// dispatched. That is the head-of-line blocking this whole change removed, rebuilt at the relay, with
+    /// the client-side split still looking perfectly correct.</para>
+    ///
+    /// <para>Counted from <c>RelayLane</c> rather than written as 2, so adding a third lane fails here
+    /// instead of quietly re-introducing the stall.</para>
+    /// </summary>
+    [Test]
+    public void TheRelayDispatchesAtLeastAsManyInvocationsAsAPeerHasLanes()
+    {
+        var slots = global::Styx.Constants.MaxParallelInvocations;
+        Assert.That(slots, Is.GreaterThanOrEqualTo(Enum.GetValues<RelayLane>().Length),
+            "a lane's invocation is not finished until the hub method returns, so fewer slots than lanes means a lane waits for another lane's frame to be delivered");
     }
 }

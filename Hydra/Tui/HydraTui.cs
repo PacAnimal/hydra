@@ -113,7 +113,7 @@ internal static class HydraTui
         // Orange by RGB, because the 16-colour names have none and BrightYellow reads as a warning rather
         // than as work in progress.
         private static readonly Terminal.Gui.Drawing.Scheme ConnectingScheme = new(new Terminal.Gui.Drawing.Attribute(
-            new Terminal.Gui.Drawing.Color(255, 145, 0), new Terminal.Gui.Drawing.Color(Terminal.Gui.Drawing.ColorName16.Black)));
+            new Terminal.Gui.Drawing.Color(255, 145), new Terminal.Gui.Drawing.Color(Terminal.Gui.Drawing.ColorName16.Black)));
 
         private static Terminal.Gui.Drawing.Scheme MarkerScheme(Terminal.Gui.Drawing.ColorName16 foreground) =>
             new(new Terminal.Gui.Drawing.Attribute(

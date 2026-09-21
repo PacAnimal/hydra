@@ -134,22 +134,13 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
             // capability map that has since been cleared. Silent key loss, reachable only by that race.
             if (_server == null || _encryption == null) return;
 
-            // A key event may join the bundle already queued for these targets, but ONLY where every one of
-            // them has said it understands a batch — an unknown kind is discarded in silence by the
-            // receiver, so bundling at an older peer would lose the keys rather than fail. A lone event
-            // still goes out as an ordinary KeyEvent, so nothing changes for the common case either way.
-            //
-            // REMOVE AFTER 2026-10-30: the EveryTargetSupports call goes, and the condition becomes the
-            // kind check alone.
-            if (payload.Length > 0 && payload[0] == (byte)MessageKind.KeyEvent && EveryTargetSupports(targetHosts, PeerCapability.KeyEventBatch)
+            // Fallback for a key that reaches the generic Send() instead of SendKeyEvent, exactly as the
+            // delta branch below is for SendMouseDelta — decoded once here so it still bundles. InputRouter,
+            // the hot path, calls SendKeyEvent and hands over the event typed, with nothing to decode.
+            if (payload.Length > 0 && payload[0] == (byte)MessageKind.KeyEvent
                 && MessageSerializer.Decode(payload).Deserialize<KeyEventMessage>() is { } keyEvent)
             {
-                _openMovementBatch = null;
-                if (_openKeyBundle?.TryAppend(targetHosts, keyEvent) == true) return;
-
-                var bundle = KeyBundle.Create(targetHosts, keyEvent);
-                _openKeyBundle = bundle;
-                _inputQueue.Writer.TryWrite(new OutboundMessage(targetHosts, payload, null, null, bundle, CancellationToken.None));
+                EnqueueKey(targetHosts, keyEvent, payload);
                 return;
             }
 
@@ -187,6 +178,55 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
             CloseOpenBatches();
             LaneFor(payload).Writer.TryWrite(new OutboundMessage(targetHosts, payload, null, null, null, CancellationToken.None));
         }
+    }
+
+    /// <summary>
+    /// One key event, typed, so the open bundle can absorb it without a JSON round trip.
+    ///
+    /// <para>The bytes are still built — <c>OnSent</c> takes them, and a LONE event travels as exactly this
+    /// payload — but they are built ONCE. The same event routed through <c>Send</c> was encoded by the
+    /// caller, decoded again inside the send-order lock to become appendable, and encoded a third time by
+    /// the drain; the middle pass held the lock that also serialises every mouse move.</para>
+    /// </summary>
+    public void SendKeyEvent(string[] targetHosts, KeyEventMessage message)
+    {
+        var payload = MessageSerializer.Encode(MessageKind.KeyEvent, message);
+        OnSent(targetHosts, payload);
+        lock (_sendOrderLock)
+        {
+            if (_server == null || _encryption == null) return;
+            EnqueueKey(targetHosts, message, payload);
+        }
+    }
+
+    /// <summary>
+    /// Queues one key event, joining the bundle already open for these targets where every one of them has
+    /// said it understands a batch. Call with <c>_sendOrderLock</c> HELD.
+    ///
+    /// <para>The capability decides because an unrecognised kind is discarded in SILENCE by the receiver:
+    /// bundling toward a peer that never advertised would lose the keys rather than fail. A lone event goes
+    /// as an ordinary KeyEvent regardless, so nothing changes for the common case either way.</para>
+    ///
+    /// <para>REMOVE AFTER 2026-10-30: the <c>EveryTargetSupports</c> call goes and every key bundles.</para>
+    /// </summary>
+    private void EnqueueKey(string[] targetHosts, KeyEventMessage keyEvent, byte[] payload)
+    {
+        if (EveryTargetSupports(targetHosts, PeerCapability.KeyEventBatch))
+        {
+            // The MOVEMENT batch only — this is about to open or extend the key bundle. A batch queued
+            // ahead of this key must stop absorbing, or a move made AFTER the keystroke merges into a frame
+            // that sits in front of it and is delivered first, at a coalesced position.
+            _openMovementBatch = null;
+            if (_openKeyBundle?.TryAppend(targetHosts, keyEvent) == true) return;
+
+            var bundle = KeyBundle.Create(targetHosts, keyEvent);
+            _openKeyBundle = bundle;
+            _inputQueue.Writer.TryWrite(new OutboundMessage(targetHosts, payload, null, null, bundle, CancellationToken.None));
+            return;
+        }
+
+        CloseOpenBatches();
+        _inputQueue.Writer.TryWrite(new OutboundMessage(targetHosts, payload, null, null, null, CancellationToken.None));
     }
 
     /// <summary>

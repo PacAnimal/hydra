@@ -42,6 +42,12 @@ public class KeyBundleTests
 
     private static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
 
+    /// <summary>
+    /// What the spill test's frame counts assume. Pinned against the real constant rather than read from
+    /// it, so a retune fails an assertion that names the choice instead of silently sliding the goalposts.
+    /// </summary>
+    private const int ExpectedCapacity = 64;
+
     /// <param name="peerTakesBundles">
     /// What the receiver advertised. FALSE is the un-upgraded peer, and it is not a corner case — it is
     /// every slave in the field until it is updated.
@@ -203,7 +209,7 @@ public class KeyBundleTests
         var blocker = sender.SendReliableAsync([Receiver], Move(1)).AsTask();
         await WaitFor(() => sender.Held == 1, "the input lane to park");
 
-        sender.Send([Receiver], Key(0, KeyEventType.KeyDown));
+        sender.Send([Receiver], Key(0));
         sender.Send([Receiver], Key(0, KeyEventType.KeyUp));
 
         sender.Send([Receiver], Sentinel());
@@ -263,13 +269,17 @@ public class KeyBundleTests
             Assert.That(KeysIn(frames), Is.EqualTo(expected),
                 "an event that did not fit the open bundle was dropped instead of starting a new one");
 
-            // The cap bounds the FRAME. Asserting only the sequence above tests the "never the input" half
-            // and leaves the other half untested: it passes with a capacity of 10 000 (one enormous frame)
-            // and with a capacity of 1 (150 frames, no bundling at all).
-            Assert.That(carrying.Max(EventsIn), Is.LessThanOrEqualTo(RelayConnection.KeyBundleCapacity),
+            // The cap bounds the FRAME, and these numbers are LITERAL on purpose. Written against
+            // RelayConnection.KeyBundleCapacity the assertions moved with the constant and stopped saying
+            // anything: at 10 000 one enormous frame satisfies both "<= capacity" and "count >= 150/10 000",
+            // which is zero — so the very tuning the cap exists to refuse passed. Retuning the real constant
+            // now fails the line below FIRST, which is where the decision belongs.
+            Assert.That(RelayConnection.KeyBundleCapacity, Is.EqualTo(ExpectedCapacity),
+                "the cap moved — the frame counts below were chosen for it, so retune them deliberately rather than letting them follow");
+            Assert.That(carrying.Max(EventsIn), Is.LessThanOrEqualTo(ExpectedCapacity),
                 "a frame carried more events than the cap allows — the cap is not bounding the frame");
-            Assert.That(carrying, Has.Count.GreaterThanOrEqualTo(count / RelayConnection.KeyBundleCapacity),
-                "the events did not spill across frames, so the cap is not being applied at all");
+            Assert.That(carrying, Has.Count.GreaterThanOrEqualTo(3),
+                "150 events did not spill across at least three frames, so the cap is not being applied at all");
             Assert.That(carrying.Any(f => f.Kind == MessageKind.KeyEventBatch), Is.True, "and they were bundled rather than sent one by one");
         }
     }
@@ -542,6 +552,118 @@ public class KeyBundleTests
         await blocker.WaitAsync(Bound);
 
         Assert.That(KeysIn(await ReadUntilSentinel(receiver)), Is.EqualTo(sent));
+    }
+
+    /// <summary>
+    /// A move made AFTER a keystroke is never delivered before it.
+    ///
+    /// <para>The mirror of <see cref="AMoveBetweenKeysKeepsEverythingInOrder"/>, and it was the uncovered
+    /// direction: that test is key→move→key, this one is move→key→move. Opening the key bundle has to close
+    /// the movement batch, or the second move merges into a batch queued BEFORE the key — so a move the
+    /// user made after typing is delivered first, and at the coalesced position of both. On a KVM that is a
+    /// click at the wrong place.</para>
+    ///
+    /// <para>Deleting that one close breaks nothing else in this fixture, which is why it is here.</para>
+    /// </summary>
+    [Test]
+    public async Task AMoveMadeAfterAKeyIsNeverDeliveredBeforeIt()
+    {
+        var (sender, receiver) = await ConnectedPair();
+        await using var _ = sender;
+        await using var __ = receiver;
+
+        sender.HoldLane(RelayLane.Input);
+        var blocker = sender.SendReliableAsync([Receiver], Key(25)).AsTask();
+        await WaitFor(() => sender.Held == 1, "the input lane to park");
+
+        sender.Send([Receiver], Move(3));
+        sender.Send([Receiver], Key(0));
+        sender.Send([Receiver], Move(9));
+
+        sender.Send([Receiver], Sentinel());
+        sender.ReleaseLane();
+        await blocker.WaitAsync(Bound);
+
+        var frames = await ReadUntilSentinel(receiver);
+        var order = frames.Select(f => f.Kind).Where(k => k is MessageKind.KeyEvent or MessageKind.KeyEventBatch or MessageKind.MouseMove).ToList();
+
+        Assert.That(order, Is.EqualTo([MessageKind.KeyEvent, MessageKind.MouseMove, MessageKind.KeyEvent, MessageKind.MouseMove]),
+            "the move made after the key merged into the batch queued before it, so it was delivered ahead of the keystroke and at the wrong position");
+    }
+
+    /// <summary>
+    /// One key travels as an ordinary <c>KeyEvent</c>, never as a batch of one.
+    ///
+    /// <para>The common case by far — nobody types fast enough to queue two keys behind one frame most of
+    /// the time — and the wire shape a peer that predates batching depends on. The lane is parked so the
+    /// event provably goes through the bundling path rather than round it: this is <c>Snapshot</c>'s rule,
+    /// not an accident of the drain being quick.</para>
+    /// </summary>
+    [Test]
+    public async Task ALoneKeyTravelsAsAPlainKeyEventNotABatchOfOne()
+    {
+        var (sender, receiver) = await ConnectedPair();
+        await using var _ = sender;
+        await using var __ = receiver;
+
+        sender.HoldLane(RelayLane.Input);
+        var blocker = sender.SendReliableAsync([Receiver], Move(1)).AsTask();
+        await WaitFor(() => sender.Held == 1, "the input lane to park");
+
+        sender.Send([Receiver], Key(0));
+
+        sender.Send([Receiver], Sentinel());
+        sender.ReleaseLane();
+        await blocker.WaitAsync(Bound);
+
+        var frames = await ReadUntilSentinel(receiver);
+        var carrying = KeyFrames(frames);
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(KeysIn(frames), Is.EqualTo([(KeyEventType.KeyDown, 'a')]));
+            Assert.That(carrying.Select(f => f.Kind), Is.EqualTo([MessageKind.KeyEvent]),
+                "a single event was wrapped in a batch — an older peer discards that kind in silence, so the keystroke is simply lost");
+        }
+    }
+
+    /// <summary>
+    /// A key addressed to another host never joins the frame open for this one.
+    ///
+    /// <para>A bundle is keyed on its TARGET list and the frame goes to those targets, so absorbing an
+    /// event meant for somebody else delivers it to the wrong machine AND never to the right one. The
+    /// guard is defence in depth — switching screens emits an <c>EnterScreen</c>, which closes the bundle
+    /// anyway — but nothing tested it, and "defended twice" is only true while both defences exist.</para>
+    ///
+    /// <para>The other host never connects, which is the point: its frame goes nowhere, so anything of its
+    /// arriving HERE could only have come out of this receiver's bundle. It is given the capability by hand
+    /// because otherwise the batch gate refuses it first and the guard under test is never reached.</para>
+    /// </summary>
+    [Test]
+    public async Task AKeyForAnotherTargetNeverJoinsThisOnesFrame()
+    {
+        var (sender, receiver) = await ConnectedPair();
+        await using var _ = sender;
+        await using var __ = receiver;
+
+        const string other = "somebody-else";
+        sender.World.SetPeerCapabilities(other, PeerCapabilities.Parse(PeerCapabilities.Advertise()));
+
+        sender.HoldLane(RelayLane.Input);
+        var blocker = sender.SendReliableAsync([Receiver], Move(1)).AsTask();
+        await WaitFor(() => sender.Held == 1, "the input lane to park");
+
+        sender.Send([Receiver], Key(0));
+        sender.Send([other], Key(1));
+        sender.Send([Receiver], Key(2));
+
+        sender.Send([Receiver], Sentinel());
+        sender.ReleaseLane();
+        await blocker.WaitAsync(Bound);
+
+        Assert.That(KeysIn(await ReadUntilSentinel(receiver)),
+            Is.EqualTo([(KeyEventType.KeyDown, 'a'), (KeyEventType.KeyDown, 'c')]),
+            "a key addressed to another host was delivered here, which means it was never delivered there");
     }
 
     private static async Task WaitFor(Func<bool> condition, string what, int timeoutMs = 15000)

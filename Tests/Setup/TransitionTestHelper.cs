@@ -34,14 +34,20 @@ public static class TransitionTestHelper
         ],
     });
 
-    public static TestServiceBundle CreateService(Func<long>? getTickCount = null, IActivityTracker? activityTracker = null)
+    /// <param name="getTickCount">The router's clock, for a test that needs to drive time rather than wait for it.</param>
+    /// <param name="activityTracker">Substituted where a test asserts on what the router reported as activity.</param>
+    /// <param name="world">
+    /// The world the router records peers in. Pass one to READ what the router wrote — what a peer
+    /// advertised is only observable there, and nothing else in the process can see it.
+    /// </param>
+    public static TestServiceBundle CreateService(Func<long>? getTickCount = null, IActivityTracker? activityTracker = null, IWorldState? world = null)
     {
         var platform = new FakePlatform();
         var relay = new FakeRelay();
         var screens = new FakeScreenDetector();
         var tracker = activityTracker ?? new ActivityTracker(TestConfig, new Lazy<IRelaySender>(() => relay), new WorldState(), new NullScreenSaverSync(), NullLogger<ActivityTracker>.Instance);
         var service = new InputRouter(platform, platform, TestConfig, relay, screens, NullLoggerFactory.Instance, NullLogger<InputRouter>.Instance, new NullScreenSaverSync(), new NullClipboardSync(),
-            FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification(), tracker, getTickCount: getTickCount);
+            FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification(), tracker, peerState: world, getTickCount: getTickCount);
         platform.AfterFireCallback = service.FlushAsync;
         return new TestServiceBundle(platform, relay, service);
     }

@@ -23,6 +23,11 @@ public interface IRelaySender
     // the numeric values directly, with no decode of its own payload just to add two more deltas to it.
     void SendMouseDelta(string[] targetHosts, int dx, int dy) =>
         Send(targetHosts, MessageSerializer.Encode(MessageKind.MouseMoveDelta, new MouseMoveDeltaMessage(dx, dy)));
+    // The same bargain for keys: the caller already holds the KeyEventMessage, and an implementation that
+    // bundles key traffic (RelayConnection) appends the typed event straight into the open frame instead of
+    // decoding the payload it was just handed.
+    void SendKeyEvent(string[] targetHosts, KeyEventMessage message) =>
+        Send(targetHosts, MessageSerializer.Encode(MessageKind.KeyEvent, message));
     event Func<string[], Task>? PeersChanged;
     event Func<string, MessageKind, ReadOnlyMemory<byte>, Task>? MessageReceived;
     event Func<Task>? Disconnected;
