@@ -1,12 +1,8 @@
-using System.Text;
-
 namespace Hydra.Management;
 
 internal sealed class RemoteManagementStore
 {
     private static readonly TimeSpan PairingLifetime = TimeSpan.FromMinutes(10);
-    private static readonly TimeSpan LockTimeout = TimeSpan.FromSeconds(5);
-    private static readonly TimeSpan ReplaceTimeout = TimeSpan.FromSeconds(5);
     private readonly string _path;
     private readonly string _lockPath;
     private readonly SemaphoreSlim _lock = new(1, 1);
@@ -17,7 +13,7 @@ internal sealed class RemoteManagementStore
     {
         var directory = Path.GetDirectoryName(Path.GetFullPath(configPath))!;
         _path = Path.Combine(directory, ".hydra-management.json");
-        _lockPath = Path.Combine(directory, ".hydra-management.lock");
+        _lockPath = ConfigFileLock.ManagementPathFor(directory);
     }
 
     internal async Task<string> CreatePairingCodeAsync(CancellationToken cancel = default)
@@ -110,7 +106,7 @@ internal sealed class RemoteManagementStore
         await _lock.WaitAsync(cancel);
         try
         {
-            await using var fileLock = await AcquireMutationLockAsync(cancel);
+            await using var fileLock = await ConfigFileLock.Acquire(_lockPath, cancel);
             return await ReadUnlockedAsync(cancel);
         }
         finally { _lock.Release(); }
@@ -121,7 +117,7 @@ internal sealed class RemoteManagementStore
         await _lock.WaitAsync(cancel);
         try
         {
-            await using var fileLock = await AcquireMutationLockAsync(cancel);
+            await using var fileLock = await ConfigFileLock.Acquire(_lockPath, cancel);
             var state = await ReadUnlockedAsync(cancel);
             mutation(state);
             await WriteUnlockedAsync(state, cancel);
@@ -154,90 +150,8 @@ internal sealed class RemoteManagementStore
         List<StoredPairingCode>? PairingCodes,
         List<StoredReplayNonce>? ReplayNonces);
 
-    private async Task<FileStream> AcquireMutationLockAsync(CancellationToken cancel)
-    {
-        var directory = Path.GetDirectoryName(_lockPath)!;
-        Directory.CreateDirectory(directory);
-        var deadline = DateTimeOffset.UtcNow + LockTimeout;
-        while (true)
-        {
-            cancel.ThrowIfCancellationRequested();
-            if (File.Exists(_lockPath) && new FileInfo(_lockPath).LinkTarget != null)
-                throw new IOException("Hydra remote-management lock cannot be a symbolic link.");
-            try
-            {
-                var stream = new FileStream(_lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite,
-                    FileShare.None, 1, FileOptions.Asynchronous);
-                if (!OperatingSystem.IsWindows())
-                    File.SetUnixFileMode(_lockPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-                return stream;
-            }
-            catch (IOException) when (DateTimeOffset.UtcNow < deadline)
-            {
-                await Task.Delay(TimeSpan.FromMilliseconds(25), cancel);
-            }
-        }
-    }
-
-    private async Task WriteUnlockedAsync(RemoteManagementState state, CancellationToken cancel)
-    {
-        var directory = Path.GetDirectoryName(_path)!;
-        Directory.CreateDirectory(directory);
-        var temp = Path.Combine(directory, $".{Path.GetFileName(_path)}.{Guid.NewGuid():N}.tmp");
-        try
-        {
-            var bytes = new UTF8Encoding(false).GetBytes(ManagementJson.Serialize(state));
-            await using (var stream = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None,
-                             4096, FileOptions.Asynchronous | FileOptions.WriteThrough))
-            {
-                await stream.WriteAsync(bytes, cancel);
-                await stream.FlushAsync(cancel);
-                stream.Flush(flushToDisk: true);
-            }
-            if (!OperatingSystem.IsWindows())
-                File.SetUnixFileMode(temp, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-            await ReplaceAsync(temp, cancel);
-        }
-        finally
-        {
-            if (File.Exists(temp)) File.Delete(temp);
-        }
-    }
-
-    /// <summary>
-    /// Puts the finished temp file in place, retrying a holder that is on its way out.
-    ///
-    /// <para><b>Windows only, in effect.</b> Replacing a file whose destination somebody has open without
-    /// <c>FILE_SHARE_DELETE</c> fails outright rather than queueing, and the holder is very often not ours
-    /// and not a bug: a virus scanner or the search indexer opening a file we just closed, for a few
-    /// milliseconds. Our OWN overlapping reader is fixed properly, by taking the lock — this covers the one
-    /// we cannot serialise with because it is not our process. A POSIX rename never fails for this reason,
-    /// so nothing here ever retries there.</para>
-    ///
-    /// <para>Bounded, and it gives up by THROWING. A write that cannot land must reach the caller as a
-    /// failure — the state it was recording is a pairing the user has already been shown, or a controller
-    /// that now believes it is enrolled.</para>
-    /// </summary>
-    private async Task ReplaceAsync(string temp, CancellationToken cancel)
-    {
-        var deadline = DateTimeOffset.UtcNow + ReplaceTimeout;
-        while (true)
-        {
-            try
-            {
-                File.Move(temp, _path, true);
-                return;
-            }
-            catch (Exception ex) when (ex is UnauthorizedAccessException or IOException && DateTimeOffset.UtcNow < deadline)
-            {
-                ReplaceRetries++;
-                await Task.Delay(TimeSpan.FromMilliseconds(20), cancel);
-            }
-        }
-    }
-
-    /// <summary>How many times a replace had to wait for a holder. Read by the test that proves it waits.</summary>
-    internal int ReplaceRetries;
+    private async Task WriteUnlockedAsync(RemoteManagementState state, CancellationToken cancel) =>
+        await PrivateFile.Write(_path, ManagementJson.Serialize(state), UnixFileMode.UserRead | UnixFileMode.UserWrite, cancel);
 
     private static RemoteManagementState Empty() => new(RemoteManagementCrypto.RandomSecret(18), [], [], [], []);
 }

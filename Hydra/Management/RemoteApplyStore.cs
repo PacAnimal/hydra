@@ -1,4 +1,3 @@
-using System.Text;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -127,11 +126,16 @@ internal sealed class RemoteApplyStore(
         await _lock.WaitAsync(cancel);
         try
         {
+            // The config lock spans the revision check AND the overwrite: rollback replaces hydra.conf, and
+            // the TUI in another process saves the same file under the same lock. ReadUnlockedAsync because
+            // the lock is not re-entrant and we are holding it.
+            await using var fileLock = await ConfigFileLock.Acquire(ConfigFileLock.ConfigPathFor(runtime.ConfigPath), cancel);
+
             if (!File.Exists(BackupPath))
                 throw new IOException("Remote configuration backup is missing; automatic rollback cannot continue.");
             var marker = await ReadMarkerAsync(cancel)
                 ?? throw new IOException("Remote configuration marker is missing; automatic rollback cannot continue.");
-            var current = await config.ReadAsync(cancel);
+            var current = await config.ReadUnlockedAsync(cancel);
             if (current.Revision.Equals(marker.PreviousRevision, StringComparison.Ordinal))
             {
                 DeleteTransactionFiles();
@@ -152,6 +156,8 @@ internal sealed class RemoteApplyStore(
     {
         var markerPath = MarkerPathFor(configPath);
         if (!File.Exists(markerPath)) return false;
+        // Startup, but not alone: a TUI may already be running against this config directory.
+        await using var fileLock = await ConfigFileLock.Acquire(ConfigFileLock.ConfigPathFor(configPath), cancel);
         RemoteApplyMarker marker;
         try { marker = ManagementJson.Deserialize<RemoteApplyMarker>(await File.ReadAllTextAsync(markerPath, cancel)); }
         catch { return false; }
@@ -201,26 +207,6 @@ internal sealed class RemoteApplyStore(
     private static string BackupPathFor(string configPath) => Path.Combine(Path.GetDirectoryName(Path.GetFullPath(configPath))!, ".hydra-remote-backup.conf");
     internal static bool HasPendingTransaction(string configPath) => File.Exists(MarkerPathFor(configPath));
 
-    private static async Task WritePrivateAsync(string path, string content, UnixFileMode mode, CancellationToken cancel)
-    {
-        var directory = Path.GetDirectoryName(path)!;
-        var temp = Path.Combine(directory, $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
-        try
-        {
-            var bytes = new UTF8Encoding(false).GetBytes(content);
-            await using (var stream = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None,
-                             4096, FileOptions.Asynchronous | FileOptions.WriteThrough))
-            {
-                await stream.WriteAsync(bytes, cancel);
-                await stream.FlushAsync(cancel);
-                stream.Flush(flushToDisk: true);
-            }
-            if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(temp, mode);
-            File.Move(temp, path, true);
-        }
-        finally
-        {
-            if (File.Exists(temp)) File.Delete(temp);
-        }
-    }
+    private static Task WritePrivateAsync(string path, string content, UnixFileMode mode, CancellationToken cancel) =>
+        PrivateFile.Write(path, content, mode, cancel);
 }

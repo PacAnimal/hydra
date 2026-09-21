@@ -93,6 +93,11 @@ public class RemoteManagementTests
     public void RuntimeStore_CanBeConstructedByDependencyInjection()
     {
         var services = new ServiceCollection();
+        // Logging, because the host has it and this store now takes an ILogger<T> — a retry that waits out
+        // another program holding these files is otherwise invisible. Registering it here keeps the graph
+        // this asserts about the same shape as the one Program.cs builds; leaving it out would test a
+        // graph nothing runs.
+        services.AddLogging();
         services.AddSingleton(new HydraRuntimeInfo(ConfigPath("dependency-injection"), DateTimeOffset.UtcNow));
         services.AddSingleton<RemoteManagementStore>();
         using var provider = services.BuildServiceProvider();
@@ -303,40 +308,4 @@ public class RemoteManagementTests
                 "a write was lost while another instance was reading — on Windows the reader's handle refuses the replace");
     }
 
-    /// <summary>
-    /// A replace waits out a holder it cannot serialise with, instead of failing the write.
-    ///
-    /// <para>Our own reader is fixed by taking the lock; this is the one that is NOT ours — a virus scanner
-    /// or the search indexer opening the file we just closed, for a few milliseconds. It is the likeliest
-    /// explanation for the intermittent lane failure that started this, and it cannot be locked against
-    /// because it is another program entirely.</para>
-    ///
-    /// <para>Deterministic, not timed: the handle is released only once the store has actually been forced
-    /// to retry, so the test proves the wait happened rather than hoping it did.</para>
-    /// </summary>
-    [Test]
-    public async Task AReplaceWaitsOutAHolderRatherThanFailingTheWrite()
-    {
-        if (!OperatingSystem.IsWindows()) Assert.Ignore("a POSIX rename over an open file succeeds, so there is nothing here to wait for");
-
-        var configPath = ConfigPath("held-destination");
-        var store = new RemoteManagementStore(configPath);
-        await store.CreatePairingCodeAsync();
-
-        var statePath = Path.Combine(Path.GetDirectoryName(configPath)!, ".hydra-management.json");
-        var holder = new FileStream(statePath, FileMode.Open, FileAccess.Read, FileShare.Read);
-
-        var write = store.CreatePairingCodeAsync();
-        var waited = SpinWait.SpinUntil(() => Volatile.Read(ref store.ReplaceRetries) > 0, TimeSpan.FromSeconds(10));
-        holder.Dispose();
-
-        var code = await write;
-
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(waited, Is.True, "the replace never had to wait, so this test proved nothing about waiting");
-            Assert.That(await store.ConsumePairingCodeAsync(code, CancellationToken.None), Is.True,
-                "the write did not land once the holder let go");
-        }
-    }
 }
