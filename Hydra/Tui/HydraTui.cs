@@ -30,7 +30,6 @@ internal static class HydraTui
     internal static Task RunAsync(string[] args)
     {
         var demo = args.Any(a => a.Equals("--demo", StringComparison.OrdinalIgnoreCase));
-        var color = args.Any(a => a.Equals("--color", StringComparison.OrdinalIgnoreCase));
         string? explicitConfig = null;
         for (var i = 0; i < args.Length; i++)
             if (args[i] == "--config" && i + 1 < args.Length)
@@ -67,7 +66,7 @@ internal static class HydraTui
         using var window = new Window();
         window.Title = demo ? "Hydra Control Center (Demo)" : "Hydra Control Center";
         window.BorderStyle = Terminal.Gui.Drawing.LineStyle.Rounded;
-        using var controller = new TuiController(app, window, configPath, client, color);
+        using var controller = new TuiController(app, window, configPath, client);
         controller.Build();
         var requestStop = window.RequestStop;
         Console.CancelKeyPress += CancelHandler;
@@ -93,15 +92,32 @@ internal static class HydraTui
 
     // internal (not private) so its pure formatting helpers are reachable from Tests via
     // InternalsVisibleTo — see FormatOverview/FormatPeers and their tests.
-    internal sealed class TuiController(IApplication app, Window window, string configPath, IManagementClient client, bool color = false) : IDisposable
+    internal sealed class TuiController(IApplication app, Window window, string configPath, IManagementClient client) : IDisposable
     {
-        // Terminal.Gui already renders in real 24-bit color by default (borders, the active tab,
-        // the status bar); --color additionally tints the connection line by actual state, since
-        // that default theme otherwise never distinguishes "connected" from "stopped" by color.
-        private static readonly Terminal.Gui.Drawing.Scheme ConnectedScheme = new(new Terminal.Gui.Drawing.Attribute(
-            new Terminal.Gui.Drawing.Color(Terminal.Gui.Drawing.ColorName16.BrightGreen), new Terminal.Gui.Drawing.Color(Terminal.Gui.Drawing.ColorName16.Black)));
-        private static readonly Terminal.Gui.Drawing.Scheme DisconnectedScheme = new(new Terminal.Gui.Drawing.Attribute(
-            new Terminal.Gui.Drawing.Color(Terminal.Gui.Drawing.ColorName16.BrightRed), new Terminal.Gui.Drawing.Color(Terminal.Gui.Drawing.ColorName16.Black)));
+        // ONLY THE STATE MARKER IS TINTED BY STATE. The rest of the line is facts — version, host,
+        // profile — that are equally true whatever the connection is doing, so colouring them by it said
+        // nothing and drowned the one word that did. The detail takes the same teal as the form's field
+        // captions, which is the TUI's own accent; the status bar along the bottom is Terminal.Gui's
+        // LightBlue and is not ours to match.
+        //
+        // Unconditional, and it must stay that way: every other colour here is — Terminal.Gui renders
+        // borders, the active tab and the status bar in 24-bit colour by default — so putting the one colour
+        // that carries INFORMATION behind a switch would make it the only one anybody had to ask for.
+        private static readonly Terminal.Gui.Drawing.Scheme ConnectedScheme = MarkerScheme(Terminal.Gui.Drawing.ColorName16.BrightGreen);
+        private static readonly Terminal.Gui.Drawing.Scheme DisconnectedScheme = MarkerScheme(Terminal.Gui.Drawing.ColorName16.BrightRed);
+
+        // Black backgrounds throughout, deliberately: these schemes paint a bar across the top of the window
+        // and an inherited background would make the lamp's own colour depend on the terminal's theme. It is
+        // the one choice here that a light-background terminal would notice.
+        //
+        // Orange by RGB, because the 16-colour names have none and BrightYellow reads as a warning rather
+        // than as work in progress.
+        private static readonly Terminal.Gui.Drawing.Scheme ConnectingScheme = new(new Terminal.Gui.Drawing.Attribute(
+            new Terminal.Gui.Drawing.Color(255, 145, 0), new Terminal.Gui.Drawing.Color(Terminal.Gui.Drawing.ColorName16.Black)));
+
+        private static Terminal.Gui.Drawing.Scheme MarkerScheme(Terminal.Gui.Drawing.ColorName16 foreground) =>
+            new(new Terminal.Gui.Drawing.Attribute(
+                new Terminal.Gui.Drawing.Color(foreground), new Terminal.Gui.Drawing.Color(Terminal.Gui.Drawing.ColorName16.Black)));
 
         // The built-in "Accent" scheme derives from Base with no hue of its own, so a selected
         // mode/section button just goes flat grey — this gives the selected one a real color
@@ -134,7 +150,23 @@ internal static class HydraTui
         private readonly TextField _remotePairingCode = new() { Secret = true };
         private readonly Editor _remoteConfig = new() { WordWrap = false, ViewportSettings = ViewportSettingsFlags.HasVerticalScrollBar | ViewportSettingsFlags.HasHorizontalScrollBar, HighlightingDefinition = HighlightingManager.Instance.GetDefinition("Json") };
         private readonly Label _remoteStatus = new() { Text = "Select a peer, pair it locally, then load its redacted configuration." };
-        private readonly Label _connection = new() { Text = "Connecting…", X = 1, Y = 0, Width = Dim.Fill(), SchemeName = "Accent" };
+        // Two labels, because a Label carries ONE scheme and this line needs two: the lamp and the facts.
+        private readonly Label _connectionState = new() { Text = "◐ Connecting…", X = 1, Y = 0, Width = Dim.Auto() };
+        private readonly Label _connectionDetail = new() { Text = "", Y = 0, Width = Dim.Fill() };
+
+        /// <summary>
+        /// The one management failure that cannot resolve itself, so the only one the lamp shows as stopped
+        /// rather than in progress. Distinct from <see cref="InvalidOperationException"/> deliberately —
+        /// that is what <c>ManagementClient</c> raises for every failure the server reports, so it cannot
+        /// tell a permanent condition from a socket that closed mid-reply.
+        /// </summary>
+        private sealed class ProtocolMismatchException(string message) : Exception(message);
+
+        /// <summary>What the lamp at the left of the connection line is saying.</summary>
+        private enum Link { Connected, Connecting, Disconnected }
+
+        /// <summary>What the lamp is showing now, so a refresh tick only repaints it when it changed.</summary>
+        private Link _link = Link.Connecting;
         private readonly Label _activity = new() { Text = "Ready", X = 1, Y = Pos.AnchorEnd(2), Width = Dim.Fill(), SchemeName = "Base" };
         private readonly Button _reconnect = new() { ShadowStyle = ShadowStyles.None, Text = "R_econnect Relay", Enabled = false };
         private readonly Button _restart = new() { ShadowStyle = ShadowStyles.None, Text = "Res_tart Hydra", Enabled = false };
@@ -193,7 +225,10 @@ internal static class HydraTui
 
         internal void Build()
         {
-            window.Add(_connection, _activity);
+            _connectionState.SetScheme(ConnectingScheme);
+            _connectionDetail.SetScheme(FieldCaptionScheme);
+            _connectionDetail.X = Pos.Right(_connectionState);
+            window.Add(_connectionState, _connectionDetail, _activity);
             _mainTabs = new TabStrip
             {
                 X = 0,
@@ -754,7 +789,7 @@ internal static class HydraTui
                 {
                     var hello = await _client.HelloAsync(timeout.Token);
                     if (hello.ProtocolVersion != ManagementProtocol.Version)
-                        throw new InvalidOperationException($"Management protocol {hello.ProtocolVersion} is incompatible with this TUI ({ManagementProtocol.Version}).");
+                        throw new ProtocolMismatchException($"Management protocol {hello.ProtocolVersion} is incompatible with this TUI ({ManagementProtocol.Version}).");
                     if (_serverProcessId != null && _serverProcessId != hello.ProcessId)
                         ResetLogStream();
                     _serverProcessId = hello.ProcessId;
@@ -782,12 +817,28 @@ internal static class HydraTui
                     SetLiveControls(false);
                     if (_shutdownConfirmed)
                     {
-                        SetConnectionStatus("○ Hydra is stopped — use Start Hydra to launch it", connected: false);
+                        SetConnectionStatus("○ Hydra is stopped", "  —  use Start Hydra to launch it", Link.Disconnected);
                         _diagnostics.Text = FormatDiagnostics();
                     }
                     else
                     {
-                        SetConnectionStatus("○ Management unavailable — Hydra may still be running; configuration editing remains available", connected: false);
+                        // Orange says "still working on it", so it is only honest while the failure could
+                        // resolve itself — a socket that is not answering yet, a daemon mid-restart. A
+                        // protocol mismatch never resolves without new binaries, and a lamp that promises
+                        // progress for ever is worse than one that says stopped.
+                        //
+                        // ITS OWN TYPE, and that is the whole point of it existing. Testing for
+                        // InvalidOperationException here looks equivalent and is not: ManagementClient
+                        // raises that for EVERY server-reported failure, so a daemon closing the socket
+                        // mid-reply would have been diagnosed, confidently and in red, as a version
+                        // mismatch — sending somebody to compare binaries that match perfectly well.
+                        var permanent = ex is ProtocolMismatchException;
+                        SetConnectionStatus(
+                            permanent ? "○ Management incompatible" : "◐ Management unavailable",
+                            permanent
+                                ? "  —  this TUI and the running Hydra speak different management protocols"
+                                : "  —  Hydra may still be running; configuration editing remains available",
+                            permanent ? Link.Disconnected : Link.Connecting);
                         _diagnostics.Text = FormatDiagnostics(ex);
                     }
                 });
@@ -806,7 +857,7 @@ internal static class HydraTui
                 SetText(_logs, "");
             }
             SetLiveControls(true);
-            SetConnectionStatus($"● Connected  │  Hydra {status.Version}  │  {status.HostName}  │  {status.ProfileName ?? "idle"} / {status.Mode}", connected: true);
+            SetConnectionStatus("● Connected", $"  │  Hydra {status.Version}  │  {status.HostName}  │  {status.ProfileName ?? "idle"} / {status.Mode}", Link.Connected);
             SetText(_overview, FormatOverview(status));
             SetText(_peers, FormatPeers(status));
             if (page.Entries.Count > 0)
@@ -827,10 +878,21 @@ internal static class HydraTui
             if (view.Text != value) view.Text = value;
         }
 
-        private void SetConnectionStatus(string text, bool connected)
+        private void SetConnectionStatus(string state, string detail, Link link)
         {
-            SetText(_connection, text);
-            if (color) _connection.SetScheme(connected ? ConnectedScheme : DisconnectedScheme);
+            SetText(_connectionState, state);
+            SetText(_connectionDetail, detail);
+
+            // Only on a CHANGE, like SetText two lines up: this runs on every refresh tick, and re-setting
+            // a scheme that already holds marks the view dirty for nothing.
+            if (_link == link) return;
+            _link = link;
+            _connectionState.SetScheme(link switch
+            {
+                Link.Connected => ConnectedScheme,
+                Link.Connecting => ConnectingScheme,
+                _ => DisconnectedScheme
+            });
         }
 
         private async Task LoadConfigAsync()
@@ -1267,7 +1329,7 @@ internal static class HydraTui
                     _shutdownConfirmed = true;
                     app.Invoke(() =>
                     {
-                        SetConnectionStatus("○ Hydra is stopped — use Start Hydra to launch it", connected: false);
+                        SetConnectionStatus("○ Hydra is stopped", "  —  use Start Hydra to launch it", Link.Disconnected);
                         _diagnostics.Text = FormatDiagnostics();
                         SetCommandBusy(false, "Hydra stopped. Use Start Hydra to launch it.");
                     });

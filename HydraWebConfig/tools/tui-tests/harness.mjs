@@ -20,9 +20,9 @@ const XTERM_JS = resolve(__dirname, 'node_modules', '@xterm', 'xterm', 'lib', 'x
 const MIME = { '.html': 'text/html', '.js': 'text/javascript' };
 
 export class HydraTui {
-  static async launch({ color = false, args = [], cols = 130, rows = 42, bin } = {}) {
+  static async launch({ args = [], cols = 130, rows = 42, bin } = {}) {
     const harness = new HydraTui(cols, rows);
-    await harness._start({ color, args, bin });
+    await harness._start({ args, bin });
     return harness;
   }
 
@@ -32,9 +32,9 @@ export class HydraTui {
     this._pending = '';
   }
 
-  async _start({ color, args, bin }) {
+  async _start({ args, bin }) {
     this.hydraBin = bin ?? findDefaultBinary(REPO_ROOT);
-    this._tuiArgs = ['tui', '--demo', ...(color ? ['--color'] : []), ...args];
+    this._tuiArgs = ['tui', '--demo', ...args];
 
     this._server = createServer(async (req, res) => {
       const path = req.url === '/' ? '/live.html' : req.url.split('?')[0];

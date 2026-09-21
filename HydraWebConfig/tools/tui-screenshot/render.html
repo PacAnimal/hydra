@@ -6,11 +6,13 @@
 <script src="https://unpkg.com/@xterm/xterm@5.5.0/lib/xterm.js"></script>
 <link rel="stylesheet" href="https://unpkg.com/@xterm/xterm@5.5.0/css/xterm.css" />
 <style>
-  /* #wrap's steel-blue is deliberately loud: screenshot.mjs crops to #term alone, so this frame
-     should never appear in a captured PNG — if one shows up bordered in this color, the crop broke. */
+  /* Everything around the terminal is the terminal's OWN background, so there is no foreign colour that
+     can leak into a capture — screenshot.mjs then trims to the content and pads it itself. A contrasting
+     frame used to sit here as a tripwire for a broken crop; two of its pixels ended up down the left edge
+     of the committed PNG and stayed there, which is what a tripwire nobody checks is worth. */
   html, body { margin: 0; background: #0c0c0c; }
   body { padding: 24px; display: flex; justify-content: center; }
-  #wrap { display: inline-block; padding: 10px; background: #3a5a78; border-radius: 8px; }
+  #wrap { display: inline-block; padding: 16px; background: #0c0c0c; }
 </style>
 </head>
 <body>

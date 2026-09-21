@@ -48,7 +48,6 @@ Open Hydra's local cross-platform TUI in another terminal:
 ```bash
 ./hydra tui
 ./hydra tui --config /path/to/hydra.conf
-./hydra tui --color   # tint the connection line green/red by actual state
 ```
 
 ![Hydra terminal control center, showing a connected relay, a peer, and live traffic counters](docs/assets/hydra-tui-demo.png)

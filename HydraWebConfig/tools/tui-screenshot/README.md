@@ -1,13 +1,9 @@
 # Hydra TUI screenshot tool
 
-Captures `hydra tui --demo --color` and renders it to a PNG, for the README and other docs.
+Captures `hydra tui --demo` and renders it to a PNG, for the README and other docs.
 This is not a mockup: it runs the actual compiled binary under a real pseudo-terminal, records
 the raw bytes it writes, and replays them through [xterm.js](https://xtermjs.org/) — the same
 terminal engine VS Code uses — inside a headless browser to get a pixel-accurate screenshot.
-
-`--color` tints the connection status line by actual state (green when connected, red when
-not) instead of the TUI's default single accent colour. It's a real flag on `hydra tui`, not
-something specific to this tool — see the "Terminal control center" section of the main README.
 
 `--demo` is a real mode of the TUI itself (see
 `Hydra/Management/MockManagementClient.cs`): it renders the exact same UI code against
@@ -67,11 +63,14 @@ exact sequences.
 
 ## Files
 
-- `capture.mjs` — spawns `hydra tui --demo --color` under `node-pty` and saves the raw captured bytes.
-- `render.html` — loads `@xterm/xterm` from a CDN and replays `capture.b64` into it. `#wrap`'s
-  steel-blue frame is a deliberate debug marker for viewing the page directly in a browser — it
-  should never show up in a screenshot; if it does, `screenshot.mjs`'s crop broke.
-- `screenshot.mjs` — serves `render.html` + the capture over a tiny local HTTP server, loads it
-  in headless Chromium via Playwright, and screenshots just the terminal element (not the page)
-  into a PNG.
+- `capture.mjs` — spawns `hydra tui --demo` under `node-pty` and saves the raw captured bytes.
+- `render.html` — loads `@xterm/xterm` from a CDN and replays `capture.b64` into it. Everything
+  around the terminal is painted in the terminal's OWN background, so there is no foreign colour
+  that a capture could pick up at its edges.
+- `screenshot.mjs` — serves `render.html` + the capture over a tiny local HTTP server, loads it in
+  headless Chromium via Playwright, captures the wrapper, then trims to the content's bounding box
+  and pads exactly 4 pixels of background on every side. The crop is decided from the PIXELS rather
+  than from an element's box: an element crop is subject to subpixel layout, and two columns of a
+  debug frame once rode into a committed PNG down its left edge that way.
+  `Tests/Tui/ScreenshotPaddingTests` holds the committed PNGs to the 4-pixel rule.
 - `output/` (gitignored) — everything the two scripts produce.

@@ -51,7 +51,7 @@ async function captureTui() {
   for (let attempt = 1; attempt <= TUI_ATTEMPTS; attempt++) {
     console.error(`[tui] attempt ${attempt}/${TUI_ATTEMPTS}`);
     const bytes = await new Promise((resolveCapture) => {
-      const term = pty.spawn(HYDRA_BIN, ['tui', '--demo', '--color'], {
+      const term = pty.spawn(HYDRA_BIN, ['tui', '--demo'], {
         name: 'xterm-256color',
         cols: COLS,
         rows: ROWS,

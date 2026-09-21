@@ -46,7 +46,7 @@ npm test
 - `overview-actions.spec.mjs` — Reconnect/Restart/Shutdown/Start and their confirmation dialogs.
 - `configuration.spec.mjs` — Form/Text mode toggle, all four sections, the no-mnemonic Reload button.
 - `remote.spec.mjs` — the Remote tab's fields and actions.
-- `misc.spec.mjs` — Esc quits the process, F5 refreshes, `--color` actually changes the rendered color.
+- `misc.spec.mjs` — Esc quits the process, F5 refreshes, the connection lamp is tinted by state and the detail beside it is not.
 - `smoke.spec.mjs` — the single fastest "is anything catastrophically broken" check.
 
 ## Adding a test
