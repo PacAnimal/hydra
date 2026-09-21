@@ -13,9 +13,9 @@ namespace Tests.Styx;
 /// WITHOUT loosening the ordering anything relies on, because a KeyUp delivered before its KeyDown leaves a
 /// key held down on somebody's machine and nothing downstream could tell.</para>
 ///
-/// <para>Nothing here is timed. The one test that needs a lane to be slow parks it on a gate and waits for
-/// <c>BulkHeld</c> to say it is genuinely parked; the rest assert arrival ORDER, which is a fact rather than
-/// a duration.</para>
+/// <para>Nothing here is timed. The tests that need a lane to be slow park it on a gate and wait for
+/// <c>Held</c> to say it is genuinely parked; the rest assert arrival ORDER, which is a fact rather than a
+/// duration.</para>
 /// </summary>
 [TestFixture]
 public class RelayLaneTests
@@ -172,7 +172,7 @@ public class RelayLaneTests
     /// <b>The reason the split exists.</b> A keystroke sent AFTER a stalled file chunk arrives while that
     /// chunk is still stuck — which on one queue was impossible by construction.
     ///
-    /// <para>Deterministic: the bulk lane is parked on a gate and the test waits for <c>BulkHeld</c> to
+    /// <para>Deterministic: the bulk lane is parked on a gate and the test waits for <c>Held</c> to
     /// confirm it before sending the keystroke, so the assertion does not depend on a chunk being slower
     /// than a keypress on this particular machine. On the single-queue code this test cannot pass — the
     /// keystroke is queued behind the held chunk and never arrives.</para>
@@ -187,7 +187,7 @@ public class RelayLaneTests
         sender.HoldLane(RelayLane.Bulk);
 
         // NOT awaited: a reliable send completes only once the payload has actually left, and this one is
-        // about to be parked on the gate. Waiting for BulkHeld is what says it is queued and stuck.
+        // about to be parked on the gate. Waiting for Held is what says it is queued and stuck.
         var stalled = sender.SendReliableAsync(["receiver"], Chunk(7)).AsTask();
         await WaitFor(() => sender.Held == 1, "the bulk lane to park on the gate");
 

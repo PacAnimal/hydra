@@ -30,6 +30,25 @@ public interface IWorldState
     // -- master-side (peer platform) --
     ValueTask SetPeerPlatform(string host, PeerPlatform platform);
     ValueTask<PeerPlatform> GetPeerPlatform(string host);
+
+    // -- master-side (peer capabilities) --
+
+    /// <summary>
+    /// Records whether a peer said it understands <see cref="MessageKind.KeyEventBatch"/>.
+    ///
+    /// <para><b>REMOVE AFTER 2026-10-30</b> along with the rest of the negotiation — see
+    /// <c>ScreenInfoMessage.KeyBundles</c>.</para>
+    /// </summary>
+    void SetPeerKeyBundles(string host, bool supported);
+
+    /// <summary>
+    /// Whether a peer has SAID it understands key bundles. Defaults to false for a peer that never said.
+    ///
+    /// <para>SYNCHRONOUS, unlike its neighbours, and deliberately: it is read from <c>RelayConnection.Send</c>
+    /// on the input hot path, inside the send-order lock, where there is nothing to await with. Backed by a
+    /// <c>ConcurrentDictionary</c> like the remote keys are, not by the semaphore the master state uses.</para>
+    /// </summary>
+    bool PeerSupportsKeyBundles(string host);
 }
 
 public class WorldState : IWorldState
@@ -37,6 +56,12 @@ public class WorldState : IWorldState
     private readonly SemaphoreSlimValue<MasterState> _master = new(new MasterState(), disposeValue: false);
     private readonly SemaphoreSlimValue<SlaveState> _slave = new(new SlaveState(), disposeValue: false);
     private readonly ConcurrentDictionary<string, SimpleAesKey> _remoteKeys = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Who has said they understand key bundles. Concurrent rather than semaphore-guarded because the send
+    /// path reads it synchronously — see <see cref="IWorldState.PeerSupportsKeyBundles"/>.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, bool> _peerKeyBundles = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, ILogger> _loggers = new(StringComparer.OrdinalIgnoreCase);
 
     public async ValueTask<PeerDelta> UpdatePeers(HashSet<string> currentPeers, HashSet<string> configuredSlaves)
@@ -141,7 +166,15 @@ public class WorldState : IWorldState
         s.PeerPlatforms.Clear();
         _loggers.Clear();
         _remoteKeys.Clear(); // keys are re-derived from the message salt on reconnect
+        // Re-advertised on the next ScreenInfo. Cleared because a host name that comes back on an OLDER
+        // build must not inherit the capability the previous occupant claimed — that would bundle keys at
+        // a peer that silently discards them.
+        _peerKeyBundles.Clear();
     }
+
+    public void SetPeerKeyBundles(string host, bool supported) => _peerKeyBundles[host] = supported;
+
+    public bool PeerSupportsKeyBundles(string host) => _peerKeyBundles.TryGetValue(host, out var yes) && yes;
 
     public async ValueTask SetPeerPlatform(string host, PeerPlatform platform)
     {

@@ -160,6 +160,21 @@ public class SlaveRelayConnection : RelayConnection
                     }
                     break;
                 }
+            case MessageKind.KeyEventBatch:
+                {
+                    // IN ORDER, and every one of them. The master only sends this because we advertised it,
+                    // and it bundles precisely those events that a single frame would have had to send one
+                    // at a time — so a partial application here is a key left down on this machine.
+                    var batch = body.ParseMessage<KeyEventBatchMessage>(_log, kind.ToString());
+                    if (batch is { Events.Length: > 0 })
+                    {
+                        if (IsOnScreenMaster(sourceHost))
+                            _cursorHider.Show();
+                        foreach (var keyEvent in batch.Events)
+                            await HandleKeyEvent(keyEvent);
+                    }
+                    break;
+                }
             case MessageKind.MouseMoveDelta:
                 HandleInputMessage<MouseMoveDeltaMessage>(body, kind, sourceHost, delta =>
                 {
@@ -329,7 +344,8 @@ public class SlaveRelayConnection : RelayConnection
     // on the master and have not reached for us yet.
     private static bool IsWakeSignal(MessageKind kind) => kind is
         MessageKind.MouseMove or MessageKind.MouseMoveDelta or MessageKind.MouseButton or
-        MessageKind.MouseScroll or MessageKind.KeyEvent or MessageKind.EnterScreen or MessageKind.ActivityPing;
+        MessageKind.MouseScroll or MessageKind.KeyEvent or MessageKind.KeyEventBatch or
+        MessageKind.EnterScreen or MessageKind.ActivityPing;
 
     // returns true when the message must not reach the normal handlers. Dormant means we stay on the relay
     // but touch nothing locally: input is refused rather than injected, and everything else is discarded.
@@ -486,7 +502,11 @@ public class SlaveRelayConnection : RelayConnection
     {
         _log.LogInformation("Sending screen info to {Master}: {Count} screen(s)", masterHost, entries.Count);
         var platform = DetectLocalPlatform();
-        var payload = MessageSerializer.Encode(MessageKind.ScreenInfo, new ScreenInfoMessage(entries, platform));
+        // KeyBundles: true says this build applies a KeyEventBatch. A master that never hears it sends one
+        // KeyEvent per frame, exactly as before — which is what makes bundling safe to add to one end first.
+        //
+        // REMOVE AFTER 2026-10-30: the argument goes with the parameter — see ScreenInfoMessage.KeyBundles.
+        var payload = MessageSerializer.Encode(MessageKind.ScreenInfo, new ScreenInfoMessage(entries, platform, KeyBundles: true));
         Send([masterHost], payload);
     }
 

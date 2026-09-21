@@ -11,9 +11,34 @@ namespace Tests.Setup;
 /// Use this for end-to-end tests that prove the full Hydra relay stack works as intended.
 /// Use TestStyxClient instead when you need to test protocol-level edge cases.
 /// </summary>
-public sealed class HydraTestClient(WebApplicationFactory<global::Styx.Program> factory, IHydraProfile profile) : RelayConnection(profile, TestLog.CreateLogger<RelayConnection>(), new WorldState()), IAsyncDisposable
+public sealed class HydraTestClient : RelayConnection, IAsyncDisposable
 {
-    private readonly WebApplicationFactory<global::Styx.Program> _factory = factory;
+    private readonly WebApplicationFactory<global::Styx.Program> _factory;
+
+    /// <summary>
+    /// The state this client sends against, so a test can say what its peers are capable of. A master learns
+    /// that from a peer's ScreenInfo in production; a test that only wants to drive the send path says it
+    /// directly rather than staging a whole handshake to reach one boolean.
+    /// </summary>
+    public IWorldState World { get; }
+
+    /// <summary>
+    /// Not a primary constructor, and not `world ?? new WorldState()` written twice: that reads as one
+    /// default and is two, so the base would send against one instance while <see cref="World"/> handed the
+    /// test another — and every capability a test set would be invisible to the code under test.
+    /// </summary>
+    public HydraTestClient(WebApplicationFactory<global::Styx.Program> factory, IHydraProfile profile, IWorldState? world = null)
+        : this(factory, profile, Shared(world)) { }
+
+    private HydraTestClient(WebApplicationFactory<global::Styx.Program> factory, IHydraProfile profile, (IWorldState World, bool _) shared)
+        : base(profile, TestLog.CreateLogger<RelayConnection>(), shared.World)
+    {
+        _factory = factory;
+        World = shared.World;
+    }
+
+    /// <summary>Evaluates the default exactly once, so the base and <see cref="World"/> share one instance.</summary>
+    private static (IWorldState, bool) Shared(IWorldState? world) => (world ?? new WorldState(), true);
 
     private readonly SemaphoreSlim _readySignal = new(0);
     private readonly NotificationQueue<string[]> _peers = new();

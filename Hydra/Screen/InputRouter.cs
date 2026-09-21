@@ -476,6 +476,13 @@ public class InputRouter(
                 if (info != null && info.Screens.Count > 0)
                 {
                     await _peerState.SetPeerScreens(sourceHost, info.Screens);
+                    // Recorded on EVERY ScreenInfo, including one that omits it: a peer that reconnects on
+                    // an older build must take the capability away again, or we would keep bundling keys at
+                    // something that discards them without a word.
+                    //
+                    // REMOVE AFTER 2026-10-30 — see ScreenInfoMessage.KeyBundles.
+                    _peerState.SetPeerKeyBundles(sourceHost, info.KeyBundles == true);
+
                     if (info.Platform.HasValue)
                     {
                         await _peerState.SetPeerPlatform(sourceHost, info.Platform.Value);

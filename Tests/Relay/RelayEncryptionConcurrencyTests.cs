@@ -19,7 +19,14 @@ namespace Tests.Relay;
 /// What the assertions below actually catch is stated where each one sits — be precise about that, because
 /// "this test covers the nonce" is the kind of belief that outlives the test's real reach.</para>
 /// </summary>
+/// <remarks>
+/// NOT PARALLELISABLE, and the contiguous-run assertion is why: <c>Iv96</c>'s counter is process-global, so
+/// any other nonce drawn anywhere in this process while these 4 000 encrypts run would widen the range and
+/// fail a test that is not actually wrong. The assertion stays exact — it is the sharpest form and the one
+/// that catches a random or per-instance counter — and the fixture states the dependency instead.
+/// </remarks>
 [TestFixture]
+[NonParallelizable]
 public class RelayEncryptionConcurrencyTests
 {
     /// <summary>The wire layout `SimpleAes` writes: [64 salt][12 nonce][16 tag][ciphertext].</summary>

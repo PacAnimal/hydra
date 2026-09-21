@@ -43,6 +43,7 @@ public enum MessageKind : byte
     LatencyProbeResponse = 33,  // diagnostics-only response; never enters the input path
     RemoteManagementRequest = 34,
     RemoteManagementResponse = 35,
+    KeyEventBatch = 36,         // master → slave: several KeyEvents in one frame, applied in order
 }
 
 /// <summary>
@@ -118,7 +119,23 @@ public record ScreenInfoEntry(string Name, int X, int Y, int Width, int Height, 
 // ReSharper disable once InconsistentNaming
 public enum PeerPlatform : byte { Unknown = 0, Linux = 1, MacOS = 2, Windows = 3 }
 
-public record ScreenInfoMessage(List<ScreenInfoEntry> Screens, PeerPlatform? Platform = null);
+/// <param name="KeyBundles">
+/// Whether this peer understands <see cref="MessageKind.KeyEventBatch"/>. NULL means it never said, which
+/// is what every build before the feature sends — and it must be read as NO, because an unknown kind is
+/// dropped silently by the receiver rather than refused. Additive and nullable for the same reason
+/// <paramref name="Platform"/> is.
+///
+/// <para><b>REMOVE AFTER 2026-10-30.</b> This whole negotiation exists only to carry the field through one
+/// upgrade window. After that date every build understands a batch, the question stops being worth asking,
+/// and this parameter is debt. Deleting it means: drop this parameter and the one that sets it in
+/// <c>SlaveRelayConnection.SendScreenInfo</c>; drop <c>IWorldState.SetPeerKeyBundles</c> /
+/// <c>PeerSupportsKeyBundles</c> and their backing dictionary; drop
+/// <c>RelayConnection.EveryTargetTakesKeyBundles</c> and its call in <c>Send</c>; drop the recording in
+/// <c>InputRouter</c>; and delete <c>KeyBundleTests.APeerThatNeverAdvertisedSupportIsNeverSentABatch</c>,
+/// which is the only test that is about the negotiation rather than about the bundling.
+/// </para>
+/// </param>
+public record ScreenInfoMessage(List<ScreenInfoEntry> Screens, PeerPlatform? Platform = null, bool? KeyBundles = null);
 public record MasterConfigMessage(LogLevel? LogLevel);
 public record SlaveLogMessage(int Level, string Category, string Message, string? Exception);
 // IsRepeat marks an OS auto-repeat the master re-resolved (with live modifier/dead-key state) and forwarded;
@@ -127,6 +144,25 @@ public record SlaveLogMessage(int Level, string Category, string Message, string
 // press-and-hold accent popup) rather than re-pressing the physical key. travelling per-keypress lets a
 // shared slave honour each master's own preference.
 public record KeyEventMessage(KeyEventType Type, KeyModifiers Modifiers, char? Character, SpecialKey? Key, bool IsRepeat = false, bool UnicodeKeyRepeat = true);
+
+/// <summary>
+/// Several key events in one frame, to be applied IN ORDER.
+///
+/// <para><b>Bundled, never merged.</b> A mouse move supersedes the one before it, so movement coalesces
+/// into a single position and the intermediate ones are discarded on purpose. Nothing about a key event is
+/// superseded: a KeyDown and the KeyUp that follows are two facts, and losing either leaves a key held down
+/// on somebody's machine. So this carries every event it was given, in the order it was given them.</para>
+///
+/// <para>What it buys is round trips. <c>Send</c> on the relay proxy is <c>InvokeCoreAsync</c>, which does
+/// not complete until the hub method returns — so a lane sends one message at a time and pays a full
+/// relay round trip for each. Type fast enough, or hold a key down, and a KeyDown and its KeyUp are both
+/// waiting by the time the first goes out; one frame delivers both for the price of one trip.</para>
+///
+/// <para><b>Only to a peer that has said it understands this.</b> An unrecognised kind reaches
+/// <c>RelayConnection.OnReceive</c>'s base, which does nothing at all — so sending one of these to a slave
+/// that predates it would discard every key in it, in silence. See <c>ScreenInfoMessage.KeyBundles</c>.</para>
+/// </summary>
+public record KeyEventBatchMessage(KeyEventMessage[] Events);
 public record MouseButtonMessage(MouseButton Button, bool IsPressed);
 public record MouseScrollMessage(short XDelta, short YDelta);
 public record EnterScreenMessage(string Screen, int X, int Y, int Width, int Height);

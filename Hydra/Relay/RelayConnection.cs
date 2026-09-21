@@ -36,6 +36,13 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     private TaskCompletionSource? _suspensionComplete;
     private readonly Lock _sendOrderLock = new();
     private MovementBatch? _openMovementBatch;
+
+    /// <summary>
+    /// Key events queued behind a frame already in flight — see <see cref="KeyBundle"/>. Guarded by the same
+    /// <c>_sendOrderLock</c> as the movement batch, because they are one question: what the NEXT enqueue may
+    /// still be added to.
+    /// </summary>
+    private KeyBundle? _openKeyBundle;
     private RelayTransportSnapshot? _transport;
     private long _connectionAttempts;
     private long _messagesSent;
@@ -111,12 +118,35 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         if (_server == null || _encryption == null) return;
         lock (_sendOrderLock)
         {
+            // A key event may join the bundle already queued for these targets, but ONLY where every one of
+            // them has said it understands a batch — an unknown kind is discarded in silence by the
+            // receiver, so bundling at an older peer would lose the keys rather than fail. A lone event
+            // still goes out as an ordinary KeyEvent, so nothing changes for the common case either way.
+            //
+            // REMOVE AFTER 2026-10-30: the EveryTargetTakesKeyBundles call goes, and the condition becomes
+            // the kind check alone.
+            if (payload.Length > 0 && payload[0] == (byte)MessageKind.KeyEvent && EveryTargetTakesKeyBundles(targetHosts)
+                && MessageSerializer.Decode(payload).Deserialize<KeyEventMessage>() is { } keyEvent)
+            {
+                _openMovementBatch = null;
+                if (_openKeyBundle?.TryAppend(targetHosts, keyEvent) == true) return;
+
+                var bundle = KeyBundle.Create(targetHosts, keyEvent);
+                _openKeyBundle = bundle;
+                _inputQueue.Writer.TryWrite(new OutboundMessage(targetHosts, payload, null, null, bundle, CancellationToken.None));
+                return;
+            }
+
+            // Anything that is not a key closes the bundle, for the reason KeyBundle's summary gives: an
+            // append after the drain has read it goes nowhere at all.
+            _openKeyBundle = null;
+
             if (payload.Length > 0 && payload[0] == (byte)MessageKind.MouseMove)
             {
                 if (_openMovementBatch?.TryAppendAbsolute(targetHosts, payload) == true) return;
                 var movement = MovementBatch.CreateAbsolute(targetHosts, payload);
                 _openMovementBatch = movement;
-                _inputQueue.Writer.TryWrite(new OutboundMessage(targetHosts, payload, null, movement, CancellationToken.None));
+                _inputQueue.Writer.TryWrite(new OutboundMessage(targetHosts, payload, null, movement, null, CancellationToken.None));
                 return;
             }
 
@@ -129,7 +159,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
                 if (_openMovementBatch?.TryAppendDelta(targetHosts, dx, dy) == true) return;
                 var movement = MovementBatch.CreateDelta(targetHosts, dx, dy);
                 _openMovementBatch = movement;
-                _inputQueue.Writer.TryWrite(new OutboundMessage(targetHosts, payload, null, movement, CancellationToken.None));
+                _inputQueue.Writer.TryWrite(new OutboundMessage(targetHosts, payload, null, movement, null, CancellationToken.None));
                 return;
             }
 
@@ -141,8 +171,26 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
             // window where it would make a difference is one a test cannot open — and an optimisation
             // nothing can observe is not worth a special case in the one path that decides where clicks land.
             _openMovementBatch = null;
-            LaneFor(payload).Writer.TryWrite(new OutboundMessage(targetHosts, payload, null, null, CancellationToken.None));
+            LaneFor(payload).Writer.TryWrite(new OutboundMessage(targetHosts, payload, null, null, null, CancellationToken.None));
         }
+    }
+
+    /// <summary>
+    /// Whether EVERY target has said it understands a key batch. All of them, because one frame goes to all
+    /// of them — and a peer that never said is a peer that would drop it without a word.
+    /// </summary>
+    /// <remarks>
+    /// <b>REMOVE AFTER 2026-10-30</b> — see <c>ScreenInfoMessage.KeyBundles</c> for everything that goes with
+    /// it. After that date bundling is unconditional and this method, its call site's <c>&amp;&amp;</c>, and the
+    /// capability it reads all come out.
+    /// </remarks>
+    private bool EveryTargetTakesKeyBundles(string[] targetHosts)
+    {
+        if (targetHosts.Length == 0) return false;
+        foreach (var host in targetHosts)
+            if (!peerState.PeerSupportsKeyBundles(host))
+                return false;
+        return true;
     }
 
     // The caller already has dx/dy as ints (see IRelaySender.SendMouseDelta) — accumulating them here
@@ -154,10 +202,11 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         if (_server == null || _encryption == null) return;
         lock (_sendOrderLock)
         {
+            _openKeyBundle = null;
             if (_openMovementBatch?.TryAppendDelta(targetHosts, dx, dy) == true) return;
             var movement = MovementBatch.CreateDelta(targetHosts, dx, dy);
             _openMovementBatch = movement;
-            _inputQueue.Writer.TryWrite(new OutboundMessage(targetHosts, [], null, movement, CancellationToken.None));
+            _inputQueue.Writer.TryWrite(new OutboundMessage(targetHosts, [], null, movement, null, CancellationToken.None));
         }
     }
 
@@ -282,7 +331,8 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         lock (_sendOrderLock)
         {
             _openMovementBatch = null;
-            if (!lane.Writer.TryWrite(new OutboundMessage(targetHosts, payload, completion, null, cancel)))
+            _openKeyBundle = null;
+            if (!lane.Writer.TryWrite(new OutboundMessage(targetHosts, payload, completion, null, null, cancel)))
                 throw new InvalidOperationException("Relay send queue is closed");
         }
 
@@ -728,6 +778,16 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
                 item = item with { Payload = item.Movement.Snapshot(), Movement = null };
             }
         }
+        else if (item.Keys != null)
+        {
+            lock (_sendOrderLock)
+            {
+                // BY REFERENCE, and the clear is what stops a later append landing in a bundle that has
+                // already been read — which would lose those keys with nothing to show for it.
+                if (ReferenceEquals(_openKeyBundle, item.Keys)) _openKeyBundle = null;
+                item = item with { Payload = item.Keys.Snapshot(), Keys = null };
+            }
+        }
         return true;
     }
 
@@ -773,6 +833,59 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     // keeps only the latest position, a delta accumulates — either way only one message crosses the
     // wire per burst instead of one per input event. Deltas arrive and stay as ints; only Snapshot()
     // ever encodes, once, right before the batch actually goes out.
+    /// <summary>
+    /// Key events queued for one target while an earlier frame is still in flight, kept IN ORDER.
+    ///
+    /// <para><b>This is the opposite of <see cref="MovementBatch"/> and the difference is the whole point.</b>
+    /// A batch of moves collapses to the latest position because the earlier ones are no longer true. Every
+    /// key event stays true: a KeyDown and its KeyUp are two separate facts, and dropping either leaves a key
+    /// held down on somebody else's machine. So this appends and never replaces.</para>
+    ///
+    /// <para><b>The loss to fear is an append to a bundle nobody will read again.</b> Appending does not
+    /// enqueue anything — it mutates an object an already-queued item points at — so the moment the drain
+    /// has taken its <see cref="Snapshot"/>, a further append would vanish without trace. That is why
+    /// <c>_openKeyBundle</c> is cleared under <c>_sendOrderLock</c> both by the drain (by reference) and by
+    /// every other enqueue, exactly as the movement batch is. It is not a theoretical hazard: deleting that
+    /// clear silently loses a mouse move, which is what <c>AMessageBetweenTwoMouseMovesKeepsThemApart</c>
+    /// exists to catch.</para>
+    /// </summary>
+    private sealed class KeyBundle
+    {
+        /// <summary>
+        /// How many events one frame may carry. A bound so a stalled relay cannot grow one frame without
+        /// limit — not a discard: <c>TryAppend</c> refuses when full and the caller enqueues a NEW bundle,
+        /// so the event that did not fit still goes, still in order.
+        /// </summary>
+        internal const int Capacity = 64;
+
+        private readonly string[] _targets;
+        private readonly List<KeyEventMessage> _events = [];
+
+        private KeyBundle(string[] targets) => _targets = targets;
+
+        internal static KeyBundle Create(string[] targets, KeyEventMessage first)
+        {
+            var bundle = new KeyBundle(targets);
+            bundle._events.Add(first);
+            return bundle;
+        }
+
+        internal bool TryAppend(string[] targets, KeyEventMessage message)
+        {
+            if (_events.Count >= Capacity || !_targets.SequenceEqual(targets)) return false;
+            _events.Add(message);
+            return true;
+        }
+
+        /// <summary>
+        /// The frame to send. ONE event goes as an ordinary <c>KeyEvent</c>, so the common case puts nothing
+        /// new on the wire and a peer only ever meets a batch it asked for.
+        /// </summary>
+        internal byte[] Snapshot() => _events.Count == 1
+            ? MessageSerializer.Encode(MessageKind.KeyEvent, _events[0])
+            : MessageSerializer.Encode(MessageKind.KeyEventBatch, new KeyEventBatchMessage([.. _events]));
+    }
+
     private sealed class MovementBatch
     {
         private readonly MessageKind _kind;
@@ -897,5 +1010,6 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         byte[] Payload,
         TaskCompletionSource? Completion,
         MovementBatch? Movement,
+        KeyBundle? Keys,
         CancellationToken Cancel);
 }
