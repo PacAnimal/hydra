@@ -6,6 +6,7 @@ internal sealed class RemoteManagementStore
 {
     private static readonly TimeSpan PairingLifetime = TimeSpan.FromMinutes(10);
     private static readonly TimeSpan LockTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan ReplaceTimeout = TimeSpan.FromSeconds(5);
     private readonly string _path;
     private readonly string _lockPath;
     private readonly SemaphoreSlim _lock = new(1, 1);
@@ -94,10 +95,24 @@ internal sealed class RemoteManagementStore
         return accepted;
     }
 
+    /// <summary>
+    /// Reads under the SAME cross-process lock a mutation takes, not just the in-process one.
+    ///
+    /// <para><b>A read that skips it breaks a concurrent WRITE, on Windows.</b> The reader opens the state
+    /// file without <c>FILE_SHARE_DELETE</c>, so a writer replacing it at that moment gets
+    /// <c>ERROR_ACCESS_DENIED</c> from <c>MoveFileEx</c> — the write fails, and the pairing code or
+    /// controller it was recording is gone. POSIX hides this completely: a rename over an open file
+    /// succeeds and the reader simply goes on reading the old inode. So one process reading status could
+    /// make another process lose a write, on one platform only.</para>
+    /// </summary>
     private async Task<RemoteManagementState> ReadAsync(CancellationToken cancel)
     {
         await _lock.WaitAsync(cancel);
-        try { return await ReadUnlockedAsync(cancel); }
+        try
+        {
+            await using var fileLock = await AcquireMutationLockAsync(cancel);
+            return await ReadUnlockedAsync(cancel);
+        }
         finally { _lock.Release(); }
     }
 
@@ -181,13 +196,48 @@ internal sealed class RemoteManagementStore
             }
             if (!OperatingSystem.IsWindows())
                 File.SetUnixFileMode(temp, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-            File.Move(temp, _path, true);
+            await ReplaceAsync(temp, cancel);
         }
         finally
         {
             if (File.Exists(temp)) File.Delete(temp);
         }
     }
+
+    /// <summary>
+    /// Puts the finished temp file in place, retrying a holder that is on its way out.
+    ///
+    /// <para><b>Windows only, in effect.</b> Replacing a file whose destination somebody has open without
+    /// <c>FILE_SHARE_DELETE</c> fails outright rather than queueing, and the holder is very often not ours
+    /// and not a bug: a virus scanner or the search indexer opening a file we just closed, for a few
+    /// milliseconds. Our OWN overlapping reader is fixed properly, by taking the lock — this covers the one
+    /// we cannot serialise with because it is not our process. A POSIX rename never fails for this reason,
+    /// so nothing here ever retries there.</para>
+    ///
+    /// <para>Bounded, and it gives up by THROWING. A write that cannot land must reach the caller as a
+    /// failure — the state it was recording is a pairing the user has already been shown, or a controller
+    /// that now believes it is enrolled.</para>
+    /// </summary>
+    private async Task ReplaceAsync(string temp, CancellationToken cancel)
+    {
+        var deadline = DateTimeOffset.UtcNow + ReplaceTimeout;
+        while (true)
+        {
+            try
+            {
+                File.Move(temp, _path, true);
+                return;
+            }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or IOException && DateTimeOffset.UtcNow < deadline)
+            {
+                ReplaceRetries++;
+                await Task.Delay(TimeSpan.FromMilliseconds(20), cancel);
+            }
+        }
+    }
+
+    /// <summary>How many times a replace had to wait for a holder. Read by the test that proves it waits.</summary>
+    internal int ReplaceRetries;
 
     private static RemoteManagementState Empty() => new(RemoteManagementCrypto.RandomSecret(18), [], [], [], []);
 }

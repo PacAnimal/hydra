@@ -258,4 +258,85 @@ public class RemoteManagementTests
         public void RestartAfterResponse() => RestartRequests++;
         public CommandResult ShutdownAfterResponse() => new(true, "Shutdown requested.");
     }
+    /// <summary>
+    /// A reader in another store instance does not make a concurrent writer LOSE its write.
+    ///
+    /// <para><b>The platforms disagree completely here, and only one of them is honest.</b> A reader opens
+    /// the state file without <c>FILE_SHARE_DELETE</c>, so on Windows a writer replacing it at that instant
+    /// gets <c>ERROR_ACCESS_DENIED</c> and the write fails outright — the pairing code it was recording is
+    /// gone, and the user has already been shown it. On POSIX the rename succeeds and the reader finishes
+    /// off the old inode, so the same defect is completely invisible. It was found on the Windows lane, as
+    /// an intermittent failure of the concurrency test next to this one.</para>
+    ///
+    /// <para>Every write is asserted to SUCCEED and every code to survive, because "no exception" and "the
+    /// data is there" are two claims and the interesting failure only breaks the first on one platform.</para>
+    /// </summary>
+    [Test]
+    public async Task AConcurrentReaderDoesNotCostAWriterItsWrite()
+    {
+        var configPath = ConfigPath("reader-vs-writer");
+        var writer = new RemoteManagementStore(configPath);
+        var reader = new RemoteManagementStore(configPath);
+
+        await writer.CreatePairingCodeAsync();
+
+        var reading = new CancellationTokenSource();
+        // The TOKEN is captured, not the source: a struct the loop owns, so the reader cannot touch a
+        // disposed CancellationTokenSource however the awaits below unwind.
+        var token = reading.Token;
+        var reads = Task.Run(async () =>
+        {
+            while (!token.IsCancellationRequested)
+                await reader.GetTargetAsync("anything", CancellationToken.None);
+        }, CancellationToken.None);
+
+        var codes = new List<string>();
+        for (var i = 0; i < 20; i++) codes.Add(await writer.CreatePairingCodeAsync());
+
+        await reading.CancelAsync();
+        await reads;
+        reading.Dispose();
+
+        var checker = new RemoteManagementStore(configPath);
+        foreach (var code in codes)
+            Assert.That(await checker.ConsumePairingCodeAsync(code, CancellationToken.None), Is.True,
+                "a write was lost while another instance was reading — on Windows the reader's handle refuses the replace");
+    }
+
+    /// <summary>
+    /// A replace waits out a holder it cannot serialise with, instead of failing the write.
+    ///
+    /// <para>Our own reader is fixed by taking the lock; this is the one that is NOT ours — a virus scanner
+    /// or the search indexer opening the file we just closed, for a few milliseconds. It is the likeliest
+    /// explanation for the intermittent lane failure that started this, and it cannot be locked against
+    /// because it is another program entirely.</para>
+    ///
+    /// <para>Deterministic, not timed: the handle is released only once the store has actually been forced
+    /// to retry, so the test proves the wait happened rather than hoping it did.</para>
+    /// </summary>
+    [Test]
+    public async Task AReplaceWaitsOutAHolderRatherThanFailingTheWrite()
+    {
+        if (!OperatingSystem.IsWindows()) Assert.Ignore("a POSIX rename over an open file succeeds, so there is nothing here to wait for");
+
+        var configPath = ConfigPath("held-destination");
+        var store = new RemoteManagementStore(configPath);
+        await store.CreatePairingCodeAsync();
+
+        var statePath = Path.Combine(Path.GetDirectoryName(configPath)!, ".hydra-management.json");
+        var holder = new FileStream(statePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+
+        var write = store.CreatePairingCodeAsync();
+        var waited = SpinWait.SpinUntil(() => Volatile.Read(ref store.ReplaceRetries) > 0, TimeSpan.FromSeconds(10));
+        holder.Dispose();
+
+        var code = await write;
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(waited, Is.True, "the replace never had to wait, so this test proved nothing about waiting");
+            Assert.That(await store.ConsumePairingCodeAsync(code, CancellationToken.None), Is.True,
+                "the write did not land once the holder let go");
+        }
+    }
 }
