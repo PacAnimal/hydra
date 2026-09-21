@@ -29,6 +29,7 @@
 #   ./run-tests.sh linux    # only the container X11 lane (Category=Linux, under Xvfb)
 #   ./run-tests.sh windows  # only the Windows lane (sync + test on the real box)
 #   ./run-tests.sh all      # mac + linux + windows
+#   ./run-tests.sh selftest # the runner's OWN oracles — no lanes, ~1s
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -191,11 +192,85 @@ exit \$rc
 REMOTE
 }
 
+# ── the runner's own oracles ────────────────────────────────────────────────────────────────────
+#
+# A claim about run_lane goes HERE, with a control that fails when the claim stops being true. This
+# exists because the first version of run_lane was completely broken — errexit was restored before the
+# greps, so a grep finding nothing killed the function at its first check and no verdict was ever
+# printed — and ten hand-run controls passed against it anyway.
+#
+# EACH CONTROL RUNS IN ITS OWN PROCESS, and that is not a stylistic choice. Bash ignores `set -e`
+# inside any context where errexit is already being suppressed, and reading a function's status
+# requires such a context — `if ! f`, `f || rc=$?`, even `( set -e; f ) || rc=$?` all suppress it, and
+# an explicit `set -e` in there does NOT undo the suppression. So an in-process harness cannot
+# reproduce how the case item below actually calls a lane, and it was that gap the broken version hid
+# in. One control, one `bash "$0"`, one exit code to compare.
+selftest_case() {
+	case "$1" in
+		clean)    echo "Passed!  - Failed: 0, Passed: 10, Total: 10" ;;
+		abort0)   echo "Passed!  - Failed: 0, Passed: 5, Total: 10"; echo "Test Run Aborted." ;;
+		crash)    echo "Test host process crashed" ;;
+		cancel)   echo "test run canceled." ;;
+		nofilter) echo "No test matches the given testcase filter" ;;
+		emptylog) : ;;
+		fail1)    echo "Failed!  - Failed: 3"; return 1 ;;
+		skip)     echo "nothing to run here"; return "$LANE_SKIPPED" ;;
+		skipquiet) return "$LANE_SKIPPED" ;;
+		# BASHPID, not $$: the lane runs in the pipeline's left-hand subshell, and killing the whole
+		# script instead would take run_lane with it and prove nothing about how it judges a dead lane.
+		sigkill)  kill -9 "$BASHPID" ;;
+		# The shape that got through review: a lane whose EARLY step fails and whose later steps would
+		# still print a clean summary. run_lane clears errexit for the lane body, so only the step's own
+		# check can catch this.
+		syncfail) echo "==> sync"; false || return 1; echo "Passed!  - Failed: 0, Passed: 10, Total: 10" ;;
+		*) echo "unknown selftest case: $1" >&2; return 2 ;;
+	esac
+}
+
+run_selftest() {
+	local fails=0 name want_rc want
+	echo "── runner self-test (each control in its own process) ─────────────"
+	while read -r name want_rc want; do
+		[ -z "$name" ] && continue
+		local out rc=0
+		out="$(bash "$0" --selftest-case "$name" 2>&1)" || rc=$?
+		if [ "$rc" -ne "$want_rc" ] || ! printf '%s' "$out" | grep -q "$want"; then
+			echo "   FAIL $name: wanted rc=$want_rc and /$want/, got rc=$rc" >&2
+			printf '%s\n' "$out" | sed 's/^/        /' >&2
+			fails=$((fails + 1))
+		else
+			echo "   ok   $name"
+		fi
+	done <<-CASES
+		clean     0 passed
+		abort0    1 died mid-run
+		crash     1 died mid-run
+		cancel    1 died mid-run
+		nofilter  1 matched no tests
+		emptylog  0 passed
+		fail1     1 FAILED
+		skip      0 skipped
+		skipquiet 0 skipped
+		sigkill   1 FAILED
+		syncfail  1 FAILED
+	CASES
+
+	if [ "$fails" -ne 0 ]; then
+		echo "── self-test: $fails control(s) FAILED — the gate cannot be trusted ──" >&2
+		return 1
+	fi
+	echo "── self-test: passed ──"
+}
+
 case "${1:-default}" in
+	--selftest-case) run_lane "$2" selftest_case "$2" ;;
+	selftest) run_selftest ;;
 	mac) run_lane mac run_mac ;;
 	linux) run_lane linux run_linux ;;
 	windows) run_lane windows run_windows ;;
 	default) run_lane mac run_mac; run_lane linux run_linux ;;
-	all) run_lane mac run_mac; run_lane linux run_linux; run_lane windows run_windows ;;
-	*) echo "usage: $0 [mac|linux|windows|default|all]" >&2; exit 2 ;;
+	# The self-test first, and it costs about a second: everything below is judged by run_lane, so a
+	# run_lane that cannot tell a crash from a pass makes every verdict after it worthless.
+	all) run_selftest; run_lane mac run_mac; run_lane linux run_linux; run_lane windows run_windows ;;
+	*) echo "usage: $0 [mac|linux|windows|default|all|selftest]" >&2; exit 2 ;;
 esac
