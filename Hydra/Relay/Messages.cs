@@ -45,6 +45,72 @@ public enum MessageKind : byte
     RemoteManagementResponse = 35,
 }
 
+/// <summary>
+/// Which of the relay's two outbound lanes a message travels on.
+///
+/// <para><b>One queue used to carry everything, and a 256 KiB file chunk sat in front of every keystroke
+/// behind it.</b> Hydra is a KVM: input latency is the product. A transfer and a keypress have no causal
+/// relationship, so they have no reason to queue behind one another — but messages WITHIN a lane very much
+/// do, which is why this is two ordered lanes rather than "send it all concurrently".</para>
+///
+/// <para><b>This is the SENDING half only.</b> The receiving side still hands each frame to
+/// <c>RelayConnection.Receive</c> on SignalR's own serial dispatch, and a slave writes a chunk inline from
+/// there into a pipe whose default pause threshold is 64 KiB — so on the machine being controlled, a chunk
+/// can still delay the input behind it. Fixing that is a separate piece of work on the receive path; do not
+/// read this type as having solved it.</para>
+/// </summary>
+public enum RelayLane : byte
+{
+    /// <summary>Input and control. Strictly ordered, and everything not named below is here.</summary>
+    Input,
+
+    /// <summary>The file-transfer stream, and only that. Strictly ordered within itself.</summary>
+    Bulk
+}
+
+public static class MessageLane
+{
+    /// <summary>
+    /// The lane a kind travels on.
+    ///
+    /// <para><b>Only the three STREAM kinds are bulk, and they must all three be together.</b>
+    /// <c>FileTransferStart</c> creates the receiver's extractor, the chunks feed it, and
+    /// <c>FileTransferDone</c> finalises and checks the hash — so a Start that lost its race with chunk 0
+    /// would be dropped by <c>HandleFileTransferChunkAsync</c>'s <c>receiver?.Extractor == null</c> guard
+    /// without a word, and a Done that overtook the last chunk would truncate the transfer. Splitting them
+    /// across lanes would introduce exactly the defect the split exists to avoid.</para>
+    ///
+    /// <para><b><c>FileTransferAbort</c> is deliberately NOT bulk.</b> It means stop, so it wants to overtake
+    /// the chunks still queued rather than wait behind them, and a chunk arriving after it normally hits the
+    /// null-extractor guard and is discarded — the outcome an abort asks for. NOT unconditionally, though:
+    /// nothing on the wire carries a transfer id, and the receiver is keyed on source host alone, so a
+    /// stale chunk that arrives after a NEW transfer has been negotiated from the same host is accepted into
+    /// it. That needs the bulk lane still stalled across a full negotiation round trip, and it surfaces as a
+    /// failed integrity check rather than a bad file, because the hash is taken over arrival order. A
+    /// transfer id on the four stream kinds would close it properly.</para>
+    ///
+    /// <para>The negotiation kinds (Request/Accepted/Busy, the FileSelection pair, FileStreamRequest) are
+    /// control too: each is a round trip that completes before any stream starts, so they are ordered by the
+    /// reply they wait for and not by the lane.</para>
+    ///
+    /// <para>Anything unrecognised is <see cref="RelayLane.Input"/>, which is the ordered lane and therefore
+    /// the safe direction to be wrong in. <c>EveryMessageKindIsDeliberatelyAssignedToALane</c> makes a new
+    /// kind fail the build's tests until somebody has actually decided.</para>
+    /// </summary>
+    public static RelayLane Of(MessageKind kind) => kind switch
+    {
+        MessageKind.FileTransferStart or MessageKind.FileTransferChunk or MessageKind.FileTransferDone => RelayLane.Bulk,
+        _ => RelayLane.Input
+    };
+
+    /// <summary>
+    /// The lane an encoded payload travels on — the wire format is <c>[1 byte kind][json]</c>, so the first
+    /// byte is the whole question. An empty payload is Input, which is where anything unclassifiable goes.
+    /// </summary>
+    public static RelayLane Of(ReadOnlySpan<byte> payload) =>
+        payload.Length == 0 ? RelayLane.Input : Of((MessageKind)payload[0]);
+}
+
 public record MouseMoveMessage(string Screen, int X, int Y);
 public record MouseMoveDeltaMessage(int Dx, int Dy);
 public record ScreenInfoEntry(string Name, int X, int Y, int Width, int Height, decimal MouseScale, decimal? RelativeMouseScale = null);

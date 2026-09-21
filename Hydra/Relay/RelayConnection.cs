@@ -43,14 +43,34 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     private long _bytesSent;
     private long _bytesReceived;
 
-    // One ordered outbound queue preserves key/control ordering. Bulk producers use SendReliableAsync and
-    // wait until their item has actually left the queue, so a file compressor cannot retain thousands of
-    // large payloads. Mouse traffic is capped by InputRouter and coalesced again at write time below.
-    // The queue is deliberately unbounded: after bulk traffic gained backpressure, the remaining producers
-    // are small control/input messages and dropping an arbitrary oldest item could lose KeyUp/LeaveScreen.
-    private readonly Channel<OutboundMessage> _sendQueue =
+    // TWO ordered lanes, each drained by its own loop — see MessageLane. Within a lane the order is exactly
+    // what it always was; across lanes there is nothing to order, because a file chunk and a keypress are
+    // unrelated.
+    //
+    // A lane's order is absolute because it never has two invocations in flight: TypedSignalR.Client
+    // generates `Send` as InvokeCoreAsync, which completes when the HUB METHOD RETURNS, not when the frame
+    // is flushed. That matters — the relay sets MaximumParallelInvocationsPerClient to 4, so a peer that
+    // pipelined WOULD have its frames dispatched concurrently and could see them reordered. Check the
+    // generated proxy before assuming otherwise after a package bump.
+    //
+    // What the split buys is that a 256 KiB chunk no longer sits in front of every keystroke behind it,
+    // which on a KVM is the product.
+    //
+    // Bulk producers use SendReliableAsync and wait until their item has actually left the queue, so a file
+    // compressor cannot retain thousands of large payloads. Mouse traffic is capped by InputRouter and
+    // coalesced again at write time below.
+    //
+    // Both are deliberately unbounded: after bulk traffic gained backpressure, the remaining producers are
+    // small control/input messages and dropping an arbitrary oldest item could lose KeyUp/LeaveScreen.
+    private readonly Channel<OutboundMessage> _inputQueue = NewLane();
+    private readonly Channel<OutboundMessage> _bulkQueue = NewLane();
+
+    private static Channel<OutboundMessage> NewLane() =>
         Channel.CreateUnbounded<OutboundMessage>(
             new UnboundedChannelOptions { SingleReader = true, AllowSynchronousContinuations = false });
+
+    private Channel<OutboundMessage> LaneFor(ReadOnlySpan<byte> payload) =>
+        MessageLane.Of(payload) == RelayLane.Bulk ? _bulkQueue : _inputQueue;
 
     protected virtual TimeSpan ReconnectDelay => TimeSpan.FromSeconds(Constants.ReconnectDelaySeconds);
     protected virtual TimeSpan SystemWakeReconnectDelay => TimeSpan.FromSeconds(1);
@@ -96,7 +116,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
                 if (_openMovementBatch?.TryAppendAbsolute(targetHosts, payload) == true) return;
                 var movement = MovementBatch.CreateAbsolute(targetHosts, payload);
                 _openMovementBatch = movement;
-                _sendQueue.Writer.TryWrite(new OutboundMessage(targetHosts, payload, null, movement, CancellationToken.None));
+                _inputQueue.Writer.TryWrite(new OutboundMessage(targetHosts, payload, null, movement, CancellationToken.None));
                 return;
             }
 
@@ -109,12 +129,19 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
                 if (_openMovementBatch?.TryAppendDelta(targetHosts, dx, dy) == true) return;
                 var movement = MovementBatch.CreateDelta(targetHosts, dx, dy);
                 _openMovementBatch = movement;
-                _sendQueue.Writer.TryWrite(new OutboundMessage(targetHosts, payload, null, movement, CancellationToken.None));
+                _inputQueue.Writer.TryWrite(new OutboundMessage(targetHosts, payload, null, movement, CancellationToken.None));
                 return;
             }
 
+            // Closing the batch is what stops a move made AFTER this message coalescing with one made before
+            // it — which is why a click lands where the cursor actually was.
+            //
+            // Closed by ANY message, bulk included. Skipping it for the bulk lane looks like free extra
+            // coalescing, but the batch is cleared again the moment the input drain READS the item, so the
+            // window where it would make a difference is one a test cannot open — and an optimisation
+            // nothing can observe is not worth a special case in the one path that decides where clicks land.
             _openMovementBatch = null;
-            _sendQueue.Writer.TryWrite(new OutboundMessage(targetHosts, payload, null, null, CancellationToken.None));
+            LaneFor(payload).Writer.TryWrite(new OutboundMessage(targetHosts, payload, null, null, CancellationToken.None));
         }
     }
 
@@ -130,7 +157,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
             if (_openMovementBatch?.TryAppendDelta(targetHosts, dx, dy) == true) return;
             var movement = MovementBatch.CreateDelta(targetHosts, dx, dy);
             _openMovementBatch = movement;
-            _sendQueue.Writer.TryWrite(new OutboundMessage(targetHosts, [], null, movement, CancellationToken.None));
+            _inputQueue.Writer.TryWrite(new OutboundMessage(targetHosts, [], null, movement, CancellationToken.None));
         }
     }
 
@@ -248,10 +275,14 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
             throw new InvalidOperationException("Relay is not connected");
 
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        // By KIND, never by which method was called: FileTransferService streams chunks through here and
+        // RemoteManagementService sends a control request through here, and those belong on different lanes.
+        var lane = LaneFor(payload);
         lock (_sendOrderLock)
         {
             _openMovementBatch = null;
-            if (!_sendQueue.Writer.TryWrite(new OutboundMessage(targetHosts, payload, completion, null, cancel)))
+            if (!lane.Writer.TryWrite(new OutboundMessage(targetHosts, payload, completion, null, cancel)))
                 throw new InvalidOperationException("Relay send queue is closed");
         }
 
@@ -394,8 +425,11 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
                 _server = null;
                 _encryption = null;
                 _transport = null;
-                while (TryReadQueued(out var stale))
-                    stale.Completion?.TrySetException(new IOException("Relay connection lost before message was sent"));
+                // BOTH lanes. A caller parked in SendReliableAsync is waiting on a completion that only this
+                // drain will ever set, so a lane left unemptied is a caller hung until the process exits —
+                // and the bulk lane is the one whose callers actually await.
+                FailQueued(_inputQueue.Reader);
+                FailQueued(_bulkQueue.Reader);
                 if (wasConnected)
                 {
                     // guard the disconnect callbacks: a throw here would escape Execute, and because the
@@ -577,49 +611,115 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         ConnectionToken = disco.Token;
         await OnAuthenticated();
 
-        // drain outbound queue until the connection drops
-        while (true)
+        // Drain both lanes until the connection drops. Concurrently, which is the entire point: a chunk
+        // being encrypted and sent no longer holds up the keystroke behind it.
+        //
+        // CONCURRENT ENCRYPTION IS SAFE, AND THE REASON IS NARROWER THAN IT LOOKS. RelayEncryption draws ONE
+        // salt per connection (_localKey) and reuses it for every message, so the AES-GCM key is CONSTANT for
+        // the life of this connection — what is per-message is the nonce, not the salt. Under a fixed key,
+        // nonce uniqueness is the only thing between us and catastrophe: GCM reuse leaks the XOR of the two
+        // plaintexts and hands out forgeries.
+        //
+        // Iv96.Next gives it. Its low 48 bits are Interlocked.Increment on a PROCESS-wide counter, so two
+        // lanes cannot draw the same value however they interleave — and process-wide is the right scope,
+        // because it holds across two RelayEncryption instances as well as across these two loops. The high
+        // 48 bits are a timestamp and may well be identical; the counter is what separates them. Everything
+        // else SimpleAes.Encrypt touches is immutable, and it builds a fresh AesGcm per call.
+        //
+        // Either lane exiting ends the connection, exactly as the single loop's `break` used to: whatever
+        // stopped it (a cancelled send, a dead socket) has stopped the other too or is about to.
+        await Task.WhenAll(
+            Drain(_inputQueue.Reader, disco),
+            Drain(_bulkQueue.Reader, disco));
+    }
+
+    /// <summary>
+    /// Drains one lane until the connection drops.
+    ///
+    /// <para><b>Everything here runs on the CONNECTION's token, never the app's.</b> Suspending or dropping
+    /// a connection cancels <c>disco</c> and then WAITS for this iteration to finish
+    /// (<c>SuspendConnectionCoreAsync</c>), so a drain parked on work that only the app-lifetime token can
+    /// cancel deadlocks the suspend — the reconnect, the sleep handler and a clean shutdown all go through
+    /// it. Encryption is fast enough that this never showed in the field; it is still the wrong token, and a
+    /// test that holds a lane still finds it immediately.</para>
+    /// </summary>
+    private async Task Drain(ChannelReader<OutboundMessage> reader, CancellationTokenSource disco)
+    {
+        try
         {
-            if (!await _sendQueue.Reader.WaitToReadAsync(disco.Token)) break;
-            if (!TryReadQueued(out var item)) continue;
+            while (true)
+            {
+                if (!await reader.WaitToReadAsync(disco.Token)) break;
+                if (!TryReadQueued(reader, out var item)) continue;
 
-            if (item.Cancel.IsCancellationRequested || item.Completion?.Task.IsCanceled == true)
-            {
-                item.Completion?.TrySetCanceled(item.Cancel);
-                continue;
-            }
+                if (item.Cancel.IsCancellationRequested || item.Completion?.Task.IsCanceled == true)
+                {
+                    item.Completion?.TrySetCanceled(item.Cancel);
+                    continue;
+                }
 
-            try
-            {
-                var encrypted = await _encryption.Encrypt(item.Payload, cancel);
-                await _server.Send(item.Targets, encrypted);
-                Interlocked.Increment(ref _messagesSent);
-                Interlocked.Add(ref _bytesSent, encrypted.LongLength);
-                item.Completion?.TrySetResult();
-            }
-            catch (OperationCanceledException ex)
-            {
-                item.Completion?.TrySetCanceled(ex.CancellationToken);
-                break;
-            }
-            catch (HttpRequestException ex)
-            {
-                item.Completion?.TrySetException(ex);
-                log.LogWarning("Failed to send relay message to [{TargetHosts}]: {Message}", string.Join(", ", item.Targets), ex.InnerException?.Message ?? ex.Message);
-            }
-            catch (Exception ex)
-            {
-                item.Completion?.TrySetException(ex);
-                log.LogWarning(ex, "Failed to send relay message to [{TargetHosts}]", string.Join(", ", item.Targets));
+                try
+                {
+                    var encrypted = await EncryptForSend(item.Payload, disco.Token);
+                    await _server!.Send(item.Targets, encrypted);
+                    Interlocked.Increment(ref _messagesSent);
+                    Interlocked.Add(ref _bytesSent, encrypted.LongLength);
+                    item.Completion?.TrySetResult();
+                }
+                catch (OperationCanceledException ex)
+                {
+                    item.Completion?.TrySetCanceled(ex.CancellationToken);
+                    break;
+                }
+                catch (HttpRequestException ex)
+                {
+                    item.Completion?.TrySetException(ex);
+                    log.LogWarning("Failed to send relay message to [{TargetHosts}]: {Message}", string.Join(", ", item.Targets), ex.InnerException?.Message ?? ex.Message);
+                }
+                catch (Exception ex)
+                {
+                    item.Completion?.TrySetException(ex);
+                    log.LogWarning(ex, "Failed to send relay message to [{TargetHosts}]", string.Join(", ", item.Targets));
+                }
             }
         }
+        finally
+        {
+            // One lane stopping means this connection is over, so wake the other rather than leaving it
+            // parked in WaitToReadAsync until something else happens to cancel it.
+            try { await disco.CancelAsync(); }
+            catch (ObjectDisposedException) { /* the connect method already unwound */ }
+        }
+
+        // NOT caught. The cancellation has to reach Execute, which is where a drop is CLASSIFIED — lost,
+        // suspended for sleep, or shutting down — and where the only log line a master ever writes about
+        // it comes from. Swallowing it here left an idle relay drop, which for a KVM is the common one,
+        // producing no output at all: the client reconnected in silence.
+    }
+
+    /// <summary>
+    /// Encrypts one queued payload, on its own lane's drain loop.
+    ///
+    /// <para>Virtual for ONE reason: a test needs to hold one lane still while the other runs, and that is
+    /// the property the whole split exists for. Asserting it by racing a big payload against a small one
+    /// would be timing dressed as a test — on a loaded machine it would eventually lie in both directions.
+    /// Production has exactly one implementation, and this is it.</para>
+    /// </summary>
+    protected virtual ValueTask<byte[]> EncryptForSend(byte[] payload, CancellationToken cancel) =>
+        _encryption!.Encrypt(payload, cancel);
+
+    /// <summary>Fails everything still queued on one lane, so nobody waits on a send this connection will never make.</summary>
+    private void FailQueued(ChannelReader<OutboundMessage> reader)
+    {
+        while (TryReadQueued(reader, out var stale))
+            stale.Completion?.TrySetException(new IOException("Relay connection lost before message was sent"));
     }
 
     // unwraps a queued movement batch to its latest coalesced payload at read time, so a burst of
     // moves collapses to the freshest position/delta regardless of how much piled up while queued.
-    private bool TryReadQueued(out OutboundMessage item)
+    private bool TryReadQueued(ChannelReader<OutboundMessage> reader, out OutboundMessage item)
     {
-        if (!_sendQueue.Reader.TryRead(out item!)) return false;
+        if (!reader.TryRead(out item!)) return false;
         if (item.Movement != null)
         {
             lock (_sendOrderLock)

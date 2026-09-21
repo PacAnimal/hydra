@@ -24,12 +24,58 @@ public sealed class HydraTestClient(WebApplicationFactory<global::Styx.Program> 
     private (string Source, MessageKind Kind, string Json)? _lastMessage;
     private string? _kickReason;
 
+    private volatile TaskCompletionSource? _gate;
+    private RelayLane _gatedLane;
+    private int _held;
+
     public (string Source, MessageKind Kind, string Json)? LastMessage => _lastMessage;
     public string? KickReason => _kickReason;
 
     protected override TimeSpan ReconnectDelay => TimeSpan.Zero;
 
     protected override Task OnAuthenticated() { _readySignal.Release(); return Task.CompletedTask; }
+
+    /// <summary>
+    /// Parks one lane just before it encrypts, until <see cref="ReleaseLane"/>.
+    ///
+    /// <para>A GATE, never a delay: the claims under test are about what can overtake what, and a test that
+    /// raced a big payload against a small one would be asserting that this machine happened to be fast
+    /// enough. <see cref="Held"/> says when the lane is genuinely parked, so a test waits on a fact.</para>
+    ///
+    /// <para>Either lane, because both need parking: the bulk one to show input overtaking it, the input
+    /// one to show a dropped connection failing what is queued there. Holding one says nothing about the
+    /// other — that is the whole point of them being separate.</para>
+    /// </summary>
+    public void HoldLane(RelayLane lane)
+    {
+        _gatedLane = lane;
+        _gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    /// <summary>How many payloads the gated lane is parked on right now.</summary>
+    public int Held => Volatile.Read(ref _held);
+
+    /// <summary>
+    /// Lets the parked lane through, and STOPS GATING.
+    ///
+    /// <para>Clearing the gate is the load-bearing half. Leaving a completed one in place would send every
+    /// later payload through the counter — increment, await an already-finished task, decrement — so
+    /// <see cref="Held"/> would briefly report a payload as held that is not held at all, and the next test
+    /// to wait on that would be waiting on a lie.</para>
+    /// </summary>
+    public void ReleaseLane() => Interlocked.Exchange(ref _gate, null)?.TrySetResult();
+
+    protected override async ValueTask<byte[]> EncryptForSend(byte[] payload, CancellationToken cancel)
+    {
+        if (_gate is { } gate && MessageLane.Of(payload) == _gatedLane)
+        {
+            Interlocked.Increment(ref _held);
+            try { await gate.Task.WaitAsync(cancel); }
+            finally { Interlocked.Decrement(ref _held); }
+        }
+
+        return await base.EncryptForSend(payload, cancel);
+    }
 
     // route the hub connection through the in-memory test server handler
     protected override void ConfigureHubUrl(HttpConnectionOptions options)

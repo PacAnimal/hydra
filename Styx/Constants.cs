@@ -12,6 +12,12 @@ public static class Constants
     public const int KeepAliveSeconds = 5;
     public const int ClientTimeoutSeconds = 15;
     public const int MaxMessageMebiBytes = 32;
+    // MUST STAY >= the number of outbound lanes a peer drains at once — see RelayConnection's lane fields,
+    // which is two. TypedSignalR generates Send as InvokeCoreAsync, so a lane's invocation is not finished
+    // until the hub method returns, and the hub holds its slot across the write to the target. At 1, a
+    // 256 KiB chunk's invocation would occupy the only slot and the keystroke behind it would not even be
+    // dispatched — head-of-line blocking rebuilt at the relay, with the client-side split still looking
+    // perfectly correct and every lane test still green, because those gate on the client's own encrypt step.
     public const int MaxParallelInvocations = 4;
 
     // throttle delays
