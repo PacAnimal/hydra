@@ -1,5 +1,9 @@
 using Hydra.Config;
 using Hydra.Relay;
+using Microsoft.AspNetCore.SignalR;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using System.Net;
 using System.Net.Sockets;
 using Tests.Setup;
@@ -262,5 +266,29 @@ public class EmbeddedStyxTests
         var port = ((IPEndPoint)listener.LocalEndpoint).Port;
         listener.Stop();
         return port;
+    }
+    /// <summary>
+    /// The embedded relay dispatches at least as many of one peer's invocations at once as that peer has
+    /// lanes — the same guarantee <c>RelayLaneTests</c> pins on the standalone host.
+    ///
+    /// <para><b>This is the SECOND relay, and it composes its own options.</b> A master running an embedded
+    /// server is the deployment with no separate Styx at all, so a limit that reaches one host and not the
+    /// other is head-of-line blocking for exactly those users and nobody else. It is the likelier of the two
+    /// to break, because it adds a <c>Configure&lt;HubOptions&gt;</c> of its own after
+    /// <c>AddStyxSignalR</c> to attach the auth filter — and the last one to write the value wins.</para>
+    ///
+    /// <para>Built rather than started: <c>Build()</c> composes the options and binds no port.</para>
+    /// </summary>
+    [Test]
+    public void TheEmbeddedRelayDispatchesAtLeastAsManyInvocationsAsAPeerHasLanes()
+    {
+        var config = new EmbeddedStyxServerConfig { Port = 0, Password = TestPassword };
+        var server = new EmbeddedStyxServer(config, NullLogger<EmbeddedStyxServer>.Instance);
+        using var app = server.BuildApp();
+
+        var configured = app.Services.GetRequiredService<IOptions<HubOptions>>().Value.MaximumParallelInvocationsPerClient;
+
+        Assert.That(configured, Is.GreaterThanOrEqualTo(Enum.GetValues<RelayLane>().Length),
+            "the embedded relay admits fewer invocations at once than a peer has lanes, so a file chunk blocks the keystroke behind it");
     }
 }

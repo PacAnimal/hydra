@@ -4,7 +4,6 @@ using Hydra.Relay;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
-using Styx;
 using Tests.Setup;
 
 namespace Tests.Styx;
@@ -428,20 +427,19 @@ public class RelayLaneTests
     /// <para>Counted from <c>RelayLane</c> rather than written as 2, so adding a third lane fails here
     /// instead of quietly re-introducing the stall.</para>
     ///
-    /// <para><b>Read off the CONFIGURED hub, never off the constant.</b> Asserting the constant against the
-    /// lane count is a constant compared with a constant: it says nothing about whether the number reaches
-    /// SignalR, and hardcoding the hub to 1 left the whole suite green. Building the real registration is
-    /// what makes this a test of the relay rather than of arithmetic.</para>
+    /// <para><b>Read off the SERVER THIS FIXTURE RUNS, never off the constant and never off a hand-built
+    /// collection.</b> Two weaker forms were tried and both were defeated. Comparing the constant with the
+    /// lane count is a constant against a constant — hardcoding the hub to 1 left the suite green. Building
+    /// a fresh <c>ServiceCollection</c> and calling <c>AddStyxSignalR</c> on it pins the HELPER, not the
+    /// host: one <c>services.Configure&lt;HubOptions&gt;</c> in <c>Styx/Program.cs</c> after that call put
+    /// the real relay at one invocation per client with the suite still green. Only the options the running
+    /// host composed can answer this, because the last <c>Configure</c> wins and anything may add one —
+    /// <c>EmbeddedStyxServer</c> already does, to attach its auth filter.</para>
     /// </summary>
     [Test]
     public void TheRelayDispatchesAtLeastAsManyInvocationsAsAPeerHasLanes()
     {
-        var services = new ServiceCollection();
-        services.AddLogging();
-        services.AddStyxSignalR();
-        using var provider = services.BuildServiceProvider();
-
-        var configured = provider.GetRequiredService<IOptions<HubOptions>>().Value.MaximumParallelInvocationsPerClient;
+        var configured = _factory!.Services.GetRequiredService<IOptions<HubOptions>>().Value.MaximumParallelInvocationsPerClient;
 
         Assert.That(configured, Is.GreaterThanOrEqualTo(Enum.GetValues<RelayLane>().Length),
             "a lane's invocation is not finished until the hub method returns, so fewer slots than lanes means a lane waits for another lane's frame to be delivered");

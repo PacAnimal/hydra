@@ -88,7 +88,11 @@ public class EmbeddedStyxServer(EmbeddedStyxServerConfig config, ILogger<Embedde
         }
     }
 
-    private WebApplication BuildApp()
+    /// <summary>
+    /// Internal so a test can compose this host's options without starting it — it is the SECOND relay, and
+    /// what it configures its hub with is invisible from the outside otherwise.
+    /// </summary>
+    internal WebApplication BuildApp()
     {
         var builder = WebApplication.CreateBuilder();
         var services = builder.Services;
