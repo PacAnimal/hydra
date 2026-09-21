@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+
 namespace Hydra.Management;
 
 /// <summary>
@@ -15,8 +17,25 @@ namespace Hydra.Management;
 /// </summary>
 internal static class ConfigFileLock
 {
-    private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan Budget = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan Poll = TimeSpan.FromMilliseconds(25);
+
+    /// <summary>
+    /// The lock files this PROCESS currently holds, so a wait that runs out can say which of the two very
+    /// different things went wrong.
+    ///
+    /// <para><b>The lock is exclusive and not re-entrant.</b> Taking it while already holding it waits for
+    /// itself for the whole budget and then reports "the process cannot access the file" — five seconds
+    /// ending in a message that names no lock, no budget and no culprit. That has happened here once
+    /// already, when rollback called a read that took the lock rollback was holding, and two more call
+    /// sites sit one edit away from it.</para>
+    ///
+    /// <para>An <c>AsyncLocal</c> was tried first and does not work: a value written inside <c>Acquire</c>
+    /// flows to ITS children, never back to the caller that asked for the lock, so the guard could never
+    /// see a hold it had itself recorded. What a process CAN know is whether the lock is its own, and that
+    /// is the difference between "somebody else is busy" and "you are waiting for yourself".</para>
+    /// </summary>
+    private static readonly ConcurrentDictionary<string, byte> HeldHere = new();
 
     /// <summary>The lock guarding the remote-management state beside a config file.</summary>
     internal static string ManagementPathFor(string directory) => Path.Combine(directory, ".hydra-management.lock");
@@ -33,26 +52,71 @@ internal static class ConfigFileLock
     /// Takes the lock, waiting for a holder and giving up by THROWING once the budget is gone — a caller
     /// that cannot get it must not proceed to read or write the thing it guards.
     /// </summary>
-    internal static async Task<FileStream> Acquire(string lockPath, CancellationToken cancel)
+    internal static Task<IAsyncDisposable> Acquire(string lockPath, CancellationToken cancel) =>
+        Acquire(lockPath, Budget, cancel);
+
+    /// <param name="lockPath">The lock file to take; see the two path helpers above.</param>
+    /// <param name="budget">How long to wait. Only a test passes this; everything else takes <c>Budget</c>.</param>
+    /// <param name="cancel">Abandons the wait; the lock is not taken.</param>
+    internal static async Task<IAsyncDisposable> Acquire(string lockPath, TimeSpan budget, CancellationToken cancel)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(lockPath)!);
-        var deadline = DateTimeOffset.UtcNow + Timeout;
+        var full = Path.GetFullPath(lockPath);
+        Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+        var deadline = DateTimeOffset.UtcNow + budget;
         while (true)
         {
             cancel.ThrowIfCancellationRequested();
-            if (File.Exists(lockPath) && new FileInfo(lockPath).LinkTarget != null)
-                throw new IOException($"Hydra lock {Path.GetFileName(lockPath)} cannot be a symbolic link.");
+            if (File.Exists(full) && new FileInfo(full).LinkTarget != null)
+                throw new IOException($"Hydra lock {Path.GetFileName(full)} cannot be a symbolic link.");
+
+            FileStream? stream = null;
             try
             {
-                var stream = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.Asynchronous);
+                stream = new FileStream(full, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.Asynchronous);
+                // Through the HANDLE, not the path. A path chmod follows a symlink, which is the very thing
+                // the guard above tries to refuse and cannot do reliably — File.Exists follows a link too,
+                // so a DANGLING one reads as absent and slips straight past it. fchmod cannot be redirected.
                 if (!OperatingSystem.IsWindows())
-                    File.SetUnixFileMode(lockPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-                return stream;
+                    File.SetUnixFileMode(stream.SafeFileHandle, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+
+                HeldHere[full] = 0;
+                return new Holder(stream, full);
             }
             catch (IOException) when (DateTimeOffset.UtcNow < deadline)
             {
+                // Disposed here or the handle leaks until finalisation, still holding the lock.
+                if (stream != null) await stream.DisposeAsync();
                 await Task.Delay(Poll, cancel);
             }
+            catch
+            {
+                if (stream != null) await stream.DisposeAsync();
+                throw;
+            }
+
+            if (DateTimeOffset.UtcNow < deadline) continue;
+
+            // WHICH failure this is matters more than the fact of it. Our own process holding the lock is
+            // a bug on this call stack — almost always a path that took it and then called something that
+            // takes it again — and is fixed in the code. Another process holding it is a busy machine.
+            if (HeldHere.ContainsKey(full))
+                throw new InvalidOperationException(
+                    $"Waited {budget.TotalSeconds:0.##}s for the Hydra lock {Path.GetFileName(full)}, which THIS process already holds. " +
+                    "It is not re-entrant: a caller that holds it must use the Unlocked read rather than taking it again.");
+
+            throw new TimeoutException(
+                $"Waited {budget.TotalSeconds:0.##}s for the Hydra lock {Path.GetFileName(full)} and another process still holds it. " +
+                "A configuration read or write is in progress elsewhere.");
+        }
+    }
+
+    /// <summary>Releases the file AND forgets the path, so the re-entrancy guard does not outlive the hold.</summary>
+    private sealed class Holder(FileStream stream, string full) : IAsyncDisposable
+    {
+        public async ValueTask DisposeAsync()
+        {
+            HeldHere.TryRemove(full, out _);
+            await stream.DisposeAsync();
         }
     }
 }

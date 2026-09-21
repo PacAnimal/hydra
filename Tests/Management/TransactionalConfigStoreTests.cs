@@ -151,4 +151,87 @@ public class TransactionalConfigStoreTests
 
         Assert.That(overlapped, Is.False, "two callers held the config lock at once, so it is not excluding anything");
     }
+    /// <summary>
+    /// Concurrent read-modify-write loses nothing — the test that fails on EVERY platform when the config
+    /// store loses its cross-process lock.
+    ///
+    /// <para><b>This exists because the other concurrency test here cannot see the defect on POSIX.</b>
+    /// Measured: deleting <c>ConfigFileLock</c> from <c>TransactionalConfigStore</c> entirely left all 75
+    /// management tests green, so two of the three lanes said nothing about the change that matters most in
+    /// this file. The Windows symptom is a refused replace; the portable one is a LOST UPDATE, and that is
+    /// what this catches.</para>
+    ///
+    /// <para>Without a lock spanning the compare and the write, two savers read the same revision, both find
+    /// it unchanged, and both write — so one edit disappears with nobody told. With the lock, the loser's
+    /// revision check fails, it is told so, and it retries. Every name must therefore survive.</para>
+    /// </summary>
+    [Test]
+    public async Task ConcurrentSavesLoseNoEdit()
+    {
+        var runtime = new HydraRuntimeInfo(_path, DateTimeOffset.UtcNow);
+        const int perWriter = 8;
+
+        static async Task Writer(TransactionalConfigStore store, string tag)
+        {
+            for (var i = 0; i < perWriter; i++)
+            {
+                var name = $"{tag}{i}";
+                // Retry on a losing revision check — that refusal is the lock WORKING, and the edit is only
+                // lost if it never lands at all.
+                while (true)
+                {
+                    var current = await store.ReadAsync();
+                    // Appended to the host NAME: an edit that accumulates and stays valid. Adding profiles
+                    // does not — only one may be default — and the point here is concurrency, not schema.
+                    const string marker = "\"name\": \"";
+                    var start = current.Json.IndexOf(marker, StringComparison.Ordinal) + marker.Length;
+                    var end = current.Json.IndexOf('"', start);
+                    var next = string.Concat(current.Json.AsSpan(0, end), ".", name, current.Json.AsSpan(end));
+                    try
+                    {
+                        await store.SaveAsync(current.Revision, next, CancellationToken.None);
+                        break;
+                    }
+                    catch (InvalidOperationException ex) when (ex.Message.Contains("changed outside"))
+                    {
+                        // somebody else got there first; re-read and reapply
+                    }
+                }
+            }
+        }
+
+        await Task.WhenAll(
+            Writer(new TransactionalConfigStore(runtime), "alpha"),
+            Writer(new TransactionalConfigStore(runtime), "beta"));
+
+        var final = await File.ReadAllTextAsync(_path);
+        var missing = Enumerable.Range(0, perWriter)
+            .SelectMany(i => new[] { $"alpha{i}", $"beta{i}" })
+            .Where(name => !final.Contains(name))
+            .ToList();
+
+        Assert.That(missing, Is.Empty,
+            "an edit was written and then silently overwritten — two savers passed the same revision check, which is what the cross-process lock is for");
+    }
+    /// <summary>
+    /// Taking the lock twice on one call stack fails AT ONCE and says what happened.
+    ///
+    /// <para>It is exclusive and not re-entrant, so a second take waits for itself for the whole budget and
+    /// then throws "the process cannot access the file" — five seconds, naming nothing. That has already
+    /// happened here once, when rollback called a read that took the lock rollback was holding, and two
+    /// more call sites sit one edit away from it.</para>
+    /// </summary>
+    [Test]
+    public async Task TakingTheConfigLockTwiceOnOneStackSaysSoImmediately()
+    {
+        var lockPath = ConfigFileLock.ConfigPathFor(_path);
+        await using var held = await ConfigFileLock.Acquire(lockPath, CancellationToken.None);
+
+        // A short budget, because the point is WHICH error it ends with, not how long it waits for it.
+        var again = Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await ConfigFileLock.Acquire(lockPath, TimeSpan.FromMilliseconds(200), CancellationToken.None));
+
+        Assert.That(again!.Message, Does.Contain("not re-entrant"),
+            "a second take on the same stack must name the problem, not time out with a message about file sharing");
+    }
 }

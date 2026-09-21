@@ -67,10 +67,22 @@ internal sealed class TransactionalConfigStore(HydraRuntimeInfo runtime)
             var mode = OperatingSystem.IsWindows() ? default : File.GetUnixFileMode(runtime.ConfigPath);
             await PrivateFile.Write(runtime.ConfigPath, json, mode, cancel);
 
-            // Re-parsed from DISK rather than from the string we just serialised, because the claim worth
-            // making is that what landed is loadable — a write that validated and then failed to survive
-            // the trip is the case nothing else here would notice.
-            _ = HydraConfigFile.Parse(await File.ReadAllTextAsync(runtime.ConfigPath, cancel), runtime.ConfigPath);
+            // Re-parsed from DISK, because the claim worth making is that what LANDED is loadable — the
+            // content was already validated at :52, so the only failure left is bytes not surviving the
+            // trip. And a failure here PUTS THE OLD CONFIG BACK. The hand-rolled write this replaced parsed
+            // its temp before promoting it, so a bad write could never become hydra.conf; parsing after the
+            // rename demoted that gate to an alarm, leaving the caller told it failed while the disk said
+            // otherwise. For a KVM whose whole remote-apply machinery exists to stop a config change
+            // bricking a distant box, the guarantee is worth restoring even at the cost of a second write.
+            try
+            {
+                _ = HydraConfigFile.Parse(await File.ReadAllTextAsync(runtime.ConfigPath, cancel), runtime.ConfigPath);
+            }
+            catch
+            {
+                await PrivateFile.Write(runtime.ConfigPath, current, mode, cancel);
+                throw;
+            }
 
             return new ConfigDocument(runtime.ConfigPath, Revision(json), json);
         }
