@@ -108,14 +108,23 @@ public class KeyBundleTests
     }
 
     /// <summary>
-    /// A mouse move nothing else uses, sent last, to mark the end of what a test expects.
+    /// A message nothing else here sends, last, to mark the end of what a test expects.
     ///
-    /// <para>A move is the right terminator because it can never be swallowed by a key bundle — it closes
-    /// the open one and takes a frame of its own — so it arrives whatever the keys did.</para>
+    /// <para><b>A kind that coalesces is the wrong terminator.</b> This was a MouseMove, and it survived
+    /// only because a key happened to precede it every time and the key path closes the movement batch —
+    /// put a move before the sentinel and it merges into that batch, the reader returns early, and every
+    /// test in the fixture fails for a reason with nothing to do with keys. <c>Osd</c> neither coalesces
+    /// nor bundles, so it takes a frame of its own whatever came before it.</para>
     /// </summary>
-    private const int SentinelX = 9999;
+    private static byte[] Sentinel() => MessageSerializer.Encode(MessageKind.Osd, new OsdMessage("end-of-test"));
 
-    private static byte[] Sentinel() => Move(SentinelX);
+    /// <summary>Every frame that carried key events, so a test can assert HOW they were packed.</summary>
+    private static List<(string Source, MessageKind Kind, string Json)> KeyFrames(IEnumerable<(string Source, MessageKind Kind, string Json)> frames) =>
+        [.. frames.Where(f => f.Kind is MessageKind.KeyEvent or MessageKind.KeyEventBatch)];
+
+    /// <summary>How many events one frame carried — 1 for a plain KeyEvent, N for a batch.</summary>
+    private static int EventsIn((string Source, MessageKind Kind, string Json) frame) =>
+        frame.Kind == MessageKind.KeyEvent ? 1 : JsonDocument.Parse(frame.Json).RootElement.GetProperty("events").GetArrayLength();
 
     /// <summary>
     /// Reads frames until the sentinel arrives, and hands back every key event among them.
@@ -131,9 +140,7 @@ public class KeyBundleTests
         while (true)
         {
             var frame = await receiver.WaitForNextMessage();
-            if (frame.Kind == MessageKind.MouseMove
-                && JsonDocument.Parse(frame.Json).RootElement.GetProperty("x").GetInt32() == SentinelX)
-                return frames;
+            if (frame.Kind == MessageKind.Osd) return frames;
             frames.Add(frame);
         }
     }
@@ -203,8 +210,20 @@ public class KeyBundleTests
         sender.ReleaseLane();
         await blocker.WaitAsync(Bound);
 
-        Assert.That(KeysIn(await ReadUntilSentinel(receiver)), Is.EqualTo([(KeyEventType.KeyDown, 'a'), (KeyEventType.KeyUp, 'a')]),
-            "a keystroke that was bundled must still be a press followed by a release");
+        var frames = await ReadUntilSentinel(receiver);
+        var carrying = KeyFrames(frames);
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(KeysIn(frames), Is.EqualTo([(KeyEventType.KeyDown, 'a'), (KeyEventType.KeyUp, 'a')]),
+                "a keystroke that was bundled must still be a press followed by a release");
+
+            // WITHOUT THIS THE TEST IS ABOUT NOTHING. KeysIn flattens a batch and two lone frames into the
+            // same list deliberately — right for proving no key was lost, blind to whether the pair was ever
+            // bundled. Delete the entire feature and the assertion above still passes.
+            Assert.That(carrying, Has.Count.EqualTo(1), "the down and the up must have shared ONE frame — that is the feature");
+            Assert.That(carrying[0].Kind, Is.EqualTo(MessageKind.KeyEventBatch));
+        }
     }
 
     /// <summary>
@@ -236,7 +255,23 @@ public class KeyBundleTests
 
         var expected = Enumerable.Range(0, count).Select(i => (KeyEventType.KeyDown, (char)('a' + i % 26))).ToList();
 
-        Assert.That(KeysIn(await ReadUntilSentinel(receiver)), Is.EqualTo(expected), "an event that did not fit the open bundle was dropped instead of starting a new one");
+        var frames = await ReadUntilSentinel(receiver);
+        var carrying = KeyFrames(frames);
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(KeysIn(frames), Is.EqualTo(expected),
+                "an event that did not fit the open bundle was dropped instead of starting a new one");
+
+            // The cap bounds the FRAME. Asserting only the sequence above tests the "never the input" half
+            // and leaves the other half untested: it passes with a capacity of 10 000 (one enormous frame)
+            // and with a capacity of 1 (150 frames, no bundling at all).
+            Assert.That(carrying.Max(EventsIn), Is.LessThanOrEqualTo(RelayConnection.KeyBundleCapacity),
+                "a frame carried more events than the cap allows — the cap is not bounding the frame");
+            Assert.That(carrying, Has.Count.GreaterThanOrEqualTo(count / RelayConnection.KeyBundleCapacity),
+                "the events did not spill across frames, so the cap is not being applied at all");
+            Assert.That(carrying.Any(f => f.Kind == MessageKind.KeyEventBatch), Is.True, "and they were bundled rather than sent one by one");
+        }
     }
 
     /// <summary>
@@ -314,6 +349,86 @@ public class KeyBundleTests
             "a key appended to a bundle the drain had already taken was never sent at all");
     }
 
+    /// <summary>
+    /// A MOUSE DELTA between two keys keeps everything in order — the production relative-mouse path.
+    ///
+    /// <para><b>This is the case the suite was missing, and it is the one that runs.</b>
+    /// <c>AMoveBetweenKeysKeepsEverythingInOrder</c> goes through <c>Send</c> with a MouseMove, but
+    /// <c>InputRouter</c> never does that: it calls <c>SendMouseDelta</c> directly, on the hot path, and
+    /// says so in a comment. The close in THAT method could be deleted with the whole suite still green.</para>
+    ///
+    /// <para>Deleted, the second key joins the bundle already queued ahead of the delta and is delivered
+    /// BEFORE a movement the user made first — a keystroke landing at the wrong cursor position. Relative
+    /// mouse mode is exactly when the cursor is on a remote screen and keys are being forwarded, so this is
+    /// the common concurrent case rather than a corner of it.</para>
+    /// </summary>
+    [Test]
+    public async Task AMouseDeltaBetweenKeysKeepsEverythingInOrder()
+    {
+        var (sender, receiver) = await ConnectedPair();
+        await using var _ = sender;
+        await using var __ = receiver;
+
+        sender.HoldLane(RelayLane.Input);
+        var blocker = sender.SendReliableAsync([Receiver], Move(1)).AsTask();
+        await WaitFor(() => sender.Held == 1, "the input lane to park");
+
+        sender.Send([Receiver], Key(0));
+        sender.SendMouseDelta([Receiver], 7, 9);
+        sender.Send([Receiver], Key(1));
+
+        sender.Send([Receiver], Sentinel());
+        sender.ReleaseLane();
+        await blocker.WaitAsync(Bound);
+
+        var frames = await ReadUntilSentinel(receiver);
+        var kinds = frames.Select(f => f.Kind).ToList();
+        var delta = kinds.IndexOf(MessageKind.MouseMoveDelta);
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(KeysIn(frames), Is.EqualTo([(KeyEventType.KeyDown, 'a'), (KeyEventType.KeyDown, 'b')]),
+                "both keys must arrive, in order");
+            Assert.That(delta, Is.GreaterThan(0), "the delta must not overtake the key sent before it");
+            Assert.That(delta, Is.LessThan(kinds.Count - 1), "and the key sent after the delta must not overtake it");
+        }
+    }
+
+    /// <summary>
+    /// And a reliable control message between two keys does the same. Same rule, third site — the one that
+    /// carries clipboard pushes, OSD, lock-screen and remote-management requests.
+    /// </summary>
+    [Test]
+    public async Task AReliableMessageBetweenKeysKeepsEverythingInOrder()
+    {
+        var (sender, receiver) = await ConnectedPair();
+        await using var _ = sender;
+        await using var __ = receiver;
+
+        sender.HoldLane(RelayLane.Input);
+        var blocker = sender.SendReliableAsync([Receiver], Move(1)).AsTask();
+        await WaitFor(() => sender.Held == 1, "the input lane to park");
+
+        sender.Send([Receiver], Key(0));
+        var between = sender.SendReliableAsync([Receiver], MessageSerializer.Encode(MessageKind.LockScreen, new LockScreenMessage(0))).AsTask();
+        sender.Send([Receiver], Key(1));
+
+        sender.Send([Receiver], Sentinel());
+        sender.ReleaseLane();
+        await Task.WhenAll(blocker, between).WaitAsync(Bound);
+
+        var frames = await ReadUntilSentinel(receiver);
+        var kinds = frames.Select(f => f.Kind).ToList();
+        var lockScreen = kinds.IndexOf(MessageKind.LockScreen);
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(KeysIn(frames), Is.EqualTo([(KeyEventType.KeyDown, 'a'), (KeyEventType.KeyDown, 'b')]));
+            Assert.That(lockScreen, Is.GreaterThan(0), "the control message must not overtake the key before it");
+            Assert.That(lockScreen, Is.LessThan(kinds.Count - 1), "nor the key after it overtake the control message");
+        }
+    }
+
     // ── and nothing is bundled where it would be discarded ───────────────────────────────────────
 
     /// <summary>
@@ -326,7 +441,7 @@ public class KeyBundleTests
     ///
     /// <para><b>REMOVE AFTER 2026-10-30, with the negotiation itself.</b> This is the one test here about
     /// asking rather than about bundling, so it is the one that goes. Everything else in this fixture is
-    /// about not losing keys and outlives the upgrade window — see <c>ScreenInfoMessage.KeyBundles</c> for
+    /// about not losing keys and outlives the upgrade window — see <see cref="PeerCapabilities.Mine"/> for
     /// the full removal list.</para>
     /// </summary>
     [Test]
@@ -356,6 +471,42 @@ public class KeyBundleTests
             Assert.That(frames.Any(f => f.Kind == MessageKind.KeyEventBatch), Is.False,
                 "a batch was sent to a peer that never said it understands one — it would discard every key in it silently");
             Assert.That(KeysIn(frames), Is.EqualTo(expected), "and the keys must still all arrive, one frame each");
+            Assert.That(KeyFrames(frames), Has.Count.EqualTo(count), "one frame per key is what an un-advertising peer must get");
+        }
+    }
+
+    /// <summary>
+    /// The positive control for <see cref="APeerThatNeverAdvertisedSupportIsNeverSentABatch"/>: a peer that
+    /// DID advertise is sent one.
+    ///
+    /// <para><b>A negative assertion with no positive counterpart is satisfied by the feature not
+    /// existing.</b> "No batch appears" is trivially true of a build that never bundles, so on its own it
+    /// proves the gate works only in the sense that nothing works.</para>
+    /// </summary>
+    [Test]
+    public async Task APeerThatAdvertisedSupportIsSentOne()
+    {
+        var (sender, receiver) = await ConnectedPair();
+        await using var _ = sender;
+        await using var __ = receiver;
+
+        sender.HoldLane(RelayLane.Input);
+        var blocker = sender.SendReliableAsync([Receiver], Move(1)).AsTask();
+        await WaitFor(() => sender.Held == 1, "the input lane to park");
+
+        for (var i = 0; i < 20; i++) sender.Send([Receiver], Key(i));
+
+        sender.Send([Receiver], Sentinel());
+        sender.ReleaseLane();
+        await blocker.WaitAsync(Bound);
+
+        var frames = await ReadUntilSentinel(receiver);
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(frames.Any(f => f.Kind == MessageKind.KeyEventBatch), Is.True,
+                "an advertising peer was sent no batch at all — the gate is refusing everyone, or nothing bundles");
+            Assert.That(KeyFrames(frames), Has.Count.LessThan(20), "and the keys were actually packed together");
         }
     }
 

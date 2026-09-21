@@ -184,6 +184,18 @@ public static class PeerCapabilities
     public static string[] Advertise() => [.. Mine.Select(c => c.ToString())];
 
     /// <summary>
+    /// The declared names, and nothing else.
+    ///
+    /// <para><b>Matched against this rather than parsed with <c>Enum.TryParse</c>, which reads far more than
+    /// names.</b> It takes "0" as the member sitting at zero — so a peer sending a digit would be taken to
+    /// claim whatever that happens to be today, which is precisely the numbering dependency this design
+    /// exists to avoid — and it takes "A,B" as a bitwise OR. <c>Enum.IsDefined</c> closes neither: "0" is
+    /// defined, and an OR of two members can land on a defined value too. A lookup cannot do either.</para>
+    /// </summary>
+    private static readonly FrozenDictionary<string, PeerCapability> ByName =
+        Enum.GetValues<PeerCapability>().ToFrozenDictionary(c => c.ToString(), c => c, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
     /// The capabilities a peer advertised, ignoring any name this build does not know.
     ///
     /// <para><b>Ignoring is the whole point.</b> A name we do not recognise comes from a NEWER peer
@@ -196,7 +208,7 @@ public static class PeerCapabilities
 
         var known = new HashSet<PeerCapability>();
         foreach (var name in names)
-            if (Enum.TryParse<PeerCapability>(name, ignoreCase: true, out var capability) && Enum.IsDefined(capability))
+            if (name != null && ByName.TryGetValue(name, out var capability))
                 known.Add(capability);
 
         return known;
@@ -226,7 +238,7 @@ public record KeyEventMessage(KeyEventType Type, KeyModifiers Modifiers, char? C
 ///
 /// <para><b>Only to a peer that has said it understands this.</b> An unrecognised kind reaches
 /// <c>RelayConnection.OnReceive</c>'s base, which does nothing at all — so sending one of these to a slave
-/// that predates it would discard every key in it, in silence. See <c>ScreenInfoMessage.KeyBundles</c>.</para>
+/// that predates it would discard every key in it, in silence. See <see cref="PeerCapability.KeyEventBatch"/>.</para>
 /// </summary>
 public record KeyEventBatchMessage(KeyEventMessage[] Events);
 public record MouseButtonMessage(MouseButton Button, bool IsPressed);

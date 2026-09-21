@@ -47,13 +47,23 @@ public class EmbeddedStyxTests
                 await _server.WaitForReady().WaitAsync(TimeSpan.FromSeconds(30));
                 return;
             }
-            catch (Exception ex) when (attempt < attempts)
+            // ONLY a lost port race is retried. An undifferentiated catch would retry a bad password, a
+            // malformed config — or a regression of the readiness HANG, which arrives here as the
+            // TimeoutException from the bound above and would cost 5 x 30s per test before failing with a
+            // message blaming the port.
+            catch (Exception ex) when (attempt < attempts && IsPortUnavailable(ex))
             {
-                TestContext.Out.WriteLine($"embedded styx would not start on port {_port} (attempt {attempt}): {ex.Message}");
+                TestContext.Out.WriteLine($"embedded styx lost the race for port {_port} (attempt {attempt}): {ex.Message}");
                 await TearDown();
             }
         }
     }
+
+    /// <summary>Whether a start failed because something else holds the port — the one thing worth retrying.</summary>
+    private static bool IsPortUnavailable(Exception ex) =>
+        ex is SocketException { SocketErrorCode: SocketError.AddressAlreadyInUse }
+        || ex.InnerException is SocketException { SocketErrorCode: SocketError.AddressAlreadyInUse }
+        || ex is IOException { InnerException: SocketException { SocketErrorCode: SocketError.AddressAlreadyInUse } };
 
     [TearDown]
     public async Task TearDown()
@@ -65,8 +75,18 @@ public class EmbeddedStyxTests
             catch { /* ignore */ }
             _server.Dispose();
         }
-        _cts?.Cancel();
-        _cts?.Dispose();
+
+        try
+        {
+            _cts?.Cancel();
+            _cts?.Dispose();
+        }
+        catch (ObjectDisposedException) { /* a retry already tore this one down */ }
+
+        // NULLED, so a second TearDown — the retry calls this, and NUnit calls it again — cannot touch a
+        // server it already stopped or a source it already disposed.
+        _server = null;
+        _cts = null;
     }
 
     private static EmbeddedHydraTestClient Client(string name, string? networkConfig = null)

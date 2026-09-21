@@ -63,6 +63,7 @@ public class MessageLaneTests
     /// Input keeps the kinds whose latency is the product, and the ones whose ordering against input matters.
     /// </summary>
     [TestCase(MessageKind.KeyEvent)]
+    [TestCase(MessageKind.KeyEventBatch)]
     [TestCase(MessageKind.MouseMove)]
     [TestCase(MessageKind.MouseMoveDelta)]
     [TestCase(MessageKind.MouseButton)]

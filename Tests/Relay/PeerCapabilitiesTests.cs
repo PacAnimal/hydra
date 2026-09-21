@@ -60,10 +60,19 @@ public class PeerCapabilitiesTests
         Assert.That(PeerCapabilities.Parse(["keyeventbatch"]), Does.Contain(PeerCapability.KeyEventBatch));
 
     /// <summary>
-    /// A NUMBER is not a name. Enum.TryParse accepts numeric text and would happily mint an undefined value
-    /// out of "7", which is exactly the kind of thing that turns an unknown capability into a false claim.
+    /// A NUMBER is not a name — including the ones that would land on a real member.
+    ///
+    /// <para><b>"0" is the case that matters, and an earlier version of this test missed it.</b> Asserting
+    /// only "7" and "-1" passes against a parse guarded by <c>Enum.IsDefined</c>, because those are not
+    /// defined — while "0" IS defined and was accepted as a genuine claim to whatever member happens to sit
+    /// at zero. That collides head-on with the promise that members may be reordered freely: reordering
+    /// would silently change what a peer sending "0" was taken to claim.</para>
     /// </summary>
-    [Test]
-    public void ANumberIsNotACapability() =>
-        Assert.That(PeerCapabilities.Parse(["7", "-1"]), Is.Empty);
+    [TestCase("0")]
+    [TestCase("1")]
+    [TestCase("7")]
+    [TestCase("-1")]
+    [TestCase("KeyEventBatch,KeyEventBatch")]
+    public void ANumberIsNotACapability(string name) =>
+        Assert.That(PeerCapabilities.Parse([name]), Is.Empty, $"'{name}' is not a capability NAME");
 }

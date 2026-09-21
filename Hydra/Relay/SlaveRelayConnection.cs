@@ -96,7 +96,7 @@ public class SlaveRelayConnection : RelayConnection
 
         _dormancy.Exited += async () =>
         {
-            var snapshot = await _screens.Get();
+            var snapshot = await _screens.Get(ConnectionToken);
             _cachedScreens = snapshot;
             _log.LogInformation("Woke from dormancy — local screens: {Count}", snapshot.Screens.Count);
             foreach (var master in await _peerState.GetMasters())
@@ -112,7 +112,14 @@ public class SlaveRelayConnection : RelayConnection
     private async ValueTask<LocalScreenSnapshot> AdvertisedScreens()
     {
         if (_dormancy.IsDormant && _cachedScreens is { } lastAwake) return lastAwake;
-        var snapshot = await _screens.Get();
+
+        // ON THE CONNECTION'S TOKEN. ScreenDetector completes its readiness only once Detect() has succeeded
+        // once, and Detect() throwing — an X server restart, a display hot-unplugged — leaves it retrying
+        // every two seconds with readiness still unset. Awaited with no token, from OnAuthenticated, that is
+        // a slave which never finishes authenticating, never starts either drain, and never drops the
+        // connection: silent and permanent. The token does not fix the detector; it stops one wedged
+        // subsystem taking the relay down with it.
+        var snapshot = await _screens.Get(ConnectionToken);
         _cachedScreens = snapshot;
         return snapshot;
     }

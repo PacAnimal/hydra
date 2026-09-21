@@ -38,6 +38,16 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     private MovementBatch? _openMovementBatch;
 
     /// <summary>
+    /// How many events one key frame may carry. A bound so a stalled relay cannot grow one frame without
+    /// limit — not a discard: <c>KeyBundle.TryAppend</c> refuses when full and the caller enqueues a NEW
+    /// bundle, so the event that did not fit still goes, still in order.
+    ///
+    /// <para>Internal rather than private so the spill test asserts against THIS number instead of a copy
+    /// of it — a mirrored constant is a test that stops testing the moment somebody retunes the real one.</para>
+    /// </summary>
+    internal const int KeyBundleCapacity = 64;
+
+    /// <summary>
     /// Key events queued behind a frame already in flight — see <see cref="KeyBundle"/>. Guarded by the same
     /// <c>_sendOrderLock</c> as the movement batch, because they are one question: what the NEXT enqueue may
     /// still be added to.
@@ -115,9 +125,15 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     public void Send(string[] targetHosts, byte[] payload)
     {
         OnSent(targetHosts, payload);
-        if (_server == null || _encryption == null) return;
         lock (_sendOrderLock)
         {
+            // INSIDE the lock, with teardown clearing these under the same lock before it drains. Checked
+            // outside, a send preempted between the check and the lock enqueues AFTER FailQueued has run —
+            // stranding the item, and with it an open bundle, into the next connection, where later keys
+            // append to a frame from before the drop and the batch/plain decision was made against a
+            // capability map that has since been cleared. Silent key loss, reachable only by that race.
+            if (_server == null || _encryption == null) return;
+
             // A key event may join the bundle already queued for these targets, but ONLY where every one of
             // them has said it understands a batch — an unknown kind is discarded in silence by the
             // receiver, so bundling at an older peer would lose the keys rather than fail. A lone event
@@ -138,8 +154,9 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
             }
 
             // Anything that is not a key closes the bundle, for the reason KeyBundle's summary gives: an
-            // append after the drain has read it goes nowhere at all.
-            _openKeyBundle = null;
+            // append after the drain has read it goes nowhere at all. Only the key bundle here — the
+            // movement branches below append to their own batch, and the fallthrough closes both.
+            CloseKeyBundle();
 
             if (payload.Length > 0 && payload[0] == (byte)MessageKind.MouseMove)
             {
@@ -163,17 +180,41 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
                 return;
             }
 
-            // Closing the batch is what stops a move made AFTER this message coalescing with one made before
-            // it — which is why a click lands where the cursor actually was.
-            //
             // Closed by ANY message, bulk included. Skipping it for the bulk lane looks like free extra
             // coalescing, but the batch is cleared again the moment the input drain READS the item, so the
             // window where it would make a difference is one a test cannot open — and an optimisation
             // nothing can observe is not worth a special case in the one path that decides where clicks land.
-            _openMovementBatch = null;
+            CloseOpenBatches();
             LaneFor(payload).Writer.TryWrite(new OutboundMessage(targetHosts, payload, null, null, null, CancellationToken.None));
         }
     }
+
+    /// <summary>
+    /// Closes whatever is still open to appending — the movement batch and the key bundle both.
+    ///
+    /// <para><b>Every enqueue that is not itself appending must call this.</b> An open batch or bundle is a
+    /// promise that the item already queued for it is still the LAST thing queued; enqueue past one without
+    /// closing it and the next append joins a frame that now sits behind this message, so it is delivered
+    /// before it. For keys that is a keystroke arriving before the mouse move that preceded it, which on a
+    /// KVM is a click in the wrong place.</para>
+    ///
+    /// <para>ONE method rather than the line repeated at each site, because repeated is how one of them was
+    /// missed: <c>SendMouseDelta</c>'s close could be deleted with the whole suite still green, and
+    /// <c>SendMouseDelta</c> is the path <c>InputRouter</c> actually takes.</para>
+    ///
+    /// <para>Call with <c>_sendOrderLock</c> HELD.</para>
+    /// </summary>
+    private void CloseOpenBatches()
+    {
+        _openMovementBatch = null;
+        CloseKeyBundle();
+    }
+
+    /// <summary>
+    /// Closes the key bundle alone, for the paths that are about to append to the MOVEMENT batch and must
+    /// not close the thing they are opening. Call with <c>_sendOrderLock</c> HELD.
+    /// </summary>
+    private void CloseKeyBundle() => _openKeyBundle = null;
 
     /// <summary>
     /// Whether EVERY target has advertised a capability. All of them, because one frame goes to all of them,
@@ -194,10 +235,12 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     public void SendMouseDelta(string[] targetHosts, int dx, int dy)
     {
         OnSent(targetHosts, MessageSerializer.Encode(MessageKind.MouseMoveDelta, new MouseMoveDeltaMessage(dx, dy)));
-        if (_server == null || _encryption == null) return;
         lock (_sendOrderLock)
         {
-            _openKeyBundle = null;
+            if (_server == null || _encryption == null) return;
+            // The KEY bundle only. This path is about to append to (or mint) the movement batch, so closing
+            // that would be closing the very thing it is opening — and would cost every bit of coalescing.
+            CloseKeyBundle();
             if (_openMovementBatch?.TryAppendDelta(targetHosts, dx, dy) == true) return;
             var movement = MovementBatch.CreateDelta(targetHosts, dx, dy);
             _openMovementBatch = movement;
@@ -315,8 +358,6 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     public async ValueTask SendReliableAsync(string[] targetHosts, byte[] payload, CancellationToken cancel = default)
     {
         OnSent(targetHosts, payload);
-        if (_server == null || _encryption == null)
-            throw new InvalidOperationException("Relay is not connected");
 
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -325,8 +366,12 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         var lane = LaneFor(payload);
         lock (_sendOrderLock)
         {
-            _openMovementBatch = null;
-            _openKeyBundle = null;
+            // Under the lock for the reason Send states: outside it, this enqueues past a teardown that has
+            // already drained, and the caller waits on a completion nothing will set.
+            if (_server == null || _encryption == null)
+                throw new InvalidOperationException("Relay is not connected");
+
+            CloseOpenBatches();
             if (!lane.Writer.TryWrite(new OutboundMessage(targetHosts, payload, completion, null, null, cancel)))
                 throw new InvalidOperationException("Relay send queue is closed");
         }
@@ -467,8 +512,17 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
             finally
             {
                 var wasConnected = _server != null;
-                _server = null;
-                _encryption = null;
+
+                // UNDER THE SEND LOCK, so a send is either wholly before this (and gets drained below) or
+                // wholly after it (and sees null and drops). Cleared outside, a send could slip between the
+                // two and leave an item — and an open bundle — in a queue nobody will read again.
+                lock (_sendOrderLock)
+                {
+                    _server = null;
+                    _encryption = null;
+                    CloseOpenBatches();
+                }
+
                 _transport = null;
                 // BOTH lanes. A caller parked in SendReliableAsync is waiting on a completion that only this
                 // drain will ever set, so a lane left unemptied is a caller hung until the process exits —
@@ -846,13 +900,6 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     /// </summary>
     private sealed class KeyBundle
     {
-        /// <summary>
-        /// How many events one frame may carry. A bound so a stalled relay cannot grow one frame without
-        /// limit — not a discard: <c>TryAppend</c> refuses when full and the caller enqueues a NEW bundle,
-        /// so the event that did not fit still goes, still in order.
-        /// </summary>
-        internal const int Capacity = 64;
-
         private readonly string[] _targets;
         private readonly List<KeyEventMessage> _events = [];
 
@@ -867,7 +914,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
 
         internal bool TryAppend(string[] targets, KeyEventMessage message)
         {
-            if (_events.Count >= Capacity || !_targets.SequenceEqual(targets)) return false;
+            if (_events.Count >= KeyBundleCapacity || !_targets.SequenceEqual(targets)) return false;
             _events.Add(message);
             return true;
         }
