@@ -35,11 +35,52 @@ cd "$(dirname "$0")"
 
 SDK_IMAGE="mcr.microsoft.com/dotnet/sdk:10.0"
 SLN="Hydra.sln"
+# A lane that had nothing to run says so with its own code, so run_lane never calls a skip a pass.
+LANE_SKIPPED=3
 WIN_HOST="${HYDRA_WINDOWS_TEST_HOST:-}"
 WIN_DIR="${HYDRA_WINDOWS_TEST_PATH:-/cygdrive/c/tmp/hydra}"
 # Kept OUTSIDE the synced tree so a re-sync never wipes the package cache or the fabricated profile.
 WIN_NUGET="${HYDRA_WINDOWS_TEST_NUGET_PACKAGES:-C:\\tmp\\nuget-packages}"
 WIN_PROFILE="${HYDRA_WINDOWS_TEST_PROFILE:-C:\\tmp\\lane-profile}"
+
+# A lane's verdict is STATED, never left to be inferred from the output.
+#
+# `dotnet test` prints a "Passed!" summary even for a run whose host died half way through — it counts
+# what got as far as reporting. The gate that taught us this printed
+# "Passed! - Failed: 0, Passed: 1147, Total: 1158" for a suite of 1224, with "Test Run Aborted." on the
+# line after it, and the only thing that disagreed was an exit code nobody was reading. Sixty-six tests
+# silently did not run and the log's last summary line said everything was fine.
+#
+# So every lane ends with a line naming itself and its verdict, and an abort is called out for what it
+# is: not a failure of the tests that ran, but a run that cannot speak for the ones that did not.
+run_lane() {
+	local name="$1"; shift
+	local log rc
+	log="$(mktemp)"
+	# The lane's OWN exit code, not the pipeline's: tee succeeds whatever the tests did. Guarded by
+	# `set +e` because -e would abort the script before this line could read it.
+	set +e
+	"$@" 2>&1 | tee "$log"
+	rc=${PIPESTATUS[0]}
+	set -e
+
+	if grep -qE "Test Run Aborted|Test host process crashed|The active test run was aborted" "$log"; then
+		echo "── $name: FAILED — the test host died mid-run; the summary above counts only what reported ──" >&2
+		rm -f "$log"
+		return 1
+	fi
+	rm -f "$log"
+
+	if [ "$rc" -eq "$LANE_SKIPPED" ]; then
+		echo "── $name: skipped ──"
+		return 0
+	fi
+	if [ "$rc" -ne 0 ]; then
+		echo "── $name: FAILED ──" >&2
+		return 1
+	fi
+	echo "── $name: passed ──"
+}
 
 run_mac() {
 	echo "── Mac-native tests (Windows/X11 tests self-skip) ─────────────────"
@@ -81,7 +122,7 @@ run_windows() {
 		echo "   WinKeyResolver's ToUnicodeEx tests and ProcessLock's file locking need a real Windows" >&2
 		echo "   box; they self-skip in the mac lane, so this run does not cover them. Set" >&2
 		echo "   HYDRA_WINDOWS_TEST_HOST to an ssh host running cygwin sshd with the .NET SDK to include them." >&2
-		return 0
+		return $LANE_SKIPPED
 	fi
 
 	if ! ssh -o BatchMode=yes -o ConnectTimeout=10 "$WIN_HOST" true 2>/dev/null; then
@@ -123,10 +164,10 @@ REMOTE
 }
 
 case "${1:-default}" in
-	mac) run_mac ;;
-	linux) run_linux ;;
-	windows) run_windows ;;
-	default) run_mac; run_linux ;;
-	all) run_mac; run_linux; run_windows ;;
+	mac) run_lane mac run_mac ;;
+	linux) run_lane linux run_linux ;;
+	windows) run_lane windows run_windows ;;
+	default) run_lane mac run_mac; run_lane linux run_linux ;;
+	all) run_lane mac run_mac; run_lane linux run_linux; run_lane windows run_windows ;;
 	*) echo "usage: $0 [mac|linux|windows|default|all]" >&2; exit 2 ;;
 esac
