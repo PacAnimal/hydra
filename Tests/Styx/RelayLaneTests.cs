@@ -1,6 +1,10 @@
 using Hydra.Config;
 using Hydra.Keyboard;
 using Hydra.Relay;
+using Microsoft.AspNetCore.SignalR;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
+using Styx;
 using Tests.Setup;
 
 namespace Tests.Styx;
@@ -423,12 +427,23 @@ public class RelayLaneTests
     ///
     /// <para>Counted from <c>RelayLane</c> rather than written as 2, so adding a third lane fails here
     /// instead of quietly re-introducing the stall.</para>
+    ///
+    /// <para><b>Read off the CONFIGURED hub, never off the constant.</b> Asserting the constant against the
+    /// lane count is a constant compared with a constant: it says nothing about whether the number reaches
+    /// SignalR, and hardcoding the hub to 1 left the whole suite green. Building the real registration is
+    /// what makes this a test of the relay rather than of arithmetic.</para>
     /// </summary>
     [Test]
     public void TheRelayDispatchesAtLeastAsManyInvocationsAsAPeerHasLanes()
     {
-        var slots = global::Styx.Constants.MaxParallelInvocations;
-        Assert.That(slots, Is.GreaterThanOrEqualTo(Enum.GetValues<RelayLane>().Length),
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddStyxSignalR();
+        using var provider = services.BuildServiceProvider();
+
+        var configured = provider.GetRequiredService<IOptions<HubOptions>>().Value.MaximumParallelInvocationsPerClient;
+
+        Assert.That(configured, Is.GreaterThanOrEqualTo(Enum.GetValues<RelayLane>().Length),
             "a lane's invocation is not finished until the hub method returns, so fewer slots than lanes means a lane waits for another lane's frame to be delivered");
     }
 }

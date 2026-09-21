@@ -50,7 +50,11 @@ public static class TestLog
         var current = new DirectoryInfo(startPath);
         while (current != null)
         {
-            if (current.GetFiles("*.sln").Length > 0 && current.GetDirectories(".git").Length > 0)
+            // .git is a DIRECTORY in a normal clone and a FILE in a worktree, pointing at the real
+            // gitdir. Accepting only the directory made every test in a worktree die in OneTimeSetUp with
+            // "Could not find solution root" — which is where a review that wants to mutate the tree safely
+            // has to work.
+            if (current.GetFiles("*.sln").Length > 0 && (current.GetDirectories(".git").Length > 0 || current.GetFiles(".git").Length > 0))
                 return current.FullName;
             current = current.Parent;
         }
