@@ -53,7 +53,8 @@ public class KeyBundleTests
         var sender = new HydraTestClient(_factory!, TransitionTestHelper.Profile("sender", new HydraConfig { Mode = Mode.Master, NetworkConfig = cfg }));
         var receiver = new HydraTestClient(_factory!, TransitionTestHelper.Profile(Receiver, new HydraConfig { Mode = Mode.Master, NetworkConfig = cfg }));
 
-        sender.World.SetPeerKeyBundles(Receiver, peerTakesBundles);
+        sender.World.SetPeerCapabilities(Receiver,
+            PeerCapabilities.Parse(peerTakesBundles ? PeerCapabilities.Advertise() : null));
 
         await sender.StartAsync(CancellationToken.None);
         await receiver.StartAsync(CancellationToken.None);

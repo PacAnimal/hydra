@@ -87,12 +87,13 @@ public class KeyBatchDeliveryTests
     }
 
     /// <summary>
-    /// The slave TELLS the master it can take bundles. Without this the master never sends one — which is
-    /// the safe direction, and exactly why forgetting to advertise would be invisible: everything keeps
-    /// working, one frame per key, and the feature is simply never used.
+    /// The slave TELLS the master it can take bundles, through the capability list it puts on ScreenInfo.
+    /// Without this the master never sends one — which is the safe direction, and exactly why forgetting to
+    /// advertise would be invisible: everything keeps working, one frame per key, and the feature is simply
+    /// never used.
     /// </summary>
     [Test]
-    public async Task TheSlaveAdvertisesThatItUnderstandsBundles()
+    public async Task TheSlaveAdvertisesThatItAppliesBundles()
     {
         var slave = new TestableSlaveRelay();
 
@@ -102,7 +103,11 @@ public class KeyBatchDeliveryTests
         var screenInfo = slave.Sent.LastOrDefault(s => s.Kind == MessageKind.ScreenInfo);
         Assert.That(screenInfo.Json, Is.Not.Null, "the slave never sent ScreenInfo, so it never advertised anything");
 
-        var advertised = JsonDocument.Parse(screenInfo.Json).RootElement.TryGetProperty("keyBundles", out var flag) && flag.GetBoolean();
-        Assert.That(advertised, Is.True, "a slave that does not advertise is never sent a bundle, and the feature is dead");
+        var advertised = JsonDocument.Parse(screenInfo.Json).RootElement.TryGetProperty("capabilities", out var list)
+            ? PeerCapabilities.Parse([.. list.EnumerateArray().Select(e => e.GetString()!)])
+            : PeerCapabilities.Parse(null);
+
+        Assert.That(advertised, Does.Contain(PeerCapability.KeyEventBatch),
+            "a slave that does not advertise is never sent a bundle, and the feature is dead");
     }
 }

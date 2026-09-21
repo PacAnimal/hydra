@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Text;
 using Cathedral.Config;
 using Cathedral.Extensions;
@@ -119,23 +120,88 @@ public record ScreenInfoEntry(string Name, int X, int Y, int Width, int Height, 
 // ReSharper disable once InconsistentNaming
 public enum PeerPlatform : byte { Unknown = 0, Linux = 1, MacOS = 2, Windows = 3 }
 
-/// <param name="KeyBundles">
-/// Whether this peer understands <see cref="MessageKind.KeyEventBatch"/>. NULL means it never said, which
-/// is what every build before the feature sends — and it must be read as NO, because an unknown kind is
-/// dropped silently by the receiver rather than refused. Additive and nullable for the same reason
-/// <paramref name="Platform"/> is.
+/// <param name="Capabilities">
+/// What this peer can do, by NAME — see <see cref="PeerCapabilities"/>. Null or empty is what every build
+/// before a given capability sends, and is read as "none of them", because the failure mode of guessing
+/// wrong is silent: an unrecognised <see cref="MessageKind"/> reaches <c>RelayConnection.OnReceive</c>'s
+/// base and is discarded without a word.
 ///
-/// <para><b>REMOVE AFTER 2026-10-30.</b> This whole negotiation exists only to carry the field through one
-/// upgrade window. After that date every build understands a batch, the question stops being worth asking,
-/// and this parameter is debt. Deleting it means: drop this parameter and the one that sets it in
-/// <c>SlaveRelayConnection.SendScreenInfo</c>; drop <c>IWorldState.SetPeerKeyBundles</c> /
-/// <c>PeerSupportsKeyBundles</c> and their backing dictionary; drop
-/// <c>RelayConnection.EveryTargetTakesKeyBundles</c> and its call in <c>Send</c>; drop the recording in
-/// <c>InputRouter</c>; and delete <c>KeyBundleTests.APeerThatNeverAdvertisedSupportIsNeverSentABatch</c>,
-/// which is the only test that is about the negotiation rather than about the bundling.
-/// </para>
+/// <para><b>STRINGS, not <see cref="PeerCapability"/> values, and that is load-bearing for two reasons.</b>
+/// Cathedral's enum converter THROWS on a name or number it does not know, so an array of enums would make
+/// a newer peer's unknown capability fail the whole <c>ScreenInfoMessage</c> — costing that peer's SCREENS,
+/// which is far worse than not knowing about one feature. Names let a master ignore what it has never heard
+/// of.</para>
+///
+/// <para>And names carry no NUMBERING to keep. Nothing on the wire depends on a capability's ordinal, so
+/// members may be added, reordered or deleted freely and no hole has to be reserved for one that is gone.
+/// Compare <see cref="MessageKind"/>, which is numbered and therefore carries "15, 16 reserved (formerly
+/// used; do not reuse)" for ever. Do not "tidy" this into an enum array later: both reasons would be lost.</para>
 /// </param>
-public record ScreenInfoMessage(List<ScreenInfoEntry> Screens, PeerPlatform? Platform = null, bool? KeyBundles = null);
+public record ScreenInfoMessage(List<ScreenInfoEntry> Screens, PeerPlatform? Platform = null, string[]? Capabilities = null);
+
+/// <summary>
+/// Something a peer can do that its peers must not assume.
+///
+/// <para>A capability exists when doing the thing at a peer that cannot would FAIL SILENTLY. That is the
+/// bar: anything a peer would merely refuse, or answer with an error, needs no entry here.</para>
+///
+/// <para><b>These travel by NAME, so their numbering means nothing.</b> Add, reorder or delete members as
+/// you like; there are no reserved values and no holes to preserve — see
+/// <c>ScreenInfoMessage.Capabilities</c> for why the wire is names and must stay names.</para>
+/// </summary>
+public enum PeerCapability
+{
+    /// <summary>
+    /// Applies <see cref="MessageKind.KeyEventBatch"/>. A peer without this is sent one key event per
+    /// frame; sending it a batch would lose every key in it in silence.
+    ///
+    /// <para><b>REMOVE AFTER 2026-10-30</b> — the MEMBER and every check of it, not the mechanism. After
+    /// that date every build applies a batch and asking is debt. See <see cref="PeerCapabilities.Mine"/>
+    /// for the full deletion list.</para>
+    /// </summary>
+    KeyEventBatch
+}
+
+/// <summary>
+/// What this build advertises, and how a peer's advertisement is read back.
+///
+/// <para>One place, so the two halves cannot drift: the names a slave sends are the names a master parses.</para>
+/// </summary>
+public static class PeerCapabilities
+{
+    /// <summary>
+    /// Everything this build can do. A slave sends these on its <c>ScreenInfo</c>.
+    ///
+    /// <para><b>REMOVE AFTER 2026-10-30:</b> take <see cref="PeerCapability.KeyEventBatch"/> out of here and
+    /// out of the enum, then delete <c>IWorldState.SetPeerCapabilities</c>'s only consumer —
+    /// <c>RelayConnection.EveryTargetSupports</c> and the <c>&amp;&amp;</c> in <c>Send</c> — and
+    /// <c>KeyBundleTests.APeerThatNeverAdvertisedSupportIsNeverSentABatch</c>, which is the one test about
+    /// asking rather than about bundling. The mechanism itself stays for whatever needs it next.</para>
+    /// </summary>
+    public static readonly PeerCapability[] Mine = [PeerCapability.KeyEventBatch];
+
+    /// <summary>The names to put on the wire for this build.</summary>
+    public static string[] Advertise() => [.. Mine.Select(c => c.ToString())];
+
+    /// <summary>
+    /// The capabilities a peer advertised, ignoring any name this build does not know.
+    ///
+    /// <para><b>Ignoring is the whole point.</b> A name we do not recognise comes from a NEWER peer
+    /// advertising something this build has never heard of — which is normal, and must cost nothing. Parsing
+    /// strictly would throw away the message it arrived on.</para>
+    /// </summary>
+    public static IReadOnlySet<PeerCapability> Parse(string[]? names)
+    {
+        if (names is not { Length: > 0 }) return FrozenSet<PeerCapability>.Empty;
+
+        var known = new HashSet<PeerCapability>();
+        foreach (var name in names)
+            if (Enum.TryParse<PeerCapability>(name, ignoreCase: true, out var capability) && Enum.IsDefined(capability))
+                known.Add(capability);
+
+        return known;
+    }
+}
 public record MasterConfigMessage(LogLevel? LogLevel);
 public record SlaveLogMessage(int Level, string Category, string Message, string? Exception);
 // IsRepeat marks an OS auto-repeat the master re-resolved (with live modifier/dead-key state) and forwarded;

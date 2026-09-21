@@ -502,11 +502,9 @@ public class SlaveRelayConnection : RelayConnection
     {
         _log.LogInformation("Sending screen info to {Master}: {Count} screen(s)", masterHost, entries.Count);
         var platform = DetectLocalPlatform();
-        // KeyBundles: true says this build applies a KeyEventBatch. A master that never hears it sends one
-        // KeyEvent per frame, exactly as before — which is what makes bundling safe to add to one end first.
-        //
-        // REMOVE AFTER 2026-10-30: the argument goes with the parameter — see ScreenInfoMessage.KeyBundles.
-        var payload = MessageSerializer.Encode(MessageKind.ScreenInfo, new ScreenInfoMessage(entries, platform, KeyBundles: true));
+        // What this build can do. A master that hears nothing assumes nothing, which is what makes a
+        // capability safe to add to one end first — see PeerCapabilities.
+        var payload = MessageSerializer.Encode(MessageKind.ScreenInfo, new ScreenInfoMessage(entries, platform, PeerCapabilities.Advertise()));
         Send([masterHost], payload);
     }
 

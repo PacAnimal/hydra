@@ -34,21 +34,22 @@ public interface IWorldState
     // -- master-side (peer capabilities) --
 
     /// <summary>
-    /// Records whether a peer said it understands <see cref="MessageKind.KeyEventBatch"/>.
+    /// Records what a peer said it can do, REPLACING whatever it said before.
     ///
-    /// <para><b>REMOVE AFTER 2026-10-30</b> along with the rest of the negotiation — see
-    /// <c>ScreenInfoMessage.KeyBundles</c>.</para>
+    /// <para>Replacing rather than merging, because an advertisement is the peer's whole current answer: a
+    /// build that no longer offers something must be able to take it back, and a downgrade is exactly the
+    /// case that matters.</para>
     /// </summary>
-    void SetPeerKeyBundles(string host, bool supported);
+    void SetPeerCapabilities(string host, IReadOnlySet<PeerCapability> capabilities);
 
     /// <summary>
-    /// Whether a peer has SAID it understands key bundles. Defaults to false for a peer that never said.
+    /// Whether a peer has SAID it can do something. False for a peer that never said — silence is no.
     ///
     /// <para>SYNCHRONOUS, unlike its neighbours, and deliberately: it is read from <c>RelayConnection.Send</c>
     /// on the input hot path, inside the send-order lock, where there is nothing to await with. Backed by a
     /// <c>ConcurrentDictionary</c> like the remote keys are, not by the semaphore the master state uses.</para>
     /// </summary>
-    bool PeerSupportsKeyBundles(string host);
+    bool PeerSupports(string host, PeerCapability capability);
 }
 
 public class WorldState : IWorldState
@@ -58,10 +59,10 @@ public class WorldState : IWorldState
     private readonly ConcurrentDictionary<string, SimpleAesKey> _remoteKeys = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
-    /// Who has said they understand key bundles. Concurrent rather than semaphore-guarded because the send
-    /// path reads it synchronously — see <see cref="IWorldState.PeerSupportsKeyBundles"/>.
+    /// What each peer has said it can do. Concurrent rather than semaphore-guarded because the send path
+    /// reads it synchronously — see <see cref="IWorldState.PeerSupports"/>.
     /// </summary>
-    private readonly ConcurrentDictionary<string, bool> _peerKeyBundles = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, IReadOnlySet<PeerCapability>> _peerCapabilities = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, ILogger> _loggers = new(StringComparer.OrdinalIgnoreCase);
 
     public async ValueTask<PeerDelta> UpdatePeers(HashSet<string> currentPeers, HashSet<string> configuredSlaves)
@@ -81,6 +82,12 @@ public class WorldState : IWorldState
                 s.KnownPeers.Remove(host);
                 s.PeerScreens.Remove(host);
                 s.PeerPlatforms.Remove(host);
+                // A CAPABILITY BELONGS TO THE PEER, NOT TO THE HOSTNAME. Leave it behind and a host that
+                // returns on an older build inherits the previous occupant's claim — and is then sent, say,
+                // key bundles it discards without a word. Its next ScreenInfo would correct this, but there
+                // is a window before that arrives, and the whole reason a master asks first is that getting
+                // it wrong fails silently rather than loudly.
+                _peerCapabilities.TryRemove(host, out _);
                 foreach (var k in _loggers.Keys.Where(k => k.StartsWithIgnoreCase($"slave:{host}/")).ToList())
                     _loggers.TryRemove(k, out _);
             }
@@ -166,15 +173,16 @@ public class WorldState : IWorldState
         s.PeerPlatforms.Clear();
         _loggers.Clear();
         _remoteKeys.Clear(); // keys are re-derived from the message salt on reconnect
-        // Re-advertised on the next ScreenInfo. Cleared because a host name that comes back on an OLDER
-        // build must not inherit the capability the previous occupant claimed — that would bundle keys at
-        // a peer that silently discards them.
-        _peerKeyBundles.Clear();
+        // Re-advertised on the next ScreenInfo. Cleared for the reason departure clears one peer's: a name
+        // that comes back on an older build must not inherit what the previous occupant claimed.
+        _peerCapabilities.Clear();
     }
 
-    public void SetPeerKeyBundles(string host, bool supported) => _peerKeyBundles[host] = supported;
+    public void SetPeerCapabilities(string host, IReadOnlySet<PeerCapability> capabilities) =>
+        _peerCapabilities[host] = capabilities;
 
-    public bool PeerSupportsKeyBundles(string host) => _peerKeyBundles.TryGetValue(host, out var yes) && yes;
+    public bool PeerSupports(string host, PeerCapability capability) =>
+        _peerCapabilities.TryGetValue(host, out var advertised) && advertised.Contains(capability);
 
     public async ValueTask SetPeerPlatform(string host, PeerPlatform platform)
     {

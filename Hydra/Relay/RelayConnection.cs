@@ -123,9 +123,9 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
             // receiver, so bundling at an older peer would lose the keys rather than fail. A lone event
             // still goes out as an ordinary KeyEvent, so nothing changes for the common case either way.
             //
-            // REMOVE AFTER 2026-10-30: the EveryTargetTakesKeyBundles call goes, and the condition becomes
-            // the kind check alone.
-            if (payload.Length > 0 && payload[0] == (byte)MessageKind.KeyEvent && EveryTargetTakesKeyBundles(targetHosts)
+            // REMOVE AFTER 2026-10-30: the EveryTargetSupports call goes, and the condition becomes the
+            // kind check alone.
+            if (payload.Length > 0 && payload[0] == (byte)MessageKind.KeyEvent && EveryTargetSupports(targetHosts, PeerCapability.KeyEventBatch)
                 && MessageSerializer.Decode(payload).Deserialize<KeyEventMessage>() is { } keyEvent)
             {
                 _openMovementBatch = null;
@@ -176,19 +176,14 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     }
 
     /// <summary>
-    /// Whether EVERY target has said it understands a key batch. All of them, because one frame goes to all
-    /// of them — and a peer that never said is a peer that would drop it without a word.
+    /// Whether EVERY target has advertised a capability. All of them, because one frame goes to all of them,
+    /// and a peer that never said is a peer that would drop it without a word.
     /// </summary>
-    /// <remarks>
-    /// <b>REMOVE AFTER 2026-10-30</b> — see <c>ScreenInfoMessage.KeyBundles</c> for everything that goes with
-    /// it. After that date bundling is unconditional and this method, its call site's <c>&amp;&amp;</c>, and the
-    /// capability it reads all come out.
-    /// </remarks>
-    private bool EveryTargetTakesKeyBundles(string[] targetHosts)
+    private bool EveryTargetSupports(string[] targetHosts, PeerCapability capability)
     {
         if (targetHosts.Length == 0) return false;
         foreach (var host in targetHosts)
-            if (!peerState.PeerSupportsKeyBundles(host))
+            if (!peerState.PeerSupports(host, capability))
                 return false;
         return true;
     }
