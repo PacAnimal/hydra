@@ -18,6 +18,13 @@ internal sealed class RemoteApplyStore(
     private string MarkerPath => MarkerPathFor(runtime.ConfigPath);
     private string BackupPath => BackupPathFor(runtime.ConfigPath);
 
+    /// <summary>
+    /// <b>Deliberately does NOT hold the config lock across its read and save.</b> It does not need to:
+    /// <c>SaveAsync</c> re-checks the revision under that lock, so a config that changed in between is
+    /// refused there rather than overwritten here. Taking it across this whole method would ALSO deadlock,
+    /// because the calls it makes take it themselves and it is not re-entrant — which is exactly how
+    /// <c>RollbackAsync</c> broke when the lock was widened, and why that one uses <c>ReadUnlockedAsync</c>.
+    /// </summary>
     internal async Task<RemoteApplyAccepted> BeginAsync(string expectedRevision, string maskedJson, CancellationToken cancel)
     {
         await _lock.WaitAsync(cancel);

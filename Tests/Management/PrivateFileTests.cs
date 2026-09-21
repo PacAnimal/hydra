@@ -36,10 +36,15 @@ public class PrivateFileTests
 
         await PrivateFile.Write(_path, "{\"secret\":\"value\"}", Private, CancellationToken.None);
 
-        // Cathedral stamps the mode on its temp at open(2) and the rename carries it, so this failing
-        // means the mode never reached it — the handler was built without one, and the file was written
-        // through a temp at the process umask: a complete copy of the secrets readable by anyone for the
-        // length of the write, and after any crash.
+        // A CREATE, and that is the only shape that can catch this. Cathedral takes `createMode ?? the
+        // destination's current mode`, so a REPLACE keeps the mode whether or not we pass one — every
+        // replace-shaped test here passes with the mode withheld from the handler. This test, the first
+        // write in AReadOnlyFileCanStillBeReplacedAndStaysReadOnly, and PairingCode_IsSingleUseAndStoredAsAHash
+        // are the whole of the coverage for that mistake.
+        //
+        // Failing here means the mode never reached the handler, so the file was written through a temp at
+        // the process umask: a complete copy of the secrets readable by anyone for the length of the write,
+        // and after any crash.
         Assert.That(ModeOf(_path), Is.EqualTo(Private),
             "the mode never reached the handler, so the file was written through a temp at the process umask — a complete copy readable by anyone");
     }

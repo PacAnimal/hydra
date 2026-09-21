@@ -188,6 +188,12 @@ internal sealed class RemoteManagementService(
         }
     }
 
+    /// <summary>
+    /// <b>The config lock is RELEASED before the apply state is read, and these must not be merged into one
+    /// scope.</b> <c>BeginAsync</c> takes the two in the opposite order — its own lock, then the config lock
+    /// through <c>SaveAsync</c> — so holding both here at once is the one arrangement that could cycle. A
+    /// snapshot consistent across the two would have to be built some other way.
+    /// </summary>
     private async Task<RemoteConfigDocument> ReadMaskedConfig(string sourceHost)
     {
         var document = await config.ReadAsync();

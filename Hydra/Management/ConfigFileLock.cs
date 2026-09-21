@@ -113,9 +113,12 @@ internal static class ConfigFileLock
                     "Either another operation here is still working, or this call stack is waiting for a lock it already took — " +
                     "the lock is not re-entrant, and a caller that holds it must use the Unlocked read instead.");
 
+            // "still not available" rather than "another process holds it": a disk returning EIO is retried
+            // for the whole budget and arrives here too, and naming contention would send the reader after
+            // a process that does not exist. What is known is that it could not be taken.
             throw new TimeoutException(
-                $"Waited {budget.TotalSeconds:0.##}s for the Hydra lock {Path.GetFileName(full)} and another process still holds it. " +
-                "A configuration read or write is in progress elsewhere.");
+                $"Waited {budget.TotalSeconds:0.##}s for the Hydra lock {Path.GetFileName(full)} and it is still not available. " +
+                "Another process is reading or writing the configuration, or the filesystem is refusing the lock file.");
         }
     }
 
