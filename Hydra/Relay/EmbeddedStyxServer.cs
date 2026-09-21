@@ -21,16 +21,29 @@ public class EmbeddedStyxServer(EmbeddedStyxServerConfig config, ILogger<Embedde
     private readonly TaskCompletionSource _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private IClientRegistry? _registry;
 
+    /// <summary>
+    /// Completes when the relay is listening, and FAULTS when it could not start.
+    ///
+    /// <para><b>It must do one or the other, always.</b> This used to be set on success alone, so a start
+    /// that threw — a port taken between being probed and being bound is the easy way — left every caller
+    /// waiting on a task nothing would ever complete. That is not a slow start, it is a permanent one: the
+    /// failure was logged by the hosted service and the awaiting test hung until the run was killed. Thirty
+    /// four minutes of a CI lane, once.</para>
+    /// </summary>
     public Task WaitForReady() => _ready.Task;
     internal ValueTask<IReadOnlyList<ClientIdentity>> GetClients() => _registry?.GetAllIdentities()
         ?? ValueTask.FromResult<IReadOnlyList<ClientIdentity>>([]);
 
     protected override async Task Execute(CancellationToken cancel)
     {
-        var app = BuildApp();
+        // INSIDE the try, because building the app can fail on its own — an out-of-range port throws while
+        // Kestrel's listener is being described, before anything is started. Left outside, that failure
+        // skipped the catch below and put readiness right back where it was: waiting for ever.
+        WebApplication? app = null;
         var started = false;
         try
         {
+            app = BuildApp();
             log.LogInformation("Starting embedded Styx relay on port {Port}", config.Port);
             await app.StartAsync(cancel);
             started = true;
@@ -39,11 +52,26 @@ public class EmbeddedStyxServer(EmbeddedStyxServerConfig config, ILogger<Embedde
             try { await Task.Delay(Timeout.Infinite, cancel); }
             catch (OperationCanceledException) { }
         }
+        catch (OperationCanceledException) when (cancel.IsCancellationRequested)
+        {
+            // Shutting down before we ever listened. Nobody is owed a listening relay, but they are owed an
+            // answer — a caller parked in WaitForReady must come back rather than outlive the service.
+            _ready.TrySetCanceled(cancel);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // THE ANSWER IS THE POINT. Whatever went wrong, every WaitForReady caller learns it here; the
+            // alternative is the hang this replaced, where the failure was logged and the waiter simply
+            // never returned.
+            _ready.TrySetException(ex);
+            throw;
+        }
         finally
         {
             try
             {
-                if (started)
+                if (started && app != null)
                 {
                     using var stopTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
                     await app.StopAsync(stopTimeout.Token);
@@ -51,7 +79,12 @@ public class EmbeddedStyxServer(EmbeddedStyxServerConfig config, ILogger<Embedde
             }
             catch (OperationCanceledException) { log.LogWarning("Embedded Styx did not stop within five seconds"); }
             catch (Exception ex) { log.LogWarning(ex, "Embedded Styx stop failed"); }
-            finally { await app.DisposeAsync(); }
+            finally { if (app != null) await app.DisposeAsync(); }
+
+            // A last resort for a path that reached neither success nor a catch — a return this method does
+            // not have today, or one added later. Cheap, and it makes "WaitForReady always completes" a
+            // property of the method rather than of its current shape.
+            _ready.TrySetException(new InvalidOperationException("Embedded Styx relay stopped before it was ready"));
         }
     }
 
