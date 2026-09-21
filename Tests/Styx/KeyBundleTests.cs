@@ -71,8 +71,29 @@ public class KeyBundleTests
     }
 
     /// <summary>One key event, identified by the character it carries so a sequence can be checked exactly.</summary>
+    private static KeyEventMessage KeyMessage(int n, KeyEventType type = KeyEventType.KeyDown) =>
+        new(type, KeyModifiers.None, (char)('a' + n % 26), null);
+
     private static byte[] Key(int n, KeyEventType type = KeyEventType.KeyDown) =>
-        MessageSerializer.Encode(MessageKind.KeyEvent, new KeyEventMessage(type, KeyModifiers.None, (char)('a' + n % 26), null));
+        MessageSerializer.Encode(MessageKind.KeyEvent, KeyMessage(n, type));
+
+    /// <summary>
+    /// One key, through whichever of the two entry points the case names.
+    ///
+    /// <para><b>Both, because production and these tests were using different ones.</b>
+    /// <c>InputRouter</c> forwards a keystroke through <c>SendKeyEvent</c>; every test here called
+    /// <c>Send</c> with an encoded payload. Measured: replacing <c>RelayConnection.SendKeyEvent</c>'s body
+    /// with a silent drop left <b>297</b> tests green — a master that types nothing, ever, with nothing to
+    /// say so. The two are meant to be one behaviour, and the only thing that keeps them one is asserting
+    /// every claim below against each.</para>
+    ///
+    /// <para><c>typed: true</c> is the production path.</para>
+    /// </summary>
+    private static void SendKey(bool typed, HydraTestClient sender, string[] targets, int n, KeyEventType type = KeyEventType.KeyDown)
+    {
+        if (typed) sender.SendKeyEvent(targets, KeyMessage(n, type));
+        else sender.Send(targets, Key(n, type));
+    }
 
     private static byte[] Move(int n) => MessageSerializer.Encode(MessageKind.MouseMove, new MouseMoveMessage("", n, n));
 
@@ -162,8 +183,9 @@ public class KeyBundleTests
     /// too, because a test that only checked the events would pass against an implementation that quietly
     /// stopped bundling — and then this whole change would be dead code nobody noticed.</para>
     /// </summary>
-    [Test]
-    public async Task ABurstOfKeysArrivesCompleteAndInOrder()
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task ABurstOfKeysArrivesCompleteAndInOrder(bool typed)
     {
         var (sender, receiver) = await ConnectedPair();
         await using var _ = sender;
@@ -175,7 +197,7 @@ public class KeyBundleTests
         var blocker = sender.SendReliableAsync([Receiver], Key(0)).AsTask();
         await WaitFor(() => sender.Held == 1, "the input lane to park");
 
-        for (var i = 1; i <= count; i++) sender.Send([Receiver], Key(i));
+        for (var i = 1; i <= count; i++) SendKey(typed, sender, [Receiver], i);
 
         sender.Send([Receiver], Sentinel());
         sender.ReleaseLane();
@@ -198,8 +220,9 @@ public class KeyBundleTests
     /// both halves of a keystroke are queued before either goes out. Deliver only the down and the key is
     /// held on the remote machine for ever.</para>
     /// </summary>
-    [Test]
-    public async Task ADownAndItsUpInOneBundleBothArriveInOrder()
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task ADownAndItsUpInOneBundleBothArriveInOrder(bool typed)
     {
         var (sender, receiver) = await ConnectedPair();
         await using var _ = sender;
@@ -209,8 +232,8 @@ public class KeyBundleTests
         var blocker = sender.SendReliableAsync([Receiver], Move(1)).AsTask();
         await WaitFor(() => sender.Held == 1, "the input lane to park");
 
-        sender.Send([Receiver], Key(0));
-        sender.Send([Receiver], Key(0, KeyEventType.KeyUp));
+        SendKey(typed, sender, [Receiver], 0);
+        SendKey(typed, sender, [Receiver], 0, KeyEventType.KeyUp);
 
         sender.Send([Receiver], Sentinel());
         sender.ReleaseLane();
@@ -239,8 +262,9 @@ public class KeyBundleTests
     /// frame, never the input — an implementation that dropped the event which did not fit would pass a test
     /// that only counted frames.</para>
     /// </summary>
-    [Test]
-    public async Task MoreKeysThanOneBundleHoldsSpillIntoTheNextWithoutLoss()
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task MoreKeysThanOneBundleHoldsSpillIntoTheNextWithoutLoss(bool typed)
     {
         var (sender, receiver) = await ConnectedPair();
         await using var _ = sender;
@@ -253,7 +277,7 @@ public class KeyBundleTests
         var blocker = sender.SendReliableAsync([Receiver], Move(1)).AsTask();
         await WaitFor(() => sender.Held == 1, "the input lane to park");
 
-        for (var i = 0; i < count; i++) sender.Send([Receiver], Key(i));
+        for (var i = 0; i < count; i++) SendKey(typed, sender, [Receiver], i);
 
         sender.Send([Receiver], Sentinel());
         sender.ReleaseLane();
@@ -335,8 +359,9 @@ public class KeyBundleTests
     /// one, the first bundle has provably been read — and the key sent next is landing in exactly the gap
     /// that loses it. With the clear in place it starts a fresh bundle; without it, it vanishes.</para>
     /// </summary>
-    [Test]
-    public async Task AKeySentAfterTheDrainTookTheBundleStillArrives()
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task AKeySentAfterTheDrainTookTheBundleStillArrives(bool typed)
     {
         var (sender, receiver) = await ConnectedPair();
         await using var _ = sender;
@@ -345,11 +370,11 @@ public class KeyBundleTests
         sender.HoldLane(RelayLane.Input);
 
         // Read and snapshotted by the drain, which then parks — so the bundle behind it is spent.
-        sender.Send([Receiver], Key(0));
+        SendKey(typed, sender, [Receiver], 0);
         await WaitFor(() => sender.Held == 1, "the drain to take the first bundle and park");
 
         // Into the gap. This must NOT join the bundle that has already been read.
-        sender.Send([Receiver], Key(1));
+        SendKey(typed, sender, [Receiver], 1);
 
         sender.Send([Receiver], Sentinel());
         sender.ReleaseLane();
@@ -454,8 +479,9 @@ public class KeyBundleTests
     /// about not losing keys and outlives the upgrade window — see <see cref="PeerCapabilities.Mine"/> for
     /// the full removal list.</para>
     /// </summary>
-    [Test]
-    public async Task APeerThatNeverAdvertisedSupportIsNeverSentABatch()
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task APeerThatNeverAdvertisedSupportIsNeverSentABatch(bool typed)
     {
         var (sender, receiver) = await ConnectedPair(peerTakesBundles: false);
         await using var _ = sender;
@@ -467,7 +493,7 @@ public class KeyBundleTests
         var blocker = sender.SendReliableAsync([Receiver], Move(1)).AsTask();
         await WaitFor(() => sender.Held == 1, "the input lane to park");
 
-        for (var i = 0; i < count; i++) sender.Send([Receiver], Key(i));
+        for (var i = 0; i < count; i++) SendKey(typed, sender, [Receiver], i);
 
         sender.Send([Receiver], Sentinel());
         sender.ReleaseLane();
@@ -493,8 +519,9 @@ public class KeyBundleTests
     /// existing.</b> "No batch appears" is trivially true of a build that never bundles, so on its own it
     /// proves the gate works only in the sense that nothing works.</para>
     /// </summary>
-    [Test]
-    public async Task APeerThatAdvertisedSupportIsSentOne()
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task APeerThatAdvertisedSupportIsSentOne(bool typed)
     {
         var (sender, receiver) = await ConnectedPair();
         await using var _ = sender;
@@ -504,7 +531,7 @@ public class KeyBundleTests
         var blocker = sender.SendReliableAsync([Receiver], Move(1)).AsTask();
         await WaitFor(() => sender.Held == 1, "the input lane to park");
 
-        for (var i = 0; i < 20; i++) sender.Send([Receiver], Key(i));
+        for (var i = 0; i < 20; i++) SendKey(typed, sender, [Receiver], i);
 
         sender.Send([Receiver], Sentinel());
         sender.ReleaseLane();
@@ -525,8 +552,9 @@ public class KeyBundleTests
     ///
     /// <para>A fixed seed, so a failure is reproducible rather than a story about one unlucky run.</para>
     /// </summary>
-    [Test]
-    public async Task ARandomisedStreamOfKeysRoundTripsExactly()
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task ARandomisedStreamOfKeysRoundTripsExactly(bool typed)
     {
         var (sender, receiver) = await ConnectedPair();
         await using var _ = sender;
@@ -543,7 +571,7 @@ public class KeyBundleTests
         {
             var type = random.Next(2) == 0 ? KeyEventType.KeyDown : KeyEventType.KeyUp;
             var n = random.Next(26);
-            sender.Send([Receiver], Key(n, type));
+            SendKey(typed, sender, [Receiver], n, type);
             sent.Add((type, (char)('a' + n)));
         }
 
@@ -599,8 +627,9 @@ public class KeyBundleTests
     /// event provably goes through the bundling path rather than round it: this is <c>Snapshot</c>'s rule,
     /// not an accident of the drain being quick.</para>
     /// </summary>
-    [Test]
-    public async Task ALoneKeyTravelsAsAPlainKeyEventNotABatchOfOne()
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task ALoneKeyTravelsAsAPlainKeyEventNotABatchOfOne(bool typed)
     {
         var (sender, receiver) = await ConnectedPair();
         await using var _ = sender;
@@ -610,7 +639,7 @@ public class KeyBundleTests
         var blocker = sender.SendReliableAsync([Receiver], Move(1)).AsTask();
         await WaitFor(() => sender.Held == 1, "the input lane to park");
 
-        sender.Send([Receiver], Key(0));
+        SendKey(typed, sender, [Receiver], 0);
 
         sender.Send([Receiver], Sentinel());
         sender.ReleaseLane();

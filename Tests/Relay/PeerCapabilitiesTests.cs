@@ -75,4 +75,20 @@ public class PeerCapabilitiesTests
     [TestCase("KeyEventBatch,KeyEventBatch")]
     public void ANumberIsNotACapability(string name) =>
         Assert.That(PeerCapabilities.Parse([name]), Is.Empty, $"'{name}' is not a capability NAME");
+    /// <summary>
+    /// A null ELEMENT is ignored, not thrown on.
+    ///
+    /// <para>The array is deserialised from a peer's message and <c>["KeyEventBatch", null]</c> is valid
+    /// JSON, so a null can be in there whatever the type says — which is why the element is declared
+    /// nullable. The guard is load-bearing rather than decorative: <c>FrozenDictionary.TryGetValue(null)</c>
+    /// throws <c>ArgumentNullException</c>, and it would take the whole advertisement down with it.</para>
+    /// </summary>
+    [Test]
+    public void ANullNameIsIgnoredAndCostsTheOthersNothing()
+    {
+        var parsed = PeerCapabilities.Parse(["KeyEventBatch", null]);
+
+        Assert.That(parsed, Is.EquivalentTo([PeerCapability.KeyEventBatch]),
+            "a null name either threw or took the rest of the advertisement with it");
+    }
 }

@@ -110,8 +110,8 @@ internal static class HydraTui
         // and an inherited background would make the lamp's own colour depend on the terminal's theme. It is
         // the one choice here that a light-background terminal would notice.
         //
-        // Orange by RGB, because the 16-colour names have none and BrightYellow reads as a warning rather
-        // than as work in progress.
+        // Orange by RGB (255,145,0), because the 16-colour names have none and BrightYellow reads as a
+        // warning rather than as work in progress. Blue is left to its zero default rather than written.
         private static readonly Terminal.Gui.Drawing.Scheme ConnectingScheme = new(new Terminal.Gui.Drawing.Attribute(
             new Terminal.Gui.Drawing.Color(255, 145), new Terminal.Gui.Drawing.Color(Terminal.Gui.Drawing.ColorName16.Black)));
 
