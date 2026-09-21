@@ -36,7 +36,10 @@ cd "$(dirname "$0")"
 SDK_IMAGE="mcr.microsoft.com/dotnet/sdk:10.0"
 SLN="Hydra.sln"
 # A lane that had nothing to run says so with its own code, so run_lane never calls a skip a pass.
-LANE_SKIPPED=3
+# 97 because it must not collide with anything a real tool returns: VSTest uses 0/1, docker 125-127,
+# ssh 255, a signal 128+n, and Microsoft.Testing.Platform defines meaningful codes in the 2-8 band —
+# a lane exiting 3 under that runner would be printed as "skipped" and exit the gate zero.
+LANE_SKIPPED=97
 WIN_HOST="${HYDRA_WINDOWS_TEST_HOST:-}"
 WIN_DIR="${HYDRA_WINDOWS_TEST_PATH:-/cygdrive/c/tmp/hydra}"
 # Kept OUTSIDE the synced tree so a re-sync never wipes the package cache or the fabricated profile.
@@ -57,6 +60,8 @@ run_lane() {
 	local name="$1"; shift
 	local log rc
 	log="$(mktemp)"
+	# shellcheck disable=SC2064 — $log must expand NOW, not when the trap fires.
+	trap "rm -f '$log'" RETURN
 	# The lane's OWN exit code, not the pipeline's: tee succeeds whatever the tests did. Guarded by
 	# `set +e` because -e would abort the script before this line could read it.
 	set +e
@@ -64,12 +69,32 @@ run_lane() {
 	rc=${PIPESTATUS[0]}
 	set -e
 
-	if grep -qE "Test Run Aborted|Test host process crashed|The active test run was aborted" "$log"; then
+	# grep exits 0 matched, 1 no match, 2 COULD NOT READ — and `if grep -q` treats 2 exactly like 1,
+	# so a log that went missing or was truncated would silently answer "nothing wrong here".
+	# `|| var=$?` rather than a bare call: a grep that finds nothing exits 1, and under errexit that
+	# would kill this function before it could say anything. Captured this way the status is readable
+	# whatever errexit is doing, which matters because 1 (no match) and 2 (could not read) mean
+	# opposite things and only one of them is good news.
+	local aborted=0 nothing=0
+	grep -iqE "Test Run Aborted|Test Run Canceled|Test host process crashed|The active test run was aborted" "$log" || aborted=$?
+	grep -iqF "No test matches the given testcase filter" "$log" || nothing=$?
+	rm -f "$log"
+
+	if [ "$aborted" -eq 0 ]; then
 		echo "── $name: FAILED — the test host died mid-run; the summary above counts only what reported ──" >&2
-		rm -f "$log"
 		return 1
 	fi
-	rm -f "$log"
+	if [ "$aborted" -gt 1 ] || [ "$nothing" -gt 1 ]; then
+		echo "── $name: FAILED — could not read the lane's own output, so its verdict cannot be trusted ──" >&2
+		return 1
+	fi
+	# A filter that selects nothing EXITS ZERO. The linux lane is seven tests hanging off one
+	# [Category("Linux")] attribute, so renaming that attribute would otherwise report a green lane
+	# for ever while testing nothing at all.
+	if [ "$nothing" -eq 0 ]; then
+		echo "── $name: FAILED — the filter matched no tests, so this lane covered nothing ──" >&2
+		return 1
+	fi
 
 	if [ "$rc" -eq "$LANE_SKIPPED" ]; then
 		echo "── $name: skipped ──"
@@ -133,12 +158,15 @@ run_windows() {
 	fi
 
 	echo "── Windows tests (synced to $WIN_HOST:$WIN_DIR) ───────────────────"
-	ssh "$WIN_HOST" "mkdir -p '$WIN_DIR'"
+	# Each step checks itself. run_lane clears errexit so it can read the lane's exit code, and that
+	# clearing reaches in here — so an unchecked command would let a FAILED SYNC report a green lane
+	# against whatever tree the box happens to still be holding from the last run.
+	ssh "$WIN_HOST" "mkdir -p '$WIN_DIR'" || return 1
 	# .git is excluded for speed, but Tests/Setup/TestLog.FindSolutionRoot needs a .sln + a .git dir
 	# to locate the test-output folder — so drop an empty .git marker after extracting.
 	COPYFILE_DISABLE=1 tar czf - \
 		--exclude='./.git' --exclude='*/bin' --exclude='*/obj' --exclude='./test-output' \
-		-C "$PWD" . | ssh "$WIN_HOST" "cd '$WIN_DIR' && tar xzf - && mkdir -p .git"
+		-C "$PWD" . | ssh "$WIN_HOST" "cd '$WIN_DIR' && tar xzf - && mkdir -p .git" || return 1
 
 	ssh "$WIN_HOST" bash <<REMOTE
 export PATH="\$PATH:/cygdrive/c/Program Files/dotnet"
