@@ -114,6 +114,16 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial int XPending(nint display);
 
+    // XEventsQueued modes. XPending is XEventsQueued(QueuedAfterFlush), which flushes the output
+    // buffer and reads the socket on EVERY call — a write and a read per motion event if it drives
+    // the event loop. QueuedAlready touches neither; QueuedAfterReading reads without flushing.
+    internal const int QueuedAlready = 0;
+    internal const int QueuedAfterReading = 1;
+
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int XEventsQueued(nint display, int mode);
+
     // returns the file descriptor of the X11 connection — used with poll() for blocking event wait
     [LibraryImport(X11)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]

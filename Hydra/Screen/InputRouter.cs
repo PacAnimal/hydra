@@ -30,12 +30,19 @@ public class InputRouter(
     IActivityTracker activityTracker,
     IWorldState? peerState = null,
     Func<long>? getTickCount = null,
-    PeerPlatform? localPlatform = null)
+    PeerPlatform? localPlatform = null,
+    TimeProvider? timeProvider = null)
     : IHostedService
 {
 
     private const int MaxMouseHz = 125; // should divide evenly by 1000
     private const int MinMouseIntervalMs = 1000 / MaxMouseHz;
+
+    // How far the physical cursor may drift from the warp point, as a fraction of the half-screen,
+    // before it is parked back. It only has to stay clear of the local screen edges while the pointer
+    // is on a virtual screen, and a warp is an X request plus a socket flush — paid at the mouse's
+    // full polling rate if it happens once per sample.
+    private const double WarpDeadZone = 0.10;
 
     private readonly IWorldState _peerState = peerState ?? new WorldState();
     private readonly Func<long> _getTickCount = getTickCount ?? (() => Environment.TickCount64);
@@ -52,6 +59,10 @@ public class InputRouter(
     private readonly Lock _mouseBatchLock = new();
     private CoalescingBatch<MouseInputKind, double>? _openMouseBatch;
     private int _postedMouseBatchCount;
+    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+    private ITimer? _mouseFlushTimer;
+    private long _lastMouseBatchPostTick;
+    private bool _mouseFlushArmed;
 
     internal int PostedMouseBatchCount => Volatile.Read(ref _postedMouseBatchCount);
 
@@ -113,6 +124,9 @@ public class InputRouter(
 
         _pollCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
+        // one-shot, and armed only while a batch is waiting, so an idle master schedules nothing
+        _mouseFlushTimer = _time.CreateTimer(_ => FlushMouseBatch(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+
         // start consumer before event tap so early events are processed
         _consumerTask = Task.Run(ProcessCommands, cancellationToken);
 
@@ -141,6 +155,10 @@ public class InputRouter(
         _screenSaverSync.ScreenLocked -= OnLockDetected;
         _screenSaverSync.ScreenUnlocked -= OnScreenUnlocked;
         platform.StopEventTap();
+
+        // no more samples can arrive, so nothing may post a batch after the writer completes
+        _mouseFlushTimer?.Dispose();
+        _mouseFlushTimer = null;
 
         // drain remaining commands, then stop consumer
         _commands.Writer.TryComplete();
@@ -204,10 +222,12 @@ public class InputRouter(
     }
 
     // posts a fence command and awaits it — all previously queued commands will have been processed on return.
-    // used by tests to synchronize after firing platform events.
+    // used by tests to synchronize after firing platform events. Seals first, so input captured into a
+    // batch still waiting out its interval is part of what the fence covers.
     internal Task FlushAsync()
     {
         if (_consumerTask == null) return Task.CompletedTask;
+        SealMouseBatch();
         var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         if (!_commands.Writer.TryWrite(_ => { tcs.TrySetResult(); return ValueTask.CompletedTask; }))
             return Task.CompletedTask;
@@ -373,8 +393,7 @@ public class InputRouter(
                     platform.IsOnVirtualScreen = true;
                     ApplyEnterScreen(st, dest, remoteInfo, savedX, savedY);
                     // anchor immediately (bogus filter); delay physical warp until the shield is absorbing
-                    st.LastWarpX = st.WarpX;
-                    st.LastWarpY = st.WarpY;
+                    AnchorAtWarpPoint(st);
                     await platform.WarpToPark(st.WarpX, st.WarpY);
                     SendEnterScreen(dest, savedX, savedY);
                     log.LogInformation("Restored cursor to '{Screen}' after screensaver", savedScreen);
@@ -1025,8 +1044,7 @@ public class InputRouter(
         ApplyEnterScreen(st, hit.Destination, remoteInfo, hit.EntryX, hit.EntryY);
         // set the warp anchor immediately so pre-queued events compute large dx → caught by bogus filter,
         // but delay the physical warp until the shield is actually absorbing (avoids hover at the park point)
-        st.LastWarpX = st.WarpX;
-        st.LastWarpY = st.WarpY;
+        AnchorAtWarpPoint(st);
         await platform.WarpToPark(st.WarpX, st.WarpY);
         log.LogInformation("Entered remote screen '{Name}' → ({X}, {Y})", hit.Destination.Name, hit.EntryX, hit.EntryY);
         SendEnterScreen(hit.Destination, hit.EntryX, hit.EntryY);
@@ -1047,13 +1065,7 @@ public class InputRouter(
         if (prevScreen != null)
             HandleIntraHostTransition(st);
         else
-        {
-            // same screen — accumulate scaled deltas for throttle
-            var isRelative = st.RelativeMouseScreens.GetValueOrDefault(st.Mouse.CurrentScreen!.Name);
-            var scale = isRelative ? (double)(st.Mouse.RelativeMouseScale ?? st.Mouse.MouseScale) : (double)st.Mouse.MouseScale;
-            st.PendingDx += dx * scale;
-            st.PendingDy += dy * scale;
-        }
+            AccumulateScaled(st, dx, dy);
 
         var now = _getTickCount();
         if (now - st.LastVirtualLogTick >= 100)
@@ -1124,11 +1136,7 @@ public class InputRouter(
         if (now - st.LastMouseSendTick >= MinMouseIntervalMs)
             SendMousePosition(st, now);
 
-        // warp to center on every event; LastWarpX/Y anchored to warp center so Mac/Windows
-        // synthetic warp events compute dx=0 and are dropped by the zero-delta filter above
-        platform.WarpCursor(st.WarpX, st.WarpY);
-        st.LastWarpX = st.WarpX;
-        st.LastWarpY = st.WarpY;
+        RecenterIfDrifted(st, dx, dy, deltasFromPositions: true);
     }
 
     private void HandleIntraHostTransition(LocalMasterState st)
@@ -1205,25 +1213,57 @@ public class InputRouter(
     {
         lock (_mouseBatchLock)
         {
-            if (_openMouseBatch == null || !_openMouseBatch.Matches(kind))
-            {
-                var batch = new CoalescingBatch<MouseInputKind, double>(kind, accumulate: kind == MouseInputKind.Delta);
-                _openMouseBatch = batch;
-                if (!_commands.Writer.TryWrite(st => ProcessMouseBatch(st, batch)))
-                {
-                    _openMouseBatch = null;
-                    return;
-                }
-                Interlocked.Increment(ref _postedMouseBatchCount);
-            }
+            // a different kind cannot coalesce into the open batch — release that one and start over
+            if (_openMouseBatch != null && !_openMouseBatch.Matches(kind))
+                PostOpenMouseBatch();
 
+            _openMouseBatch ??= new CoalescingBatch<MouseInputKind, double>(kind, accumulate: kind == MouseInputKind.Delta);
             _openMouseBatch.Add(x, y);
+
+            // Raw samples arrive at the mouse's polling rate — ~900/s on an ordinary one — and posting
+            // an actor command each costs a thread-pool wake per sample while buying nothing, since
+            // sends are throttled to MaxMouseHz anyway. Holding the batch for the rest of the interval
+            // loses no movement: deltas accumulate and absolute samples keep the latest.
+            var due = MinMouseIntervalMs - (_getTickCount() - _lastMouseBatchPostTick);
+            if (due <= 0)
+                PostOpenMouseBatch();
+            else
+                ArmMouseFlush(due);
         }
     }
 
+    // Releases the open batch so the command queued after it cannot overtake motion already captured.
     private void SealMouseBatch()
     {
-        lock (_mouseBatchLock) _openMouseBatch = null;
+        lock (_mouseBatchLock) PostOpenMouseBatch();
+    }
+
+    // caller holds _mouseBatchLock
+    private void PostOpenMouseBatch()
+    {
+        var batch = _openMouseBatch;
+        if (batch == null) return;
+        _openMouseBatch = null;
+        _lastMouseBatchPostTick = _getTickCount();
+        if (!_commands.Writer.TryWrite(st => ProcessMouseBatch(st, batch))) return;
+        Interlocked.Increment(ref _postedMouseBatchCount);
+    }
+
+    // caller holds _mouseBatchLock
+    private void ArmMouseFlush(long dueMs)
+    {
+        if (_mouseFlushArmed) return;
+        _mouseFlushArmed = true;
+        _mouseFlushTimer?.Change(TimeSpan.FromMilliseconds(dueMs), Timeout.InfiniteTimeSpan);
+    }
+
+    private void FlushMouseBatch()
+    {
+        lock (_mouseBatchLock)
+        {
+            _mouseFlushArmed = false;
+            PostOpenMouseBatch();
+        }
     }
 
     private async ValueTask ProcessMouseBatch(LocalMasterState st, CoalescingBatch<MouseInputKind, double> batch)
@@ -1231,10 +1271,7 @@ public class InputRouter(
         double x, y;
         var kind = batch.Kind;
         lock (_mouseBatchLock)
-        {
-            if (ReferenceEquals(_openMouseBatch, batch)) _openMouseBatch = null;
             (x, y) = batch.Snapshot();
-        }
 
         st.LastInputTick = _getTickCount();
         await activityTracker.LocalActivity();
@@ -1261,7 +1298,7 @@ public class InputRouter(
         if (prevScreen != null)
         {
             HandleIntraHostTransition(st);
-            if (st.ActiveLocalScreen != null) platform.WarpCursor(st.WarpX, st.WarpY);
+            Recenter(st);
             return;
         }
 
@@ -1303,20 +1340,90 @@ public class InputRouter(
             }
         }
 
-        var isRelative = st.RelativeMouseScreens.GetValueOrDefault(st.Mouse.CurrentScreen!.Name);
-        var scale = isRelative ? (double)(st.Mouse.RelativeMouseScale ?? st.Mouse.MouseScale) : (double)st.Mouse.MouseScale;
-        st.PendingDx += dx * scale;
-        st.PendingDy += dy * scale;
+        AccumulateScaled(st, dx, dy);
 
         var now = _getTickCount();
         if (now - st.LastMouseSendTick >= MinMouseIntervalMs)
             SendMousePosition(st, now);
 
-        // warp to keep cursor near center — prevents it hitting local screen edges while on virtual
-        if (st.ActiveLocalScreen != null) platform.WarpCursor(st.WarpX, st.WarpY);
+        RecenterIfDrifted(st, dx, dy, deltasFromPositions: false);
     }
 
     private enum MouseInputKind { Absolute, Delta }
+
+    // One accumulator serves both modes: relative sends it as a delta and keeps the sub-pixel
+    // remainder, absolute discards it and sends the virtual position instead. Resolving the scale
+    // here is what keeps both capture surfaces to a single expression with no mode knowledge.
+    private static void AccumulateScaled(LocalMasterState st, double dx, double dy)
+    {
+        var isRelative = st.RelativeMouseScreens.GetValueOrDefault(st.Mouse.CurrentScreen!.Name);
+        var scale = isRelative ? (double)(st.Mouse.RelativeMouseScale ?? st.Mouse.MouseScale) : (double)st.Mouse.MouseScale;
+        st.PendingDx += dx * scale;
+        st.PendingDy += dy * scale;
+    }
+
+    // Re-anchors the delta reference on the warp point. Every place that physically parks the cursor
+    // there owes this, or the next sample measures its delta from where the cursor used to be.
+    private static void AnchorAtWarpPoint(LocalMasterState st)
+    {
+        st.LastWarpX = st.WarpX;
+        st.LastWarpY = st.WarpY;
+        st.DriftX = 0;
+        st.DriftY = 0;
+    }
+
+    private void Recenter(LocalMasterState st)
+    {
+        if (st.ActiveLocalScreen == null) return;
+        platform.WarpCursor(st.WarpX, st.WarpY);
+        AnchorAtWarpPoint(st);
+    }
+
+    // Keeps the physical cursor clear of the local screen edges while the pointer is on a virtual
+    // screen, warping once it has drifted out of WarpDeadZone instead of once per sample. Both
+    // capture surfaces hand over the same deltas, so the behaviour is identical on all three.
+    //
+    // deltasFromPositions says the caller SUBTRACTS POSITIONS to get its deltas, which is what
+    // decides whether a warp can lose movement. Such a surface loses everything the cursor travelled
+    // between the sample being handled and the warp landing: the next sample measures from the warp
+    // point, and the events still queued at the old position produce a jump the bogus filter throws
+    // away. So read the position one last time and account for the difference BEFORE moving the
+    // cursor. A surface reporting raw device deltas must NOT do this — a warp neither consumes nor
+    // duplicates one, so what would be read here is movement its own next event still carries.
+    private void RecenterIfDrifted(LocalMasterState st, double dx, double dy, bool deltasFromPositions)
+    {
+        if (st.ActiveLocalScreen == null) return;
+        st.DriftX += dx;
+        st.DriftY += dy;
+        if (Math.Abs(st.DriftX) < st.HalfW * WarpDeadZone && Math.Abs(st.DriftY) < st.HalfH * WarpDeadZone)
+        {
+            // no warp, so the reference is wherever the cursor actually ended up — which is what
+            // makes a surface reporting absolute positions agree with one reporting deltas
+            st.LastWarpX = st.WarpX + st.DriftX;
+            st.LastWarpY = st.WarpY + st.DriftY;
+            return;
+        }
+
+        if (deltasFromPositions) ApplyResidualMovement(st);
+        Recenter(st);
+    }
+
+    // Folds in whatever the cursor travelled past the sample being handled, read from the platform
+    // immediately before the warp that would otherwise discard it.
+    private void ApplyResidualMovement(LocalMasterState st)
+    {
+        if (platform.GetCursorPosition() is not { } actual) return;
+        var residualX = actual.X - (st.WarpX + st.DriftX);
+        var residualY = actual.Y - (st.WarpY + st.DriftY);
+        if (residualX == 0 && residualY == 0) return;
+
+        st.DriftX += residualX;
+        st.DriftY += residualY;
+        if (st.Mouse.ApplyDelta(residualX, residualY) != null)
+            HandleIntraHostTransition(st);
+        else
+            AccumulateScaled(st, residualX, residualY);
+    }
 
     // evdev cross-host transitions; called from consumer, so st access is safe
     private async ValueTask HandleEvdevCrossHostTransitionAsync(LocalMasterState st, ScreenRect leavingScreen, EdgeHit hit)
@@ -1376,6 +1483,8 @@ public class InputRouter(
         st.HalfH = screen.Height / 2;
         st.WarpX = screen.X + st.HalfW;
         st.WarpY = screen.Y + st.HalfH;
+        st.DriftX = 0;
+        st.DriftY = 0;
         cursorHider.UpdateWarpPoint(st.WarpX, st.WarpY);
     }
 
@@ -1409,6 +1518,7 @@ public class InputRouter(
         public VirtualMouseState Mouse = new();
         public int WarpX, WarpY, HalfW, HalfH;
         public double LastWarpX, LastWarpY;
+        public double DriftX, DriftY;
         public long LastVirtualLogTick;
         public bool LockedToScreen;
         // remote-only with no local screen: confine the cursor to the current remote screen.

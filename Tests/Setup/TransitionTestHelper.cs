@@ -40,14 +40,20 @@ public static class TransitionTestHelper
     /// The world the router records peers in. Pass one to READ what the router wrote — what a peer
     /// advertised is only observable there, and nothing else in the process can see it.
     /// </param>
-    public static TestServiceBundle CreateService(Func<long>? getTickCount = null, IActivityTracker? activityTracker = null, IWorldState? world = null)
+    /// <param name="timeProvider">
+    /// Where the router's timers come from. Pass a <see cref="ManualTimerProvider"/> to fire the
+    /// mouse-batch flush on demand rather than racing the few milliseconds it is armed for.
+    /// </param>
+    public static TestServiceBundle CreateService(Func<long>? getTickCount = null, IActivityTracker? activityTracker = null, IWorldState? world = null,
+        TimeProvider? timeProvider = null)
     {
         var platform = new FakePlatform();
         var relay = new FakeRelay();
         var screens = new FakeScreenDetector();
         var tracker = activityTracker ?? new ActivityTracker(TestConfig, new Lazy<IRelaySender>(() => relay), new WorldState(), new NullScreenSaverSync(), NullLogger<ActivityTracker>.Instance);
         var service = new InputRouter(platform, platform, TestConfig, relay, screens, NullLoggerFactory.Instance, NullLogger<InputRouter>.Instance, new NullScreenSaverSync(), new NullClipboardSync(),
-            FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification(), tracker, peerState: world, getTickCount: getTickCount);
+            FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification(), tracker, peerState: world, getTickCount: getTickCount,
+            timeProvider: timeProvider);
         platform.AfterFireCallback = service.FlushAsync;
         return new TestServiceBundle(platform, relay, service);
     }

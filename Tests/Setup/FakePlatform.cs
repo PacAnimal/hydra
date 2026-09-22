@@ -16,6 +16,11 @@ public sealed class FakePlatform : IPlatformInput, ICursorHider
     public bool HideCursorCalled { get; set; }
     public bool ShowCursorCalled { get; set; }
     public int WarpX { get; private set; }
+    public int WarpCount { get; private set; }
+
+    // where the router will see the cursor if it asks. Null (the ICursor default) means the platform
+    // cannot say, which is how a test covers the surfaces that have no answer.
+    public (int X, int Y)? CursorPosition { get; set; }
     public int WarpY { get; private set; }
 
     // set to InputRouter.FlushAsync to synchronize channel consumer after each Fire call
@@ -62,7 +67,8 @@ public sealed class FakePlatform : IPlatformInput, ICursorHider
     public bool AnyMouseButtonHeld { get; set; }
     bool IPlatformInput.AnyMouseButtonHeld() => AnyMouseButtonHeld;
     public void StopEventTap() { }
-    public void WarpCursor(int x, int y) { WarpX = x; WarpY = y; }
+    public void WarpCursor(int x, int y) { WarpX = x; WarpY = y; WarpCount++; }
+    public (int X, int Y)? GetCursorPosition() => CursorPosition;
     // ICursorHider — what InputRouter calls
     void ICursorHider.Hide() { HideCursorCalled = true; }
     void ICursorHider.Show() { ShowCursorCalled = true; }

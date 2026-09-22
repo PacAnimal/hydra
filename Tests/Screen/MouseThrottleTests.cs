@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Cathedral.Utils;
 using Hydra.Keyboard;
 using Hydra.Relay;
 using Hydra.Screen;
@@ -9,6 +10,8 @@ namespace Tests.Screen;
 [TestFixture]
 public class MouseThrottleTests
 {
+    private const int MouseSendIntervalMs = 8;  // 1000 / MaxMouseHz
+
     private FakePlatform _platform = null!;
     private FakeRelay _relay = null!;
     private InputRouter _service = null!;
@@ -57,8 +60,11 @@ public class MouseThrottleTests
     [Test]
     public async Task RawMouseBurst_IsBoundedToInFlightAndPendingActorCommands()
     {
+        // frozen clock: every sample after the first lands inside one send interval
         var tracker = new BlockingActivityTracker();
-        var (platform, relay, service) = TransitionTestHelper.CreateService(activityTracker: tracker);
+        var timers = new ManualTimerProvider();
+        var (platform, relay, service) = TransitionTestHelper.CreateService(
+            getTickCount: () => 1000L, activityTracker: tracker, timeProvider: timers);
         await service.StartAsync(CancellationToken.None);
         await BringRemoteOnline(relay);
         platform.FireMouseMove(2559, 720);
@@ -67,15 +73,118 @@ public class MouseThrottleTests
         platform.AfterFireCallback = null;
         tracker.BlockNext();
         var before = service.PostedMouseBatchCount;
+
+        // one batch in flight, held by the blocked consumer
         platform.FireMouseMove(platform.WarpX + 2, platform.WarpY + 1);
+        timers.FireAll();
         await tracker.WaitUntilBlocked();
+
         for (var i = 0; i < 10_000; i++)
             platform.FireMouseMove(platform.WarpX + 2, platform.WarpY + 1);
+        Assert.That(service.PostedMouseBatchCount - before, Is.EqualTo(1),
+            "the whole burst coalesces into the batch still waiting out its send interval");
 
+        timers.FireAll();
         Assert.That(service.PostedMouseBatchCount - before, Is.EqualTo(2),
             "one in-flight batch plus one pending batch should absorb the entire burst");
         tracker.Release();
         await service.FlushAsync();
+        await service.StopAsync(CancellationToken.None);
+        await platform.DisposeAsync();
+    }
+
+    [Test]
+    public async Task RawSamplesWithinOneInterval_PostASingleActorCommand()
+    {
+        // frozen clock: the interval never elapses, so nothing but the first sample may post
+        var timers = new ManualTimerProvider();
+        var (platform, relay, service) = TransitionTestHelper.CreateService(
+            getTickCount: () => 1000L, timeProvider: timers);
+        await service.StartAsync(CancellationToken.None);
+        await BringRemoteOnline(relay);
+        platform.FireMouseMove(2559, 720);
+        Assert.That(platform.IsOnVirtualScreen, Is.True);
+
+        platform.AfterFireCallback = null;
+        var before = service.PostedMouseBatchCount;
+        for (var i = 0; i < 500; i++)
+            platform.FireMouseMove(platform.WarpX + 1, platform.WarpY);
+
+        Assert.That(service.PostedMouseBatchCount - before, Is.Zero,
+            "samples inside one send interval are coalesced, not posted one command apiece");
+
+        await service.StopAsync(CancellationToken.None);
+        await platform.DisposeAsync();
+    }
+
+    [Test]
+    public async Task MovementPastTheLastSample_SurvivesTheRecentringWarp()
+    {
+        // The platform reports the cursor 20px further along than the sample that crosses the dead
+        // zone — movement the warp would discard, since the next sample measures from the warp point.
+        // A platform that cannot answer is the control: there the 20px is simply lost.
+        var withResidual = await VirtualXAfterCrossingDeadZone(reportedOvershoot: 20);
+        var withoutResidual = await VirtualXAfterCrossingDeadZone(reportedOvershoot: null);
+
+        Assert.That(withResidual - withoutResidual, Is.EqualTo(20),
+            "movement past the last sample is read before the warp and folded in, not discarded");
+    }
+
+    private static async Task<int> VirtualXAfterCrossingDeadZone(int? reportedOvershoot)
+    {
+        var now = new Boxed<long>(1000L);
+        var (platform, relay, service) = TransitionTestHelper.CreateService(getTickCount: () => now.Value);
+        await service.StartAsync(CancellationToken.None);
+        await BringRemoteOnline(relay);
+        platform.FireMouseMove(2559, 720);
+
+        var warpX = platform.WarpX;
+        var warpY = platform.WarpY;
+
+        // march to just inside the dead zone — 10% of the 1280px half-screen
+        for (var i = 1; i <= 120; i++)
+            platform.FireMouseMove(warpX + i, warpY);
+
+        platform.CursorPosition = reportedOvershoot is { } overshoot ? (warpX + 128 + overshoot, warpY) : null;
+        platform.FireMouseMove(warpX + 128, warpY);  // crosses the zone: reads the position, then warps
+
+        now.Value += MouseSendIntervalMs;
+        platform.FireMouseMove(warpX + 1, warpY);    // carries the accumulated position out on a send
+
+        var json = relay.Sent.Last(s => s.Kind == MessageKind.MouseMove).Json;
+        var message = JsonSerializer.Deserialize<MouseMoveMessage>(json, Cathedral.Config.SaneJson.Options)!;
+
+        await service.StopAsync(CancellationToken.None);
+        await platform.DisposeAsync();
+        return message.X;
+    }
+
+    [Test]
+    public async Task CursorIsRecentred_OnlyAfterItDriftsOutOfTheDeadZone()
+    {
+        var (platform, relay, service) = TransitionTestHelper.CreateService();
+        await service.StartAsync(CancellationToken.None);
+        await BringRemoteOnline(relay);
+        platform.FireMouseMove(2559, 720);
+        Assert.That(platform.IsOnVirtualScreen, Is.True);
+
+        // dead zone is 10% of the half-screen, so 128px on a 2560-wide local screen
+        var warpX = platform.WarpX;
+        var warpY = platform.WarpY;
+        var before = platform.WarpCount;
+
+        for (var i = 1; i <= 100; i++)
+            platform.FireMouseMove(warpX + i, warpY);
+        Assert.That(platform.WarpCount, Is.EqualTo(before),
+            "a cursor still inside the dead zone costs no warp at all");
+
+        // the march stops at the crossing: a real platform delivers the next sample near the centre
+        // the warp just moved the cursor to, so drift restarts there rather than carrying on
+        for (var i = 101; i <= 128; i++)
+            platform.FireMouseMove(warpX + i, warpY);
+        Assert.That(platform.WarpCount, Is.EqualTo(before + 1),
+            "crossing the dead zone recentres exactly once");
+
         await service.StopAsync(CancellationToken.None);
         await platform.DisposeAsync();
     }

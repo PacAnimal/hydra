@@ -200,13 +200,22 @@ public sealed class XorgInputHandler : IPlatformInput
 
             while (_running)
             {
-                if (NativeMethods.XPending(_display) > 0)
+                // QueuedAlready touches neither the socket nor the output buffer, so a burst of
+                // already-buffered motion events drains without a flush and a read apiece. Flush
+                // only when the queue runs dry and we are about to block, so that anything a
+                // handler buffered still reaches the server.
+                if (NativeMethods.XEventsQueued(_display, NativeMethods.QueuedAlready) == 0)
                 {
-                    _ = NativeMethods.XNextEvent(_display, out var ev);
-                    HandleEvent(ref ev);
+                    _ = NativeMethods.XFlush(_display);
+                    if (NativeMethods.XEventsQueued(_display, NativeMethods.QueuedAfterReading) == 0)
+                    {
+                        NativeMethods.poll(ref pfd, 1, 100);  // block up to 100ms, then check _running
+                        continue;
+                    }
                 }
-                else
-                    NativeMethods.poll(ref pfd, 1, 100);  // block up to 100ms, then check _running
+
+                _ = NativeMethods.XNextEvent(_display, out var ev);
+                HandleEvent(ref ev);
             }
         })
         { IsBackground = true, Name = "HydraXorgEventTap" };
