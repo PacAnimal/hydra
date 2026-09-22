@@ -215,6 +215,7 @@ internal static class HydraTui
         private readonly TextField _mouseScale = new();
         private readonly TextField _relativeMouseScale = new();
         private readonly TextField _deadCorners = new();
+        private readonly TextField _maxMouseHz = new();
         private readonly CheckBox _hideCursor = new() { Text = "Hide Cursor" };
         private readonly CheckBox _remoteOnly = new() { Text = "Remote Only" };
         private readonly CheckBox _syncScreensaver = new() { Text = "Sync Screensaver" };
@@ -613,11 +614,13 @@ internal static class HydraTui
             AddFieldAt(profile, "Mouse Scale", _mouseScale, 53, 69, 7, 18, "Slave fallback cursor-speed multiplier. Master profiles must leave this empty.");
             AddFieldAt(profile, "Relative Scale", _relativeMouseScale, 53, 69, 9, 18, "Slave fallback relative-mode cursor-speed multiplier.");
             AddFieldAt(profile, "Dead Corners", _deadCorners, 53, 69, 11, 18, "Pixels at each screen corner that do not trigger an edge transition.");
+            AddFieldAt(profile, "Max Mouse Hz", _maxMouseHz, 53, 69, 13, 18, "Master: how many mouse updates a second are sent to a slave. Higher costs master CPU.");
             AddDefaultHint(profile, _conditionSsid, "any SSID");
             AddDefaultHint(profile, _conditionScreens, "any count");
             AddDefaultHint(profile, _mouseScale, "1.0");
             AddDefaultHint(profile, _relativeMouseScale, "mouse scale");
             AddDefaultHint(profile, _deadCorners, "0 px");
+            AddDefaultHint(profile, _maxMouseHz, $"{HydraProfile.DefaultMaxMouseHz} Hz");
             profile.Add(_profilePosition, _previousProfile, _nextProfile);
             BindConfigHelp(_previousProfile, "Previous Profile", "Move to the previous profile. Disabled on the first profile or when only one exists.");
             BindConfigHelp(_nextProfile, "Next Profile", "Move to the next profile. Disabled on the last profile or when only one exists.");
@@ -1105,6 +1108,7 @@ internal static class HydraTui
             _mouseScale.Text = profile.MouseScale?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "";
             _relativeMouseScale.Text = profile.RelativeMouseScale?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "";
             _deadCorners.Text = profile.DeadCorners?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "";
+            _maxMouseHz.Text = profile.MaxMouseHz?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "";
             SetChecked(_hideCursor, profile.HideCursor);
             SetChecked(_remoteOnly, profile.RemoteOnly);
             SetChecked(_syncScreensaver, profile.SyncScreensaver);
@@ -1141,6 +1145,7 @@ internal static class HydraTui
                 GuidedConfigDocument.ParseDecimal(_mouseScale.Text, "Mouse scale"),
                 GuidedConfigDocument.ParseDecimal(_relativeMouseScale.Text, "Relative mouse scale"),
                 GuidedConfigDocument.ParseInt(_deadCorners.Text, "Dead corners"),
+                GuidedConfigDocument.ParseInt(_maxMouseHz.Text, "Max mouse Hz"),
                 0,
                 0));
         }

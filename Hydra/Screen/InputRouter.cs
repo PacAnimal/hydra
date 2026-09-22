@@ -35,8 +35,10 @@ public class InputRouter(
     : IHostedService
 {
 
-    private const int MaxMouseHz = 125; // should divide evenly by 1000
-    private const int MinMouseIntervalMs = 1000 / MaxMouseHz;
+    // How often a mouse position is sent to a slave, and therefore how long a batch of raw samples is
+    // held before it is processed. Both come off the one number, so raising it moves them together.
+    // Integer division truncates, so a rate that does not divide 1000 lands on the next rate up.
+    private readonly int _minMouseIntervalMs = Math.Max(1, 1000 / profile.MaxMouseHz);
 
     // How far the physical cursor may drift from the warp point, as a fraction of the half-screen,
     // before it is parked back. It only has to stay clear of the local screen edges while the pointer
@@ -1132,8 +1134,8 @@ public class InputRouter(
             }
         }
 
-        // throttle mouse sends to MaxMouseHz
-        if (now - st.LastMouseSendTick >= MinMouseIntervalMs)
+        // throttle mouse sends to the configured rate
+        if (now - st.LastMouseSendTick >= _minMouseIntervalMs)
             SendMousePosition(st, now);
 
         RecenterIfDrifted(st, dx, dy, deltasFromPositions: true);
@@ -1222,9 +1224,9 @@ public class InputRouter(
 
             // Raw samples arrive at the mouse's polling rate — ~900/s on an ordinary one — and posting
             // an actor command each costs a thread-pool wake per sample while buying nothing, since
-            // sends are throttled to MaxMouseHz anyway. Holding the batch for the rest of the interval
+            // sends are throttled to the configured rate anyway. Holding the batch for the rest of the interval
             // loses no movement: deltas accumulate and absolute samples keep the latest.
-            var due = MinMouseIntervalMs - (_getTickCount() - _lastMouseBatchPostTick);
+            var due = _minMouseIntervalMs - (_getTickCount() - _lastMouseBatchPostTick);
             if (due <= 0)
                 PostOpenMouseBatch();
             else
@@ -1343,7 +1345,7 @@ public class InputRouter(
         AccumulateScaled(st, dx, dy);
 
         var now = _getTickCount();
-        if (now - st.LastMouseSendTick >= MinMouseIntervalMs)
+        if (now - st.LastMouseSendTick >= _minMouseIntervalMs)
             SendMousePosition(st, now);
 
         RecenterIfDrifted(st, dx, dy, deltasFromPositions: false);

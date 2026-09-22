@@ -73,6 +73,7 @@ internal sealed class GuidedConfigDocument
             Decimal(profile, "mouseScale"),
             Decimal(profile, "relativeMouseScale"),
             Int(profile, "deadCorners"),
+            Int(profile, "maxMouseHz"),
             (profile["hosts"] as JsonArray)?.Count ?? 0,
             (profile["screenDefinitions"] as JsonArray)?.Count ?? 0);
     }
@@ -95,6 +96,7 @@ internal sealed class GuidedConfigDocument
         SetOptionalNumber(profile, "mouseScale", fields.MouseScale);
         SetOptionalNumber(profile, "relativeMouseScale", fields.RelativeMouseScale);
         SetOptionalNumber(profile, "deadCorners", fields.DeadCorners);
+        SetOptionalNumber(profile, "maxMouseHz", fields.MaxMouseHz);
     }
 
     internal string ToJson() => _root.ToJsonString(PrettyJson) + Environment.NewLine;
@@ -184,4 +186,4 @@ internal sealed record GuidedProfileFields(
     string? NetworkConfig, string? EmbeddedServer, string? EmbeddedPassword, int? EmbeddedPort,
     string? EmbeddedServerPassword, bool HideCursor, bool RemoteOnly, bool SyncScreensaver,
     bool ScreenLockPropagation, bool AccelerateMouseWheel, bool UnicodeKeyRepeat, decimal? MouseScale,
-    decimal? RelativeMouseScale, int? DeadCorners, int HostCount, int ScreenDefinitionCount);
+    decimal? RelativeMouseScale, int? DeadCorners, int? MaxMouseHz, int HostCount, int ScreenDefinitionCount);

@@ -16,9 +16,13 @@ public static class TransitionTestHelper
         new HydraProfile(new HydraConfigFile { Name = name }, config);
 
     // "home" is the local screen; "remote" is a real remote host
-    public static readonly IHydraProfile TestConfig = Profile("home", new HydraConfig
+    public static readonly IHydraProfile TestConfig = ProfileWith();
+
+    // the standard two-host master, with room for the one setting a test wants to vary
+    public static IHydraProfile ProfileWith(int? maxMouseHz = null) => Profile("home", new HydraConfig
     {
         Mode = Mode.Master,
+        MaxMouseHz = maxMouseHz,
         Hosts =
         [
             new HostConfig
@@ -44,14 +48,16 @@ public static class TransitionTestHelper
     /// Where the router's timers come from. Pass a <see cref="ManualTimerProvider"/> to fire the
     /// mouse-batch flush on demand rather than racing the few milliseconds it is armed for.
     /// </param>
+    /// <param name="profile">The master profile to run, for a test that varies a configured setting.</param>
     public static TestServiceBundle CreateService(Func<long>? getTickCount = null, IActivityTracker? activityTracker = null, IWorldState? world = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null, IHydraProfile? profile = null)
     {
         var platform = new FakePlatform();
         var relay = new FakeRelay();
         var screens = new FakeScreenDetector();
-        var tracker = activityTracker ?? new ActivityTracker(TestConfig, new Lazy<IRelaySender>(() => relay), new WorldState(), new NullScreenSaverSync(), NullLogger<ActivityTracker>.Instance);
-        var service = new InputRouter(platform, platform, TestConfig, relay, screens, NullLoggerFactory.Instance, NullLogger<InputRouter>.Instance, new NullScreenSaverSync(), new NullClipboardSync(),
+        var config = profile ?? TestConfig;
+        var tracker = activityTracker ?? new ActivityTracker(config, new Lazy<IRelaySender>(() => relay), new WorldState(), new NullScreenSaverSync(), NullLogger<ActivityTracker>.Instance);
+        var service = new InputRouter(platform, platform, config, relay, screens, NullLoggerFactory.Instance, NullLogger<InputRouter>.Instance, new NullScreenSaverSync(), new NullClipboardSync(),
             FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification(), tracker, peerState: world, getTickCount: getTickCount,
             timeProvider: timeProvider);
         platform.AfterFireCallback = service.FlushAsync;

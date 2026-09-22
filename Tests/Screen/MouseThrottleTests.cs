@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Cathedral.Utils;
+using Hydra.Config;
 using Hydra.Keyboard;
 using Hydra.Relay;
 using Hydra.Screen;
@@ -10,7 +11,7 @@ namespace Tests.Screen;
 [TestFixture]
 public class MouseThrottleTests
 {
-    private const int MouseSendIntervalMs = 8;  // 1000 / MaxMouseHz
+    private const int MouseSendIntervalMs = 1000 / HydraProfile.DefaultMaxMouseHz;
 
     private FakePlatform _platform = null!;
     private FakeRelay _relay = null!;
@@ -115,6 +116,47 @@ public class MouseThrottleTests
 
         await service.StopAsync(CancellationToken.None);
         await platform.DisposeAsync();
+    }
+
+    [Test]
+    public async Task ConfiguredMaxMouseHz_DecidesBothTheSendRateAndTheBatchInterval()
+    {
+        // 50 Hz is a 20ms interval against the default's 8 — a configured value that never reached
+        // the router would leave both of those at 8 and the counts identical
+        var atDefault = await SendsOverSixtyMillisecondsOfMotion(maxMouseHz: null);
+        var atFifty = await SendsOverSixtyMillisecondsOfMotion(maxMouseHz: 50);
+
+        using (Assert.EnterMultipleScope())
+        {
+            // within one, because whether the window's first send lands inside it is a fencepost and
+            // not the property; the ratio between the two is
+            Assert.That(atDefault, Is.EqualTo(60 / (1000 / HydraProfile.DefaultMaxMouseHz)).Within(1), "the default sends about once per 8ms");
+            Assert.That(atFifty, Is.EqualTo(60 / 20).Within(1), "50 Hz sends about once per 20ms");
+            Assert.That(atDefault, Is.GreaterThan(atFifty * 2), "a configured rate that never reached the router would leave these equal");
+        }
+    }
+
+    private static async Task<int> SendsOverSixtyMillisecondsOfMotion(int? maxMouseHz)
+    {
+        var now = new Boxed<long>(1000L);
+        var (platform, relay, service) = TransitionTestHelper.CreateService(
+            getTickCount: () => now.Value, profile: TransitionTestHelper.ProfileWith(maxMouseHz));
+        await service.StartAsync(CancellationToken.None);
+        await BringRemoteOnline(relay);
+        platform.FireMouseMove(2559, 720);
+        relay.Sent.Clear();
+
+        // one sample per millisecond, so the send count is exactly the number of intervals elapsed
+        for (var ms = 0; ms < 60; ms++)
+        {
+            now.Value++;
+            platform.FireMouseMove(platform.WarpX + (ms % 2 == 0 ? 1 : 2), platform.WarpY);
+        }
+
+        var sends = relay.Sent.Count(s => s.Kind == MessageKind.MouseMove);
+        await service.StopAsync(CancellationToken.None);
+        await platform.DisposeAsync();
+        return sends;
     }
 
     [Test]

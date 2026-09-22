@@ -57,6 +57,7 @@ public class HydraConfig
     public List<ScreenDefinition> ScreenDefinitions { get; init; } = [];
     public decimal? MouseScale { get; init; }          // slave only — fallback cursor speed multiplier; overridden by per-screen mouseScale
     public decimal? RelativeMouseScale { get; init; }  // slave only — fallback relative-mode cursor speed; overridden by per-screen relativeMouseScale
+    public int? MaxMouseHz { get; init; }              // master only — how often mouse position is sent to a slave
 
     public string? NetworkConfig { get; init; }
     public EmbeddedStyxConfig? EmbeddedStyx { get; init; }         // connect to embedded Styx (plain-text alternative to base64 networkConfig)
@@ -248,6 +249,12 @@ public class HydraConfig
                 throw new InvalidOperationException("mouseScale is slave-only. Remove it from master profiles.");
             if (cfg.Mode == Mode.Master && cfg.ScreenDefinitions.Count > 0)
                 throw new InvalidOperationException("screenDefinitions is slave-only. Remove it from master profiles.");
+            if (cfg.Mode == Mode.Slave && cfg.MaxMouseHz != null)
+                throw new InvalidOperationException("maxMouseHz is master-only. Remove it from slave profiles.");
+            // The ceiling is the sample rate itself: at 1000 Hz every sample a mouse reports is already
+            // sent on its own, and asking for more would only mean an interval of zero milliseconds.
+            if (cfg.MaxMouseHz is < 1 or > HydraProfile.MaxConfigurableMouseHz)
+                throw new InvalidOperationException($"maxMouseHz must be between 1 and {HydraProfile.MaxConfigurableMouseHz}.");
 
             foreach (var def in cfg.ScreenDefinitions)
             {
