@@ -188,6 +188,12 @@ The easiest way to set up multi-machine layouts, Styx relay configs, and network
 
 ---
 
+## Contributing
+
+Contributions are welcome, big or small. Found a bug? [Open an issue](https://github.com/PacAnimal/hydra/issues). Have an idea? [Start a discussion](https://github.com/PacAnimal/hydra/discussions). Want to fix something yourself? Fork the repo and open a PR — we'll take it from there.
+
+---
+
 ## Full documentation
 
 - [Configuration reference](docs/CONFIGURATION.md) — all config fields, screen layout options, network-aware profiles, hotkeys, Styx setup, and building from source
