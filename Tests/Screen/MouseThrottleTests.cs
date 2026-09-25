@@ -160,16 +160,20 @@ public class MouseThrottleTests
     }
 
     [Test]
-    public async Task MovementPastTheLastSample_SurvivesTheRecentringWarp()
+    public async Task MovementPastTheLastSample_IsNotFoldedIn_ForPositionCapture()
     {
-        // The platform reports the cursor 20px further along than the sample that triggers the warp
-        // — movement the warp would discard, since the next sample measures from the warp point.
-        // A platform that cannot answer is the control: there the 20px is simply lost.
-        var withResidual = await VirtualXAfterOneRecentringSample(reportedOvershoot: 20);
-        var withoutResidual = await VirtualXAfterOneRecentringSample(reportedOvershoot: null);
+        // Mac/Windows recentre on every sample, so the gap a residual read would be closing here is
+        // just the time between taking the batch snapshot and calling WarpCursor a few lines later —
+        // a live GetCursorPos() read in that gap races the hook thread's own delivery instead of
+        // recovering anything real, and was removed for exactly that reason (it showed up as the
+        // reported position wandering a few dozen pixels on a live Windows master). So what the
+        // platform additionally reports here, past the sample that triggers the warp, is simply lost
+        // — the same tradeoff the code made before any of this warp machinery existed.
+        var withOvershoot = await VirtualXAfterOneRecentringSample(reportedOvershoot: 20);
+        var withoutOvershoot = await VirtualXAfterOneRecentringSample(reportedOvershoot: null);
 
-        Assert.That(withResidual - withoutResidual, Is.EqualTo(20),
-            "movement past the last sample is read before the warp and folded in, not discarded");
+        Assert.That(withOvershoot, Is.EqualTo(withoutOvershoot),
+            "a position-reporting platform does not read a residual before recentring");
     }
 
     private static async Task<int> VirtualXAfterOneRecentringSample(int? reportedOvershoot)

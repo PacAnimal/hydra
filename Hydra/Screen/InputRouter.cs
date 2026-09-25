@@ -1414,12 +1414,17 @@ public class InputRouter(
     // sample batching cut the OS-level call rate to at most MaxMouseHz — the batching is what made
     // recentring every sample affordable again; the dead zone was never the fix for the CPU cost.
     //
-    // A warp can lose movement for a position-reporting surface specifically: the next sample
-    // measures from the warp point, and events still queued at the old position produce a jump the
-    // bogus filter throws away. So read the position one last time and account for the difference
-    // BEFORE moving the cursor. A delta-reporting surface must NOT do this — a warp neither consumes
-    // nor duplicates one of its samples, so what would be read here is movement its own next event
-    // still carries.
+    // A position-reporting surface recentres every sample now, and does not read a residual before
+    // doing so. That read used to exist to recover movement a warp would otherwise discard between
+    // the sample being handled and the warp landing — real, at dead-zone frequency, where many
+    // samples separated one warp from the next. At every-sample frequency the gap it was closing is
+    // just the time between taking the batch snapshot and calling WarpCursor a few lines later, and
+    // a live GetCursorPos() read in there instead races the hook thread's own delivery of whatever
+    // the cursor is doing right now — folding that race's outcome in as "movement" is noise, not
+    // signal, and it showed up as the reported position wandering a few dozen pixels instead of
+    // either tracking real motion or (the prior bug) freezing outright. The original code — before
+    // any of this warp machinery existed — warped to centre and re-anchored with nothing else, and
+    // that worked; this keeps to that for the per-sample path.
     private void RecenterIfDrifted(LocalMasterState st, double dx, double dy, bool deltasFromPositions)
     {
         if (st.ActiveLocalScreen == null) return;
@@ -1428,7 +1433,6 @@ public class InputRouter(
 
         if (deltasFromPositions)
         {
-            ApplyResidualMovement(st);
             Recenter(st);
             return;
         }
@@ -1442,23 +1446,6 @@ public class InputRouter(
         }
 
         Recenter(st);
-    }
-
-    // Folds in whatever the cursor travelled past the sample being handled, read from the platform
-    // immediately before the warp that would otherwise discard it.
-    private void ApplyResidualMovement(LocalMasterState st)
-    {
-        if (platform.GetCursorPosition() is not { } actual) return;
-        var residualX = actual.X - (st.WarpX + st.DriftX);
-        var residualY = actual.Y - (st.WarpY + st.DriftY);
-        if (residualX == 0 && residualY == 0) return;
-
-        st.DriftX += residualX;
-        st.DriftY += residualY;
-        if (st.Mouse.ApplyDelta(residualX, residualY) != null)
-            HandleIntraHostTransition(st);
-        else
-            AccumulateScaled(st, residualX, residualY);
     }
 
     // evdev cross-host transitions; called from consumer, so st access is safe
