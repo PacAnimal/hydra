@@ -189,11 +189,13 @@ public class MouseThrottleTests
     [Test]
     public async Task DeltaCapture_RecentresOnlyAfterItDriftsOutOfTheDeadZone()
     {
-        // Unlike the absolute-position path above, a delta-reporting surface (Linux evdev/Xorg)
-        // never reads the cursor as a position, so a warp neither consumes nor duplicates one of its
-        // samples — recentring less often than every sample costs nothing but an X warp + socket
-        // flush, and this dead-zone behaviour is unchanged.
-        var (platform, relay, service) = TransitionTestHelper.CreateService();
+        // Linux evdev/Xorg's delta is XI_RawMotion: a raw hardware-relative stream with no notion of
+        // an on-screen position, so it can never run into a real screen edge no matter how long it
+        // goes between warps — recentring less often than every sample costs nothing here but an X
+        // warp + socket flush. localPlatform is pinned to Linux explicitly: this must hold regardless
+        // of which OS happens to be running the test, and must NOT hold for Windows (see the sibling
+        // test below) even though both feed the exact same MouseInputKind.Delta code path.
+        var (platform, relay, service) = TransitionTestHelper.CreateService(localPlatform: PeerPlatform.Linux);
         await service.StartAsync(CancellationToken.None);
         await BringRemoteOnline(relay);
         platform.FireMouseMove(2559, 720);
@@ -211,6 +213,35 @@ public class MouseThrottleTests
             platform.FireMouseDelta(1, 0);
         Assert.That(platform.WarpCount, Is.EqualTo(before + 1),
             "crossing the dead zone recentres exactly once");
+
+        await service.StopAsync(CancellationToken.None);
+        await platform.DisposeAsync();
+    }
+
+    [Test]
+    public async Task WindowsDeltaCapture_RecentresOnEverySample()
+    {
+        // Windows' delta (WindowsInputHandler) is synthesised from two reads of the same real,
+        // monitor-clamped cursor position an absolute capture would read directly — reshaping it
+        // into a MouseInputKind.Delta does not exempt it from the clamp risk that requires
+        // recentring every sample; it inherits that requirement from the surface underneath, not
+        // from which shape the router happens to receive it in. This is the regression once fixed
+        // by making Mac/Windows an every-sample "position" path (PositionCapture_RecentresOnEverySample
+        // above) and then reopened by moving Windows onto the dead-zone-gated delta path Linux safely
+        // uses — same MouseInputKind.Delta code path as the sibling test above, opposite behaviour,
+        // because isClampable is keyed on localPlatform, not on the message shape.
+        var (platform, relay, service) = TransitionTestHelper.CreateService(localPlatform: PeerPlatform.Windows);
+        await service.StartAsync(CancellationToken.None);
+        await BringRemoteOnline(relay);
+        platform.FireMouseMove(2559, 720);
+        Assert.That(platform.IsOnVirtualScreen, Is.True);
+
+        var before = platform.WarpCount;
+
+        for (var i = 0; i < 5; i++)
+            platform.FireMouseDelta(1, 0);
+        Assert.That(platform.WarpCount, Is.EqualTo(before + 5),
+            "every processed delta sample recentres on Windows, however small the drift");
 
         await service.StopAsync(CancellationToken.None);
         await platform.DisposeAsync();

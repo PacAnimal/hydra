@@ -49,8 +49,13 @@ public static class TransitionTestHelper
     /// mouse-batch flush on demand rather than racing the few milliseconds it is armed for.
     /// </param>
     /// <param name="profile">The master profile to run, for a test that varies a configured setting.</param>
+    /// <param name="localPlatform">
+    /// The master's own OS, for a test that depends on it (e.g. Windows recentring a clampable
+    /// capture every sample). Defaults to whatever OS is actually running the test otherwise, which
+    /// is exactly the trap this parameter exists to let a test avoid.
+    /// </param>
     public static TestServiceBundle CreateService(Func<long>? getTickCount = null, IActivityTracker? activityTracker = null, IWorldState? world = null,
-        TimeProvider? timeProvider = null, IHydraProfile? profile = null)
+        TimeProvider? timeProvider = null, IHydraProfile? profile = null, PeerPlatform? localPlatform = null)
     {
         var platform = new FakePlatform();
         var relay = new FakeRelay();
@@ -59,7 +64,7 @@ public static class TransitionTestHelper
         var tracker = activityTracker ?? new ActivityTracker(config, new Lazy<IRelaySender>(() => relay), new WorldState(), new NullScreenSaverSync(), NullLogger<ActivityTracker>.Instance);
         var service = new InputRouter(platform, platform, config, relay, screens, NullLoggerFactory.Instance, NullLogger<InputRouter>.Instance, new NullScreenSaverSync(), new NullClipboardSync(),
             FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification(), tracker, peerState: world, getTickCount: getTickCount,
-            timeProvider: timeProvider);
+            timeProvider: timeProvider, localPlatform: localPlatform);
         platform.AfterFireCallback = service.FlushAsync;
         return new TestServiceBundle(platform, relay, service);
     }

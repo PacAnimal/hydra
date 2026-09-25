@@ -1138,7 +1138,7 @@ public class InputRouter(
         if (now - st.LastMouseSendTick >= _minMouseIntervalMs)
             SendMousePosition(st, now);
 
-        RecenterIfDrifted(st, dx, dy, deltasFromPositions: true);
+        RecenterIfDrifted(st, dx, dy, isClampable: true);
     }
 
     private void HandleIntraHostTransition(LocalMasterState st)
@@ -1348,7 +1348,10 @@ public class InputRouter(
         if (now - st.LastMouseSendTick >= _minMouseIntervalMs)
             SendMousePosition(st, now);
 
-        RecenterIfDrifted(st, dx, dy, deltasFromPositions: false);
+        // Windows' "delta" (WindowsInputHandler) is synthesised from two reads of the same real,
+        // monitor-clamped cursor position a Mac/absolute capture would read directly — it inherits
+        // that surface's need to recentre every sample, not Linux's XI_RawMotion's freedom not to.
+        RecenterIfDrifted(st, dx, dy, isClampable: _localPlatform == PeerPlatform.Windows);
     }
 
     private enum MouseInputKind { Absolute, Delta }
@@ -1399,40 +1402,47 @@ public class InputRouter(
     // Keeps the physical cursor clear of the local screen edges while the pointer is on a virtual
     // screen.
     //
-    // deltasFromPositions says the caller SUBTRACTS POSITIONS to get its deltas (Mac/Windows) rather
-    // than reading raw device deltas directly (Linux evdev/Xorg) — and that distinction is exactly
-    // what decides how often a warp is safe to skip.
+    // isClampable says the underlying sample source is a real OS cursor position — bounded by the
+    // actual monitor, whether the caller reads it as a position (Mac) or has already turned it into
+    // a delta by subtracting two consecutive reads (Windows: MSLLHOOKSTRUCT.pt is GetCursorPos in
+    // disguise, and blocking the hook message hides the cursor without exempting Windows' own
+    // tracking of it from the screen's pixel bounds). Linux evdev/Xorg is the one caller this is NOT
+    // true for: XI_RawMotion is a raw hardware-delta stream with no notion of an on-screen position
+    // to begin with, so nothing it reports can ever run into an edge.
     //
-    // A delta-reporting surface never reads the cursor as a position, so waiting for drift to cross
-    // WarpDeadZone before recentring costs nothing but an X warp + socket flush at up to MaxMouseHz.
+    // A non-clampable surface can safely wait for drift to cross WarpDeadZone before recentring —
+    // it costs nothing but an X warp + socket flush at up to MaxMouseHz, since there is no edge to
+    // reach in the first place.
     //
-    // A position-reporting surface is different: while frozen on the virtual screen, the OS still
-    // has a real position for the (invisible) cursor, and nothing but recentring keeps it from
+    // A clampable surface cannot: while frozen on the virtual screen, the OS still tracks a real
+    // position for the (invisible) cursor, and nothing but recentring keeps that position from
     // reaching the real screen edge during perfectly ordinary movement — 10% of the half-screen is
     // easily covered in well under a second of continuous motion. Once it clamps there, movement in
-    // that direction stops registering at all, for the rest of the visit to this screen — a KVM with
-    // a dead cursor. So this surface recentres on every processed sample, exactly as it did before
-    // sample batching cut the OS-level call rate to at most MaxMouseHz — the batching is what made
-    // recentring every sample affordable again; the dead zone was never the fix for the CPU cost.
+    // that direction reports zero delta, forever, for the rest of the visit to this screen: not
+    // "slow", not "noisy" — dead. Every mature Windows KVM (Synergy, Barrier, Deskflow, Input Leap)
+    // recentres a clampable surface on literally every mouse-move message, batched or throttled not
+    // at all, for exactly this reason (MSWindowsScreen.cpp::onMouseMove, all four). Reshaping the
+    // Windows capture into "a delta" changes nothing here — the delta is still synthesised from two
+    // reads of the same clampable position, so it inherits the same requirement. Sample batching
+    // upstream already keeps the resulting warp rate to at most MaxMouseHz, same as the dead zone
+    // was trying to buy — recentring every sample is not the expensive path batching was fixing.
     //
-    // A position-reporting surface recentres every sample now, and does not read a residual before
-    // doing so. That read used to exist to recover movement a warp would otherwise discard between
-    // the sample being handled and the warp landing — real, at dead-zone frequency, where many
-    // samples separated one warp from the next. At every-sample frequency the gap it was closing is
-    // just the time between taking the batch snapshot and calling WarpCursor a few lines later, and
-    // a live GetCursorPos() read in there instead races the hook thread's own delivery of whatever
-    // the cursor is doing right now — folding that race's outcome in as "movement" is noise, not
-    // signal, and it showed up as the reported position wandering a few dozen pixels instead of
-    // either tracking real motion or (the prior bug) freezing outright. The original code — before
-    // any of this warp machinery existed — warped to centre and re-anchored with nothing else, and
-    // that worked; this keeps to that for the per-sample path.
-    private void RecenterIfDrifted(LocalMasterState st, double dx, double dy, bool deltasFromPositions)
+    // This surface recentres every sample and does not read a residual before doing so. That read
+    // used to exist to recover movement a warp would otherwise discard between the sample being
+    // handled and the warp landing — real, at dead-zone frequency, where many samples separated one
+    // warp from the next. At every-sample frequency the gap it was closing is just the time between
+    // taking the batch snapshot and calling WarpCursor a few lines later, and a live GetCursorPos()
+    // read in there instead races the hook thread's own delivery of whatever the cursor is doing
+    // right now — folding that race's outcome in as "movement" is noise, not signal, and it showed
+    // up as the reported position wandering a few dozen pixels instead of either tracking real
+    // motion or (the prior bug) freezing outright.
+    private void RecenterIfDrifted(LocalMasterState st, double dx, double dy, bool isClampable)
     {
         if (st.ActiveLocalScreen == null) return;
         st.DriftX += dx;
         st.DriftY += dy;
 
-        if (deltasFromPositions)
+        if (isClampable)
         {
             Recenter(st);
             return;
