@@ -30,6 +30,12 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
     private readonly WindowsShieldWindow _shield = new();
     private int _lastWarpX = -1;
     private int _lastWarpY = -1;
+    // The fixed point WarpCursor last targeted — kept clear of the local screen edges is the whole
+    // reason a virtual-screen visit re-centres at all. Every real sample re-warps back to exactly
+    // this, on this thread, synchronously (see MouseHookCallback) rather than waiting for the
+    // router to ask for it.
+    private int _warpTargetX = -1;
+    private int _warpTargetY = -1;
     private readonly Toggle _isOnVirtualScreen = new();
 
     public bool IsOnVirtualScreen
@@ -67,6 +73,8 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
 
     public void WarpCursor(int x, int y)
     {
+        _warpTargetX = x;
+        _warpTargetY = y;
         _lastWarpX = x;
         _lastWarpY = y;
         NativeMethods.SetCursorPos(x, y);
@@ -270,16 +278,12 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
                     // Relative delta from consecutive readings on this one thread, immune to the
                     // "keep only the latest sample" coalescing an absolute position feeds into
                     // upstream — that silently drops whatever the cursor did between the sample
-                    // being handled and a warp actually landing. This is still the SAME real,
-                    // monitor-clamped cursor position underneath (just consumed as a delta instead
-                    // of a position), so InputRouter still recentres it every sample — the delta
-                    // form fixes the coalescing loss, it does not exempt this from the clamp risk
-                    // recentring every sample exists to prevent. _lastWarpX/Y double as the delta
-                    // reference: WarpCursor already sets them to the warp target, so the first real
-                    // sample after a warp measures from there, not from wherever the cursor was
-                    // before it. _deltaReferenceIsStale skips exactly the one sample that would
-                    // otherwise measure across a transition: resync without reporting movement,
-                    // rather than report garbage.
+                    // being handled and a warp actually landing. _lastWarpX/Y double as the delta
+                    // reference: WarpCursor sets them to the warp target, so the first real sample
+                    // after a warp measures from there, not from wherever the cursor was before it.
+                    // _deltaReferenceIsStale skips exactly the one sample that would otherwise
+                    // measure across a transition: resync without reporting movement, rather than
+                    // report garbage.
                     if (_deltaReferenceIsStale)
                     {
                         _lastWarpX = info.pt.x;
@@ -290,9 +294,31 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
                     {
                         var dx = info.pt.x - _lastWarpX;
                         var dy = info.pt.y - _lastWarpY;
-                        _lastWarpX = info.pt.x;
-                        _lastWarpY = info.pt.y;
                         _onMouseDelta?.Invoke(dx, dy);
+
+                        // Re-centre on THIS raw sample, synchronously, right here — not once per
+                        // batch InputRouter gets around to processing (up to ~8ms and a whole
+                        // batch's worth of real movement later). Windows' own cursor position is
+                        // still the real, monitor-clamped one underneath this delta; nothing has
+                        // changed that. What changed is HOW BIG the periodic reset jump looks to
+                        // Windows' own ballistics/acceleration state: warping back every raw sample
+                        // (~900/s) undoes at most one sample's worth of real movement each time —
+                        // small, indistinguishable from ordinary jitter, exactly what commit
+                        // 8964546 did and what never had this problem. Warping once per processed
+                        // batch instead (what recentring every PROCESSED sample amounts to) undoes
+                        // up to a whole batch's worth in one jump, and Windows can't tell that
+                        // artificial reset apart from real input — its own documented behaviour is
+                        // that continual SetCursorPos resets "can cause mouse movement recording to
+                        // malfunction", and a batch-sized jump repeating every 8ms is precisely the
+                        // pattern that provokes it. Keeping the reset sample-sized keeps it invisible
+                        // to that state machine, same as it always was. The relay send/actor-post
+                        // this delta feeds (PostMouseInput, upstream) is unaffected and stays
+                        // batched to MaxMouseHz — only the warp itself moved back to per-sample,
+                        // and a bare SetCursorPos costs nothing like the channel post that the
+                        // batching in d2742e3 was actually paying for.
+                        NativeMethods.SetCursorPos(_warpTargetX, _warpTargetY);
+                        _lastWarpX = _warpTargetX;
+                        _lastWarpY = _warpTargetY;
                     }
                 }
                 else

@@ -219,17 +219,25 @@ public class MouseThrottleTests
     }
 
     [Test]
-    public async Task WindowsDeltaCapture_RecentresOnEverySample()
+    public async Task WindowsDeltaCapture_TheRouterNeverRecentres()
     {
         // Windows' delta (WindowsInputHandler) is synthesised from two reads of the same real,
-        // monitor-clamped cursor position an absolute capture would read directly — reshaping it
-        // into a MouseInputKind.Delta does not exempt it from the clamp risk that requires
-        // recentring every sample; it inherits that requirement from the surface underneath, not
-        // from which shape the router happens to receive it in. This is the regression once fixed
-        // by making Mac/Windows an every-sample "position" path (PositionCapture_RecentresOnEverySample
-        // above) and then reopened by moving Windows onto the dead-zone-gated delta path Linux safely
-        // uses — same MouseInputKind.Delta code path as the sibling test above, opposite behaviour,
-        // because isClampable is keyed on localPlatform, not on the message shape.
+        // monitor-clamped cursor position an absolute capture would read directly, and DOES still
+        // need recentring every raw sample for exactly that reason — but WindowsInputHandler now
+        // does that itself, synchronously, on the hook thread, the moment each sample is measured
+        // (see MouseHookCallback), which is the only place that can keep the reset sample-sized
+        // rather than batch-sized (batch-sized resets are indistinguishable from real input to
+        // Windows' own pointer-acceleration state, and that mismeasurement — not a coalescing bug —
+        // was the actual cause of "have to lift and reposition to cross the screen").
+        //
+        // The router must NOT also recentre for Windows: it would be a second, uncoordinated
+        // writer to the exact fields the hook thread writes with no synchronisation between them,
+        // and adversarial review confirmed that pairing can tear a warp target's X from its Y. So
+        // for Windows specifically, the router's own recentre call is skipped entirely — the real
+        // per-sample recentre this test's name refers to is not observable through FakePlatform at
+        // all (it happens in native code no fake stands in for, same as the rest of
+        // WindowsInputHandler); what IS observable and worth locking in is that the router leaves
+        // it alone.
         var (platform, relay, service) = TransitionTestHelper.CreateService(localPlatform: PeerPlatform.Windows);
         await service.StartAsync(CancellationToken.None);
         await BringRemoteOnline(relay);
@@ -240,8 +248,8 @@ public class MouseThrottleTests
 
         for (var i = 0; i < 5; i++)
             platform.FireMouseDelta(1, 0);
-        Assert.That(platform.WarpCount, Is.EqualTo(before + 5),
-            "every processed delta sample recentres on Windows, however small the drift");
+        Assert.That(platform.WarpCount, Is.EqualTo(before),
+            "the router must not recentre Windows' delta capture — WindowsInputHandler already does, per sample, on the hook thread");
 
         await service.StopAsync(CancellationToken.None);
         await platform.DisposeAsync();

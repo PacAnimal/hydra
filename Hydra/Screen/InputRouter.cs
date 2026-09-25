@@ -1295,12 +1295,22 @@ public class InputRouter(
     {
         if (!st.Mouse.IsOnVirtualScreen) return;
 
+        // Windows recentres itself, synchronously, on the hook thread, on every raw sample — see
+        // WindowsInputHandler.MouseHookCallback. A router-side recentre call for the same physical
+        // cursor is not merely redundant there: it is a second, uncoordinated writer to the exact
+        // fields the hook thread also writes with no synchronisation between them, and adversarial
+        // review confirmed that combination can produce a torn X/Y pair (a warp to a mismatched
+        // pair of old-X/new-Y, or a self-echo filter stuck on a stale value) — precisely the kind
+        // of spurious jump recentring every sample was meant to eliminate, reintroduced via a race
+        // instead of routinely. Linux's XI_RawMotion has no such self-recentre and still needs this.
+        var routerRecentres = _localPlatform != PeerPlatform.Windows;
+
         var leavingScreen = st.Mouse.CurrentScreen!;
         var prevScreen = st.Mouse.ApplyDelta(dx, dy);
         if (prevScreen != null)
         {
             HandleIntraHostTransition(st);
-            Recenter(st);
+            if (routerRecentres) Recenter(st);
             return;
         }
 
@@ -1348,10 +1358,7 @@ public class InputRouter(
         if (now - st.LastMouseSendTick >= _minMouseIntervalMs)
             SendMousePosition(st, now);
 
-        // Windows' "delta" (WindowsInputHandler) is synthesised from two reads of the same real,
-        // monitor-clamped cursor position a Mac/absolute capture would read directly — it inherits
-        // that surface's need to recentre every sample, not Linux's XI_RawMotion's freedom not to.
-        RecenterIfDrifted(st, dx, dy, isClampable: _localPlatform == PeerPlatform.Windows);
+        if (routerRecentres) RecenterIfDrifted(st, dx, dy, isClampable: false);
     }
 
     private enum MouseInputKind { Absolute, Delta }
