@@ -162,17 +162,17 @@ public class MouseThrottleTests
     [Test]
     public async Task MovementPastTheLastSample_SurvivesTheRecentringWarp()
     {
-        // The platform reports the cursor 20px further along than the sample that crosses the dead
-        // zone — movement the warp would discard, since the next sample measures from the warp point.
+        // The platform reports the cursor 20px further along than the sample that triggers the warp
+        // — movement the warp would discard, since the next sample measures from the warp point.
         // A platform that cannot answer is the control: there the 20px is simply lost.
-        var withResidual = await VirtualXAfterCrossingDeadZone(reportedOvershoot: 20);
-        var withoutResidual = await VirtualXAfterCrossingDeadZone(reportedOvershoot: null);
+        var withResidual = await VirtualXAfterOneRecentringSample(reportedOvershoot: 20);
+        var withoutResidual = await VirtualXAfterOneRecentringSample(reportedOvershoot: null);
 
         Assert.That(withResidual - withoutResidual, Is.EqualTo(20),
             "movement past the last sample is read before the warp and folded in, not discarded");
     }
 
-    private static async Task<int> VirtualXAfterCrossingDeadZone(int? reportedOvershoot)
+    private static async Task<int> VirtualXAfterOneRecentringSample(int? reportedOvershoot)
     {
         var now = new Boxed<long>(1000L);
         var (platform, relay, service) = TransitionTestHelper.CreateService(getTickCount: () => now.Value);
@@ -183,12 +183,9 @@ public class MouseThrottleTests
         var warpX = platform.WarpX;
         var warpY = platform.WarpY;
 
-        // march to just inside the dead zone — 10% of the 1280px half-screen
-        for (var i = 1; i <= 120; i++)
-            platform.FireMouseMove(warpX + i, warpY);
-
-        platform.CursorPosition = reportedOvershoot is { } overshoot ? (warpX + 128 + overshoot, warpY) : null;
-        platform.FireMouseMove(warpX + 128, warpY);  // crosses the zone: reads the position, then warps
+        // a position-reporting platform recentres on every sample, so this alone triggers the warp
+        platform.CursorPosition = reportedOvershoot is { } overshoot ? (warpX + 5 + overshoot, warpY) : null;
+        platform.FireMouseMove(warpX + 5, warpY);
 
         now.Value += MouseSendIntervalMs;
         platform.FireMouseMove(warpX + 1, warpY);    // carries the accumulated position out on a send
@@ -204,21 +201,18 @@ public class MouseThrottleTests
     [Test]
     public async Task WarpThatFailsToLand_DoesNotDistortFurtherMovement()
     {
-        // Regression: recentring used to happen every sample, so a warp that silently failed to
-        // move the physical cursor (e.g. Windows SetCursorPos while the hook thread isn't on the
-        // input desktop) self-corrected within a millisecond. Now it only happens once per dead
-        // zone — if the drift reference is reset to the warp target without checking it actually
-        // landed there, the next sample's delta is measured against a point the cursor never
-        // reached, and reports a spurious jump (or, compounded across further crossings, a delta
-        // large enough for the bogus filter to drop for good).
-        var succeeded = await VirtualXAfterDeadZoneCrossing(warpSucceeds: true);
-        var failed = await VirtualXAfterDeadZoneCrossing(warpSucceeds: false);
+        // A warp that silently fails to move the physical cursor (e.g. Windows SetCursorPos while
+        // the hook thread isn't on the input desktop) must not corrupt the drift reference: anchoring
+        // it to the intended target regardless measures every later sample's delta against a point
+        // the cursor never reached — a phantom jump at best, a dead cursor at worst.
+        var succeeded = await VirtualXAfterOneRecentringSampleWithWarp(warpSucceeds: true);
+        var failed = await VirtualXAfterOneRecentringSampleWithWarp(warpSucceeds: false);
 
         Assert.That(failed, Is.EqualTo(succeeded),
             "the same real movement must land at the same place whether or not the warp took effect");
     }
 
-    private static async Task<int> VirtualXAfterDeadZoneCrossing(bool warpSucceeds)
+    private static async Task<int> VirtualXAfterOneRecentringSampleWithWarp(bool warpSucceeds)
     {
         var now = new Boxed<long>(1000L);
         var (platform, relay, service) = TransitionTestHelper.CreateService(getTickCount: () => now.Value);
@@ -228,23 +222,19 @@ public class MouseThrottleTests
 
         var warpX = platform.WarpX;
         var warpY = platform.WarpY;
-        platform.CursorPosition = (warpX, warpY);
 
-        // march to just inside the dead zone, then cross it — the physical cursor is really at
-        // warpX+128 at that point (matching the sample that crosses), and the resulting warp either
-        // lands (CursorPosition follows it to warpX) or silently fails (CursorPosition stays put)
-        for (var i = 1; i <= 120; i++)
-            platform.FireMouseMove(warpX + i, warpY);
-        platform.CursorPosition = (warpX + 128, warpY);
+        // the physical cursor is really at warpX+5 (matching the sample below), and the resulting
+        // warp either lands (CursorPosition follows it to warpX) or silently fails (stays put)
+        platform.CursorPosition = (warpX + 5, warpY);
         platform.WarpSucceeds = warpSucceeds;
-        platform.FireMouseMove(warpX + 128, warpY);
+        platform.FireMouseMove(warpX + 5, warpY);
         platform.WarpSucceeds = true;
 
         // real further movement, reported (as a real hook would) relative to wherever the physical
         // cursor actually is now — not to wherever our own bookkeeping assumes it landed
-        var actualBase = warpSucceeds ? warpX : warpX + 128;
+        var actualBase = warpSucceeds ? warpX : warpX + 5;
         now.Value += MouseSendIntervalMs;
-        platform.FireMouseMove(actualBase + 5, warpY);
+        platform.FireMouseMove(actualBase + 3, warpY);
 
         var json = relay.Sent.Last(s => s.Kind == MessageKind.MouseMove).Json;
         var message = JsonSerializer.Deserialize<MouseMoveMessage>(json, Cathedral.Config.SaneJson.Options)!;
@@ -255,8 +245,41 @@ public class MouseThrottleTests
     }
 
     [Test]
-    public async Task CursorIsRecentred_OnlyAfterItDriftsOutOfTheDeadZone()
+    public async Task PositionCapture_RecentresOnEverySample()
     {
+        // Mac/Windows read the cursor as an absolute position while it is frozen on the virtual
+        // screen — waiting for drift to cross a dead zone before recentring gives the OS's own
+        // tracked position room to reach the real screen edge during perfectly ordinary movement,
+        // and once it does, movement in that direction stops registering for the rest of the visit.
+        // So unlike the delta-reporting path below, this one recentres on every sample, however
+        // small — sample batching upstream already keeps the resulting warp rate to at most
+        // MaxMouseHz, so this is not the ~900/s a raw mouse would otherwise produce.
+        var (platform, relay, service) = TransitionTestHelper.CreateService();
+        await service.StartAsync(CancellationToken.None);
+        await BringRemoteOnline(relay);
+        platform.FireMouseMove(2559, 720);
+        Assert.That(platform.IsOnVirtualScreen, Is.True);
+
+        var warpX = platform.WarpX;
+        var warpY = platform.WarpY;
+        var before = platform.WarpCount;
+
+        for (var i = 1; i <= 5; i++)
+            platform.FireMouseMove(warpX + i, warpY);
+        Assert.That(platform.WarpCount, Is.EqualTo(before + 5),
+            "every processed position sample recentres, however small the drift");
+
+        await service.StopAsync(CancellationToken.None);
+        await platform.DisposeAsync();
+    }
+
+    [Test]
+    public async Task DeltaCapture_RecentresOnlyAfterItDriftsOutOfTheDeadZone()
+    {
+        // Unlike the absolute-position path above, a delta-reporting surface (Linux evdev/Xorg)
+        // never reads the cursor as a position, so a warp neither consumes nor duplicates one of its
+        // samples — recentring less often than every sample costs nothing but an X warp + socket
+        // flush, and this dead-zone behaviour is unchanged.
         var (platform, relay, service) = TransitionTestHelper.CreateService();
         await service.StartAsync(CancellationToken.None);
         await BringRemoteOnline(relay);
@@ -264,19 +287,15 @@ public class MouseThrottleTests
         Assert.That(platform.IsOnVirtualScreen, Is.True);
 
         // dead zone is 10% of the half-screen, so 128px on a 2560-wide local screen
-        var warpX = platform.WarpX;
-        var warpY = platform.WarpY;
         var before = platform.WarpCount;
 
-        for (var i = 1; i <= 100; i++)
-            platform.FireMouseMove(warpX + i, warpY);
+        for (var i = 0; i < 100; i++)
+            platform.FireMouseDelta(1, 0);
         Assert.That(platform.WarpCount, Is.EqualTo(before),
             "a cursor still inside the dead zone costs no warp at all");
 
-        // the march stops at the crossing: a real platform delivers the next sample near the centre
-        // the warp just moved the cursor to, so drift restarts there rather than carrying on
-        for (var i = 101; i <= 128; i++)
-            platform.FireMouseMove(warpX + i, warpY);
+        for (var i = 0; i < 28; i++)
+            platform.FireMouseDelta(1, 0);
         Assert.That(platform.WarpCount, Is.EqualTo(before + 1),
             "crossing the dead zone recentres exactly once");
 

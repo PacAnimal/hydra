@@ -1386,6 +1386,9 @@ public class InputRouter(
         if (st.ActiveLocalScreen == null) return;
         platform.WarpCursor(st.WarpX, st.WarpY);
         var landed = platform.GetCursorPosition();
+        if (landed is { } actual && (actual.X != st.WarpX || actual.Y != st.WarpY))
+            log.LogWarning("Warp to ({TargetX}, {TargetY}) did not land — cursor reports ({ActualX}, {ActualY})",
+                st.WarpX, st.WarpY, actual.X, actual.Y);
         st.LastWarpX = landed?.X ?? st.WarpX;
         st.LastWarpY = landed?.Y ?? st.WarpY;
         st.DriftX = 0;
@@ -1393,31 +1396,51 @@ public class InputRouter(
     }
 
     // Keeps the physical cursor clear of the local screen edges while the pointer is on a virtual
-    // screen, warping once it has drifted out of WarpDeadZone instead of once per sample. Both
-    // capture surfaces hand over the same deltas, so the behaviour is identical on all three.
+    // screen.
     //
-    // deltasFromPositions says the caller SUBTRACTS POSITIONS to get its deltas, which is what
-    // decides whether a warp can lose movement. Such a surface loses everything the cursor travelled
-    // between the sample being handled and the warp landing: the next sample measures from the warp
-    // point, and the events still queued at the old position produce a jump the bogus filter throws
-    // away. So read the position one last time and account for the difference BEFORE moving the
-    // cursor. A surface reporting raw device deltas must NOT do this — a warp neither consumes nor
-    // duplicates one, so what would be read here is movement its own next event still carries.
+    // deltasFromPositions says the caller SUBTRACTS POSITIONS to get its deltas (Mac/Windows) rather
+    // than reading raw device deltas directly (Linux evdev/Xorg) — and that distinction is exactly
+    // what decides how often a warp is safe to skip.
+    //
+    // A delta-reporting surface never reads the cursor as a position, so waiting for drift to cross
+    // WarpDeadZone before recentring costs nothing but an X warp + socket flush at up to MaxMouseHz.
+    //
+    // A position-reporting surface is different: while frozen on the virtual screen, the OS still
+    // has a real position for the (invisible) cursor, and nothing but recentring keeps it from
+    // reaching the real screen edge during perfectly ordinary movement — 10% of the half-screen is
+    // easily covered in well under a second of continuous motion. Once it clamps there, movement in
+    // that direction stops registering at all, for the rest of the visit to this screen — a KVM with
+    // a dead cursor. So this surface recentres on every processed sample, exactly as it did before
+    // sample batching cut the OS-level call rate to at most MaxMouseHz — the batching is what made
+    // recentring every sample affordable again; the dead zone was never the fix for the CPU cost.
+    //
+    // A warp can lose movement for a position-reporting surface specifically: the next sample
+    // measures from the warp point, and events still queued at the old position produce a jump the
+    // bogus filter throws away. So read the position one last time and account for the difference
+    // BEFORE moving the cursor. A delta-reporting surface must NOT do this — a warp neither consumes
+    // nor duplicates one of its samples, so what would be read here is movement its own next event
+    // still carries.
     private void RecenterIfDrifted(LocalMasterState st, double dx, double dy, bool deltasFromPositions)
     {
         if (st.ActiveLocalScreen == null) return;
         st.DriftX += dx;
         st.DriftY += dy;
+
+        if (deltasFromPositions)
+        {
+            ApplyResidualMovement(st);
+            Recenter(st);
+            return;
+        }
+
         if (Math.Abs(st.DriftX) < st.HalfW * WarpDeadZone && Math.Abs(st.DriftY) < st.HalfH * WarpDeadZone)
         {
-            // no warp, so the reference is wherever the cursor actually ended up — which is what
-            // makes a surface reporting absolute positions agree with one reporting deltas
+            // no warp, so the reference is wherever the cursor actually ended up
             st.LastWarpX = st.WarpX + st.DriftX;
             st.LastWarpY = st.WarpY + st.DriftY;
             return;
         }
 
-        if (deltasFromPositions) ApplyResidualMovement(st);
         Recenter(st);
     }
 
