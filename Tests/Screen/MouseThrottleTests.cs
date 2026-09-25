@@ -202,6 +202,59 @@ public class MouseThrottleTests
     }
 
     [Test]
+    public async Task WarpThatFailsToLand_DoesNotDistortFurtherMovement()
+    {
+        // Regression: recentring used to happen every sample, so a warp that silently failed to
+        // move the physical cursor (e.g. Windows SetCursorPos while the hook thread isn't on the
+        // input desktop) self-corrected within a millisecond. Now it only happens once per dead
+        // zone — if the drift reference is reset to the warp target without checking it actually
+        // landed there, the next sample's delta is measured against a point the cursor never
+        // reached, and reports a spurious jump (or, compounded across further crossings, a delta
+        // large enough for the bogus filter to drop for good).
+        var succeeded = await VirtualXAfterDeadZoneCrossing(warpSucceeds: true);
+        var failed = await VirtualXAfterDeadZoneCrossing(warpSucceeds: false);
+
+        Assert.That(failed, Is.EqualTo(succeeded),
+            "the same real movement must land at the same place whether or not the warp took effect");
+    }
+
+    private static async Task<int> VirtualXAfterDeadZoneCrossing(bool warpSucceeds)
+    {
+        var now = new Boxed<long>(1000L);
+        var (platform, relay, service) = TransitionTestHelper.CreateService(getTickCount: () => now.Value);
+        await service.StartAsync(CancellationToken.None);
+        await BringRemoteOnline(relay);
+        platform.FireMouseMove(2559, 720);
+
+        var warpX = platform.WarpX;
+        var warpY = platform.WarpY;
+        platform.CursorPosition = (warpX, warpY);
+
+        // march to just inside the dead zone, then cross it — the physical cursor is really at
+        // warpX+128 at that point (matching the sample that crosses), and the resulting warp either
+        // lands (CursorPosition follows it to warpX) or silently fails (CursorPosition stays put)
+        for (var i = 1; i <= 120; i++)
+            platform.FireMouseMove(warpX + i, warpY);
+        platform.CursorPosition = (warpX + 128, warpY);
+        platform.WarpSucceeds = warpSucceeds;
+        platform.FireMouseMove(warpX + 128, warpY);
+        platform.WarpSucceeds = true;
+
+        // real further movement, reported (as a real hook would) relative to wherever the physical
+        // cursor actually is now — not to wherever our own bookkeeping assumes it landed
+        var actualBase = warpSucceeds ? warpX : warpX + 128;
+        now.Value += MouseSendIntervalMs;
+        platform.FireMouseMove(actualBase + 5, warpY);
+
+        var json = relay.Sent.Last(s => s.Kind == MessageKind.MouseMove).Json;
+        var message = JsonSerializer.Deserialize<MouseMoveMessage>(json, Cathedral.Config.SaneJson.Options)!;
+
+        await service.StopAsync(CancellationToken.None);
+        await platform.DisposeAsync();
+        return message.X;
+    }
+
+    [Test]
     public async Task CursorIsRecentred_OnlyAfterItDriftsOutOfTheDeadZone()
     {
         var (platform, relay, service) = TransitionTestHelper.CreateService();

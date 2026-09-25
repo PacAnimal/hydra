@@ -1374,11 +1374,22 @@ public class InputRouter(
         st.DriftY = 0;
     }
 
+    // Recentering used to happen on every sample, so a warp that silently failed to land was
+    // corrected within a millisecond and never mattered. Now it only happens once per dead zone,
+    // so a single failed warp — e.g. Windows' SetCursorPos while the hook thread isn't on the
+    // input desktop — would otherwise anchor the drift reference to a point the cursor never
+    // reached: every following sample's delta is measured against that phantom origin, comes out
+    // enormous, trips the bogus filter, and the pointer is stuck for the rest of the visit to this
+    // screen. Anchoring to where the cursor actually landed keeps that failure to one sample again.
     private void Recenter(LocalMasterState st)
     {
         if (st.ActiveLocalScreen == null) return;
         platform.WarpCursor(st.WarpX, st.WarpY);
-        AnchorAtWarpPoint(st);
+        var landed = platform.GetCursorPosition();
+        st.LastWarpX = landed?.X ?? st.WarpX;
+        st.LastWarpY = landed?.Y ?? st.WarpY;
+        st.DriftX = 0;
+        st.DriftY = 0;
     }
 
     // Keeps the physical cursor clear of the local screen edges while the pointer is on a virtual
