@@ -18,15 +18,7 @@ public sealed class FakePlatform : IPlatformInput, ICursorHider
     public int WarpX { get; private set; }
     public int WarpCount { get; private set; }
 
-    // where the router will see the cursor if it asks. Null (the ICursor default) means the platform
-    // cannot say, which is how a test covers the surfaces that have no answer.
-    public (int X, int Y)? CursorPosition { get; set; }
     public int WarpY { get; private set; }
-
-    // false models a warp that is issued but silently never moves the real cursor (e.g. Windows
-    // SetCursorPos while the hook thread isn't on the input desktop) — CursorPosition then keeps
-    // whatever value the test last gave it instead of following WarpCursor's target.
-    public bool WarpSucceeds { get; set; } = true;
 
     // set to InputRouter.FlushAsync to synchronize channel consumer after each Fire call
     public Func<Task>? AfterFireCallback { get; set; }
@@ -72,17 +64,8 @@ public sealed class FakePlatform : IPlatformInput, ICursorHider
     public bool AnyMouseButtonHeld { get; set; }
     bool IPlatformInput.AnyMouseButtonHeld() => AnyMouseButtonHeld;
     public void StopEventTap() { }
-    // mirrors a real platform: once a test is tracking CursorPosition at all, a successful warp
-    // lands there too. Leave CursorPosition null to model a platform that cannot report a
-    // position, or set WarpSucceeds false to model a warp that silently failed to take effect.
-    public void WarpCursor(int x, int y)
-    {
-        WarpX = x;
-        WarpY = y;
-        WarpCount++;
-        if (WarpSucceeds && CursorPosition != null) CursorPosition = (x, y);
-    }
-    public (int X, int Y)? GetCursorPosition() => CursorPosition;
+    public void WarpCursor(int x, int y) { WarpX = x; WarpY = y; WarpCount++; }
+    public (int X, int Y)? GetCursorPosition() => null;
     // ICursorHider — what InputRouter calls
     void ICursorHider.Hide() { HideCursorCalled = true; }
     void ICursorHider.Show() { ShowCursorCalled = true; }

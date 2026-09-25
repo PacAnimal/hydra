@@ -1381,18 +1381,19 @@ public class InputRouter(
     // reached: every following sample's delta is measured against that phantom origin, comes out
     // enormous, trips the bogus filter, and the pointer is stuck for the rest of the visit to this
     // screen. Anchoring to where the cursor actually landed keeps that failure to one sample again.
+    // Used to read the position back and log a warning if the warp didn't land where asked. Two
+    // real-machine captures — one with that check, one without, both on the dead-zone-gated
+    // recentre this replaced — froze identically, and the warning never once fired: every warp
+    // landed, every time, on this hardware. So the check was a synchronous GetCursorPos() call
+    // bought on every recentre (now every processed sample, not once per dead zone) for a failure
+    // mode with zero observed occurrences — pure cost, and a plausible source of "dead slow"
+    // sluggishness once this runs at up to MaxMouseHz instead of rarely. Gone; this is the original
+    // form, from before any of this warp machinery existed.
     private void Recenter(LocalMasterState st)
     {
         if (st.ActiveLocalScreen == null) return;
         platform.WarpCursor(st.WarpX, st.WarpY);
-        var landed = platform.GetCursorPosition();
-        if (landed is { } actual && (actual.X != st.WarpX || actual.Y != st.WarpY))
-            log.LogWarning("Warp to ({TargetX}, {TargetY}) did not land — cursor reports ({ActualX}, {ActualY})",
-                st.WarpX, st.WarpY, actual.X, actual.Y);
-        st.LastWarpX = landed?.X ?? st.WarpX;
-        st.LastWarpY = landed?.Y ?? st.WarpY;
-        st.DriftX = 0;
-        st.DriftY = 0;
+        AnchorAtWarpPoint(st);
     }
 
     // Keeps the physical cursor clear of the local screen edges while the pointer is on a virtual

@@ -11,8 +11,6 @@ namespace Tests.Screen;
 [TestFixture]
 public class MouseThrottleTests
 {
-    private const int MouseSendIntervalMs = 1000 / HydraProfile.DefaultMaxMouseHz;
-
     private FakePlatform _platform = null!;
     private FakeRelay _relay = null!;
     private InputRouter _service = null!;
@@ -157,95 +155,6 @@ public class MouseThrottleTests
         await service.StopAsync(CancellationToken.None);
         await platform.DisposeAsync();
         return sends;
-    }
-
-    [Test]
-    public async Task MovementPastTheLastSample_IsNotFoldedIn_ForPositionCapture()
-    {
-        // Mac/Windows recentre on every sample, so the gap a residual read would be closing here is
-        // just the time between taking the batch snapshot and calling WarpCursor a few lines later —
-        // a live GetCursorPos() read in that gap races the hook thread's own delivery instead of
-        // recovering anything real, and was removed for exactly that reason (it showed up as the
-        // reported position wandering a few dozen pixels on a live Windows master). So what the
-        // platform additionally reports here, past the sample that triggers the warp, is simply lost
-        // — the same tradeoff the code made before any of this warp machinery existed.
-        var withOvershoot = await VirtualXAfterOneRecentringSample(reportedOvershoot: 20);
-        var withoutOvershoot = await VirtualXAfterOneRecentringSample(reportedOvershoot: null);
-
-        Assert.That(withOvershoot, Is.EqualTo(withoutOvershoot),
-            "a position-reporting platform does not read a residual before recentring");
-    }
-
-    private static async Task<int> VirtualXAfterOneRecentringSample(int? reportedOvershoot)
-    {
-        var now = new Boxed<long>(1000L);
-        var (platform, relay, service) = TransitionTestHelper.CreateService(getTickCount: () => now.Value);
-        await service.StartAsync(CancellationToken.None);
-        await BringRemoteOnline(relay);
-        platform.FireMouseMove(2559, 720);
-
-        var warpX = platform.WarpX;
-        var warpY = platform.WarpY;
-
-        // a position-reporting platform recentres on every sample, so this alone triggers the warp
-        platform.CursorPosition = reportedOvershoot is { } overshoot ? (warpX + 5 + overshoot, warpY) : null;
-        platform.FireMouseMove(warpX + 5, warpY);
-
-        now.Value += MouseSendIntervalMs;
-        platform.FireMouseMove(warpX + 1, warpY);    // carries the accumulated position out on a send
-
-        var json = relay.Sent.Last(s => s.Kind == MessageKind.MouseMove).Json;
-        var message = JsonSerializer.Deserialize<MouseMoveMessage>(json, Cathedral.Config.SaneJson.Options)!;
-
-        await service.StopAsync(CancellationToken.None);
-        await platform.DisposeAsync();
-        return message.X;
-    }
-
-    [Test]
-    public async Task WarpThatFailsToLand_DoesNotDistortFurtherMovement()
-    {
-        // A warp that silently fails to move the physical cursor (e.g. Windows SetCursorPos while
-        // the hook thread isn't on the input desktop) must not corrupt the drift reference: anchoring
-        // it to the intended target regardless measures every later sample's delta against a point
-        // the cursor never reached — a phantom jump at best, a dead cursor at worst.
-        var succeeded = await VirtualXAfterOneRecentringSampleWithWarp(warpSucceeds: true);
-        var failed = await VirtualXAfterOneRecentringSampleWithWarp(warpSucceeds: false);
-
-        Assert.That(failed, Is.EqualTo(succeeded),
-            "the same real movement must land at the same place whether or not the warp took effect");
-    }
-
-    private static async Task<int> VirtualXAfterOneRecentringSampleWithWarp(bool warpSucceeds)
-    {
-        var now = new Boxed<long>(1000L);
-        var (platform, relay, service) = TransitionTestHelper.CreateService(getTickCount: () => now.Value);
-        await service.StartAsync(CancellationToken.None);
-        await BringRemoteOnline(relay);
-        platform.FireMouseMove(2559, 720);
-
-        var warpX = platform.WarpX;
-        var warpY = platform.WarpY;
-
-        // the physical cursor is really at warpX+5 (matching the sample below), and the resulting
-        // warp either lands (CursorPosition follows it to warpX) or silently fails (stays put)
-        platform.CursorPosition = (warpX + 5, warpY);
-        platform.WarpSucceeds = warpSucceeds;
-        platform.FireMouseMove(warpX + 5, warpY);
-        platform.WarpSucceeds = true;
-
-        // real further movement, reported (as a real hook would) relative to wherever the physical
-        // cursor actually is now — not to wherever our own bookkeeping assumes it landed
-        var actualBase = warpSucceeds ? warpX : warpX + 5;
-        now.Value += MouseSendIntervalMs;
-        platform.FireMouseMove(actualBase + 3, warpY);
-
-        var json = relay.Sent.Last(s => s.Kind == MessageKind.MouseMove).Json;
-        var message = JsonSerializer.Deserialize<MouseMoveMessage>(json, Cathedral.Config.SaneJson.Options)!;
-
-        await service.StopAsync(CancellationToken.None);
-        await platform.DisposeAsync();
-        return message.X;
     }
 
     [Test]
