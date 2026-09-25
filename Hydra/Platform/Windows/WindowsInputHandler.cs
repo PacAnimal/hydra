@@ -20,6 +20,7 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
     private readonly WinKeyResolver _keyResolver = new();
     private Action<double, double>? _onMouseMove;
     private Action<double, double>? _onMouseDelta;
+    private bool _deltaReferenceIsStale = true;
     private Action<KeyEvent>? _onKeyEvent;
     private Action<MouseButtonEvent>? _onMouseButton;
     private Action<MouseScrollEvent>? _onMouseScroll;
@@ -239,14 +240,32 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
                     // delta reference: WarpCursor already sets them to the warp target, so the
                     // first real sample after a warp measures from there, not from wherever the
                     // cursor was before it.
-                    var dx = info.pt.x - _lastWarpX;
-                    var dy = info.pt.y - _lastWarpY;
-                    _lastWarpX = info.pt.x;
-                    _lastWarpY = info.pt.y;
-                    _onMouseDelta?.Invoke(dx, dy);
+                    //
+                    // The router flips IsOnVirtualScreen true BEFORE the warp that is meant to prime
+                    // that reference actually runs (ApplyEnterScreen/AnchorAtWarpPoint sit in
+                    // between, on the OTHER thread) — a real sample landing in that gap would
+                    // otherwise measure against wherever the cursor was on the REAL screen, an
+                    // arbitrary and often huge delta that lands the remote cursor in a random
+                    // corner on entry. _deltaReferenceIsStale skips exactly that one sample: resync
+                    // the reference without reporting movement, rather than report garbage.
+                    if (_deltaReferenceIsStale)
+                    {
+                        _lastWarpX = info.pt.x;
+                        _lastWarpY = info.pt.y;
+                        _deltaReferenceIsStale = false;
+                    }
+                    else
+                    {
+                        var dx = info.pt.x - _lastWarpX;
+                        var dy = info.pt.y - _lastWarpY;
+                        _lastWarpX = info.pt.x;
+                        _lastWarpY = info.pt.y;
+                        _onMouseDelta?.Invoke(dx, dy);
+                    }
                 }
                 else
                 {
+                    _deltaReferenceIsStale = true;
                     _onMouseMove?.Invoke(info.pt.x, info.pt.y);
                 }
             }
