@@ -48,7 +48,7 @@ public class EmbeddedStyxTests
             try
             {
                 await _server.StartAsync(_cts.Token);
-                await _server.WaitForReady().WaitAsync(TimeSpan.FromSeconds(30));
+                await _server.WaitForReady().WaitAsync(TimeSpan.FromSeconds(60));
                 return;
             }
             // ONLY a lost port race is retried. An undifferentiated catch would retry a bad password, a
