@@ -6,6 +6,17 @@ internal static class MacDisplayHelper
 {
     private const uint MaxDisplays = 32;
 
+    // AppKit's screen objects are not thread-safe, and two of our loops ask for them at once: ScreenDetector
+    // and NetworkWatcher's screen-count probe both arrive here from their own thread-pool threads, and both
+    // start together. -[NSScreen localizedName] fills a Swift-side cache on first use, and two first calls on
+    // one screen release the same object twice — reproduced with nothing but AppKit and eight threads, at 3
+    // crashes in 200 fresh processes. Under .NET that fault does not even crash: the runtime keeps resuming
+    // the faulting thread, it never reaches a GC safe point, and the whole process wedges at the next GC —
+    // which is how a macOS slave sat off the relay at full CPU after a self-update restart, until killed.
+    // Everything that touches NSScreen goes through this lock, inside a pool so the autoreleased screens and
+    // strings are drained before the next caller gets in.
+    private static readonly Lock NsScreenLock = new();
+
     internal static unsafe List<DetectedScreen> GetAllScreens()
     {
         var result = new List<DetectedScreen>();
@@ -14,7 +25,12 @@ internal static class MacDisplayHelper
         if (NativeMethods.CGGetActiveDisplayList(MaxDisplays, ids, out var count) != 0)
             return [GetPrimaryFallback()];
 
-        var nameMap = BuildNameMap();
+        Dictionary<uint, string?> nameMap;
+        lock (NsScreenLock)
+        {
+            using var pool = new ObjcAutoreleasePool();
+            nameMap = BuildNameMap();
+        }
 
         for (uint i = 0; i < count; i++)
         {
@@ -34,7 +50,7 @@ internal static class MacDisplayHelper
         return result.Count > 0 ? result : [GetPrimaryFallback()];
     }
 
-    // builds display-id → NSScreen.localizedName map via ObjC runtime
+    // builds display-id → NSScreen.localizedName map via ObjC runtime — only ever under NsScreenLock
     private static Dictionary<uint, string?> BuildNameMap()
     {
         var map = new Dictionary<uint, string?>();
