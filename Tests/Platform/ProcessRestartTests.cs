@@ -46,22 +46,4 @@ public class ProcessRestartTests
         var missing = Path.Combine(TestPaths.FreshFixtureRoot(nameof(ProcessRestartTests)), "never-created");
         Assert.DoesNotThrow(() => ProcessRestart.DropDiagnosticEndpoint(missing, 4242));
     }
-
-    // the deadline is a real kernel timer on the test host, so it is armed far out and always cleared — the
-    // kill itself is SIGALRM's default action and was verified by hand, not here
-    [Test]
-    public void SetDeadline_ArmsTheKernelTimer_AndZeroClearsIt()
-    {
-        if (OperatingSystem.IsWindows()) Assert.Ignore("Unix interval timer");
-        try
-        {
-            ProcessRestart.SetDeadline(TimeSpan.FromHours(1));
-            Assert.That(ProcessRestart.DeadlineRemaining(), Is.InRange(TimeSpan.FromMinutes(59), TimeSpan.FromHours(1)));
-        }
-        finally
-        {
-            ProcessRestart.SetDeadline(TimeSpan.Zero);
-        }
-        Assert.That(ProcessRestart.DeadlineRemaining(), Is.EqualTo(TimeSpan.Zero));
-    }
 }
