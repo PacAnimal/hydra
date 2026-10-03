@@ -18,6 +18,10 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
+// clear the deadline a restart arms before exec'ing us (execve preserves it) — first, so nothing below can
+// outlast it. See ProcessRestart.SetDeadline.
+ProcessRestart.SetDeadline(TimeSpan.Zero);
+
 // ensure console can display non-ASCII characters (e.g. '€', 'ø') in debug logs
 Console.OutputEncoding = Encoding.UTF8;
 

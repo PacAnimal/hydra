@@ -8,11 +8,20 @@ internal static partial class ProcessRestart
 {
     private static readonly Toggle Restarting = new(); // one-shot latch — restart already initiated
 
+    /// <summary>How long a restart has, from <see cref="Restart"/> to the first line of the new image's Main.</summary>
+    /// <remarks>Covers exec, the runtime starting and a first-run bundle extraction on an SD card. A restart
+    /// that overruns it is killed and the supervisor starts it fresh, without a deadline — so even a slow
+    /// start that trips it costs one extra start, not a loop.</remarks>
+    internal static readonly TimeSpan Deadline = TimeSpan.FromSeconds(120);
+
     internal static void Restart()
     {
         // one restart only — a racing caller (NetworkWatcher + SelfUpdater, or an event burst) must not
         // spawn a second process (Windows) before Environment.Exit runs
         if (!Restarting.TrySet()) return;
+
+        // first, before anything below allocates — see SetDeadline
+        SetDeadline(Deadline);
 
         var exePath = Environment.ProcessPath!;
 
@@ -76,6 +85,63 @@ internal static partial class ProcessRestart
         catch (UnauthorizedAccessException) { /* temp dir unreadable */ }
     }
 
+    /// <summary>
+    /// Arms a kernel timer that kills this process <paramref name="after"/> from now, or clears it when
+    /// given zero. Program.cs clears it as its very first statement.
+    ///
+    /// <para>A restart that wedges must not leave a live-looking process behind. On macOS a slave logged
+    /// <c>Update applied, restarting</c> and never exec'd: two threads were re-faulting in native code that
+    /// the runtime kept resuming, so they never reached a GC safe point, and the restart's first allocation
+    /// waited on that GC for ever. launchd's KeepAlive (and systemd's Restart=) only act on a process that
+    /// exits, so it sat at full CPU, off the relay, still running the old binary, until it was killed by hand.</para>
+    ///
+    /// <para>Nothing managed can rescue a runtime in that state — a watchdog thread waits on the same GC — so
+    /// the deadline is the kernel's: <c>ITIMER_REAL</c>, whose SIGALRM terminates by default action (the
+    /// runtime installs no handler for it), and which execve preserves. It therefore spans the exec, and
+    /// whatever stops the new image reaching Main — a wedged restart, a failed exec, a new binary that hangs
+    /// starting — ends with the process dying and the supervisor starting it again. Verified on macOS: a
+    /// 3 s timer armed before execv into a .NET app that never clears it kills it at 3 s with status 142.</para>
+    ///
+    /// <para>Program.cs's startup call is also what compiles this method and its P/Invoke stub, so arming it
+    /// at restart time takes no JIT — and the JIT is one of the things that blocks on a pending GC.</para>
+    ///
+    /// <para>Windows has no interval timers, and restarts by starting a new process rather than exec, so
+    /// this is a no-op there.</para>
+    /// </summary>
+    internal static void SetDeadline(TimeSpan after)
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var timer = new ItimerVal { ValueSec = (long)Math.Ceiling(after.TotalSeconds) };
+        _ = SetItimer(ItimerReal, timer, nint.Zero); // best effort — a restart without a deadline is today's behaviour
+    }
+
+    /// <summary>Whole seconds left on the deadline; zero when none is armed (and always, on Windows).</summary>
+    internal static TimeSpan DeadlineRemaining()
+    {
+        if (OperatingSystem.IsWindows() || GetItimer(ItimerReal, out var timer) != 0) return TimeSpan.Zero;
+        return TimeSpan.FromSeconds(timer.ValueSec); // seconds only — see ItimerVal
+    }
+
+    private const int ItimerReal = 0; // same value on Linux and macOS
+
+    // struct itimerval { struct timeval it_interval, it_value; } with a 16-byte timeval on every 64-bit Unix
+    // we ship. macOS's tv_usec is 32 bits padded out to 8, so these long fields are exact everywhere as long
+    // as usec is written as zero, and read back only for the seconds.
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ItimerVal
+    {
+        public long IntervalSec;
+        public long IntervalUsec;
+        public long ValueSec;
+        public long ValueUsec;
+    }
+
     [LibraryImport("libc", EntryPoint = "execv", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
     private static partial int Execv(string pathname, string?[] argv);
+
+    [LibraryImport("libc", EntryPoint = "setitimer", SetLastError = true)]
+    private static partial int SetItimer(int which, in ItimerVal value, nint oldValue);
+
+    [LibraryImport("libc", EntryPoint = "getitimer", SetLastError = true)]
+    private static partial int GetItimer(int which, out ItimerVal value);
 }
