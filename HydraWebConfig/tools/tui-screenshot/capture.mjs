@@ -7,27 +7,41 @@
 //
 // `--demo` (see Hydra/Management/MockManagementClient.cs) renders the exact same UI code against
 // fabricated data instead of a live daemon — no real config, no real network, no real machine
-// identity, and nothing external to wait on, so this capture needs no daemon and no retry logic
-// around one. The only flakiness left to retry around is the TUI draw itself occasionally not
-// happening on the first attempt under a synthetic pty — see README.md.
+// identity, and nothing external to wait on. The capture waits for the frame it wants rather than
+// a fixed time, so a slow first launch costs time, never a broken capture — see README.md.
 
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pty from 'node-pty';
-import { findDefaultBinary, replyFor, isRealTui } from './pty-helpers.mjs';
+import { hydraBinary, recordPty, spawnHydraTui, waitForDraw } from './pty-helpers.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = resolve(__dirname, '..', '..', '..');
 
 const args = parseArgs(process.argv.slice(2));
-const HYDRA_BIN = args.bin ?? findDefaultBinary(REPO_ROOT);
+const HYDRA_BIN = hydraBinary();
 const OUT_DIR = resolve(args.out ?? join(__dirname, 'output'));
 const COLS = Number(args.cols ?? 130);
 const ROWS = Number(args.rows ?? 42);
-const TUI_ATTEMPTS = Number(args.tuiAttempts ?? 5);
-const TUI_CAPTURE_MS = Number(args.tuiCaptureMs ?? 4000);
 const GOTO = typeof args.goto === 'string' ? args.goto : null;
+// covers a freshly built binary's cold first launch
+const DRAW_TIMEOUT_MS = 120_000;
+// text only that tab shows once it has data, by --goto letter
+const TAB_MARKERS = {
+  p: 'Local Screens',
+  l: 'Connected to Styx relay',
+  c: 'Machine Name',
+  r: 'Pairing code',
+  d: 'Management',
+  h: 'Move between controls',
+};
+// the connected status line, drawn in the same frame as the Overview's data
+const CONNECTED = '● Connected';
+
+if (GOTO && !TAB_MARKERS[GOTO]) {
+  console.error(`--goto ${GOTO} names no tab; use one of ${Object.keys(TAB_MARKERS).join(', ')}`);
+  process.exit(2);
+}
 
 mkdirSync(OUT_DIR, { recursive: true });
 
@@ -43,56 +57,27 @@ function parseArgs(argv) {
   return out;
 }
 
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
+// Everything the TUI wrote up to the end of the frame that shows the wanted tab: the connected Overview,
+// then --goto's tab when given. Output past that frame's end is a later frame still being written.
 async function captureTui() {
-  for (let attempt = 1; attempt <= TUI_ATTEMPTS; attempt++) {
-    console.error(`[tui] attempt ${attempt}/${TUI_ATTEMPTS}`);
-    const bytes = await new Promise((resolveCapture) => {
-      const term = pty.spawn(HYDRA_BIN, ['tui', '--demo'], {
-        name: 'xterm-256color',
-        cols: COLS,
-        rows: ROWS,
-        env: { ...process.env, TERM: 'xterm-256color' },
-      });
-
-      let out = '';
-      term.onData((data) => {
-        out += data;
-        const reply = replyFor(data, COLS, ROWS);
-        if (reply) term.write(reply);
-      });
-
-      // --goto <letter> jumps to another tab via its Alt-mnemonic, once the initial draw has
-      // definitely happened, so the capture ends on that tab instead of Overview.
-      if (GOTO) setTimeout(() => term.write(`\x1b${GOTO}`), Math.min(1500, TUI_CAPTURE_MS / 2));
-
-      setTimeout(() => {
-        try {
-          term.kill();
-        } catch {
-          // already gone
-        }
-        resolveCapture(out);
-      }, TUI_CAPTURE_MS);
-    });
-
-    if (isRealTui(bytes)) {
-      console.error(`[tui] captured ${Buffer.byteLength(bytes, 'utf8')} bytes on attempt ${attempt}`);
-      return bytes;
+  const term = spawnHydraTui({ pty, bin: HYDRA_BIN, cols: COLS, rows: ROWS });
+  const recording = recordPty(term);
+  try {
+    let end = await waitForDraw(recording, CONNECTED, { timeoutMs: DRAW_TIMEOUT_MS });
+    if (GOTO) {
+      term.write(`\x1b${GOTO}`);
+      end = await waitForDraw(recording, TAB_MARKERS[GOTO], { timeoutMs: DRAW_TIMEOUT_MS, from: end });
     }
-    console.error(`[tui] attempt ${attempt} did not draw the TUI; retrying`);
-    await sleep(300);
+    return recording.output.slice(0, end);
+  } finally {
+    if (!recording.exited) term.kill();
   }
-
-  throw new Error(`hydra tui --demo did not draw a real terminal UI after ${TUI_ATTEMPTS} attempts`);
 }
 
 async function main() {
   console.error(`[setup] binary: ${HYDRA_BIN}`);
   const bytes = await captureTui();
+  console.error(`[tui] captured ${Buffer.byteLength(bytes, 'utf8')} bytes`);
 
   const binPath = join(OUT_DIR, 'capture.bin');
   const b64Path = join(OUT_DIR, 'capture.b64');

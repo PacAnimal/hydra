@@ -32,25 +32,24 @@ npm run capture         # writes output/capture.bin, capture.b64, meta.json
 npm run screenshot      # renders output/capture.b64 → output/hydra-tui.png
 ```
 
-Useful flags for `capture.mjs`:
+Useful flags for `capture.mjs` (the binary is `$HYDRA_TUI_BIN`, else `Hydra/bin/{Release,Debug}/net10.0/Hydra`):
 
 | Flag | Default | Purpose |
 |---|---|---|
-| `--bin <path>` | auto-detected `Hydra/bin/{Release,Debug}/net10.0/Hydra` | binary to run |
 | `--cols`, `--rows` | 130, 42 | terminal size |
-| `--tui-attempts` | 5 | retry budget for the TUI actually drawing (see below) |
-| `--tui-capture-ms` | 4000 | how long to record once the TUI starts drawing |
-| `--goto <letter>` | none (stays on Overview) | jumps to another tab via its Alt-mnemonic (e.g. `--goto c` for Configuration) partway through the capture window |
+| `--goto <letter>` | none (stays on Overview) | once the connected Overview is drawn, switches to another tab via its Alt-mnemonic (e.g. `--goto c` for Configuration) and captures that instead |
 
-## Why this needs retry logic at all
+## When the capture ends
 
-`hydra tui` has occasionally not drawn anything within the capture window when spawned under
-a synthetic pty with nothing answering its terminal-capability queries in time. `capture.mjs`
-detects this by checking whether the very first bytes written are the alternate-screen-enter
-sequence (`\x1b[?1049h`) that only the real TUI writes, and retries the pty spawn if not. This
-has been reliable in practice with `--demo` (no daemon or network involved at all); if you're
-investigating further and it reproduces on a clean, idle machine, that's worth chasing down at
-the Terminal.Gui/pty layer rather than papering over with more retries.
+The first launch of a freshly built binary is slow: its files are cold and the OS checks them on first
+use, which under load can take far longer than any later launch. A capture that recorded for a fixed
+time therefore sometimes caught nothing, or half a frame, on a fresh build and fine on the next try.
+
+So `capture.mjs` launches once with a generous deadline and waits for what it wants to see: the
+connected Overview drawn in full (`waitForDraw` in `pty-helpers.mjs` — the text drawn, not just in the
+window title, and the frame that drew it ended), then, with `--goto`, that tab's own text and the end of
+its frame. It keeps the output up to that frame's end and kills the process. A process that exits
+first, or a deadline that passes, fails the capture with the output it did write.
 
 ## How the terminal query answering works
 
@@ -58,13 +57,13 @@ Terminal.Gui's console driver asks the terminal a handful of capability question
 (cursor position, window size in characters, foreground/background colour, Kitty keyboard
 protocol support, primary device attributes) and waits for answers before it draws anything. A
 bare pty with nothing on the other end never answers, so `capture.mjs` answers them itself,
-matching what a real terminal emulator would send — see `replyFor()` in `capture.mjs` for the
+matching what a real terminal emulator would send — see `queryResponder()` in `pty-helpers.mjs` for the
 exact sequences.
 
 ## Files
 
 - `capture.mjs` — spawns `hydra tui --demo` under `node-pty` and saves the raw captured bytes.
-- `render.html` — loads `@xterm/xterm` from a CDN and replays `capture.b64` into it. Everything
+- `render.html` — loads `@xterm/xterm` from `node_modules` and replays `capture.b64` into it. Everything
   around the terminal is painted in the terminal's OWN background, so there is no foreign colour
   that a capture could pick up at its edges.
 - `screenshot.mjs` — serves `render.html` + the capture over a tiny local HTTP server, loads it in
@@ -73,4 +72,8 @@ exact sequences.
   than from an element's box: an element crop is subject to subpixel layout, and two columns of a
   debug frame once rode into a committed PNG down its left edge that way.
   `Tests/Tui/ScreenshotPaddingTests` holds the committed PNGs to the 4-pixel rule.
+- `terminal.js` — the xterm.js `Terminal` options (font stack, size, theme), shared with the
+  tui-tests' `live.html`.
+- `pty-helpers.mjs` — the binary lookup, pty spawn, capability replies, draw detection and static
+  server, shared with the tui-tests harness. Node builtins only, since each tool installs its own `node_modules`.
 - `output/` (gitignored) — everything the two scripts produce.

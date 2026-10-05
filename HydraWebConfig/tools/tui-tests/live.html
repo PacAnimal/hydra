@@ -4,6 +4,8 @@
 <meta charset="utf-8" />
 <title>Hydra TUI live harness</title>
 <script src="xterm.js"></script>
+<script src="terminal.js"></script>
+<link rel="stylesheet" href="xterm.css" />
 <style>
   html, body { margin: 0; background: #0c0c0c; }
   #term { padding: 4px; }
@@ -16,15 +18,7 @@
   const cols = Number(params.get('cols') || 130);
   const rows = Number(params.get('rows') || 42);
 
-  const term = new Terminal({
-    cols,
-    rows,
-    fontFamily: 'Menlo, "SF Mono", Consolas, monospace',
-    fontSize: 13,
-    lineHeight: 1.0,
-    theme: { background: '#0c0c0c' },
-    allowProposedApi: true,
-  });
+  const term = createHydraTerminal(cols, rows);
   term.open(document.getElementById('term'));
 
   // The harness (Node side) already receives fully UTF-8-decoded strings from node-pty's

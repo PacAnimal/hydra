@@ -10,6 +10,7 @@
     "shoot": "node capture.mjs && node screenshot.mjs"
   },
   "devDependencies": {
+    "@xterm/xterm": "^5.5.0",
     "node-pty": "^1.1.0",
     "playwright": "^1.48.0"
   }

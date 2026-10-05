@@ -3,8 +3,9 @@
 <head>
 <meta charset="utf-8" />
 <title>Hydra TUI render</title>
-<script src="https://unpkg.com/@xterm/xterm@5.5.0/lib/xterm.js"></script>
-<link rel="stylesheet" href="https://unpkg.com/@xterm/xterm@5.5.0/css/xterm.css" />
+<script src="xterm.js"></script>
+<script src="terminal.js"></script>
+<link rel="stylesheet" href="xterm.css" />
 <style>
   /* Everything around the terminal is the terminal's OWN background, so there is no foreign colour that
      can leak into a capture — screenshot.mjs then trims to the content and pads it itself. A contrasting
@@ -20,15 +21,7 @@
 <script>
   (async function () {
     const meta = await fetch('meta.json').then((r) => r.json()).catch(() => ({ cols: 130, rows: 42 }));
-    const term = new Terminal({
-      cols: meta.cols,
-      rows: meta.rows,
-      fontFamily: 'Menlo, "SF Mono", Consolas, "Liberation Mono", monospace',
-      fontSize: 13,
-      lineHeight: 1.0,
-      theme: { background: '#0c0c0c' },
-      allowProposedApi: true,
-    });
+    const term = createHydraTerminal(meta.cols, meta.rows);
     term.open(document.getElementById('term'));
 
     const b64 = await fetch('capture.b64').then((r) => r.text());

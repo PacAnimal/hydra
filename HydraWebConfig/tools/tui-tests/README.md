@@ -21,18 +21,31 @@ cd HydraWebConfig/tools/tui-tests
 npm install
 npx playwright install chromium   # first time only
 npm test
+npx playwright test --project unit   # just the pure-function specs; no build needed
 ```
+
+`HYDRA_TUI_BIN=/path/to/Hydra` runs another binary instead of the repo's Release (else Debug) build;
+the warm-up and every test read it from the same place.
+
+CI runs this suite in `build-hydra.yml`'s `test-tui` job, against a Release build on macOS.
 
 ## How it works
 
 - `harness.mjs` — `HydraTui.launch()` spawns `hydra tui --demo` under `node-pty` (reusing the same
-  terminal-capability handshake as the screenshot tool, from `../tui-screenshot/pty-helpers.mjs`),
-  opens a headless browser page hosting `live.html`, and mirrors the pty's output into a live
-  xterm.js `Terminal` there as it arrives.
+  spawn, terminal-capability handshake and static server as the screenshot tool, from
+  `../tui-screenshot/pty-helpers.mjs`), opens a headless browser page hosting `live.html`, and
+  mirrors the pty's output into a live xterm.js `Terminal` there as it arrives. `live.html` builds
+  that terminal with the screenshot tool's `terminal.js`, so tests and screenshots share one font
+  stack and theme.
 - Tests drive input by sending raw bytes straight to the pty (`tui.alt('c')`, `tui.key('enter')`,
   `tui.send(...)`) — exactly what a real terminal would send for that keypress — and assert via
   `tui.screenText()` / `tui.waitForText(needle)`, which read xterm's actual rendered screen (one
   string per row), or `tui.cellColor(row, col)` for the highlighting/color rules.
+- `warm-up.setup.mjs` launches the binary once before any TUI test (a Playwright setup project), so
+  the slow first launch of a fresh build is not charged to whichever test happens to run first. It
+  waits for the TUI's name to be drawn on screen, not merely set as the window title.
+- `*.unit.spec.mjs` test the shared helpers' pure functions and run without a binary (the `unit`
+  project).
 - Every real terminal-emulator quirk (cursor positioning, redraws, box-drawing characters, 24-bit
   color) is handled by xterm.js itself, not by us — we're testing against the same parser a real
   terminal uses, not a hand-rolled approximation of one.
@@ -40,9 +53,9 @@ npm test
 ## What's covered
 
 - `navigation.spec.mjs` — every tab reachable via its mnemonic, F1 jumping to Help, a full tour.
-- `hotkey-scoping.spec.mjs` — regression coverage for the background-tab hotkey bug found and fixed
-  this session (see `docs/HOTKEYS.md`): a tab's hotkeys must be dead while it isn't in the
-  foreground, even ones that don't collide with anything.
+- `hotkey-scoping.spec.mjs` — regression coverage for the background-tab hotkey bug (see
+  `docs/HOTKEYS.md`): a tab's hotkeys must be dead while it isn't in the foreground, even ones that
+  don't collide with anything.
 - `overview-actions.spec.mjs` — Reconnect/Restart/Shutdown/Start and their confirmation dialogs.
 - `configuration.spec.mjs` — Form/Text mode toggle, all four sections, the no-mnemonic Reload button.
 - `remote.spec.mjs` — the Remote tab's fields and actions.
@@ -51,7 +64,11 @@ npm test
 
 ## Adding a test
 
-Import `HydraTui` from `./harness.mjs`, `launch()` it in a `beforeEach`, `close()` it in an
-`afterEach`. Prefer `waitForText`/`waitForTextGone` over a fixed `setTimeout` for anything that
-should eventually appear; reserve a short fixed delay only for asserting that something did **not**
-happen (a background tab's hotkey misfiring, for example) since there's nothing to poll for there.
+Import `test` and `expect` from `./harness.mjs` rather than `@playwright/test`, and take the `tui`
+fixture: a demo TUI already showing its connected Overview, closed after the test whatever happens.
+`tui.gotoTab(letter, marker)` switches tab and waits for text only that tab shows. Never wait a fixed
+time: use `waitForText`/`waitForTextGone` for anything that should appear or go, and to assert that a
+key did **not** do something (a background tab's hotkey misfiring, for example), call
+`tui.afterInput()` first. It sends a key with a visible effect and waits for it, and since input is
+handled in order, everything sent before it has been handled too. That covers synchronous handling
+only, and it leaves you on the Help tab.

@@ -5,24 +5,34 @@
 // component that decides whether a byte stream reads as a real terminal or as noise, so it's
 // the right thing to drive tests through rather than regex-matching escape codes ourselves.
 
-import { createServer } from 'node:http';
-import { readFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pty from 'node-pty';
-import { chromium } from 'playwright';
-import { findDefaultBinary, replyFor, isRealTui } from '../tui-screenshot/pty-helpers.mjs';
+import { test as base, chromium } from '@playwright/test';
+import { hydraBinary, serveStatic, spawnHydraTui, terminalFiles } from '../tui-screenshot/pty-helpers.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = resolve(__dirname, '..', '..', '..');
-const XTERM_JS = resolve(__dirname, 'node_modules', '@xterm', 'xterm', 'lib', 'xterm.js');
-
-const MIME = { '.html': 'text/html', '.js': 'text/javascript' };
+// how long a pty that has not yet drawn a frame must be quiet before its output is shown anyway
+const IDLE_FLUSH_MS = 150;
+// a warm launch, see warm-up.setup.mjs for the cold one
+const LAUNCH_TIMEOUT_MS = 10_000;
+// frame markers, see flush()
+const HIDE_CURSOR = '\x1b[?25l';
+const SHOW_CURSOR = '\x1b[?25h';
+const hasFrameMarker = (s) => s.includes(HIDE_CURSOR) || s.includes(SHOW_CURSOR);
+// text only the Help tab shows
+const HELP_MARKER = 'Move between controls';
 
 export class HydraTui {
-  static async launch({ args = [], cols = 130, rows = 42, bin } = {}) {
+  static async launch({ args = [], cols = 130, rows = 42 } = {}) {
     const harness = new HydraTui(cols, rows);
-    await harness._start({ args, bin });
+    try {
+      await harness._start({ args });
+    } catch (err) {
+      // nobody gets a harness to close, so the browser and server it already opened go here
+      await harness.close();
+      throw err;
+    }
     return harness;
   }
 
@@ -32,83 +42,59 @@ export class HydraTui {
     this._pending = '';
   }
 
-  async _start({ args, bin }) {
-    this.hydraBin = bin ?? findDefaultBinary(REPO_ROOT);
-    this._tuiArgs = ['tui', '--demo', ...args];
-
-    this._server = createServer(async (req, res) => {
-      const path = req.url === '/' ? '/live.html' : req.url.split('?')[0];
-      const filePath = path === '/xterm.js' ? XTERM_JS : join(__dirname, path);
-      try {
-        res.writeHead(200, { 'Content-Type': MIME[filePath.slice(filePath.lastIndexOf('.'))] ?? 'application/octet-stream' });
-        res.end(await readFile(filePath));
-      } catch {
-        res.writeHead(404);
-        res.end('not found');
-      }
-    });
-    await new Promise((r) => this._server.listen(0, '127.0.0.1', r));
-    const port = this._server.address().port;
+  async _start({ args }) {
+    this._server = await serveStatic({ roots: [__dirname], files: terminalFiles(__dirname), index: 'live.html' });
 
     this._browser = await chromium.launch();
     this.page = await this._browser.newPage();
-    await this.page.goto(`http://127.0.0.1:${port}/live.html?cols=${this.cols}&rows=${this.rows}`);
+    await this.page.goto(`${this._server.origin}/live.html?cols=${this.cols}&rows=${this.rows}`);
     await this.page.waitForFunction(() => window.__termReady === true);
 
-    // hydra tui has an occasional first-attempt dispatch flakiness unrelated to rendering
-    // (see HydraWebConfig/tools/tui-screenshot/README.md) — retry a couple of times rather
-    // than let it flake a whole test run.
-    const attempts = 3;
-    for (let attempt = 1; attempt <= attempts; attempt++) {
-      await this._spawn();
-      try {
-        await this.waitForText('Hydra Control Center', 4000);
-        return;
-      } catch (err) {
-        await this._killPty();
-        if (attempt === attempts) throw err;
-      }
-    }
+    this._spawn(hydraBinary(), args);
+    await this.waitForText('Hydra Control Center', LAUNCH_TIMEOUT_MS);
   }
 
-  async _spawn() {
+  _spawn(bin, args) {
     this._alive = true;
     this._raw = '';
-    this._pending = '';
-    this.pty = pty.spawn(this.hydraBin, this._tuiArgs, {
-      name: 'xterm-256color',
+    this._sawFrame = false;
+    this.pty = spawnHydraTui({
+      pty,
+      bin,
+      args,
       cols: this.cols,
       rows: this.rows,
-      env: { ...process.env, TERM: 'xterm-256color' },
-    });
-    this.pty.onData((data) => {
-      this._raw += data;
-      const reply = replyFor(data, this.cols, this.rows);
-      if (reply) this.pty.write(reply);
-      this._pending += data;
+      onData: (data) => {
+        this._raw += data;
+        this._pending += data;
+        this._sawFrame ||= hasFrameMarker(this._raw);
+        this._settled = false;
+        clearTimeout(this._idleTimer);
+        this._idleTimer = setTimeout(() => (this._settled = true), IDLE_FLUSH_MS);
+      },
     });
     this.pty.onExit(() => {
       this._alive = false;
+      clearTimeout(this._idleTimer);
     });
-    // A pty that never draws the real alt-screen (see isRealTui) is the known flaky case —
-    // fail fast on it instead of waiting out the full text timeout for nothing.
-    await this._waitFor(() => isRealTui(this._raw) || !this._alive, 'the real TUI to draw (alt-screen sequence)', 2000).catch(() => {});
   }
 
-  async _killPty() {
-    try {
-      if (this._alive) this.pty.kill();
-    } catch {
-      /* already gone */
-    }
-  }
-
-  // Pushes everything received from the pty since the last flush into the live terminal.
+  // Pushes every complete frame received from the pty since the last flush into the live terminal.
   // Call before any assertion — screenText()/waitForText() call this for you.
+  //
+  // Only whole frames: Terminal.Gui ends each one by setting the cursor's visibility (ESC[?25l or
+  // ESC[?25h) and never emits that mid-frame, so output past the last such marker is a frame still
+  // being written. Showing it would let a test see the new page's first rows over the old page's rest.
+  // Output that never gets a marker, such as an error printed before the TUI starts, is shown once
+  // the pty has exited, or gone quiet before drawing any frame. Once frames are being drawn, a quiet
+  // pty may just be a slow one midway through the next, so only a marker ends it.
   async flush() {
-    if (!this._pending) return;
-    const chunk = this._pending;
-    this._pending = '';
+    const marker = Math.max(this._pending.lastIndexOf(HIDE_CURSOR), this._pending.lastIndexOf(SHOW_CURSOR));
+    const whole = !this._alive || (this._settled && !this._sawFrame);
+    const end = whole ? this._pending.length : marker < 0 ? 0 : marker + HIDE_CURSOR.length;
+    if (end === 0) return;
+    const chunk = this._pending.slice(0, end);
+    this._pending = this._pending.slice(chunk.length);
     await this.page.evaluate((s) => window.__writeToTerm(s), chunk);
   }
 
@@ -121,6 +107,26 @@ export class HydraTui {
   /** Alt+<letter> — the mnemonic convention this TUI uses for tab/section navigation. */
   alt(letter) {
     this.send(`\x1b${letter}`);
+  }
+
+  /**
+   * Waits until every key sent so far has been handled, for asserting that one did nothing. Input is
+   * processed in order, so once the Help tab that F1 opens is on screen, so is whatever came before it.
+   *
+   * That proves only that the keys were handled synchronously: an effect a key starts asynchronously can
+   * still be on its way, so wait for such effects directly. It leaves you on the Help tab, and throws if
+   * Help is already showing, since then the screen it waits for would prove nothing.
+   */
+  async afterInput() {
+    if ((await this.screenText()).includes(HELP_MARKER)) throw new Error('afterInput() needs a screen other than Help to wait from');
+    this.key('f1');
+    return this.waitForText(HELP_MARKER);
+  }
+
+  /** Switches tab by its mnemonic and waits for `marker`, a text only that tab shows. */
+  gotoTab(letter, marker) {
+    this.alt(letter);
+    return this.waitForText(marker);
   }
 
   key(name) {
@@ -170,6 +176,7 @@ export class HydraTui {
       await this.flush();
       last = await this.page.evaluate(() => window.__screenText());
       if (last.includes(needle)) return last;
+      if (!this._alive) throw new Error(`hydra tui exited before showing ${JSON.stringify(needle)}. Last screen:\n${last}`);
       await new Promise((r) => setTimeout(r, 50));
     }
     throw new Error(`Timed out waiting for ${JSON.stringify(needle)} on screen. Last screen:\n${last}`);
@@ -181,6 +188,8 @@ export class HydraTui {
     while (Date.now() < deadline) {
       await this.flush();
       const screen = await this.page.evaluate(() => window.__screenText());
+      // a dead tui clears its screen, so absence proves nothing once it has exited
+      if (!this._alive) throw new Error(`hydra tui exited while waiting for ${JSON.stringify(needle)} to go. Last screen:\n${screen}`);
       if (!screen.includes(needle)) return;
       await new Promise((r) => setTimeout(r, 50));
     }
@@ -192,6 +201,7 @@ export class HydraTui {
   }
 
   async close() {
+    clearTimeout(this._idleTimer);
     try {
       if (this._alive) this.pty.kill();
     } catch {
@@ -209,3 +219,18 @@ export class HydraTui {
     }
   }
 }
+
+/** A demo TUI that has drawn its connected Overview, closed after the test whatever happens. */
+export const test = base.extend({
+  tui: async ({}, use) => {
+    const tui = await HydraTui.launch();
+    try {
+      await tui.waitForText('Connected');
+      await use(tui);
+    } finally {
+      await tui.close();
+    }
+  },
+});
+
+export { expect } from '@playwright/test';

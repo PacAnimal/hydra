@@ -2,35 +2,15 @@
 // Loads render.html (an xterm.js replay of capture.mjs's output) in a real headless
 // browser and saves a PNG. Run `npm run capture` first to produce output/capture.b64.
 
-import { createServer } from 'node:http';
-import { readFile, writeFile } from 'node:fs/promises';
+import { writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { dirname, extname, join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
+import { serveStatic, terminalFiles } from './pty-helpers.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const OUT_DIR = resolve(process.argv[2] ?? join(__dirname, 'output'));
-
-const MIME = { '.html': 'text/html', '.json': 'application/json', '.b64': 'text/plain', '.js': 'text/javascript' };
-
-async function serveOnce(rootDirs, port) {
-  const server = createServer(async (req, res) => {
-    const path = req.url === '/' ? '/render.html' : req.url;
-    for (const dir of rootDirs) {
-      const filePath = join(dir, path);
-      if (existsSync(filePath)) {
-        res.writeHead(200, { 'Content-Type': MIME[extname(filePath)] ?? 'application/octet-stream' });
-        res.end(await readFile(filePath));
-        return;
-      }
-    }
-    res.writeHead(404);
-    res.end('not found');
-  });
-  await new Promise((resolveListen) => server.listen(port, '127.0.0.1', resolveListen));
-  return server;
-}
 
 /// Padding left around the content, in IMAGE pixels, on every side equally. The page renders at
 /// deviceScaleFactor 2, so this is what a reader of the PNG sees, not a CSS length.
@@ -99,8 +79,7 @@ async function main() {
     process.exit(1);
   }
 
-  const port = 34567 + Math.floor(Math.random() * 1000);
-  const server = await serveOnce([OUT_DIR, __dirname], port);
+  const server = await serveStatic({ roots: [OUT_DIR, __dirname], files: terminalFiles(__dirname), index: 'render.html' });
   try {
     const browser = await chromium.launch();
     try {
@@ -109,7 +88,7 @@ async function main() {
       // current 130x42 — so a taller capture would be silently truncated, and trim-and-pad would then
       // emit a perfectly padded TRUNCATED image that the padding test happily passes.
       const page = await browser.newPage({ deviceScaleFactor: 2, viewport: { width: 2400, height: 1800 } });
-      await page.goto(`http://127.0.0.1:${port}/render.html`);
+      await page.goto(`${server.origin}/render.html`);
       await page.waitForFunction(() => window.__renderDone === true, { timeout: 10000 });
       await page.waitForTimeout(200); // let webfonts/layout settle
       const outPath = join(OUT_DIR, 'hydra-tui.png');

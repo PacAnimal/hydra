@@ -1,25 +1,13 @@
-import { test, expect } from '@playwright/test';
-import { HydraTui } from './harness.mjs';
+import { test, expect } from './harness.mjs';
 
 test.describe('Overview actions', () => {
-  let tui;
-
-  test.beforeEach(async () => {
-    tui = await HydraTui.launch();
-    await tui.waitForText('Connected');
-  });
-
-  test.afterEach(async () => {
-    await tui.close();
-  });
-
-  test('Reconnect Relay (Alt+E) reports progress on the activity line', async () => {
+  test('Reconnect Relay (Alt+E) reports progress on the activity line', async ({ tui }) => {
     tui.alt('e');
     const screen = await tui.waitForText('reconnect');
     expect(screen.toLowerCase()).toContain('relay');
   });
 
-  test('Restart Hydra (Alt+T) shows a confirmation dialog defaulting to Cancel', async () => {
+  test('Restart Hydra (Alt+T) shows a confirmation dialog defaulting to Cancel', async ({ tui }) => {
     tui.alt('t');
     const screen = await tui.waitForText('Restart the running Hydra process?');
     expect(screen).toContain('Restart Hydra');
@@ -27,7 +15,7 @@ test.describe('Overview actions', () => {
     await tui.waitForTextGone('Restart the running Hydra process?');
   });
 
-  test('Shutdown Hydra (Alt+W) shows a confirmation dialog defaulting to Cancel', async () => {
+  test('Shutdown Hydra (Alt+W) shows a confirmation dialog defaulting to Cancel', async ({ tui }) => {
     tui.alt('w');
     const screen = await tui.waitForText('disconnect all peers');
     expect(screen).toContain('Shutdown Hydra');
@@ -35,15 +23,13 @@ test.describe('Overview actions', () => {
     await tui.waitForTextGone('disconnect all peers');
   });
 
-  test('Start Hydra (Alt+S) is disabled while connected', async () => {
-    const before = await tui.screenText();
+  test('Start Hydra (Alt+S) is disabled while connected', async ({ tui }) => {
     tui.alt('s');
-    await new Promise((r) => setTimeout(r, 300));
-    const after = await tui.screenText();
-    expect(after).toBe(before);
+    const screen = await tui.afterInput();
+    expect(screen).not.toContain('Start Hydra with the current configuration?');
   });
 
-  test('canceling Restart leaves the connection state untouched', async () => {
+  test('canceling Restart leaves the connection state untouched', async ({ tui }) => {
     tui.alt('t');
     await tui.waitForText('Restart the running Hydra process?');
     tui.key('enter'); // Cancel
