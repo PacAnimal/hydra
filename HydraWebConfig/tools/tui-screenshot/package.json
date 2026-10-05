@@ -7,7 +7,8 @@
   "scripts": {
     "capture": "node capture.mjs",
     "screenshot": "node screenshot.mjs",
-    "shoot": "node capture.mjs && node screenshot.mjs"
+    "shoot": "node capture.mjs && node screenshot.mjs",
+    "postinstall": "node -e \"for (const a of ['arm64', 'x64']) try { require('fs').chmodSync('node_modules/node-pty/prebuilds/darwin-' + a + '/spawn-helper', 0o755) } catch {}\""
   },
   "devDependencies": {
     "@xterm/xterm": "^5.5.0",

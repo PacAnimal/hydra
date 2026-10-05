@@ -5,7 +5,8 @@
   "type": "module",
   "description": "Integration tests for hydra tui, driven end-to-end through a live xterm.js terminal in a Playwright browser.",
   "scripts": {
-    "test": "playwright test"
+    "test": "playwright test",
+    "postinstall": "node -e \"for (const a of ['arm64', 'x64']) try { require('fs').chmodSync('node_modules/node-pty/prebuilds/darwin-' + a + '/spawn-helper', 0o755) } catch {}\""
   },
   "devDependencies": {
     "@playwright/test": "^1.48.0",

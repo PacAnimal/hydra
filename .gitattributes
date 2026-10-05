@@ -1,2 +1,5 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# raw string literals take their line endings from the source file
+*.cs text eol=lf
