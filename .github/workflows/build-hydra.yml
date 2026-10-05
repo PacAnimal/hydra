@@ -26,14 +26,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          # major.minor; a new series starts at .0, and every push to main after that adds one to the patch
+          SERIES: "0.2"
         run: |
+          latest=""
           if [ "${{ github.event_name }}" == "push" ]; then
-            latest=$(gh release list --limit 1 --json tagName --jq '.[0].tagName // empty')
-            patch="${latest#v}"
-            patch="${patch#0.1.}"
-            echo "version=0.1.$((patch + 1))" >> "$GITHUB_OUTPUT"
+            latest=$(gh release list --limit 20 --json tagName --jq "[.[].tagName | select(startswith(\"v$SERIES.\"))][0] // empty")
+          fi
+          if [ -n "$latest" ]; then
+            echo "version=$SERIES.$(( ${latest#v$SERIES.} + 1 ))" >> "$GITHUB_OUTPUT"
           else
-            echo "version=0.1.0" >> "$GITHUB_OUTPUT"
+            echo "version=$SERIES.0" >> "$GITHUB_OUTPUT"
           fi
 
   test:
@@ -144,15 +147,24 @@ jobs:
       contents: write
 
     steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: docs/releases
+
       - uses: actions/download-artifact@v8
 
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
-          gh release create "v${{ needs.version.outputs.version }}" \
-            --title "Hydra ${{ needs.version.outputs.version }}" \
+          # a version with written notes in docs/releases gets them, ahead of the generated changelog link
+          notes=()
+          if [ -f "docs/releases/$VERSION.md" ]; then notes=(--notes-file "docs/releases/$VERSION.md"); fi
+          gh release create "v$VERSION" \
+            --title "Hydra $VERSION" \
+            "${notes[@]}" \
             --generate-notes \
             hydra-osx-arm64/hydra-osx-arm64.tar.gz \
             hydra-win-x64/hydra-win-x64.tar.gz \

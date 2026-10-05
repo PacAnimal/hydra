@@ -13,7 +13,7 @@
         <Product>Styx</Product>
         <Company>Cathedral</Company>
         <Description>Relay server for Hydra KVM — tunnels connections between machines not in the same network</Description>
-        <Copyright>Copyright (c) 2026 Cathedral. Licensed under the Apache License, Version 2.0.</Copyright>
+        <Copyright>Copyright (c) 2026 Cathedral Networks. Licensed under the GNU General Public License, version 2.</Copyright>
     </PropertyGroup>
 
     <PropertyGroup Condition=" '$(Configuration)' == 'Debug' ">
