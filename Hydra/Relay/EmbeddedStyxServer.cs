@@ -1,15 +1,11 @@
-using Cathedral.Extensions;
 using Cathedral.Logging;
 using Cathedral.Utils;
 using Hydra.Config;
 using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Connections.Features;
 using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Styx;
-using Styx.Filters;
 using Styx.Services;
 using System.Net;
 
@@ -44,11 +40,13 @@ public class EmbeddedStyxServer(EmbeddedStyxServerConfig config, ILogger<Embedde
         try
         {
             app = BuildApp();
-            log.LogInformation("Starting embedded Styx relay on port {Port}", config.Port);
+            if (log.IsEnabled(LogLevel.Information))
+                log.LogInformation("Starting embedded Styx relay on port {Port}", config.Port);
             await app.StartAsync(cancel);
             started = true;
             _ready.TrySetResult();
-            log.LogInformation("Embedded Styx relay listening on port {Port}", config.Port);
+            if (log.IsEnabled(LogLevel.Information))
+                log.LogInformation("Embedded Styx relay listening on port {Port}", config.Port);
             try { await Task.Delay(Timeout.Infinite, cancel); }
             catch (OperationCanceledException) { }
         }
@@ -88,6 +86,9 @@ public class EmbeddedStyxServer(EmbeddedStyxServerConfig config, ILogger<Embedde
         }
     }
 
+    // what times the hub's response throttle, so a test need not wait out a second per login
+    internal TimeProvider ThrottleClock { get; init; } = TimeProvider.System;
+
     /// <summary>
     /// Internal so a test can compose this host's options without starting it — it is the SECOND relay, and
     /// what it configures its hub with is invisible from the outside otherwise.
@@ -95,35 +96,10 @@ public class EmbeddedStyxServer(EmbeddedStyxServerConfig config, ILogger<Embedde
     internal WebApplication BuildApp()
     {
         var builder = WebApplication.CreateBuilder();
-        var services = builder.Services;
 
-        builder.DisableEventLog();
-        services.AddSereneConsoleLogging();
-
-        services.AddDataProtection().PersistKeysToNowhere();
-        services.AddStyxSignalR();
-
-        services.AddSingleton(new StyxOptions(false));
-        services.AddSingleton<IClientRegistry, ClientRegistry>();
-        services.AddHostedService<IPeerBroadcaster, PeerBroadcastService>();
-        services.AddSingleton<IStyxPasswordProvider>(new InlineStyxPasswordProvider(config.Password));
-        services.AddSingleton<AuthenticationHubFilter>();
-        services.Configure<HubOptions>(options => options.AddFilter<AuthenticationHubFilter>());
-
-        services.AddCathedralForwardedHeaders();
-
-        builder.WebHost.ConfigureKestrel(options =>
-        {
-            options.Listen(IPAddress.IPv6Any, config.Port, listenOptions =>
-            {
-                listenOptions.Use(next => ctx =>
-                {
-                    var socketFeature = ctx.Features.Get<IConnectionSocketFeature>();
-                    if (socketFeature != null) socketFeature.Socket.NoDelay = true;
-                    return next(ctx);
-                });
-            });
-        });
+        builder.AddStyxRelay(new InlineStyxPasswordProvider(config.Password), new StyxOptions(false), ThrottleClock);
+        builder.Services.AddSereneConsoleLogging();
+        builder.WebHost.ConfigureKestrel(options => options.Listen(IPAddress.IPv6Any, config.Port, listenOptions => listenOptions.UseTcpNoDelay()));
 
         var app = builder.Build();
         _registry = app.Services.GetRequiredService<IClientRegistry>();

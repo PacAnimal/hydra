@@ -17,20 +17,20 @@ internal sealed class ManagementClient(string configPath) : IManagementClient
         return ManagementJson.Deserialize<T>(response.Json);
     }
 
-    public Task<ServerHello> HelloAsync(CancellationToken cancel = default) => InvokeAsync<ServerHello>("hello", cancel: cancel);
-    public Task<HydraStatusSnapshot> GetStatusAsync(CancellationToken cancel = default) => InvokeAsync<HydraStatusSnapshot>("status", cancel: cancel);
-    public Task<ManagementLogPage> GetLogsAsync(long after, CancellationToken cancel = default) => InvokeAsync<ManagementLogPage>("logs", after, cancel);
-    public Task<ConfigDocument> GetConfigAsync(CancellationToken cancel = default) => InvokeAsync<ConfigDocument>("config.get", cancel: cancel);
-    public Task<ConfigValidation> ValidateConfigAsync(string json, CancellationToken cancel = default) => InvokeAsync<ConfigValidation>("config.validate", json, cancel);
-    public Task<ConfigDocument> SaveConfigAsync(SaveConfigRequest request, CancellationToken cancel = default) => InvokeAsync<ConfigDocument>("config.save", request, cancel);
-    public Task<CommandResult> ReconnectRelayAsync(CancellationToken cancel = default) => InvokeAsync<CommandResult>("relay.reconnect", cancel: cancel);
-    public Task<CommandResult> RestartHydraAsync(CancellationToken cancel = default) => InvokeAsync<CommandResult>("hydra.restart", cancel: cancel);
-    public Task<CommandResult> ShutdownHydraAsync(CancellationToken cancel = default) => InvokeAsync<CommandResult>("hydra.shutdown", cancel: cancel);
-    public Task<RemotePairResult> PairRemoteAsync(RemotePairRequest request, CancellationToken cancel = default) => InvokeAsync<RemotePairResult>("remote.pair", request, cancel);
-    public Task<RemoteConfigDocument> GetRemoteConfigAsync(string host, CancellationToken cancel = default) => InvokeAsync<RemoteConfigDocument>("remote.config.get", new RemoteHostRequest(host), cancel);
-    public Task<ConfigValidation> ValidateRemoteConfigAsync(RemoteValidateRequest request, CancellationToken cancel = default) => InvokeAsync<ConfigValidation>("remote.config.validate", request, cancel);
-    public Task<RemoteApplyAccepted> ApplyRemoteConfigAsync(RemoteApplyRequest request, CancellationToken cancel = default) => InvokeAsync<RemoteApplyAccepted>("remote.config.apply", request, cancel);
-    public Task<CommandResult> ConfirmRemoteConfigAsync(RemoteConfirmRequest request, CancellationToken cancel = default) => InvokeAsync<CommandResult>("remote.config.confirm", request, cancel);
+    public Task<ServerHello> HelloAsync(CancellationToken cancel = default) => InvokeAsync<ServerHello>(ManagementMethods.Hello, cancel: cancel);
+    public Task<HydraStatusSnapshot> GetStatusAsync(CancellationToken cancel = default) => InvokeAsync<HydraStatusSnapshot>(ManagementMethods.Status, cancel: cancel);
+    public Task<ManagementLogPage> GetLogsAsync(long after, CancellationToken cancel = default) => InvokeAsync<ManagementLogPage>(ManagementMethods.Logs, after, cancel);
+    public Task<ConfigDocument> GetConfigAsync(CancellationToken cancel = default) => InvokeAsync<ConfigDocument>(ManagementMethods.ConfigGet, cancel: cancel);
+    public Task<ConfigValidation> ValidateConfigAsync(string json, CancellationToken cancel = default) => InvokeAsync<ConfigValidation>(ManagementMethods.ConfigValidate, json, cancel);
+    public Task<ConfigDocument> SaveConfigAsync(SaveConfigRequest request, CancellationToken cancel = default) => InvokeAsync<ConfigDocument>(ManagementMethods.ConfigSave, request, cancel);
+    public Task<CommandResult> ReconnectRelayAsync(CancellationToken cancel = default) => InvokeAsync<CommandResult>(ManagementMethods.RelayReconnect, cancel: cancel);
+    public Task<CommandResult> RestartHydraAsync(CancellationToken cancel = default) => InvokeAsync<CommandResult>(ManagementMethods.HydraRestart, cancel: cancel);
+    public Task<CommandResult> ShutdownHydraAsync(CancellationToken cancel = default) => InvokeAsync<CommandResult>(ManagementMethods.HydraShutdown, cancel: cancel);
+    public Task<RemotePairResult> PairRemoteAsync(RemotePairRequest request, CancellationToken cancel = default) => InvokeAsync<RemotePairResult>(ManagementMethods.RemotePair, request, cancel);
+    public Task<RemoteConfigDocument> GetRemoteConfigAsync(string host, CancellationToken cancel = default) => InvokeAsync<RemoteConfigDocument>(ManagementMethods.RemoteConfigGet, new RemoteHostRequest(host), cancel);
+    public Task<ConfigValidation> ValidateRemoteConfigAsync(RemoteValidateRequest request, CancellationToken cancel = default) => InvokeAsync<ConfigValidation>(ManagementMethods.RemoteConfigValidate, request, cancel);
+    public Task<RemoteApplyAccepted> ApplyRemoteConfigAsync(RemoteApplyRequest request, CancellationToken cancel = default) => InvokeAsync<RemoteApplyAccepted>(ManagementMethods.RemoteConfigApply, request, cancel);
+    public Task<CommandResult> ConfirmRemoteConfigAsync(RemoteConfirmRequest request, CancellationToken cancel = default) => InvokeAsync<CommandResult>(ManagementMethods.RemoteConfigConfirm, request, cancel);
 
     private async Task<Stream> ConnectAsync(CancellationToken cancel)
     {

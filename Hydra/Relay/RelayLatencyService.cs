@@ -1,5 +1,4 @@
 using Microsoft.Extensions.Hosting;
-using System.Text.Json;
 
 namespace Hydra.Relay;
 
@@ -103,27 +102,23 @@ internal sealed class RelayLatencyService(
 
     private Task OnMessageReceived(string sourceHost, MessageKind kind, ReadOnlyMemory<byte> body)
     {
-        try
+        switch (kind)
         {
-            switch (kind)
-            {
-                case MessageKind.LatencyProbe:
-                    {
-                        var request = JsonSerializer.Deserialize<LatencyProbeMessage>(body.Span, Cathedral.Config.SaneJson.Options);
-                        if (request != null)
-                            relay.Send([sourceHost], MessageSerializer.Encode(MessageKind.LatencyProbeResponse,
-                                new LatencyProbeResponseMessage(request.Sequence)));
-                        break;
-                    }
-                case MessageKind.LatencyProbeResponse:
-                    {
-                        var response = JsonSerializer.Deserialize<LatencyProbeResponseMessage>(body.Span, Cathedral.Config.SaneJson.Options);
-                        if (response != null) RecordResponse(sourceHost, response.Sequence);
-                        break;
-                    }
-            }
+            case MessageKind.LatencyProbe:
+                {
+                    var request = body.TryDecodeBody<LatencyProbeMessage>();
+                    if (request != null)
+                        relay.Send([sourceHost], MessageSerializer.Encode(MessageKind.LatencyProbeResponse,
+                            new LatencyProbeResponseMessage(request.Sequence)));
+                    break;
+                }
+            case MessageKind.LatencyProbeResponse:
+                {
+                    var response = body.TryDecodeBody<LatencyProbeResponseMessage>();
+                    if (response != null) RecordResponse(sourceHost, response.Sequence);
+                    break;
+                }
         }
-        catch (JsonException) { }
         return Task.CompletedTask;
     }
 

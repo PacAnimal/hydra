@@ -37,17 +37,6 @@ internal static class ConfigFileLock
     /// </summary>
     private static readonly ConcurrentDictionary<string, byte> HeldHere = new();
 
-    /// <summary>The lock guarding the remote-management state beside a config file.</summary>
-    internal static string ManagementPathFor(string directory) => Path.Combine(directory, ".hydra-management.lock");
-
-    /// <summary>
-    /// The lock guarding <c>hydra.conf</c> and everything that rewrites it — the TUI's save, a remote apply
-    /// and its rollback. ONE lock for all of them, because they contend over the same file and a lock per
-    /// store would let two of them replace it at once.
-    /// </summary>
-    internal static string ConfigPathFor(string configPath) =>
-        Path.Combine(Path.GetDirectoryName(Path.GetFullPath(configPath))!, ".hydra-config.lock");
-
     /// <summary>
     /// Takes the lock, waiting for a holder and giving up by THROWING once the budget is gone — a caller
     /// that cannot get it must not proceed to read or write the thing it guards.
@@ -55,7 +44,7 @@ internal static class ConfigFileLock
     internal static Task<IAsyncDisposable> Acquire(string lockPath, CancellationToken cancel) =>
         Acquire(lockPath, Budget, cancel);
 
-    /// <param name="lockPath">The lock file to take; see the two path helpers above.</param>
+    /// <param name="lockPath">The lock file to take: <see cref="ConfigDir.ConfigLock"/> or <see cref="ConfigDir.ManagementLock"/>.</param>
     /// <param name="budget">How long to wait. Only a test passes this; everything else takes <c>Budget</c>.</param>
     /// <param name="cancel">Abandons the wait; the lock is not taken.</param>
     internal static async Task<IAsyncDisposable> Acquire(string lockPath, TimeSpan budget, CancellationToken cancel)

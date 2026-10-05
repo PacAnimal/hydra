@@ -1,4 +1,5 @@
 using Hydra.Relay;
+using Tests.Setup;
 
 namespace Tests.Relay;
 
@@ -103,13 +104,13 @@ public class MessageLaneTests
     [Test]
     public void AnEncodedPayloadIsClassifiedByItsFirstByte()
     {
-        var chunk = MessageSerializer.Encode(MessageKind.FileTransferChunk, new FileTransferChunkMessage(0, [1, 2, 3]));
-        var key = MessageSerializer.Encode(MessageKind.MouseMove, new MouseMoveMessage("", 1, 2));
+        var chunk = TestMessages.Chunk(0);
+        var move = TestMessages.Move(1, 2);
 
         using (Assert.EnterMultipleScope())
         {
             Assert.That(MessageLane.Of(chunk), Is.EqualTo(RelayLane.Bulk));
-            Assert.That(MessageLane.Of(key), Is.EqualTo(RelayLane.Input));
+            Assert.That(MessageLane.Of(move), Is.EqualTo(RelayLane.Input));
         }
     }
 

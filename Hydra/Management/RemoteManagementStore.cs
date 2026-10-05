@@ -1,3 +1,5 @@
+using Cathedral.Extensions;
+
 namespace Hydra.Management;
 
 internal sealed class RemoteManagementStore
@@ -11,9 +13,9 @@ internal sealed class RemoteManagementStore
 
     internal RemoteManagementStore(string configPath)
     {
-        var directory = Path.GetDirectoryName(Path.GetFullPath(configPath))!;
-        _path = Path.Combine(directory, ".hydra-management.json");
-        _lockPath = ConfigFileLock.ManagementPathFor(directory);
+        var dir = new ConfigDir(configPath);
+        _path = dir.ManagementState;
+        _lockPath = dir.ManagementLock;
     }
 
     internal async Task<string> CreatePairingCodeAsync(CancellationToken cancel = default)
@@ -52,14 +54,14 @@ internal sealed class RemoteManagementStore
 
     internal Task SaveTargetAsync(string host, string secret, CancellationToken cancel) => MutateAsync(state =>
     {
-        state.Targets.RemoveAll(item => item.Host.Equals(host, StringComparison.OrdinalIgnoreCase));
+        state.Targets.RemoveAll(item => item.Host.EqualsIgnoreCase(host));
         state.Targets.Add(new StoredRemoteTarget(host, secret));
     }, cancel);
 
     internal async Task<TargetCredential?> GetTargetAsync(string host, CancellationToken cancel)
     {
         var state = await ReadAsync(cancel);
-        var target = state.Targets.FirstOrDefault(item => item.Host.Equals(host, StringComparison.OrdinalIgnoreCase));
+        var target = state.Targets.FirstOrDefault(item => item.Host.EqualsIgnoreCase(host));
         return target == null ? null : new TargetCredential(state.ControllerId, target.Secret);
     }
 
@@ -89,6 +91,19 @@ internal sealed class RemoteManagementStore
             accepted = true;
         }, cancel);
         return accepted;
+    }
+
+    // rewrites an existing sidecar so its private DACL names whoever is at the console now, not at its last write
+    internal async Task Restamp(CancellationToken cancel)
+    {
+        await _lock.WaitAsync(cancel);
+        try
+        {
+            await using var fileLock = await ConfigFileLock.Acquire(_lockPath, cancel);
+            if (!File.Exists(_path)) return;
+            await WriteUnlockedAsync(await ReadUnlockedAsync(cancel), cancel);
+        }
+        finally { _lock.Release(); }
     }
 
     /// <summary>
@@ -151,7 +166,7 @@ internal sealed class RemoteManagementStore
         List<StoredReplayNonce>? ReplayNonces);
 
     private async Task WriteUnlockedAsync(RemoteManagementState state, CancellationToken cancel) =>
-        await PrivateFile.Write(_path, ManagementJson.Serialize(state), UnixFileMode.UserRead | UnixFileMode.UserWrite, cancel);
+        await PrivateFile.Write(_path, ManagementJson.Serialize(state), PrivateFile.OwnerOnly, cancel);
 
     private static RemoteManagementState Empty() => new(RemoteManagementCrypto.RandomSecret(18), [], [], [], []);
 }

@@ -1,7 +1,7 @@
-using System.Reflection;
 using System.Net.NetworkInformation;
 using Hydra.Config;
 using Hydra.Relay;
+using Hydra.Update;
 using Hydra.Screen;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -33,7 +33,7 @@ internal sealed class HydraStatusService(
         if (profile.Mode == Mode.Master)
         {
             foreach (var peer in await world.GetPeerRuntimeSnapshot())
-                peers.Add(new PeerStatus(peer.Name, peer.Platform.ToString(), true,
+                peers.Add(new PeerStatus(peer.Name, peer.Platform.DisplayName(), true,
                     [.. peer.Screens.Select(s => new ScreenStatus(s.Name, peer.Name, s.Width, s.Height, s.MouseScale, s.RelativeMouseScale))]));
         }
         else
@@ -49,11 +49,10 @@ internal sealed class HydraStatusService(
         var embeddedPeers = await GetEmbeddedRelayPeers();
         var latency = services.GetService<RelayLatencyService>()?.GetSnapshot() ?? [];
         var config = await configStore.ReadAsync(cancel);
-        var version = Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.0.0";
 
         return new HydraStatusSnapshot(
             DateTimeOffset.UtcNow,
-            version,
+            HydraVersion.Current,
             Environment.ProcessId,
             (long)(DateTimeOffset.UtcNow - runtime.StartedAt).TotalSeconds,
             runtime.ConfigPath,
@@ -101,35 +100,13 @@ internal sealed class HydraStatusService(
                     client.RemoteIp,
                     client.LocalIp,
                     network?.Name ?? "unknown",
-                    network == null ? "unknown" : DescribeInterface(network));
+                    NetworkInterfaceLookup.Describe(network));
             })
             .OrderBy(client => client.HostName, StringComparer.Ordinal)];
     }
 
-    private static NetworkInterface? FindInterface(string address)
-    {
-        if (!System.Net.IPAddress.TryParse(address, out var parsed)) return null;
-        try
-        {
-            if (parsed.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6 && parsed.ScopeId > 0)
-            {
-                var scoped = NetworkInterface.GetAllNetworkInterfaces().FirstOrDefault(network =>
-                {
-                    try { return network.GetIPProperties().GetIPv6Properties().Index == parsed.ScopeId; }
-                    catch (NetworkInformationException) { return false; } // interface has no IPv6 side — skip it, not the whole search
-                });
-                if (scoped != null) return scoped;
-            }
-            return NetworkInterface.GetAllNetworkInterfaces().FirstOrDefault(network =>
-                network.GetIPProperties().UnicastAddresses.Any(unicast =>
-                    unicast.Address.Equals(parsed)
-                    || unicast.Address.IsIPv4MappedToIPv6 && unicast.Address.MapToIPv4().Equals(parsed)));
-        }
-        catch (NetworkInformationException)
-        {
-            return null;
-        }
-    }
+    private static NetworkInterface? FindInterface(string address) =>
+        System.Net.IPAddress.TryParse(address, out var parsed) ? NetworkInterfaceLookup.FindByAddress(parsed) : null;
 
     private static List<NetworkAdapterStatus> GetActiveNetworkAdapters()
     {
@@ -150,7 +127,7 @@ internal sealed class HydraStatusService(
                         !gateway.Address.Equals(System.Net.IPAddress.Any)
                         && !gateway.Address.Equals(System.Net.IPAddress.IPv6Any));
                     var statistics = TryGetStatistics(network);
-                    return new NetworkAdapterStatus(network.Name, DescribeInterface(network), addresses, hasGateway,
+                    return new NetworkAdapterStatus(network.Name, NetworkInterfaceLookup.Describe(network), addresses, hasGateway,
                         TryGetSpeed(network),
                         statistics?.BytesReceived,
                         statistics?.BytesSent,
@@ -181,24 +158,5 @@ internal sealed class HydraStatusService(
         try { return network.Speed; }
         catch (NetworkInformationException) { return 0; }
         catch (PlatformNotSupportedException) { return 0; }
-    }
-
-    private static string DescribeInterface(NetworkInterface network)
-    {
-        if (network.NetworkInterfaceType == NetworkInterfaceType.Unknown
-            && (network.Name.StartsWith("utun", StringComparison.OrdinalIgnoreCase)
-                || network.Name.StartsWith("tun", StringComparison.OrdinalIgnoreCase)
-                || network.Name.StartsWith("tap", StringComparison.OrdinalIgnoreCase)))
-            return "VPN / tunnel";
-        return network.NetworkInterfaceType switch
-        {
-            NetworkInterfaceType.Wireless80211 => "Wi-Fi",
-            NetworkInterfaceType.Ethernet or NetworkInterfaceType.Ethernet3Megabit
-                or NetworkInterfaceType.FastEthernetFx or NetworkInterfaceType.FastEthernetT
-                or NetworkInterfaceType.GigabitEthernet => "Ethernet",
-            NetworkInterfaceType.Tunnel => "VPN / tunnel",
-            NetworkInterfaceType.Ppp => "PPP",
-            _ => network.NetworkInterfaceType.ToString()
-        };
     }
 }

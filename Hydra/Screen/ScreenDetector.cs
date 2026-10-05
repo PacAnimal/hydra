@@ -18,30 +18,21 @@ public interface IScreenDetector
 
 public record LocalScreenSnapshot(List<ScreenRect> Screens, List<ScreenInfoEntry> Entries);
 
-public abstract class ScreenDetector : SimpleHostedService, IScreenDetector
+public abstract class ScreenDetector(IHydraProfile profile, ILogger log) : SimpleHostedService(log, loopTime: TimeSpan.FromSeconds(2)), IScreenDetector
 {
     internal static readonly JsonSerializerOptions JsonOptions = new()
     {
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
 
-    private readonly IHydraProfile _profile;
-    private readonly ILogger _log;
+    private readonly IHydraProfile _profile = profile;
+    private readonly ILogger _log = log;
     private readonly SemaphoreSlim _lock = new(1, 1);
     private List<DetectedScreen> _detected = [];
     private LocalScreenSnapshot? _current;
     private readonly TaskCompletionSource _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public event Func<LocalScreenSnapshot, Task>? ScreensChanged;
-
-    // ReSharper disable once ConvertToPrimaryConstructor
-#pragma warning disable IDE0290
-    protected ScreenDetector(IHydraProfile profile, ILogger log) : base(log, loopTime: TimeSpan.FromSeconds(2))
-    {
-        _profile = profile;
-        _log = log;
-    }
-#pragma warning restore IDE0290
 
     protected abstract List<DetectedScreen> Detect();
 
@@ -71,10 +62,13 @@ public abstract class ScreenDetector : SimpleHostedService, IScreenDetector
 
         if (snapshot != null)
         {
-            _log.LogInformation("Local screens: {Count}", snapshot.Screens.Count);
-            for (var i = 0; i < snapshot.Screens.Count; i++)
-                if (snapshot.Screens[i].Identity != null)
-                    _log.LogInformation("  Screen {I}: {Json}", i, JsonSerializer.Serialize(snapshot.Screens[i].Identity, JsonOptions));
+            if (_log.IsEnabled(LogLevel.Information))
+            {
+                _log.LogInformation("Local screens: {Count}", snapshot.Screens.Count);
+                for (var i = 0; i < snapshot.Screens.Count; i++)
+                    if (snapshot.Screens[i].Identity != null)
+                        _log.LogInformation("  Screen {I}: {Json}", i, JsonSerializer.Serialize(snapshot.Screens[i].Identity, JsonOptions));
+            }
             if (ScreensChanged != null) await ScreensChanged(snapshot);
         }
     }
@@ -134,9 +128,8 @@ public abstract class ScreenDetector : SimpleHostedService, IScreenDetector
 public sealed class NullScreenDetector : IScreenDetector, IHostedService
 {
     private static readonly LocalScreenSnapshot Empty = new([], []);
-#pragma warning disable CS0067  // never fired — headless mode has no screen changes
-    public event Func<LocalScreenSnapshot, Task>? ScreensChanged;
-#pragma warning restore CS0067
+    // headless mode has no screen changes, so there is nothing to subscribe to
+    public event Func<LocalScreenSnapshot, Task>? ScreensChanged { add { } remove { } }
     public Task<LocalScreenSnapshot> Get(CancellationToken ct = default) => Task.FromResult(Empty);
     public Task StartAsync(CancellationToken ct) => Task.CompletedTask;
     public Task StopAsync(CancellationToken ct) => Task.CompletedTask;

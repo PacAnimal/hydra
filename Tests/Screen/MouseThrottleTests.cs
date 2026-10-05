@@ -3,7 +3,7 @@ using Cathedral.Utils;
 using Hydra.Config;
 using Hydra.Keyboard;
 using Hydra.Relay;
-using Hydra.Screen;
+using Microsoft.Extensions.Time.Testing;
 using Tests.Setup;
 
 namespace Tests.Screen;
@@ -11,36 +11,34 @@ namespace Tests.Screen;
 [TestFixture]
 public class MouseThrottleTests
 {
+    // beyond any mouse-batch flush interval, so stepping a FakeTimeProvider this far fires an armed flush
+    private static readonly TimeSpan PastAnyFlush = TimeSpan.FromSeconds(1);
+
     private FakePlatform _platform = null!;
     private FakeRelay _relay = null!;
-    private InputRouter _service = null!;
+    private readonly SteppableTicks _ticks = new();
+    private readonly StartedServices _services = new();
 
     [SetUp]
     public async Task SetUp()
     {
-        (_platform, _relay, _service) = CreateService();
-        await _service.StartAsync(CancellationToken.None);
+        (_platform, _relay, _) = await _services.Start(TransitionTestHelper.CreateService(getTickCount: _ticks.Now));
         await BringRemoteOnline(_relay);
     }
 
     [TearDown]
-    public async Task TearDown()
-    {
-        await _service.StopAsync(CancellationToken.None);
-        await _platform.DisposeAsync();
-    }
+    public Task TearDown() => _services.StopAll();
 
     [Test]
     public async Task MouseMoves_AreThrottled_ToMaxHz()
     {
         // frozen clock: all 50 events share the same tick so only the first send fires
-        var (platform, relay, service) = TransitionTestHelper.CreateService(getTickCount: () => 1000L);
-        await service.StartAsync(CancellationToken.None);
+        var (platform, relay, _) = await _services.Start(TransitionTestHelper.CreateService(getTickCount: () => 1000L));
         await BringRemoteOnline(relay);
 
         platform.FireMouseMove(2559, 720);
         Assert.That(platform.IsOnVirtualScreen, Is.True);
-        relay.Sent.Clear();
+        relay.ClearSent();
 
         var warpX = platform.WarpX;
         var warpY = platform.WarpY;
@@ -48,12 +46,9 @@ public class MouseThrottleTests
         for (var i = 0; i < 50; i++)
             platform.FireMouseMove(warpX + 5, warpY);
 
-        var mouseMoves = relay.Sent.Count(s => s.Kind == MessageKind.MouseMove);
+        var mouseMoves = relay.Snapshot().Count(s => s.Kind == MessageKind.MouseMove);
         Assert.That(mouseMoves, Is.LessThan(15),
             $"Expected throttling but got {mouseMoves} MouseMove sends for 50 events");
-
-        await service.StopAsync(CancellationToken.None);
-        await platform.DisposeAsync();
     }
 
     [Test]
@@ -61,10 +56,9 @@ public class MouseThrottleTests
     {
         // frozen clock: every sample after the first lands inside one send interval
         var tracker = new BlockingActivityTracker();
-        var timers = new ManualTimerProvider();
-        var (platform, relay, service) = TransitionTestHelper.CreateService(
-            getTickCount: () => 1000L, activityTracker: tracker, timeProvider: timers);
-        await service.StartAsync(CancellationToken.None);
+        var timers = new FakeTimeProvider();
+        var (platform, relay, service) = await _services.Start(TransitionTestHelper.CreateService(
+            getTickCount: () => 1000L, activityTracker: tracker, timeProvider: timers));
         await BringRemoteOnline(relay);
         platform.FireMouseMove(2559, 720);
         Assert.That(platform.IsOnVirtualScreen, Is.True);
@@ -72,34 +66,37 @@ public class MouseThrottleTests
         platform.AfterFireCallback = null;
         tracker.BlockNext();
         var before = service.PostedMouseBatchCount;
-
-        // one batch in flight, held by the blocked consumer
-        platform.FireMouseMove(platform.WarpX + 2, platform.WarpY + 1);
-        timers.FireAll();
-        await tracker.WaitUntilBlocked();
-
-        for (var i = 0; i < 10_000; i++)
+        try
+        {
+            // one batch in flight, held by the blocked consumer
             platform.FireMouseMove(platform.WarpX + 2, platform.WarpY + 1);
-        Assert.That(service.PostedMouseBatchCount - before, Is.EqualTo(1),
-            "the whole burst coalesces into the batch still waiting out its send interval");
+            timers.Advance(PastAnyFlush);
+            await tracker.WaitUntilBlocked();
 
-        timers.FireAll();
-        Assert.That(service.PostedMouseBatchCount - before, Is.EqualTo(2),
-            "one in-flight batch plus one pending batch should absorb the entire burst");
-        tracker.Release();
+            for (var i = 0; i < 10_000; i++)
+                platform.FireMouseMove(platform.WarpX + 2, platform.WarpY + 1);
+            Assert.That(service.PostedMouseBatchCount - before, Is.EqualTo(1),
+                "the whole burst coalesces into the batch still waiting out its send interval");
+
+            timers.Advance(PastAnyFlush);
+            Assert.That(service.PostedMouseBatchCount - before, Is.EqualTo(2),
+                "one in-flight batch plus one pending batch should absorb the entire burst");
+        }
+        finally
+        {
+            // a blocked consumer would hang the teardown's stop
+            tracker.Release();
+        }
         await service.FlushAsync();
-        await service.StopAsync(CancellationToken.None);
-        await platform.DisposeAsync();
     }
 
     [Test]
     public async Task RawSamplesWithinOneInterval_PostASingleActorCommand()
     {
         // frozen clock: the interval never elapses, so nothing but the first sample may post
-        var timers = new ManualTimerProvider();
-        var (platform, relay, service) = TransitionTestHelper.CreateService(
-            getTickCount: () => 1000L, timeProvider: timers);
-        await service.StartAsync(CancellationToken.None);
+        var timers = new FakeTimeProvider();
+        var (platform, relay, service) = await _services.Start(TransitionTestHelper.CreateService(
+            getTickCount: () => 1000L, timeProvider: timers));
         await BringRemoteOnline(relay);
         platform.FireMouseMove(2559, 720);
         Assert.That(platform.IsOnVirtualScreen, Is.True);
@@ -111,9 +108,6 @@ public class MouseThrottleTests
 
         Assert.That(service.PostedMouseBatchCount - before, Is.Zero,
             "samples inside one send interval are coalesced, not posted one command apiece");
-
-        await service.StopAsync(CancellationToken.None);
-        await platform.DisposeAsync();
     }
 
     [Test]
@@ -134,15 +128,14 @@ public class MouseThrottleTests
         }
     }
 
-    private static async Task<int> SendsOverSixtyMillisecondsOfMotion(int? maxMouseHz)
+    private async Task<int> SendsOverSixtyMillisecondsOfMotion(int? maxMouseHz)
     {
         var now = new Boxed<long>(1000L);
-        var (platform, relay, service) = TransitionTestHelper.CreateService(
-            getTickCount: () => now.Value, profile: TransitionTestHelper.ProfileWith(maxMouseHz));
-        await service.StartAsync(CancellationToken.None);
+        var (platform, relay, _) = await _services.Start(TransitionTestHelper.CreateService(
+            getTickCount: () => now.Value, profile: TransitionTestHelper.ProfileWith(maxMouseHz)));
         await BringRemoteOnline(relay);
         platform.FireMouseMove(2559, 720);
-        relay.Sent.Clear();
+        relay.ClearSent();
 
         // one sample per millisecond, so the send count is exactly the number of intervals elapsed
         for (var ms = 0; ms < 60; ms++)
@@ -151,9 +144,7 @@ public class MouseThrottleTests
             platform.FireMouseMove(platform.WarpX + (ms % 2 == 0 ? 1 : 2), platform.WarpY);
         }
 
-        var sends = relay.Sent.Count(s => s.Kind == MessageKind.MouseMove);
-        await service.StopAsync(CancellationToken.None);
-        await platform.DisposeAsync();
+        var sends = relay.Snapshot().Count(s => s.Kind == MessageKind.MouseMove);
         return sends;
     }
 
@@ -167,8 +158,7 @@ public class MouseThrottleTests
         // So unlike the delta-reporting path below, this one recentres on every sample, however
         // small — sample batching upstream already keeps the resulting warp rate to at most
         // MaxMouseHz, so this is not the ~900/s a raw mouse would otherwise produce.
-        var (platform, relay, service) = TransitionTestHelper.CreateService();
-        await service.StartAsync(CancellationToken.None);
+        var (platform, relay, _) = await _services.Start(TransitionTestHelper.CreateService());
         await BringRemoteOnline(relay);
         platform.FireMouseMove(2559, 720);
         Assert.That(platform.IsOnVirtualScreen, Is.True);
@@ -181,9 +171,6 @@ public class MouseThrottleTests
             platform.FireMouseMove(warpX + i, warpY);
         Assert.That(platform.WarpCount, Is.EqualTo(before + 5),
             "every processed position sample recentres, however small the drift");
-
-        await service.StopAsync(CancellationToken.None);
-        await platform.DisposeAsync();
     }
 
     [Test]
@@ -192,11 +179,8 @@ public class MouseThrottleTests
         // Linux evdev/Xorg's delta is XI_RawMotion: a raw hardware-relative stream with no notion of
         // an on-screen position, so it can never run into a real screen edge no matter how long it
         // goes between warps — recentring less often than every sample costs nothing here but an X
-        // warp + socket flush. localPlatform is pinned to Linux explicitly: this must hold regardless
-        // of which OS happens to be running the test, and must NOT hold for Windows (see the sibling
-        // test below) even though both feed the exact same MouseInputKind.Delta code path.
-        var (platform, relay, service) = TransitionTestHelper.CreateService(localPlatform: PeerPlatform.Linux);
-        await service.StartAsync(CancellationToken.None);
+        // warp + socket flush.
+        var (platform, relay, _) = await _services.Start(TransitionTestHelper.CreateService());
         await BringRemoteOnline(relay);
         platform.FireMouseMove(2559, 720);
         Assert.That(platform.IsOnVirtualScreen, Is.True);
@@ -213,46 +197,41 @@ public class MouseThrottleTests
             platform.FireMouseDelta(1, 0);
         Assert.That(platform.WarpCount, Is.EqualTo(before + 1),
             "crossing the dead zone recentres exactly once");
-
-        await service.StopAsync(CancellationToken.None);
-        await platform.DisposeAsync();
     }
 
     [Test]
     public async Task WindowsDeltaCapture_TheRouterNeverRecentres()
     {
-        // Windows' delta (WindowsInputHandler) is synthesised from two reads of the same real,
-        // monitor-clamped cursor position an absolute capture would read directly, and DOES still
-        // need recentring every raw sample for exactly that reason — but WindowsInputHandler now
-        // does that itself, synchronously, on the hook thread, the moment each sample is measured
-        // (see MouseHookCallback), which is the only place that can keep the reset sample-sized
-        // rather than batch-sized (batch-sized resets are indistinguishable from real input to
-        // Windows' own pointer-acceleration state, and that mismeasurement — not a coalescing bug —
-        // was the actual cause of "have to lift and reposition to cross the screen").
-        //
-        // The router must NOT also recentre for Windows: it would be a second, uncoordinated
-        // writer to the exact fields the hook thread writes with no synchronisation between them,
-        // and adversarial review confirmed that pairing can tear a warp target's X from its Y. So
-        // for Windows specifically, the router's own recentre call is skipped entirely — the real
-        // per-sample recentre this test's name refers to is not observable through FakePlatform at
-        // all (it happens in native code no fake stands in for, same as the rest of
-        // WindowsInputHandler); what IS observable and worth locking in is that the router leaves
-        // it alone.
-        var (platform, relay, service) = TransitionTestHelper.CreateService(localPlatform: PeerPlatform.Windows);
-        await service.StartAsync(CancellationToken.None);
+        // WindowsInputHandler recentres per sample itself; a router warp on top would be an extra reset jump
+        var (platform, relay, _) = await _services.Start(TransitionTestHelper.CreateService());
+        platform.RecentresItself = true;
         await BringRemoteOnline(relay);
         platform.FireMouseMove(2559, 720);
         Assert.That(platform.IsOnVirtualScreen, Is.True);
 
         var before = platform.WarpCount;
 
-        for (var i = 0; i < 5; i++)
+        // well past the 128px dead zone a router-side recentre would warp at
+        for (var i = 0; i < 200; i++)
             platform.FireMouseDelta(1, 0);
         Assert.That(platform.WarpCount, Is.EqualTo(before),
             "the router must not recentre Windows' delta capture — WindowsInputHandler already does, per sample, on the hook thread");
+    }
 
-        await service.StopAsync(CancellationToken.None);
-        await platform.DisposeAsync();
+    // a stale absolute sample still reaching the router on Windows must not warp from the router thread either
+    [Test]
+    public async Task WindowsAbsoluteSample_TheRouterNeverRecentres()
+    {
+        var (platform, relay, _) = await _services.Start(TransitionTestHelper.CreateService());
+        platform.RecentresItself = true;
+        await BringRemoteOnline(relay);
+        platform.FireMouseMove(2559, 720);
+        Assert.That(platform.IsOnVirtualScreen, Is.True);
+
+        var before = platform.WarpCount;
+        for (var i = 0; i < 10; i++)
+            platform.FireMouseMove(platform.WarpX + 5, platform.WarpY);
+        Assert.That(platform.WarpCount, Is.EqualTo(before));
     }
 
     [Test]
@@ -266,18 +245,18 @@ public class MouseThrottleTests
         _platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyDown, 'm',
             KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Super));
 
-        _relay.Sent.Clear();
+        _relay.ClearSent();
         var warpX = _platform.WarpX;
         var warpY = _platform.WarpY;
 
         // wait past the throttle interval to ensure a send happens
-        Thread.Sleep(20);
+        _ticks.Advance(20);
         _platform.FireMouseMove(warpX + 10, warpY + 5);
-        Thread.Sleep(20);
+        _ticks.Advance(20);
         _platform.FireMouseMove(warpX + 5, warpY);
 
-        var deltaMessages = _relay.Sent.Where(s => s.Kind == MessageKind.MouseMoveDelta).ToList();
-        var absoluteMessages = _relay.Sent.Where(s => s.Kind == MessageKind.MouseMove).ToList();
+        var deltaMessages = _relay.Snapshot().Where(s => s.Kind == MessageKind.MouseMoveDelta).ToList();
+        var absoluteMessages = _relay.Snapshot().Where(s => s.Kind == MessageKind.MouseMove).ToList();
 
         using (Assert.EnterMultipleScope())
         {
@@ -301,14 +280,14 @@ public class MouseThrottleTests
         _platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyDown, 'm',
             KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Super));
 
-        _relay.Sent.Clear();
+        _relay.ClearSent();
         var warpX = _platform.WarpX;
         var warpY = _platform.WarpY;
 
-        Thread.Sleep(20);
+        _ticks.Advance(20);
         _platform.FireMouseMove(warpX + 10, warpY);
 
-        var absoluteMessages = _relay.Sent.Where(s => s.Kind == MessageKind.MouseMove).ToList();
+        var absoluteMessages = _relay.Snapshot().Where(s => s.Kind == MessageKind.MouseMove).ToList();
         Assert.That(absoluteMessages, Is.Not.Empty, "expected MouseMove (absolute) after toggling back");
     }
 
@@ -328,11 +307,11 @@ public class MouseThrottleTests
     {
         // enter virtual screen
         _platform.FireMouseMove(2559, 720);
-        _relay.Sent.Clear();
+        _relay.ClearSent();
 
         _platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyDown, 'w', KeyModifiers.None));
 
-        var keySends = _relay.Sent.Where(s => s.Kind == MessageKind.KeyEvent).ToList();
+        var keySends = _relay.Snapshot().Where(s => s.Kind == MessageKind.KeyEvent).ToList();
         Assert.That(keySends, Has.Count.GreaterThanOrEqualTo(1));
 
         var msg = JsonSerializer.Deserialize<KeyEventMessage>(keySends[0].Json, Cathedral.Config.SaneJson.Options);
@@ -349,12 +328,12 @@ public class MouseThrottleTests
     {
         // enter virtual screen
         _platform.FireMouseMove(2559, 720);
-        _relay.Sent.Clear();
+        _relay.ClearSent();
 
         // an OS auto-repeat is re-resolved on the master and surfaces as a KeyEvent flagged IsRepeat
         _platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyDown, 'w', KeyModifiers.None) with { IsRepeat = true });
 
-        var keySends = _relay.Sent.Where(s => s.Kind == MessageKind.KeyEvent).ToList();
+        var keySends = _relay.Snapshot().Where(s => s.Kind == MessageKind.KeyEvent).ToList();
         Assert.That(keySends, Has.Count.GreaterThanOrEqualTo(1));
 
         var msg = JsonSerializer.Deserialize<KeyEventMessage>(keySends[0].Json, Cathedral.Config.SaneJson.Options);
@@ -363,9 +342,6 @@ public class MouseThrottleTests
     }
 
     // -- helpers --
-
-    private static TestServiceBundle CreateService() =>
-        TransitionTestHelper.CreateService();
 
     private static Task BringRemoteOnline(FakeRelay relay) =>
         TransitionTestHelper.BringRemoteOnline(relay);

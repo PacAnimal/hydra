@@ -1,16 +1,14 @@
-using System.Collections.Concurrent;
-
 namespace Styx.Services;
 
 public interface IClientRegistry
 {
-    ValueTask Register(string connectionId, Guid networkId, string hostName, string remoteIp, string localIp = "unknown");
+    ValueTask Register(string connectionId, Guid networkId, string hostName, string remoteIp, string localIp = ClientRegistry.Unknown);
     ValueTask Unregister(string connectionId);
     ValueTask<string?> GetConnectionId(Guid networkId, string hostName);
     ValueTask<ClientIdentity?> GetIdentity(string connectionId);
     // atomically kicks same-network+host duplicates AND registers the new connection under one lock, so two
     // concurrent authenticates for the same host can't both find nothing to kick and both register.
-    ValueTask<RegistrationResult> RegisterKickingDuplicates(string connectionId, Guid networkId, string hostName, string remoteIp, string localIp = "unknown");
+    ValueTask<RegistrationResult> RegisterKickingDuplicates(string connectionId, Guid networkId, string hostName, string remoteIp, string localIp = ClientRegistry.Unknown);
     // returns all clients on a network, optionally excluding one connection
     ValueTask<IReadOnlyList<NetworkClient>> GetNetworkClients(Guid networkId, string? excludeConnectionId = null);
     ValueTask<IReadOnlyList<ClientIdentity>> GetAllIdentities();
@@ -27,45 +25,50 @@ public record RegistrationResult(IReadOnlyList<string> Kicked, IReadOnlyList<Net
 
 public class ClientRegistry(ILogger<ClientRegistry> log) : IClientRegistry
 {
-    private readonly Lock _mutationLock = new();
-    private readonly ConcurrentDictionary<string, ClientIdentity> _byConnection = [];
-    private readonly ConcurrentDictionary<(Guid NetworkId, string HostName), string> _byNetworkHost = [];
+    // stands in for an address the connection could not report
+    public const string Unknown = "unknown";
 
-    public ValueTask Register(string connectionId, Guid networkId, string hostName, string remoteIp, string localIp = "unknown")
+    private readonly Lock _lock = new();
+    private readonly Dictionary<string, ClientIdentity> _byConnection = [];
+    private readonly Dictionary<(Guid NetworkId, string HostName), string> _byNetworkHost = [];
+
+    public ValueTask Register(string connectionId, Guid networkId, string hostName, string remoteIp, string localIp = Unknown)
     {
-        lock (_mutationLock)
+        lock (_lock)
             Register(connectionId, new ClientIdentity(networkId, hostName, remoteIp, localIp));
-        log.LogDebug("Registered client \"{HostName}\" from {RemoteIp} on network {NetworkId}", hostName, remoteIp, networkId);
+        if (log.IsEnabled(LogLevel.Debug))
+            log.LogDebug("Registered client \"{HostName}\" from {RemoteIp} on network {NetworkId}", hostName, remoteIp, networkId);
         return ValueTask.CompletedTask;
     }
 
     public ValueTask Unregister(string connectionId)
     {
         ClientIdentity? identity;
-        lock (_mutationLock)
+        lock (_lock)
             identity = Remove(connectionId);
-        if (identity != null)
+        if (identity != null && log.IsEnabled(LogLevel.Information))
         {
             log.LogInformation("Unregistered client \"{HostName}\" from network {NetworkId}", identity.HostName, identity.NetworkId);
         }
         return ValueTask.CompletedTask;
     }
 
-    // _mutationLock only orders compound writes across both dictionaries; ConcurrentDictionary is
-    // safe to read without it, so lookups stay wait-free instead of taking a lock on every relay send.
-    // ReSharper disable once InconsistentlySynchronizedField
-    public ValueTask<string?> GetConnectionId(Guid networkId, string hostName) =>
-        ValueTask.FromResult(_byNetworkHost.GetValueOrDefault(HostKey(networkId, hostName)));
+    // the lock is held only for a lookup, so a relay send pays for an uncontended acquire at most
+    public ValueTask<string?> GetConnectionId(Guid networkId, string hostName)
+    {
+        lock (_lock) return ValueTask.FromResult(_byNetworkHost.GetValueOrDefault(HostKey(networkId, hostName)));
+    }
 
-    // ReSharper disable once InconsistentlySynchronizedField
-    public ValueTask<ClientIdentity?> GetIdentity(string connectionId) =>
-        ValueTask.FromResult(_byConnection.TryGetValue(connectionId, out var identity) ? identity : null);
+    public ValueTask<ClientIdentity?> GetIdentity(string connectionId)
+    {
+        lock (_lock) return ValueTask.FromResult(_byConnection.GetValueOrDefault(connectionId));
+    }
 
     // atomically kick same-network+host duplicates and register the new connection under one lock
-    public ValueTask<RegistrationResult> RegisterKickingDuplicates(string connectionId, Guid networkId, string hostName, string remoteIp, string localIp = "unknown")
+    public ValueTask<RegistrationResult> RegisterKickingDuplicates(string connectionId, Guid networkId, string hostName, string remoteIp, string localIp = Unknown)
     {
         RegistrationResult result;
-        lock (_mutationLock)
+        lock (_lock)
         {
             // Look up the same case-insensitive key Register() below will evict by — a case-sensitive
             // scan here could miss a duplicate that Register() then silently displaces without it ever
@@ -76,26 +79,31 @@ public class ClientRegistry(ILogger<ClientRegistry> log) : IClientRegistry
             {
                 found.Add(previousConnectionId);
                 Remove(previousConnectionId);
-                log.LogInformation("Kicked duplicate \"{HostName}\" from network {NetworkId}", hostName, networkId);
+                if (log.IsEnabled(LogLevel.Information))
+                    log.LogInformation("Kicked duplicate \"{HostName}\" from network {NetworkId}", hostName, networkId);
             }
             var others = OnNetwork(networkId, connectionId);
             Register(connectionId, new ClientIdentity(networkId, hostName, remoteIp, localIp));
             result = new RegistrationResult(found, others);
         }
-        log.LogDebug("Registered client \"{HostName}\" from {RemoteIp} on network {NetworkId}", hostName, remoteIp, networkId);
+        if (log.IsEnabled(LogLevel.Debug))
+            log.LogDebug("Registered client \"{HostName}\" from {RemoteIp} on network {NetworkId}", hostName, remoteIp, networkId);
         return ValueTask.FromResult(result);
     }
 
-    public ValueTask<IReadOnlyList<NetworkClient>> GetNetworkClients(Guid networkId, string? excludeConnectionId = null) =>
-        ValueTask.FromResult<IReadOnlyList<NetworkClient>>(OnNetwork(networkId, excludeConnectionId));
+    public ValueTask<IReadOnlyList<NetworkClient>> GetNetworkClients(Guid networkId, string? excludeConnectionId = null)
+    {
+        lock (_lock) return ValueTask.FromResult<IReadOnlyList<NetworkClient>>(OnNetwork(networkId, excludeConnectionId));
+    }
 
-    public ValueTask<IReadOnlyList<ClientIdentity>> GetAllIdentities() =>
-        ValueTask.FromResult<IReadOnlyList<ClientIdentity>>([.. _byConnection.Values]);
+    public ValueTask<IReadOnlyList<ClientIdentity>> GetAllIdentities()
+    {
+        lock (_lock) return ValueTask.FromResult<IReadOnlyList<ClientIdentity>>([.. _byConnection.Values]);
+    }
 
     private List<NetworkClient> OnNetwork(Guid networkId, string? excludeConnectionId)
     {
         var result = new List<NetworkClient>();
-        // ReSharper disable once InconsistentlySynchronizedField
         foreach (var (connectionId, identity) in _byConnection)
         {
             if (identity.NetworkId == networkId && connectionId != excludeConnectionId)
@@ -118,10 +126,10 @@ public class ClientRegistry(ILogger<ClientRegistry> log) : IClientRegistry
 
     private ClientIdentity? Remove(string connectionId)
     {
-        if (!_byConnection.TryRemove(connectionId, out var old)) return null;
+        if (!_byConnection.Remove(connectionId, out var old)) return null;
         var key = HostKey(old.NetworkId, old.HostName);
         if (_byNetworkHost.GetValueOrDefault(key) == connectionId)
-            _byNetworkHost.TryRemove(key, out _);
+            _byNetworkHost.Remove(key);
         return old;
     }
 

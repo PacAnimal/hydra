@@ -1,6 +1,5 @@
 using System.Net;
 using System.Net.Http.Json;
-using Hydra.Config;
 using System.Text;
 using System.Text.Json;
 using Cathedral.Config;
@@ -11,29 +10,21 @@ using Tests.Setup;
 namespace Tests.Styx;
 
 [TestFixture]
-public class StyxHttpTests
+public class StyxHttpTests : StyxFixtureBase
 {
-    private static Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactory<global::Styx.Program>? _factory;
-    private static HttpClient? _http;
+    private HttpClient? _http;
 
     [OneTimeSetUp]
-    public static void OneTimeSetUp()
+    public void CreateHttpClient()
     {
-        _factory = StyxTestServer.Create();
-        _ = _factory.Server; // eager init
-        _http = _factory.CreateClient(new Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactoryClientOptions
+        _http = Factory.CreateClient(new Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactoryClientOptions
         {
             AllowAutoRedirect = false
         });
     }
 
     [OneTimeTearDown]
-    public static async Task OneTimeTearDown()
-    {
-        _http?.Dispose();
-        if (_factory != null)
-            await _factory.DisposeAsync();
-    }
+    public void DisposeHttpClient() => _http?.Dispose();
 
     [Test]
     public async Task Root_Returns200WithHtmlContent()
@@ -111,13 +102,12 @@ public class StyxHttpTests
 
         // build a NetworkConfig base64 string using the API-issued authorization
         var key = StyxTestServer.GenerateEncryptionKey();
-        var styxServer = _factory!.Server.BaseAddress.ToString().TrimEnd('/');
+        var styxServer = Factory.Server.BaseAddress.ToString().TrimEnd('/');
         var config = new NetworkConfig(styxServer, key, authorization);
         var configBase64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(config, SaneJson.Options)));
 
-        await using var client = new HydraTestClient(_factory, TransitionTestHelper.Profile("api-test", new HydraConfig { Mode = Mode.Master, NetworkConfig = configBase64 }));
-        await client.StartAsync(CancellationToken.None);
-        await client.WaitForReady();
+        await using var client = HydraTestClient.Master(Factory, "api-test", configBase64);
+        await client.StartReady();
 
         Assert.That(client.IsConnected, Is.True);
     }
@@ -154,8 +144,8 @@ public class StyxHttpTests
 
         await using var clientA = new TestStyxClient();
         await using var clientB = new TestStyxClient();
-        await clientA.Connect(_factory!, auth, "machine-alpha");
-        await clientB.Connect(_factory!, auth, "machine-beta");
+        await clientA.Connect(Factory, auth, "machine-alpha");
+        await clientB.Connect(Factory, auth, "machine-beta");
 
         using var request = new HttpRequestMessage(HttpMethod.Get, "/api/status");
         request.Headers.TryAddWithoutValidation("Authorization", $"Bearer {auth}");

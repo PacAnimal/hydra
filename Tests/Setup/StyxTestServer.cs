@@ -3,10 +3,10 @@ using System.Text.Json;
 using Cathedral.Config;
 using Cathedral.Utils;
 using Common;
-using Microsoft.AspNetCore.Http.Connections;
+using Hydra.Relay;
 using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.DependencyInjection;
+using Styx;
 
 namespace Tests.Setup;
 
@@ -14,9 +14,10 @@ public static class StyxTestServer
 {
     public const string TestPassword = "test-relay-password-hydra";
 
-    public static WebApplicationFactory<global::Styx.Program> Create(string password = TestPassword)
+    public static WebApplicationFactory<global::Styx.Program> Create(string password = TestPassword, Action<IServiceCollection>? configure = null)
     {
-        // must be set before the factory initializes the host
+        // must be set before the factory initializes the host. process-wide, so safe only while fixtures run
+        // one at a time — every caller uses the default today
         Environment.SetEnvironmentVariable("RELAY_PASSWORD", password);
 
         return new WebApplicationFactory<global::Styx.Program>()
@@ -25,12 +26,28 @@ public static class StyxTestServer
                 builder.ConfigureServices(services =>
                 {
                     TestLog.ConfigureFileLogging(services);
-                    // short keep-alive so long-poll GETs cycle every ~2s; this ensures hub connections
-                    // close within the 5s StopAsync timeout in HydraTestClient.DisposeAsync()
-                    services.Configure<HubOptions>(o => o.KeepAliveInterval = TimeSpan.FromSeconds(2));
-                    services.Configure<HttpConnectionDispatcherOptions>(o => o.LongPolling.PollTimeout = TimeSpan.FromSeconds(2));
+                    services.AddSingleton(new ResponseThrottle(new InstantTimeProvider()));
+                    configure?.Invoke(services);
                 });
             });
+    }
+
+    /// <summary>
+    /// A sender and a receiver, both masters on a fresh network, both authenticated.
+    ///
+    /// <para><c>peerTakesBundles</c> is what the sender believes the receiver advertised; null leaves it
+    /// unknown. FALSE is the un-upgraded peer, and it is not a corner case — it is every slave in the field
+    /// until it is updated.</para>
+    /// </summary>
+    public static async Task<ClientPair> ConnectedPair(
+        WebApplicationFactory<global::Styx.Program> factory, string sender = "sender", string receiver = "receiver", bool? peerTakesBundles = null)
+    {
+        var cfg = await BuildNetworkConfig(factory, Guid.NewGuid());
+        var senderClient = HydraTestClient.Master(factory, sender, cfg);
+        if (peerTakesBundles is { } bundles)
+            senderClient.World.SetPeerCapabilities(receiver, PeerCapabilities.Parse(bundles ? PeerCapabilities.Advertise() : null));
+
+        return await ClientPair.Start(senderClient, HydraTestClient.Master(factory, receiver, cfg));
     }
 
     // generates a valid authorization blob for the given networkId, signed with the given password

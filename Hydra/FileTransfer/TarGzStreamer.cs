@@ -39,52 +39,43 @@ public static class TarGzStreamer
     // creates a tar.gz stream from paths, calls onChunk for each bounded chunk of compressed output.
     // onChunk receives (compressedData, sequenceNumber, uncompressedBytesWrittenSoFar).
     // returns SHA-256 hash of all compressed bytes (same data the receiver will hash).
-    public static async Task<byte[]> StreamAsync(List<string> paths, Func<byte[], int, long, Task> onChunk, Action<string> onFileStart, CancellationToken cancel)
+    public static async Task<byte[]> StreamAsync(List<string> paths, Func<byte[], int, long, ValueTask> onChunk, Action<string> onFileStart, CancellationToken cancel)
     {
-        var sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        try
+        var progress = new StreamProgress();
+        await using var chunker = new ChunkingWriteStream(ChunkSize, data => onChunk(data, progress.Sequence++, progress.UncompressedWritten));
+
+        await using (var gzip = new GZipStream(chunker, CompressionLevel.Optimal, leaveOpen: true))
         {
-            var sequence = 0;
-            long uncompressedWritten = 0;
-
-            await using var chunker = new ChunkingWriteStream(ChunkSize, async data =>
+            // ByteCountingStream sits between TarWriter and GZipStream; pre-increments the counter
+            // before each write so onChunk (which fires inside gzip.WriteAsync) reads current bytes.
+            await using var counter = new ByteCountingStream(gzip, n => progress.UncompressedWritten = n);
+            await using var tar = new TarWriter(counter, TarEntryFormat.Gnu, leaveOpen: true);
+            foreach (var path in paths)
             {
-                // ReSharper disable once AccessToDisposedClosure
-                sha.AppendData(data);
-                // ReSharper disable once AccessToModifiedClosure
-                await onChunk(data, sequence++, uncompressedWritten);
-            });
-
-            await using (var gzip = new GZipStream(chunker, CompressionLevel.Optimal, leaveOpen: true))
-            {
-                // ByteCountingStream sits between TarWriter and GZipStream; pre-increments the counter
-                // before each write so onChunk (which fires inside gzip.WriteAsync) reads current bytes.
-                await using var counter = new ByteCountingStream(gzip, n => uncompressedWritten = n);
-                await using var tar = new TarWriter(counter, TarEntryFormat.Gnu, leaveOpen: true);
-                foreach (var path in paths)
+                cancel.ThrowIfCancellationRequested();
+                if (Directory.Exists(path))
+                    await AddDirectoryAsync(tar, path, onFileStart, cancel);
+                else if (File.Exists(path))
                 {
-                    cancel.ThrowIfCancellationRequested();
-                    if (Directory.Exists(path))
-                        await AddDirectoryAsync(tar, path, onFileStart, cancel);
-                    else if (File.Exists(path))
-                    {
-                        onFileStart(Path.GetFileName(path));
-                        await AddFileAsync(tar, path, Path.GetFileName(path), cancel);
-                    }
+                    onFileStart(Path.GetFileName(path));
+                    await AddFileAsync(tar, path, Path.GetFileName(path), cancel);
                 }
-                // dispose tar first to flush trailing blocks into gzip
             }
-            // gzip is now disposed — all compressed bytes have been written to chunker
-
-            // flush any remaining partial chunk
-            await chunker.FlushFinalAsync();
-
-            return sha.GetHashAndReset();
+            // dispose tar first to flush trailing blocks into gzip
         }
-        finally
-        {
-            sha.Dispose();
-        }
+        // gzip is now disposed — all compressed bytes have been written to chunker
+
+        // flush any remaining partial chunk
+        await chunker.FlushFinalAsync();
+
+        return chunker.GetHashAndReset();
+    }
+
+    // shared by the chunker and the byte counter, which run inside each other's writes
+    private sealed class StreamProgress
+    {
+        public int Sequence { get; set; }
+        public long UncompressedWritten { get; set; }
     }
 
     private static async Task AddDirectoryAsync(TarWriter tar, string dirPath, Action<string> onFileStart, CancellationToken cancel)
@@ -210,11 +201,15 @@ public static class TarGzStreamer
         public override async ValueTask DisposeAsync() { await FlushBufferAsync(CancellationToken.None); await inner.DisposeAsync(); await base.DisposeAsync(); }
     }
 
-    // write-only stream that accumulates bytes and fires a callback for each full chunk
-    internal sealed class ChunkingWriteStream(int chunkSize, Func<byte[], Task> onChunk) : Stream
+    // write-only stream that accumulates bytes and fires a callback for each full chunk, hashing what it hands out
+    internal sealed class ChunkingWriteStream(int chunkSize, Func<byte[], ValueTask> onChunk) : Stream
     {
+        private readonly IncrementalHash _sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         private byte[] _buffer = new byte[chunkSize];
         private int _pos;
+
+        // SHA-256 of every chunk handed to onChunk so far
+        public byte[] GetHashAndReset() => _sha.GetHashAndReset();
 
         public override bool CanRead => false;
         public override bool CanSeek => false;
@@ -260,7 +255,7 @@ public static class TarGzStreamer
                 var chunk = new byte[_pos];
                 Array.Copy(_buffer, chunk, _pos);
                 _pos = 0;
-                await onChunk(chunk);
+                await EmitAsync(chunk);
             }
         }
 
@@ -269,7 +264,19 @@ public static class TarGzStreamer
             var chunk = _buffer;
             _buffer = new byte[chunkSize];
             _pos = 0;
-            await onChunk(chunk);
+            await EmitAsync(chunk);
+        }
+
+        private ValueTask EmitAsync(byte[] chunk)
+        {
+            _sha.AppendData(chunk);
+            return onChunk(chunk);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) _sha.Dispose();
+            base.Dispose(disposing);
         }
     }
 }

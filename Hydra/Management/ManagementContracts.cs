@@ -8,6 +8,25 @@ internal static class ManagementProtocol
     internal const int MaxMessageBytes = 2 * 1024 * 1024;
 }
 
+// the local socket/pipe's methods, between the TUI and its own daemon
+internal static class ManagementMethods
+{
+    internal const string Hello = "hello";
+    internal const string Status = "status";
+    internal const string Logs = "logs";
+    internal const string ConfigGet = "config.get";
+    internal const string ConfigValidate = "config.validate";
+    internal const string ConfigSave = "config.save";
+    internal const string RelayReconnect = "relay.reconnect";
+    internal const string HydraRestart = "hydra.restart";
+    internal const string HydraShutdown = "hydra.shutdown";
+    internal const string RemotePair = "remote.pair";
+    internal const string RemoteConfigGet = "remote.config.get";
+    internal const string RemoteConfigValidate = "remote.config.validate";
+    internal const string RemoteConfigApply = "remote.config.apply";
+    internal const string RemoteConfigConfirm = "remote.config.confirm";
+}
+
 public sealed record ManagementRequest(string Method, string? Json = null);
 
 public sealed record ManagementResponse(bool Success, string? Json = null, string? Error = null)

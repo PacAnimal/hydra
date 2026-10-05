@@ -2,6 +2,7 @@ using Hydra.Management;
 using Hydra.Relay;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Tests.Setup;
 
 namespace Tests.Management;
 
@@ -9,18 +10,20 @@ namespace Tests.Management;
 public class RemoteManagementTests
 {
     private string _root = null!;
+    private readonly StartedServices _services = new();
 
     [SetUp]
-    public void SetUp()
-    {
-        _root = Path.Combine(Path.GetTempPath(), $"hydra-remote-management-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(_root);
-    }
+    public void SetUp() => _root = TestPaths.FreshFixtureRoot(nameof(RemoteManagementTests));
 
     [TearDown]
-    public void TearDown()
+    public Task TearDown() => _services.StopAll();
+
+    // stored hashes in .hydra-management.json must still match after an upgrade
+    [Test]
+    public void PairingCodeHash_IsLowercaseHexSha256()
     {
-        if (Directory.Exists(_root)) Directory.Delete(_root, recursive: true);
+        Assert.That(RemoteManagementCrypto.HashPairingCode("hydra-pair"),
+            Is.EqualTo("7b9cf80fb8a605ebf303d7c977dfc55745f15f52cfe4b1ea8403645a015df549"));
     }
 
     [Test]
@@ -54,6 +57,43 @@ public class RemoteManagementTests
         if (!OperatingSystem.IsWindows())
             Assert.That(File.GetUnixFileMode(Path.Combine(Path.GetDirectoryName(configPath)!, ".hydra-management.json")),
                 Is.EqualTo(UnixFileMode.UserRead | UnixFileMode.UserWrite));
+    }
+
+    // the private DACL names the console user of the last write, so a new console user needs it written afresh
+    [Test]
+    public async Task Restamp_MakesTheSidecarPrivateAgain_KeepingItsContents()
+    {
+        var configPath = ConfigPath("restamp");
+        var store = new RemoteManagementStore(configPath);
+        var code = await store.CreatePairingCodeAsync();
+        var sidecar = new ConfigDir(configPath).ManagementState;
+        var json = await File.ReadAllTextAsync(sidecar);
+        // replaced by a plain write, which takes the directory's ACL or the umask's mode
+        File.Delete(sidecar);
+        await File.WriteAllTextAsync(sidecar, json);
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(sidecar, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
+
+        await store.Restamp(CancellationToken.None);
+
+        using (Assert.EnterMultipleScope())
+        {
+            if (OperatingSystem.IsWindows())
+                Assert.That(new FileInfo(sidecar).GetAccessControl().AreAccessRulesProtected, Is.True, "the sidecar still inherits the directory's ACL");
+            else
+                Assert.That(File.GetUnixFileMode(sidecar), Is.EqualTo(UnixFileMode.UserRead | UnixFileMode.UserWrite));
+            Assert.That(await store.ConsumePairingCodeAsync(code, CancellationToken.None), Is.True);
+        }
+    }
+
+    [Test]
+    public async Task Restamp_CreatesNoSidecar()
+    {
+        var configPath = ConfigPath("restamp-absent");
+
+        await new RemoteManagementStore(configPath).Restamp(CancellationToken.None);
+
+        Assert.That(File.Exists(new ConfigDir(configPath).ManagementState), Is.False);
     }
 
     [Test]
@@ -113,10 +153,8 @@ public class RemoteManagementTests
         var (localRelay, remoteRelay) = LinkedRelay.Create("local", "remote");
         var localStore = new RemoteManagementStore(localPath);
         var remoteStore = new RemoteManagementStore(remotePath);
-        var local = Service(localRelay, localStore, localPath);
-        var remote = Service(remoteRelay, remoteStore, remotePath);
-        await local.StartAsync(CancellationToken.None);
-        await remote.StartAsync(CancellationToken.None);
+        var local = await _services.Start(Service(localRelay, localStore, localPath));
+        await _services.Start(Service(remoteRelay, remoteStore, remotePath));
 
         var code = await remoteStore.CreatePairingCodeAsync();
         var paired = await local.PairAsync(new RemotePairRequest("remote", code), CancellationToken.None);
@@ -131,9 +169,6 @@ public class RemoteManagementTests
             Assert.That(document.Json, Does.Not.Contain("relay-secret"));
             Assert.That(validation.Valid, Is.True);
         }
-
-        await local.StopAsync(CancellationToken.None);
-        await remote.StopAsync(CancellationToken.None);
     }
 
     [Test]
@@ -153,10 +188,8 @@ public class RemoteManagementTests
         var localPath = ConfigPath("invalid-pair-local");
         var remotePath = ConfigPath("invalid-pair-remote");
         var (localRelay, remoteRelay) = LinkedRelay.Create("local", "remote");
-        var local = Service(localRelay, new RemoteManagementStore(localPath), localPath);
-        var remote = Service(remoteRelay, new RemoteManagementStore(remotePath), remotePath);
-        await local.StartAsync(CancellationToken.None);
-        await remote.StartAsync(CancellationToken.None);
+        var local = await _services.Start(Service(localRelay, new RemoteManagementStore(localPath), localPath));
+        await _services.Start(Service(remoteRelay, new RemoteManagementStore(remotePath), remotePath));
 
         var result = await local.PairAsync(new RemotePairRequest("remote", RemoteManagementCrypto.RandomSecret()),
             CancellationToken.None);
@@ -166,8 +199,6 @@ public class RemoteManagementTests
             Assert.That(result.Paired, Is.False);
             Assert.That(result.Message, Does.Contain("invalid"));
         }
-        await local.StopAsync(CancellationToken.None);
-        await remote.StopAsync(CancellationToken.None);
     }
 
     [Test]
@@ -179,10 +210,8 @@ public class RemoteManagementTests
         var localStore = new RemoteManagementStore(localPath);
         var remoteStore = new RemoteManagementStore(remotePath);
         var remoteLifetime = new FakeLifetimeController();
-        var local = Service(localRelay, localStore, localPath);
-        var remote = Service(remoteRelay, remoteStore, remotePath, remoteLifetime);
-        await local.StartAsync(CancellationToken.None);
-        await remote.StartAsync(CancellationToken.None);
+        var local = await _services.Start(Service(localRelay, localStore, localPath));
+        await _services.Start(Service(remoteRelay, remoteStore, remotePath, remoteLifetime));
 
         var code = await remoteStore.CreatePairingCodeAsync();
         _ = await local.PairAsync(new RemotePairRequest("remote", code), CancellationToken.None);
@@ -199,9 +228,6 @@ public class RemoteManagementTests
             Assert.That(File.Exists(Path.Combine(Path.GetDirectoryName(remotePath)!, ".hydra-remote-apply.json")), Is.False);
             Assert.That(File.Exists(Path.Combine(Path.GetDirectoryName(remotePath)!, ".hydra-remote-backup.conf")), Is.False);
         }
-
-        await local.StopAsync(CancellationToken.None);
-        await remote.StopAsync(CancellationToken.None);
     }
 
     private static RemoteManagementService Service(IRelaySender relay, RemoteManagementStore store, string configPath,
@@ -229,25 +255,23 @@ public class RemoteManagementTests
         return path;
     }
 
-    private sealed class LinkedRelay(string host) : IRelaySender
+    private sealed class LinkedRelay(string host) : NullRelaySender
     {
         private readonly string _host = host;
         private LinkedRelay? _other;
-        public bool IsConnected => _other != null;
-        public event Func<string[], Task>? PeersChanged { add { } remove { } }
-        public event Func<string, MessageKind, ReadOnlyMemory<byte>, Task>? MessageReceived;
-        public event Func<Task>? Disconnected { add { } remove { } }
+        public override bool IsConnected => _other != null;
+        public override event Func<string, MessageKind, ReadOnlyMemory<byte>, Task>? MessageReceived;
 
-        internal static (LinkedRelay Left, LinkedRelay Right) Create(string leftHost, string rightHost)
+        internal static LinkedRelays Create(string leftHost, string rightHost)
         {
             var left = new LinkedRelay(leftHost);
             var right = new LinkedRelay(rightHost);
             left._other = right;
             right._other = left;
-            return (left, right);
+            return new LinkedRelays(left, right);
         }
 
-        public void Send(string[] targetHosts, byte[] payload)
+        public override void Send(string[] targetHosts, byte[] payload)
         {
             var other = _other;
             if (other == null || !targetHosts.Contains(other._host, StringComparer.OrdinalIgnoreCase)) return;
@@ -257,12 +281,8 @@ public class RemoteManagementTests
         }
     }
 
-    private sealed class FakeLifetimeController : IHydraLifetimeController
-    {
-        internal int RestartRequests;
-        public void RestartAfterResponse() => RestartRequests++;
-        public CommandResult ShutdownAfterResponse() => new(true, "Shutdown requested.");
-    }
+    private sealed record LinkedRelays(LinkedRelay Left, LinkedRelay Right);
+
     /// <summary>
     /// A reader in another store instance does not make a concurrent writer LOSE its write.
     ///

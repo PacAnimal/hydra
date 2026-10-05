@@ -19,23 +19,25 @@ public sealed class WindowsFileSelectionDetector(ILogger<WindowsFileSelectionDet
     public string FileManagerName => "Explorer";
     public bool IsFileTransferSupported => true;
 
-    public FileSelectionResult GetSelectedPaths()
+    public FileSelectionResult GetSelectedPaths(CancellationToken cancel)
     {
         try
         {
-            return FindSelectedInForegroundExplorer();
+            return FindSelectedInForegroundExplorer(cancel);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogDebug(ex, "GetSelectedPaths failed");
-            return new FileSelectionResult(false, null);
+            return FileSelectionResult.Failure;
         }
     }
 
     public void Dispose() => _comShell.Dispose();
 
-    private FileSelectionResult FindSelectedInForegroundExplorer()
+    // checked between COM calls, since none of them can be interrupted
+    private FileSelectionResult FindSelectedInForegroundExplorer(CancellationToken cancel)
     {
+        cancel.ThrowIfCancellationRequested();
         var fgHwnd = NativeMethods.GetForegroundWindow();
         if (fgHwnd == nint.Zero) return new FileSelectionResult(false, null);
 
@@ -57,6 +59,7 @@ public sealed class WindowsFileSelectionDetector(ILogger<WindowsFileSelectionDet
                 int count = windows.Count;
                 for (var i = 0; i < count; i++)
                 {
+                    cancel.ThrowIfCancellationRequested();
                     dynamic? window = windows.Item(i);
                     if (window == null) continue;
                     try
@@ -84,6 +87,7 @@ public sealed class WindowsFileSelectionDetector(ILogger<WindowsFileSelectionDet
                             int itemCount = items.Count;
                             for (var j = 0; j < itemCount; j++)
                             {
+                                cancel.ThrowIfCancellationRequested();
                                 dynamic? item = items.Item(j);
                                 if (item == null) continue;
                                 string? path;
@@ -114,7 +118,7 @@ public sealed class WindowsFileSelectionDetector(ILogger<WindowsFileSelectionDet
 
         // Shell.Application.Windows() didn't include the desktop — fall back to direct ListView query
         if (fgIsDesktop)
-            return GetDesktopSelectionFromListView();
+            return GetDesktopSelectionFromListView(cancel);
 
         // no Shell window matched the foreground HWND — Explorer is not focused
         return new FileSelectionResult(false, null);
@@ -122,7 +126,7 @@ public sealed class WindowsFileSelectionDetector(ILogger<WindowsFileSelectionDet
 
     // reads selected items directly from the desktop SysListView32 via cross-process memory.
     // this covers Windows versions where the desktop is absent from Shell.Application.Windows().
-    private static FileSelectionResult GetDesktopSelectionFromListView()
+    private static FileSelectionResult GetDesktopSelectionFromListView(CancellationToken cancel)
     {
         var hListView = FindDesktopListView();
         if (hListView == 0) return new FileSelectionResult(true, null);
@@ -137,6 +141,7 @@ public sealed class WindowsFileSelectionDetector(ILogger<WindowsFileSelectionDet
         var idx = -1;
         while (true)
         {
+            cancel.ThrowIfCancellationRequested();
             // return value of SendMessageTimeoutW is 0 on timeout/error, non-zero on success
             var ret = NativeMethods.SendMessageTimeoutW(hListView, NativeMethods.LVM_GETNEXTITEM, idx,
                 NativeMethods.LVNI_SELECTED, NativeMethods.SMTO_ABORTIFHUNG, 2000, out var nextRaw);
@@ -171,6 +176,7 @@ public sealed class WindowsFileSelectionDetector(ILogger<WindowsFileSelectionDet
 
                 foreach (var index in selectedIndices)
                 {
+                    cancel.ThrowIfCancellationRequested();
                     var name = ReadListViewItemText(hProcess, hListView, pBuf, structSize, index, maxChars);
                     if (string.IsNullOrEmpty(name)) continue;
                     var path = ResolveDesktopItemPath(name, userDesktop, commonDesktop);

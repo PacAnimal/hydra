@@ -63,10 +63,10 @@ Changing framing, endpoint identity, permissions, protocol versioning, or reques
 
 The configuration view has two representations of the same retained source document:
 
-- **Form** patches common fields through `GuidedConfigDocument`.
+- **Form** patches common fields through `GuidedConfigDocument`. Every field is one row of the `GuidedFields` table (`GuidedField.cs`), which drives the form's layout, loading and saving; adding a field means adding a row there.
 - **Text** edits the complete JSON document.
 
-The form must preserve unknown, advanced, and topology fields it does not expose. It must never serialize the mirror-expanded runtime host graph back to disk. Switching between Form and Text must not change semantics on its own.
+The form must preserve unknown, advanced, and topology fields it does not expose. Keys are matched case-insensitively and the last duplicate wins, exactly as the loader binds them (`JsonNodeExt`). It must never serialize the mirror-expanded runtime host graph back to disk. Switching between Form and Text must not change semantics on its own.
 
 Saving is revision-aware and validates before replacing the original through a sibling temporary file. Preserve private file permissions, external-change detection, and the distinction between **Save** and **Save & Restart**. Offline editing remains available when the daemon is unavailable, but the TUI must not assume that any connection failure means Hydra is stopped.
 

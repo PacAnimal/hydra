@@ -1,3 +1,4 @@
+// member names are spelled on the wire and in hydra.conf hotkeys, many as X11 keysyms from <X11/keysymdef.h>
 // ReSharper disable InconsistentNaming
 namespace Hydra.Keyboard;
 
@@ -104,15 +105,4 @@ public enum SpecialKey : uint
     Alt_R = 0x01FFEA,
     Super_L = 0x01FFEB,
     Super_R = 0x01FFEC,
-}
-
-public static class SpecialKeyExtensions
-{
-    // true for keys that modify subsequent input: shift, ctrl, alt, super, capslock, altgr, numlock, scrolllock
-    public static bool IsModifier(this SpecialKey key) => key is
-        SpecialKey.AltGr or SpecialKey.CapsLock or SpecialKey.NumLock or SpecialKey.ScrollLock or
-        SpecialKey.Shift_L or SpecialKey.Shift_R or
-        SpecialKey.Control_L or SpecialKey.Control_R or
-        SpecialKey.Alt_L or SpecialKey.Alt_R or
-        SpecialKey.Super_L or SpecialKey.Super_R;
 }

@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using System.Formats.Tar;
 using System.IO.Compression;
-using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using Cathedral.Utils;
@@ -49,7 +48,8 @@ internal sealed class SelfUpdater(IHydraProfile profile, ILogger<SelfUpdater> lo
         }
         catch (HttpRequestException e)
         {
-            log.LogDebug("Auto-update check failed: {Message}", e.InnerException?.Message ?? e.Message);
+            if (log.IsEnabled(LogLevel.Debug))
+                log.LogDebug("Auto-update check failed: {Message}", e.InnerMessage());
         }
         catch (Exception e) when (e is not OperationCanceledException)
         {
@@ -60,7 +60,8 @@ internal sealed class SelfUpdater(IHydraProfile profile, ILogger<SelfUpdater> lo
     private async Task CheckAndUpdate(CancellationToken cancel)
     {
         var current = CurrentVersion();
-        log.LogInformation("Checking for updates (current: {Version})", current);
+        if (log.IsEnabled(LogLevel.Information))
+            log.LogInformation("Checking for updates (current: {Version})", current);
 
         var json = await Http.GetStringAsync($"https://api.github.com/repos/{Repo}/releases/latest", cancel);
         using var doc = JsonDocument.Parse(json);
@@ -71,11 +72,13 @@ internal sealed class SelfUpdater(IHydraProfile profile, ILogger<SelfUpdater> lo
 
         if (latest <= current)
         {
-            log.LogInformation("Already up to date ({Version})", current);
+            if (log.IsEnabled(LogLevel.Information))
+                log.LogInformation("Already up to date ({Version})", current);
             return;
         }
 
-        log.LogInformation("Update available: {Current} → {Latest}", current, latest);
+        if (log.IsEnabled(LogLevel.Information))
+            log.LogInformation("Update available: {Current} → {Latest}", current, latest);
 
         var rid = Rid();
         if (rid == null)
@@ -101,7 +104,8 @@ internal sealed class SelfUpdater(IHydraProfile profile, ILogger<SelfUpdater> lo
             return;
         }
 
-        log.LogInformation("Downloading {Asset}", assetName);
+        if (log.IsEnabled(LogLevel.Information))
+            log.LogInformation("Downloading {Asset}", assetName);
         await DownloadAndApply(downloadUrl, cancel);
     }
 
@@ -218,11 +222,7 @@ internal sealed class SelfUpdater(IHydraProfile profile, ILogger<SelfUpdater> lo
         catch { /* best effort */ }
     }
 
-    private static Version CurrentVersion() =>
-        Version.Parse(Assembly.GetExecutingAssembly()
-            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
-            ?.InformationalVersion.Split('+')[0]  // strip build metadata suffix
-            ?? "0.0.0");
+    private static Version CurrentVersion() => Version.Parse(HydraVersion.Current);
 
     private static string? Rid()
     {

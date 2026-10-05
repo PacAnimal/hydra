@@ -1,5 +1,6 @@
 using System.Text;
 using System.Net.Sockets;
+using Cathedral.Extensions;
 using Hydra.Config;
 using Hydra.Management;
 using Hydra.Platform;
@@ -27,13 +28,47 @@ internal static class HydraTui
         return previousAttempts == null || current.RelayConnection.ConnectionAttempts > previousAttempts;
     }
 
-    internal static Task RunAsync(string[] args)
+    // a call cut off by its own timeout says so, not "The operation was canceled."
+    internal static string FailureMessage(Exception ex) =>
+        ex is OperationCanceledException ? "Hydra did not answer in time." : ex.Message;
+
+    // runs a call and reports its failure, unless the failure is the TUI itself shutting down
+    internal static async Task ReportFailures(Func<Task> body, Action<string> report, CancellationToken shutdown)
     {
-        var demo = args.Any(a => a.Equals("--demo", StringComparison.OrdinalIgnoreCase));
-        string? explicitConfig = null;
-        for (var i = 0; i < args.Length; i++)
-            if (args[i] == "--config" && i + 1 < args.Length)
-                explicitConfig = args[++i];
+        try
+        {
+            await body();
+        }
+        catch (OperationCanceledException) when (shutdown.IsCancellationRequested) { }
+        catch (Exception ex)
+        {
+            report(FailureMessage(ex));
+        }
+    }
+
+    // returns the process exit code: 2 for a bad command line, like the daemon and pair
+    internal static int Run(string[] args)
+    {
+        HydraArgs tuiArgs;
+        try { tuiArgs = HydraArgs.Parse(args); }
+        catch (ArgumentException ex)
+        {
+            Console.Error.WriteLine(ex.Message);
+            return 2;
+        }
+        if (tuiArgs.UnknownArgument(HydraArgs.DemoOption) is { } unknown)
+        {
+            Console.Error.WriteLine($"Unknown argument: {unknown}");
+            Console.Error.WriteLine(HydraArgs.TuiUsage);
+            return 2;
+        }
+        var demo = tuiArgs.Has(HydraArgs.DemoOption);
+        // the demo writes its fabricated config to its path, so it is never handed a real one
+        if (demo && tuiArgs.ExplicitConfigPath != null)
+        {
+            Console.Error.WriteLine("--demo runs against its own temporary config and cannot be combined with --config.");
+            return 2;
+        }
 
         string configPath;
         IManagementClient client;
@@ -42,7 +77,7 @@ internal static class HydraTui
             // A design-preview mode: renders this same UI against fabricated data (see
             // MockManagementClient) instead of a live daemon, so the TUI can be reviewed or
             // screenshotted without a running Hydra, a real config, or a real machine identity.
-            configPath = explicitConfig ?? Path.Combine(Path.GetTempPath(), $"hydra-demo-{Guid.NewGuid():N}.conf");
+            configPath = Path.Combine(Path.GetTempPath(), $"hydra-demo-{Guid.NewGuid():N}.conf");
             try { File.WriteAllText(configPath, MockManagementClient.DemoConfigJson); }
             catch (IOException) { /* only used as a fallback for offline config editing in demo mode */ }
             client = new MockManagementClient();
@@ -51,12 +86,12 @@ internal static class HydraTui
         {
             try
             {
-                configPath = HydraConfigFile.ResolvePath(explicitConfig ?? Environment.GetEnvironmentVariable("CONFIG"));
+                configPath = HydraProcessLauncher.AddressedAs(HydraConfigFile.ResolvePath(tuiArgs.ConfigPath));
             }
             catch (Exception ex)
             {
                 Console.Error.WriteLine(ex.Message);
-                return Task.CompletedTask;
+                return 1;
             }
             client = new ManagementClient(configPath);
         }
@@ -66,33 +101,15 @@ internal static class HydraTui
         using var window = new Window();
         window.Title = demo ? "Hydra Control Center (Demo)" : "Hydra Control Center";
         window.BorderStyle = Terminal.Gui.Drawing.LineStyle.Rounded;
-        using var controller = new TuiController(app, window, configPath, client);
+        using var controller = new TuiController(app, window, configPath, client, demo);
         controller.Build();
-        var requestStop = window.RequestStop;
-        Console.CancelKeyPress += CancelHandler;
-        try
-        {
-            app.Run(window);
-        }
-        finally
-        {
-            Console.CancelKeyPress -= CancelHandler;
-        }
-        return Task.CompletedTask;
-
-        // Unsubscribed in the finally block above before app/window are disposed at method end, so this
-        // local function never runs against a disposed instance.
-        void CancelHandler(object? sender, ConsoleCancelEventArgs e)
-        {
-            e.Cancel = true;
-            // ReSharper disable once AccessToDisposedClosure
-            app.Invoke(requestStop);
-        }
+        app.Run(window);
+        return 0;
     }
 
     // internal (not private) so its pure formatting helpers are reachable from Tests via
     // InternalsVisibleTo — see FormatOverview/FormatPeers and their tests.
-    internal sealed class TuiController(IApplication app, Window window, string configPath, IManagementClient client) : IDisposable
+    internal sealed class TuiController(IApplication app, Window window, string configPath, IManagementClient client, bool demo) : IDisposable
     {
         // ONLY THE STATE MARKER IS TINTED BY STATE. The rest of the line is facts — version, host,
         // profile — that are equally true whatever the connection is doing, so colouring them by it said
@@ -127,6 +144,13 @@ internal static class HydraTui
             new Terminal.Gui.Drawing.Color(Terminal.Gui.Drawing.ColorName16.Black), new Terminal.Gui.Drawing.Color(Terminal.Gui.Drawing.ColorName16.BrightCyan)));
         private static readonly Terminal.Gui.Drawing.Scheme FieldCaptionScheme = new(new Terminal.Gui.Drawing.Attribute(
             new Terminal.Gui.Drawing.Color(Terminal.Gui.Drawing.ColorName16.BrightCyan), new Terminal.Gui.Drawing.Color(Terminal.Gui.Drawing.ColorName16.Black)));
+
+        private static readonly TimeSpan RemoteTimeout = TimeSpan.FromSeconds(12);
+        // one local management call: status, config, hello
+        private static readonly TimeSpan ProbeTimeout = TimeSpan.FromMilliseconds(800);
+        // how long a command gets to show its effect, polled every StatusPollInterval
+        private static readonly TimeSpan StatusPollBudget = TimeSpan.FromSeconds(15);
+        private static readonly TimeSpan StatusPollInterval = TimeSpan.FromMilliseconds(300);
 
         private readonly IManagementClient _client = client;
         private readonly TransactionalConfigStore _offlineStore = new(new HydraRuntimeInfo(configPath, DateTimeOffset.UtcNow));
@@ -179,6 +203,8 @@ internal static class HydraTui
         private HydraStatusSnapshot? _lastStatus;
         private long _logCursor;
         private int _refreshing;
+        // demo only, so a test can tell an F5 refresh from the timer's
+        private int? _f5Refreshes = demo ? 0 : null;
         private int _remoteOperationActive;
         private bool _connected;
         private bool _liveControlsReady;
@@ -195,37 +221,13 @@ internal static class HydraTui
         private readonly List<(Button Button, FrameView Content, string Name)> _formSections = [];
         private TabStrip _mainTabs = null!; // assigned in Build(), which always runs before any use
 
-        private readonly TextField _rootName = new();
-        private readonly TextField _rootLogLevel = new();
-        private readonly TextField _rootProfileOverride = new();
-        private readonly CheckBox _rootAutoUpdate = new() { Text = "Auto Update" };
-        private readonly CheckBox _rootDebugShield = new() { Text = "Debug Shield" };
-        private readonly CheckBox _rootDebugMouse = new() { Text = "Debug Mouse" };
+        private readonly Dictionary<GuidedField, View> _guidedControls = [];
         private readonly Label _profilePosition = new();
-        private readonly TextField _profileName = new();
-        private readonly TextField _profileMode = new();
-        private readonly TextField _conditionSsid = new();
-        private readonly TextField _conditionScreens = new();
-        private readonly TextField _conditionPower = new();
-        private readonly TextField _networkConfig = new() { Secret = true };
-        private readonly TextField _embeddedServer = new();
-        private readonly TextField _embeddedPassword = new() { Secret = true };
-        private readonly TextField _embeddedPort = new();
-        private readonly TextField _embeddedServerPassword = new() { Secret = true };
-        private readonly TextField _mouseScale = new();
-        private readonly TextField _relativeMouseScale = new();
-        private readonly TextField _deadCorners = new();
-        private readonly TextField _maxMouseHz = new();
-        private readonly CheckBox _hideCursor = new() { Text = "Hide Cursor" };
-        private readonly CheckBox _remoteOnly = new() { Text = "Remote Only" };
-        private readonly CheckBox _syncScreensaver = new() { Text = "Sync Screensaver" };
-        private readonly CheckBox _screenLockPropagation = new() { Text = "Propagate Screen Lock" };
-        private readonly CheckBox _accelerateMouseWheel = new() { Text = "Accelerate Wheel" };
-        private readonly CheckBox _unicodeKeyRepeat = new() { Text = "Unicode Key Repeat" };
         private readonly Label _advancedSummary = new();
 
         internal void Build()
         {
+            Console.CancelKeyPress += StopOnCtrlC;
             _connectionState.SetScheme(ConnectingScheme);
             _connectionDetail.SetScheme(FieldCaptionScheme);
             _connectionDetail.X = Pos.Right(_connectionState);
@@ -254,7 +256,7 @@ internal static class HydraTui
 
             var status = new StatusBar([
                 new Shortcut(Application.GetDefaultKey(Command.Quit), "Quit", () => window.RequestStop()),
-                new Shortcut(Key.F5, "Refresh", () => _ = RefreshAsync()),
+                new Shortcut(Key.F5, "Refresh", () => _ = RefreshAsync(f5: true)),
                 new Shortcut(Key.F1, "Help", () => _mainTabs.Select(contents.Length - 1))
             ]);
             window.Add(status);
@@ -405,29 +407,17 @@ internal static class HydraTui
                 MessageBox.ErrorQuery(app, "Remote Pairing", "Enter the peer host and its one-time pairing code.", "OK");
                 return;
             }
-            if (!BeginRemoteOperation()) return;
-            try
+            await RunRemote("Remote Pairing", "Pairing failed", async () =>
             {
                 SetText(_remoteStatus, $"Pairing with {host}…");
-                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(_cancel.Token);
-                timeout.CancelAfter(TimeSpan.FromSeconds(12));
+                using var timeout = TimeoutAfter(RemoteTimeout);
                 var result = await _client.PairRemoteAsync(new RemotePairRequest(host, code), timeout.Token);
                 app.Invoke(() =>
                 {
                     _remotePairingCode.Text = "";
                     SetText(_remoteStatus, result.Message);
                 });
-            }
-            catch (OperationCanceledException) when (_cancel.IsCancellationRequested) { }
-            catch (Exception ex)
-            {
-                app.Invoke(() =>
-                {
-                    SetText(_remoteStatus, $"Pairing failed: {ex.Message}");
-                    MessageBox.ErrorQuery(app, "Remote Pairing", ex.Message, "OK");
-                });
-            }
-            finally { EndRemoteOperation(); }
+            });
         }
 
         private async Task LoadRemoteConfigAsync()
@@ -438,12 +428,10 @@ internal static class HydraTui
                 MessageBox.ErrorQuery(app, "Remote Configuration", "Enter a peer host.", "OK");
                 return;
             }
-            if (!BeginRemoteOperation()) return;
-            try
+            await RunRemote("Remote Configuration", "Load failed", async () =>
             {
                 SetText(_remoteStatus, $"Loading {host}…");
-                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(_cancel.Token);
-                timeout.CancelAfter(TimeSpan.FromSeconds(12));
+                using var timeout = TimeoutAfter(RemoteTimeout);
                 var document = await _client.GetRemoteConfigAsync(host, timeout.Token);
                 _remoteConfigDocument = document;
                 app.Invoke(() =>
@@ -451,62 +439,43 @@ internal static class HydraTui
                     _remoteConfig.Text = document.Json;
                     SetText(_remoteStatus, $"Loaded {host} revision {document.Revision[..Math.Min(12, document.Revision.Length)]}.");
                 });
-            }
-            catch (OperationCanceledException) when (_cancel.IsCancellationRequested) { }
-            catch (Exception ex)
-            {
-                app.Invoke(() =>
-                {
-                    SetText(_remoteStatus, $"Load failed: {ex.Message}");
-                    MessageBox.ErrorQuery(app, "Remote Configuration", ex.Message, "OK");
-                });
-            }
-            finally { EndRemoteOperation(); }
+            });
         }
 
         private async Task ValidateRemoteConfigAsync()
         {
             var host = _remoteHost.Text.Trim();
-            if (_remoteConfigDocument == null || !_remoteConfigDocument.Host.Equals(host, StringComparison.OrdinalIgnoreCase))
+            if (_remoteConfigDocument == null || !_remoteConfigDocument.Host.EqualsIgnoreCase(host))
             {
                 MessageBox.ErrorQuery(app, "Remote Configuration", "Load this peer's configuration before validating it.", "OK");
                 return;
             }
-            if (!BeginRemoteOperation()) return;
-            try
+            // a failure leaves the status line alone: validating changes nothing on the peer
+            await RunRemote("Remote Configuration", failurePrefix: null, async () =>
             {
-                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(_cancel.Token);
-                timeout.CancelAfter(TimeSpan.FromSeconds(12));
+                using var timeout = TimeoutAfter(RemoteTimeout);
                 var result = await _client.ValidateRemoteConfigAsync(new RemoteValidateRequest(host, _remoteConfig.Text), timeout.Token);
                 app.Invoke(() =>
                 {
                     if (result.Valid) MessageBox.Query(app, "Remote Configuration", "The remote configuration is valid.", "OK");
                     else MessageBox.ErrorQuery(app, "Remote Configuration", result.Error ?? "Invalid configuration.", "OK");
                 });
-            }
-            catch (OperationCanceledException) when (_cancel.IsCancellationRequested) { }
-            catch (Exception ex)
-            {
-                app.Invoke(() => MessageBox.ErrorQuery(app, "Remote Configuration", ex.Message, "OK"));
-            }
-            finally { EndRemoteOperation(); }
+            });
         }
 
         private async Task ApplyRemoteConfigAsync()
         {
             var host = _remoteHost.Text.Trim();
             var document = _remoteConfigDocument;
-            if (document == null || !document.Host.Equals(host, StringComparison.OrdinalIgnoreCase))
+            if (document == null || !document.Host.EqualsIgnoreCase(host))
             {
                 MessageBox.ErrorQuery(app, "Remote Configuration", "Load this peer's configuration before applying it.", "OK");
                 return;
             }
-            if (!BeginRemoteOperation()) return;
-            try
+            await RunRemote("Remote Configuration", "Remote apply failed", async () =>
             {
-                using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(_cancel.Token))
+                using (var timeout = TimeoutAfter(RemoteTimeout))
                 {
-                    timeout.CancelAfter(TimeSpan.FromSeconds(12));
                     var validation = await _client.ValidateRemoteConfigAsync(new RemoteValidateRequest(host, _remoteConfig.Text), timeout.Token);
                     if (!validation.Valid)
                     {
@@ -523,23 +492,46 @@ internal static class HydraTui
                     return;
 
                 app.Invoke(() => SetText(_remoteStatus, $"Applying candidate to {host}…"));
-                using var applyTimeout = CancellationTokenSource.CreateLinkedTokenSource(_cancel.Token);
-                applyTimeout.CancelAfter(TimeSpan.FromSeconds(12));
+                using var applyTimeout = TimeoutAfter(RemoteTimeout);
                 var accepted = await _client.ApplyRemoteConfigAsync(
                     new RemoteApplyRequest(host, document.Revision, _remoteConfig.Text), applyTimeout.Token);
                 app.Invoke(() => SetText(_remoteStatus, $"{host} restarting; waiting for candidate revision…"));
                 await WaitForRemoteApplyAsync(host, accepted);
-            }
-            catch (OperationCanceledException) when (_cancel.IsCancellationRequested) { }
-            catch (Exception ex)
+            });
+        }
+
+        // one remote operation at a time; a failure is reported in a dialog and, given a prefix, on the status line
+        private async Task RunRemote(string title, string? failurePrefix, Func<Task> body)
+        {
+            if (!BeginRemoteOperation()) return;
+            try
             {
-                app.Invoke(() =>
+                await ReportFailures(body, failure => app.Invoke(() =>
                 {
-                    SetText(_remoteStatus, $"Remote apply failed: {ex.Message}");
-                    MessageBox.ErrorQuery(app, "Remote Configuration", ex.Message, "OK");
-                });
+                    if (failurePrefix != null) SetText(_remoteStatus, $"{failurePrefix}: {failure}");
+                    MessageBox.ErrorQuery(app, title, failure, "OK");
+                }), _cancel.Token);
             }
             finally { EndRemoteOperation(); }
+        }
+
+        private CancellationTokenSource TimeoutAfter(TimeSpan after)
+        {
+            var timeout = CancellationTokenSource.CreateLinkedTokenSource(_cancel.Token);
+            timeout.CancelAfter(after);
+            return timeout;
+        }
+
+        // calls probe every interval, each call under its own probeTimeout, until it reports done; false if the deadline passed first
+        private async Task<bool> Poll(DateTimeOffset deadline, TimeSpan interval, TimeSpan probeTimeout, Func<CancellationToken, Task<bool>> probe)
+        {
+            while (DateTimeOffset.UtcNow < deadline && !_cancel.IsCancellationRequested)
+            {
+                await Task.Delay(interval, _cancel.Token);
+                using var timeout = TimeoutAfter(probeTimeout);
+                if (await probe(timeout.Token)) return true;
+            }
+            return false;
         }
 
         private bool BeginRemoteOperation()
@@ -553,27 +545,23 @@ internal static class HydraTui
 
         private async Task WaitForRemoteApplyAsync(string host, RemoteApplyAccepted accepted)
         {
-            var deadline = accepted.ExpiresAt + TimeSpan.FromSeconds(15);
-            while (DateTimeOffset.UtcNow < deadline && !_cancel.IsCancellationRequested)
+            var confirmed = await Poll(accepted.ExpiresAt + TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(6), async cancel =>
             {
-                await Task.Delay(TimeSpan.FromSeconds(1), _cancel.Token);
                 try
                 {
-                    using var timeout = CancellationTokenSource.CreateLinkedTokenSource(_cancel.Token);
-                    timeout.CancelAfter(TimeSpan.FromSeconds(6));
-                    var document = await _client.GetRemoteConfigAsync(host, timeout.Token);
+                    var document = await _client.GetRemoteConfigAsync(host, cancel);
                     if (document.Revision.Equals(accepted.CandidateRevision, StringComparison.Ordinal)
                         && document.Apply?.TransactionId == accepted.TransactionId)
                     {
                         _ = await _client.ConfirmRemoteConfigAsync(
-                            new RemoteConfirmRequest(host, accepted.TransactionId, accepted.CandidateRevision), timeout.Token);
+                            new RemoteConfirmRequest(host, accepted.TransactionId, accepted.CandidateRevision), cancel);
                         _remoteConfigDocument = document with { Apply = null };
                         app.Invoke(() =>
                         {
                             _remoteConfig.Text = document.Json;
                             SetText(_remoteStatus, $"{host} is healthy on the new revision; rollback cancelled.");
                         });
-                        return;
+                        return true;
                     }
                     if (document.Apply == null && !document.Revision.Equals(accepted.CandidateRevision, StringComparison.Ordinal))
                         throw new InvalidOperationException($"{host} restored its previous configuration.");
@@ -581,67 +569,38 @@ internal static class HydraTui
                 catch (Exception ex) when (!_cancel.IsCancellationRequested
                     && (ex is IOException or TimeoutException or OperationCanceledException
                         || ex is InvalidOperationException
-                            && ex.Message.Contains("Remote management", StringComparison.OrdinalIgnoreCase)))
+                            && ex.Message.ContainsIgnoreCase("Remote management")))
                 {
                     app.Invoke(() => SetText(_remoteStatus,
                         $"Waiting for {host} to reconnect; rollback at {accepted.ExpiresAt.ToLocalTime():HH:mm:ss}…"));
                 }
-            }
-            throw new TimeoutException($"{host} did not confirm the candidate; the remote rollback deadline has passed.");
+                return false;
+            });
+            if (!confirmed)
+                throw new TimeoutException($"{host} did not confirm the candidate; the remote rollback deadline has passed.");
         }
 
         private void BuildGuidedConfigForm()
         {
-            var global = new FrameView { Title = "Global", X = 0, Y = 2, Width = Dim.Fill(), Height = Dim.Fill() };
-            AddField(global, "Machine Name", _rootName, 0, 26, "Name advertised to peers; defaults to the hostname when empty.");
-            AddField(global, "Log Level", _rootLogLevel, 2, 26, "Minimum log detail: trce, dbug, info, warn, fail, or crit.");
-            AddField(global, "Force Profile", _rootProfileOverride, 4, 26, "Always select this profile name and ignore its activation conditions. Leave empty for automatic selection.");
-            PlaceCheckBox(global, _rootAutoUpdate, 6, "Allow Hydra's built-in updater to check for and apply releases.");
-            PlaceCheckBox(global, _rootDebugShield, 8, "Enable verbose macOS shield diagnostics. Normally leave disabled.");
-            PlaceCheckBox(global, _rootDebugMouse, 10, "Enable verbose mouse routing diagnostics. Normally leave disabled.");
+            var global = GuidedSectionView(GuidedSection.Global, "Global", visible: true);
 
-            var profile = new FrameView { Title = "Profile", X = 0, Y = 2, Width = Dim.Fill(), Height = Dim.Fill(), Visible = false };
+            var profile = GuidedSectionView(GuidedSection.Profile, "Profile");
             _profilePosition.X = 1; _profilePosition.Y = 0; _profilePosition.Width = 66;
             _previousProfile.X = 1; _previousProfile.Y = 2;
             _nextProfile.X = Pos.Right(_previousProfile) + 2; _nextProfile.Y = 2;
             _previousProfile.Accepting += (_, e) => { e.Handled = true; ChangeGuidedProfile(-1); };
             _nextProfile.Accepting += (_, e) => { e.Handled = true; ChangeGuidedProfile(1); };
-            AddFieldAt(profile, "Profile Name", _profileName, 1, 15, 5, 18, "Display name used by the TUI and optional profile override.");
-            AddFieldAt(profile, "Mode", _profileMode, 1, 15, 7, 18, "Master captures and routes input; Slave receives and injects input.");
-            AddFieldAt(profile, "SSID", _conditionSsid, 1, 15, 9, 18, "Activate this profile only when connected to this Wi-Fi network. Empty means any SSID.");
-            AddFieldAt(profile, "Screen Count", _conditionScreens, 1, 15, 11, 18, "Activate only when exactly this many local screens are detected. Empty means any count.");
-            AddFieldAt(profile, "Power", _conditionPower, 53, 69, 5, 18, "Activation condition: any, yes (AC power), or no (battery).");
-            AddFieldAt(profile, "Mouse Scale", _mouseScale, 53, 69, 7, 18, "Slave fallback cursor-speed multiplier. Master profiles must leave this empty.");
-            AddFieldAt(profile, "Relative Scale", _relativeMouseScale, 53, 69, 9, 18, "Slave fallback relative-mode cursor-speed multiplier.");
-            AddFieldAt(profile, "Dead Corners", _deadCorners, 53, 69, 11, 18, "Pixels at each screen corner that do not trigger an edge transition.");
-            AddFieldAt(profile, "Max Mouse Hz", _maxMouseHz, 53, 69, 13, 18, "Master: how many mouse updates a second are sent to a slave. Higher costs master CPU.");
-            AddDefaultHint(profile, _conditionSsid, "any SSID");
-            AddDefaultHint(profile, _conditionScreens, "any count");
-            AddDefaultHint(profile, _mouseScale, "1.0");
-            AddDefaultHint(profile, _relativeMouseScale, "mouse scale");
-            AddDefaultHint(profile, _deadCorners, "0 px");
-            AddDefaultHint(profile, _maxMouseHz, $"{HydraProfile.DefaultMaxMouseHz} Hz");
             profile.Add(_profilePosition, _previousProfile, _nextProfile);
             BindConfigHelp(_previousProfile, "Previous Profile", "Move to the previous profile. Disabled on the first profile or when only one exists.");
             BindConfigHelp(_nextProfile, "Next Profile", "Move to the next profile. Disabled on the last profile or when only one exists.");
 
-            var relay = new FrameView { Title = "Relay", X = 0, Y = 2, Width = Dim.Fill(), Height = Dim.Fill(), Visible = false };
-            AddField(relay, "Network Config", _networkConfig, 0, 38, "Encrypted/base64 Styx network configuration shared by peers.");
-            AddField(relay, "Embedded URL", _embeddedServer, 3, 38, "Connect to an embedded Styx relay at this URL instead of using networkConfig.");
-            AddField(relay, "Password", _embeddedPassword, 5, 38, "Password for the embedded Styx relay URL above. Masked while typing.");
-            AddField(relay, "Local Port", _embeddedPort, 8, 38, "Run an embedded Styx relay on this TCP port.");
-            AddField(relay, "Password", _embeddedServerPassword, 10, 38, "Password used by peers connecting to this machine's embedded relay. Masked while typing.");
+            var relay = GuidedSectionView(GuidedSection.Relay, "Relay");
             relay.Add(new Label { Text = "Secrets remain masked in Form mode.", X = 1, Y = 11 });
 
-            var behavior = new FrameView { Title = "Behaviour & Topology", X = 0, Y = 2, Width = Dim.Fill(), Height = Dim.Fill(), Visible = false };
-            PlaceCheckBox(behavior, _hideCursor, 0, "Hide the master's local cursor after inactivity. Master only.");
-            PlaceCheckBox(behavior, _remoteOnly, 2, "Treat this master as a headless input forwarder with no local screen route.");
-            PlaceCheckBox(behavior, _syncScreensaver, 4, "Synchronize screensaver activation with connected peers.");
-            PlaceCheckBox(behavior, _screenLockPropagation, 6, "Propagate this master's machine lock to connected slaves.");
-            PlaceCheckBox(behavior, _accelerateMouseWheel, 8, "Apply Hydra's scroll-wheel acceleration behavior.");
-            PlaceCheckBox(behavior, _unicodeKeyRepeat, 10, "Repeat printable keys as Unicode on Mac slaves to avoid the accent popup.");
-
-            _advancedSummary.X = 1; _advancedSummary.Y = 12; _advancedSummary.Width = Dim.Fill(1); _advancedSummary.Height = 3;
+            var behavior = GuidedSectionView(GuidedSection.Behaviour, "Behaviour & Topology");
+            _advancedSummary.X = 1;
+            _advancedSummary.Y = GuidedFields.All.Where(f => f.Section == GuidedSection.Behaviour).Max(f => f.Row) + 2;
+            _advancedSummary.Width = Dim.Fill(1); _advancedSummary.Height = 3;
             behavior.Add(_advancedSummary);
             BindConfigHelp(_advancedSummary, "Advanced Topology", "Host neighbours and per-screen matching are preserved here and editable in Text mode.");
 
@@ -676,6 +635,45 @@ internal static class HydraTui
             SelectFormSection(0);
         }
 
+        // a section page holding its fields from the guided field table
+        private FrameView GuidedSectionView(GuidedSection section, string title, bool visible = false)
+        {
+            var view = new FrameView { Title = title, X = 0, Y = 2, Width = Dim.Fill(), Height = Dim.Fill(), Visible = visible };
+            foreach (var field in GuidedFields.All.Where(f => f.Section == section))
+                _guidedControls[field] = field.Kind == GuidedFieldKind.Toggle
+                    ? PlaceCheckBox(view, field)
+                    : PlaceTextField(view, field, FieldColumns(section)[field.Column]);
+            return view;
+        }
+
+        private static FieldColumn[] FieldColumns(GuidedSection section) => section switch
+        {
+            GuidedSection.Global => [new FieldColumn(1, 18, 26)],
+            GuidedSection.Profile => [new FieldColumn(1, 15, 18), new FieldColumn(53, 69, 18)],
+            GuidedSection.Relay => [new FieldColumn(1, 18, 38)],
+            _ => [new FieldColumn(1, 18, 18)]
+        };
+
+        private TextField PlaceTextField(View parent, GuidedField field, FieldColumn column)
+        {
+            var caption = new Label { Text = field.Label, X = column.LabelX, Y = field.Row, Width = column.FieldX - column.LabelX - 1 };
+            caption.SetScheme(FieldCaptionScheme);
+            var text = new TextField { Secret = field.Kind == GuidedFieldKind.Secret, X = column.FieldX, Y = field.Row, Width = column.Width };
+            parent.Add(caption, text);
+            BindConfigHelp(caption, field.Label, field.Help);
+            BindConfigHelp(text, field.Label, field.Help);
+            if (field.DefaultHint != null) AddDefaultHint(parent, text, field.DefaultHint);
+            return text;
+        }
+
+        private CheckBox PlaceCheckBox(View parent, GuidedField field)
+        {
+            var box = new CheckBox { Text = field.Label, X = 1, Y = field.Row };
+            parent.Add(box);
+            BindConfigHelp(box, field.Label, field.Help);
+            return box;
+        }
+
         private void SelectFormSection(int index)
         {
             if (index < 0 || index >= _formSections.Count) return;
@@ -703,31 +701,6 @@ internal static class HydraTui
             };
             field.TextChanged += (_, _) => hint.Visible = string.IsNullOrWhiteSpace(field.Text);
             parent.Add(hint);
-        }
-
-        private void AddField(View parent, string label, TextField field, int y, int width, string help)
-        {
-            AddFieldAt(parent, label, field, 1, 18, y, width, help);
-        }
-
-        private void AddFieldAt(View parent, string label, TextField field, int labelX, int fieldX, int y, int width, string help)
-        {
-            var caption = new Label { Text = label, X = labelX, Y = y, Width = fieldX - labelX - 1 };
-            caption.SetScheme(FieldCaptionScheme);
-            field.X = fieldX;
-            field.Y = y;
-            field.Width = width;
-            parent.Add(caption, field);
-            BindConfigHelp(caption, label, help);
-            BindConfigHelp(field, label, help);
-        }
-
-        private void PlaceCheckBox(View parent, CheckBox box, int y, string help)
-        {
-            box.X = 1;
-            box.Y = y;
-            parent.Add(box);
-            BindConfigHelp(box, box.Text, help);
         }
 
         private void BindConfigHelp(View view, string title, string help)
@@ -781,13 +754,13 @@ internal static class HydraTui
             return BuildTextTab(help);
         }
 
-        private async Task RefreshAsync()
+        private async Task RefreshAsync(bool f5 = false)
         {
             if (Interlocked.Exchange(ref _refreshing, 1) != 0) return;
+            if (f5) _f5Refreshes++;
             try
             {
-                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(_cancel.Token);
-                timeout.CancelAfter(TimeSpan.FromMilliseconds(800));
+                using var timeout = TimeoutAfter(ProbeTimeout);
                 if (!_helloComplete)
                 {
                     var hello = await _client.HelloAsync(timeout.Token);
@@ -819,10 +792,7 @@ internal static class HydraTui
                 {
                     SetLiveControls(false);
                     if (_shutdownConfirmed)
-                    {
-                        SetConnectionStatus("○ Hydra is stopped", "  —  use Start Hydra to launch it", Link.Disconnected);
-                        _diagnostics.Text = FormatDiagnostics();
-                    }
+                        MarkStopped();
                     else
                     {
                         // Orange says "still working on it", so it is only honest while the failure could
@@ -905,8 +875,7 @@ internal static class HydraTui
                 ConfigDocument document;
                 try
                 {
-                    using var timeout = CancellationTokenSource.CreateLinkedTokenSource(_cancel.Token);
-                    timeout.CancelAfter(TimeSpan.FromMilliseconds(800));
+                    using var timeout = TimeoutAfter(ProbeTimeout);
                     document = await _client.GetConfigAsync(timeout.Token);
                     _connected = true;
                 }
@@ -969,9 +938,9 @@ internal static class HydraTui
 
         private async Task SaveConfigAsync(bool restart)
         {
-            if (_configDocument == null) return;
+            if (_configDocument is not { } document) return;
             var previousStatus = _lastStatus;
-            try
+            await ReportFailures(async () =>
             {
                 var json = CurrentConfigForSave();
                 var validation = TransactionalConfigStore.Validate(json);
@@ -986,8 +955,8 @@ internal static class HydraTui
 
                 SetCommandBusy(true, restart ? "Saving configuration and restarting Hydra…" : "Saving configuration…");
                 _configDocument = _connected
-                    ? await _client.SaveConfigAsync(new SaveConfigRequest(_configDocument.Revision, json, restart), _cancel.Token)
-                    : await _offlineStore.SaveAsync(_configDocument.Revision, json, _cancel.Token);
+                    ? await _client.SaveConfigAsync(new SaveConfigRequest(document.Revision, json, restart), _cancel.Token)
+                    : await _offlineStore.SaveAsync(document.Revision, json, _cancel.Token);
                 _configWithSecrets = _configDocument.Json;
                 _secretsRevealed = false;
                 _configMaskFailed = false;
@@ -1000,15 +969,11 @@ internal static class HydraTui
                     await WaitForRestartAsync(previousStatus);
                 else
                     SetCommandBusy(false, restart ? "Configuration saved. Start Hydra to apply it." : "Configuration saved.");
-            }
-            catch (Exception ex)
+            }, failure => app.Invoke(() =>
             {
-                app.Invoke(() =>
-                {
-                    SetCommandBusy(false, $"Save failed: {ex.Message}", "Error");
-                    MessageBox.ErrorQuery(app, "Save Failed", ex.Message, "OK");
-                });
-            }
+                SetCommandBusy(false, $"Save failed: {failure}", "Error");
+                MessageBox.ErrorQuery(app, "Save Failed", failure, "OK");
+            }), _cancel.Token);
         }
 
         private string CurrentConfigForSave()
@@ -1072,13 +1037,7 @@ internal static class HydraTui
         {
             _guidedConfig = GuidedConfigDocument.Parse(json);
             _guidedProfileIndex = Math.Clamp(_guidedProfileIndex, 0, Math.Max(0, _guidedConfig.ProfileCount - 1));
-            var root = _guidedConfig.ReadRoot();
-            _rootName.Text = root.Name ?? "";
-            _rootLogLevel.Text = root.LogLevel;
-            _rootProfileOverride.Text = root.ProfileOverride ?? "";
-            SetChecked(_rootAutoUpdate, root.AutoUpdate);
-            SetChecked(_rootDebugShield, root.DebugShield);
-            SetChecked(_rootDebugMouse, root.DebugMouse);
+            ShowGuidedValues(GuidedFields.Root, _guidedConfig.ReadRoot());
             LoadGuidedProfile();
         }
 
@@ -1091,63 +1050,40 @@ internal static class HydraTui
                 _nextProfile.Enabled = false;
                 return;
             }
-            var profile = _guidedConfig.ReadProfile(_guidedProfileIndex);
             _profilePosition.Text = $"{_guidedProfileIndex + 1}/{_guidedConfig.ProfileCount}  {_guidedConfig.ProfileLabel(_guidedProfileIndex)}";
             _previousProfile.Enabled = _guidedProfileIndex > 0;
             _nextProfile.Enabled = _guidedProfileIndex < _guidedConfig.ProfileCount - 1;
-            _profileName.Text = profile.ProfileName ?? "";
-            _profileMode.Text = profile.Mode;
-            _conditionSsid.Text = profile.Ssid ?? "";
-            _conditionScreens.Text = profile.ScreenCount?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "";
-            _conditionPower.Text = profile.IsPluggedIn switch { true => "yes", false => "no", null => "any" };
-            _networkConfig.Text = profile.NetworkConfig ?? "";
-            _embeddedServer.Text = profile.EmbeddedServer ?? "";
-            _embeddedPassword.Text = profile.EmbeddedPassword ?? "";
-            _embeddedPort.Text = profile.EmbeddedPort?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "";
-            _embeddedServerPassword.Text = profile.EmbeddedServerPassword ?? "";
-            _mouseScale.Text = profile.MouseScale?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "";
-            _relativeMouseScale.Text = profile.RelativeMouseScale?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "";
-            _deadCorners.Text = profile.DeadCorners?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "";
-            _maxMouseHz.Text = profile.MaxMouseHz?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "";
-            SetChecked(_hideCursor, profile.HideCursor);
-            SetChecked(_remoteOnly, profile.RemoteOnly);
-            SetChecked(_syncScreensaver, profile.SyncScreensaver);
-            SetChecked(_screenLockPropagation, profile.ScreenLockPropagation);
-            SetChecked(_accelerateMouseWheel, profile.AccelerateMouseWheel);
-            SetChecked(_unicodeKeyRepeat, profile.UnicodeKeyRepeat);
-            _advancedSummary.Text = $"Advanced\nHosts: {profile.HostCount}   Screen Definitions: {profile.ScreenDefinitionCount}\nUse Text mode to edit hosts, neighbours and per-screen matching.";
+            ShowGuidedValues(GuidedFields.Profile, _guidedConfig.ReadProfile(_guidedProfileIndex));
+            var topology = _guidedConfig.Topology(_guidedProfileIndex);
+            _advancedSummary.Text = $"Advanced\nHosts: {topology.HostCount}   Screen Definitions: {topology.ScreenDefinitionCount}\nUse Text mode to edit hosts, neighbours and per-screen matching.";
         }
 
         private void CommitGuidedFields()
         {
             if (_guidedConfig == null) throw new InvalidOperationException("Configuration form has not loaded.");
-            _guidedConfig.WriteRoot(new GuidedRootFields(
-                _rootName.Text, _rootProfileOverride.Text, _rootLogLevel.Text,
-                IsChecked(_rootAutoUpdate), IsChecked(_rootDebugShield), IsChecked(_rootDebugMouse)));
+            _guidedConfig.WriteRoot(GuidedValuesShown(GuidedFields.Root));
             if (_guidedConfig.ProfileCount == 0) return;
-            _guidedConfig.WriteProfile(_guidedProfileIndex, new GuidedProfileFields(
-                _profileName.Text,
-                _profileMode.Text.Trim(),
-                _conditionSsid.Text,
-                GuidedConfigDocument.ParseInt(_conditionScreens.Text, "Screen count"),
-                ParsePower(_conditionPower.Text),
-                _networkConfig.Text,
-                _embeddedServer.Text,
-                _embeddedPassword.Text,
-                GuidedConfigDocument.ParseInt(_embeddedPort.Text, "Local relay port"),
-                _embeddedServerPassword.Text,
-                IsChecked(_hideCursor),
-                IsChecked(_remoteOnly),
-                IsChecked(_syncScreensaver),
-                IsChecked(_screenLockPropagation),
-                IsChecked(_accelerateMouseWheel),
-                IsChecked(_unicodeKeyRepeat),
-                GuidedConfigDocument.ParseDecimal(_mouseScale.Text, "Mouse scale"),
-                GuidedConfigDocument.ParseDecimal(_relativeMouseScale.Text, "Relative mouse scale"),
-                GuidedConfigDocument.ParseInt(_deadCorners.Text, "Dead corners"),
-                GuidedConfigDocument.ParseInt(_maxMouseHz.Text, "Max mouse Hz"),
-                0,
-                0));
+            _guidedConfig.WriteProfile(_guidedProfileIndex, GuidedValuesShown(GuidedFields.Profile));
+        }
+
+        private void ShowGuidedValues(IEnumerable<GuidedField> fields, GuidedValues values)
+        {
+            foreach (var field in fields)
+            {
+                if (_guidedControls[field] is CheckBox box) SetChecked(box, values.IsOn(field));
+                else _guidedControls[field].Text = values[field];
+            }
+        }
+
+        private GuidedValues GuidedValuesShown(IEnumerable<GuidedField> fields)
+        {
+            var values = new GuidedValues();
+            foreach (var field in fields)
+            {
+                if (_guidedControls[field] is CheckBox box) values.Set(field, IsChecked(box));
+                else values[field] = _guidedControls[field].Text;
+            }
+            return values;
         }
 
         private void ChangeGuidedProfile(int delta)
@@ -1164,14 +1100,6 @@ internal static class HydraTui
                 MessageBox.ErrorQuery(app, "Configuration Error", ex.Message, "OK");
             }
         }
-
-        private static bool? ParsePower(string value) => value.Trim().ToLowerInvariant() switch
-        {
-            "" or "any" => null,
-            "yes" or "true" or "on" => true,
-            "no" or "false" or "off" => false,
-            _ => throw new InvalidOperationException("Power condition must be any, yes, or no.")
-        };
 
         private static bool IsChecked(CheckBox box) => box.Value == CheckState.Checked;
         private static void SetChecked(CheckBox box, bool value) => box.Value = value ? CheckState.Checked : CheckState.UnChecked;
@@ -1227,7 +1155,7 @@ internal static class HydraTui
                 _ => "Reconnecting relay…"
             };
             SetCommandBusy(true, activity);
-            try
+            await ReportFailures(async () =>
             {
                 var result = await command();
                 if (!result.Accepted)
@@ -1245,26 +1173,23 @@ internal static class HydraTui
                     await WaitForRestartAsync(previousStatus);
                 else
                     await WaitForRelayAsync(previousStatus);
-            }
-            catch (Exception ex)
-            {
-                app.Invoke(() =>
-                {
-                    SetCommandBusy(false, $"Command failed: {ex.Message}", "Error");
-                    MessageBox.ErrorQuery(app, "Command Failed", ex.Message, "OK");
-                });
-            }
+            }, failure => ReportCommandFailure("Command Failed", failure), _cancel.Token);
         }
+
+        private void ReportCommandFailure(string title, string failure) => app.Invoke(() =>
+        {
+            SetCommandBusy(false, $"Command failed: {failure}", "Error");
+            MessageBox.ErrorQuery(app, title, failure, "OK");
+        });
 
         private async Task StartHydraAsync()
         {
             if (!CanStartHydra(_connected, _shutdownConfirmed, _commandBusy)) return;
             SetCommandBusy(true, "Starting Hydra…");
-            try
+            await ReportFailures(async () =>
             {
-                using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(_cancel.Token))
+                using (var timeout = TimeoutAfter(ProbeTimeout))
                 {
-                    timeout.CancelAfter(TimeSpan.FromMilliseconds(800));
                     try
                     {
                         var status = await _client.GetStatusAsync(timeout.Token);
@@ -1288,15 +1213,7 @@ internal static class HydraTui
                 }
                 HydraProcessLauncher.Start(configPath);
                 await WaitForStartAsync();
-            }
-            catch (Exception ex)
-            {
-                app.Invoke(() =>
-                {
-                    SetCommandBusy(false, $"Command failed: {ex.Message}", "Error");
-                    MessageBox.ErrorQuery(app, "Start Failed", ex.Message, "OK");
-                });
-            }
+            }, failure => ReportCommandFailure("Start Failed", failure), _cancel.Token);
         }
 
         private async Task WaitForStartAsync()
@@ -1309,41 +1226,43 @@ internal static class HydraTui
         private async Task WaitForShutdownAsync()
         {
             app.Invoke(() => SetActivity("Shutdown requested — waiting for Hydra to stop…", "Accent"));
-            var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(15);
             var failedReads = 0;
-            while (DateTimeOffset.UtcNow < deadline && !_cancel.IsCancellationRequested)
+            var stopped = await Poll(DateTimeOffset.UtcNow + StatusPollBudget, StatusPollInterval, ProbeTimeout, async cancel =>
             {
-                await Task.Delay(300, _cancel.Token);
                 try
                 {
-                    using var timeout = CancellationTokenSource.CreateLinkedTokenSource(_cancel.Token);
-                    timeout.CancelAfter(TimeSpan.FromMilliseconds(800));
-                    await _client.GetStatusAsync(timeout.Token);
+                    await _client.GetStatusAsync(cancel);
                     failedReads = 0;
+                    return false;
                 }
-                catch (OperationCanceledException) when (_cancel.IsCancellationRequested)
+                catch (Exception)
                 {
-                    return;
+                    return ++failedReads >= 2;
                 }
-                catch
-                {
-                    if (++failedReads < 2) continue;
-                    _connected = false;
-                    _helloComplete = false;
-                    _lastStatus = null;
-                    _shutdownConfirmed = true;
-                    app.Invoke(() =>
-                    {
-                        SetConnectionStatus("○ Hydra is stopped", "  —  use Start Hydra to launch it", Link.Disconnected);
-                        _diagnostics.Text = FormatDiagnostics();
-                        SetCommandBusy(false, "Hydra stopped. Use Start Hydra to launch it.");
-                    });
-                    return;
-                }
-            }
+            });
             if (_cancel.IsCancellationRequested) return;
+            if (stopped)
+            {
+                app.Invoke(() =>
+                {
+                    MarkStopped();
+                    SetCommandBusy(false, "Hydra stopped. Use Start Hydra to launch it.");
+                });
+                return;
+            }
             app.Invoke(() => SetCommandBusy(false,
-                "Hydra did not stop within 15 seconds; it may still be running.", "Error"));
+                $"Hydra did not stop within {StatusPollBudget.TotalSeconds:0} seconds; it may still be running.", "Error"));
+        }
+
+        // a confirmed stop: forget the daemon and offer Start
+        private void MarkStopped()
+        {
+            _connected = false;
+            _helloComplete = false;
+            _lastStatus = null;
+            _shutdownConfirmed = true;
+            SetConnectionStatus("○ Hydra is stopped", "  —  use Start Hydra to launch it", Link.Disconnected);
+            _diagnostics.Text = FormatDiagnostics();
         }
 
         private async Task WaitForRestartAsync(HydraStatusSnapshot? previousStatus)
@@ -1365,16 +1284,13 @@ internal static class HydraTui
             Func<HydraStatusSnapshot, string> message,
             bool resetLogs = false)
         {
-            var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(15);
-            while (DateTimeOffset.UtcNow < deadline && !_cancel.IsCancellationRequested)
+            var deadline = DateTimeOffset.UtcNow + StatusPollBudget;
+            var completed = await Poll(deadline, StatusPollInterval, ProbeTimeout, async cancel =>
             {
-                await Task.Delay(300, _cancel.Token);
                 try
                 {
-                    using var timeout = CancellationTokenSource.CreateLinkedTokenSource(_cancel.Token);
-                    timeout.CancelAfter(TimeSpan.FromMilliseconds(800));
-                    var status = await _client.GetStatusAsync(timeout.Token);
-                    if (!complete(status)) continue;
+                    var status = await _client.GetStatusAsync(cancel);
+                    if (!complete(status)) return false;
                     _connected = true;
                     _helloComplete = false;
                     _lastStatus = status;
@@ -1384,20 +1300,21 @@ internal static class HydraTui
                         Render(status, new ManagementLogPage(_logCursor, _logCursor, []));
                         SetCommandBusy(false, message(status));
                     });
-                    return;
+                    return true;
                 }
                 catch (OperationCanceledException) when (_cancel.IsCancellationRequested)
                 {
-                    return;
+                    return false;
                 }
                 catch (Exception) when (DateTimeOffset.UtcNow < deadline)
                 {
                     // Restart and start deliberately remove or recreate the management endpoint.
+                    return false;
                 }
-            }
-            if (_cancel.IsCancellationRequested) return;
+            });
+            if (completed || _cancel.IsCancellationRequested) return;
             app.Invoke(() => SetCommandBusy(false,
-                "The command was accepted, but Hydra did not report completion within 15 seconds.", "Error"));
+                $"The command was accepted, but Hydra did not report completion within {StatusPollBudget.TotalSeconds:0} seconds.", "Error"));
         }
 
         private void ResetLogStream()
@@ -1445,7 +1362,7 @@ internal static class HydraTui
                   Network       {relay.InterfaceType} ({relay.InterfaceName})
                   Local socket  {relay.LocalAddress}:{relay.LocalPort}
                   Relay         {relay.RelayHost} → {relay.RemoteAddress}:{relay.RemotePort}
-                  Connected for {DateTimeOffset.UtcNow - relay.ConnectedAt:g}
+                  Connected for {FormatDuration(s.CapturedAt - relay.ConnectedAt)}
                   Relay traffic ↑ {FormatBytes(relay.BytesSent)} / {relay.MessagesSent} msg   ↓ {FormatBytes(relay.BytesReceived)} / {relay.MessagesReceived} msg
                   Attempts      {relay.ConnectionAttempts}
                 """;
@@ -1459,7 +1376,7 @@ internal static class HydraTui
             var embeddedPeers = relayPeers.Count == 0
                 ? "  (not hosting an embedded relay)"
                 : string.Join('\n', relayPeers.Select(peer =>
-                    $"  ● {peer.HostName,-16} {peer.InterfaceType} ({peer.InterfaceName})  {peer.RemoteAddress} → {peer.LocalAddress}{(peer.HostName.Equals(s.HostName, StringComparison.OrdinalIgnoreCase) ? "  [this Hydra]" : "")}"));
+                    $"  ● {peer.HostName,-16} {peer.InterfaceType} ({peer.InterfaceName})  {peer.RemoteAddress} → {peer.LocalAddress}{(peer.HostName.EqualsIgnoreCase(s.HostName) ? "  [this Hydra]" : "")}"));
             var latency = s.PeerLatency ?? [];
             var peerLatency = latency.Count == 0
                 ? "  (collecting samples)"
@@ -1468,7 +1385,7 @@ internal static class HydraTui
             return $"""
                 Runtime
                   Process       {s.ProcessId}
-                  Uptime        {TimeSpan.FromSeconds(s.UptimeSeconds):g}
+                  Uptime        {FormatDuration(TimeSpan.FromSeconds(s.UptimeSeconds))}
                   Profile       {s.ProfileName ?? "<no matching profile>"}
                   Mode          {s.Mode}
                   Config        {s.ConfigPath}
@@ -1497,6 +1414,9 @@ internal static class HydraTui
                   Mouse mode    {(s.Router?.RelativeMouse == true ? "relative" : "absolute")}
                 """;
         }
+
+        // whole seconds: a fraction only churns on every refresh
+        private static string FormatDuration(TimeSpan span) => $"{TimeSpan.FromSeconds(Math.Floor(span.TotalSeconds)):g}";
 
         private static string FormatBytes(long? bytes) => bytes switch
         {
@@ -1537,17 +1457,17 @@ internal static class HydraTui
 
         private string FormatDiagnostics(Exception? error = null) => FormatDiagnostics(
             _connected, configPath, _configDocument?.Revision ?? _lastStatus?.ConfigRevision,
-            _lastStatus?.CapturedAt, _logCursor, error);
+            _lastStatus?.CapturedAt, _logCursor, error, _f5Refreshes);
 
         internal static string FormatDiagnostics(bool connected, string configPath, string? configRevision,
-            DateTimeOffset? lastSnapshot, long logCursor, Exception? error = null) => $"""
+            DateTimeOffset? lastSnapshot, long logCursor, Exception? error = null, int? f5Refreshes = null) => $"""
             Management     {(connected ? "connected" : "unavailable")}
             Protocol       {ManagementProtocol.Version}
             Config path    {configPath}
             Config rev     {configRevision ?? "unknown"}
             Last snapshot  {lastSnapshot?.ToLocalTime().ToString("O") ?? "none"}
             Log cursor     {logCursor}
-            Last error     {error?.Message ?? "none"}
+            Last error     {error?.Message ?? "none"}{(f5Refreshes is { } count ? $"\nF5 refreshes   {count}" : "")}
 
             The management endpoint is local-only. Secrets, clipboard data, typed characters and
             file-transfer content are not included in status or the TUI log buffer.
@@ -1575,11 +1495,21 @@ internal static class HydraTui
             HighlightingDefinition = highlighting
         };
 
+        // Ctrl+C quits like the Quit shortcut; unhooked in Dispose, before the app and window it reaches are disposed
+        private void StopOnCtrlC(object? sender, ConsoleCancelEventArgs e)
+        {
+            e.Cancel = true;
+            app.Invoke(() => window.RequestStop());
+        }
+
         public void Dispose()
         {
+            Console.CancelKeyPress -= StopOnCtrlC;
             app.Mouse.MouseEvent -= HandleMainTabMouse;
             _cancel.Cancel();
             _cancel.Dispose();
         }
+
+        private sealed record FieldColumn(int LabelX, int FieldX, int Width);
     }
 }

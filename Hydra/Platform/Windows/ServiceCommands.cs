@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.Versioning;
 using System.Security.Principal;
+using Hydra.Config;
 using Microsoft.Win32;
 
 namespace Hydra.Platform.Windows;
@@ -10,9 +11,9 @@ internal static class ServiceCommands
 {
     private const string ServiceName = "Hydra";
 
-    internal static void Install()
+    internal static void Install(string? configPath)
     {
-        EnsureElevated("--install");
+        EnsureElevated(HydraArgs.WithConfig(HydraArgs.InstallOption, configPath));
 
         var exePath = Environment.ProcessPath
             ?? throw new InvalidOperationException("cannot determine process path");
@@ -20,7 +21,7 @@ internal static class ServiceCommands
         // remove the "downloaded from internet" mark so windows doesn't block the service binary
         File.Delete(exePath + ":Zone.Identifier");
 
-        RunSc($"create {ServiceName} binPath= \"\\\"{exePath}\\\" --service\" start= auto obj= LocalSystem");
+        RunSc($"create {ServiceName} binPath= {HydraArgs.QuoteWindowsArgument(HydraArgs.ServiceCommandLine(exePath, configPath))} start= auto obj= LocalSystem");
         RunSc($"description {ServiceName} \"Hydra KVM — seamless mouse and keyboard sharing\"");
         RunSc($"failure {ServiceName} reset= 0 actions= restart/5000/restart/5000/restart/5000");
 
@@ -35,13 +36,13 @@ internal static class ServiceCommands
 
     internal static void Uninstall()
     {
-        EnsureElevated("--uninstall");
+        EnsureElevated(HydraArgs.UninstallOption);
         RunSc($"stop {ServiceName}");
         RunSc($"delete {ServiceName}");
         Console.WriteLine("Hydra service removed.");
     }
 
-    private static void EnsureElevated(string arg)
+    private static void EnsureElevated(string arguments)
     {
         if (IsElevated()) return;
 
@@ -50,7 +51,7 @@ internal static class ServiceCommands
 
         try
         {
-            Process.Start(new ProcessStartInfo(exePath, arg) { Verb = "runas", UseShellExecute = true })?.WaitForExit();
+            Process.Start(new ProcessStartInfo(exePath, arguments) { Verb = "runas", UseShellExecute = true })?.WaitForExit();
         }
         catch (Exception ex)
         {

@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using Hydra.Relay;
 using Terminal.Gui.Drawing;
 using Terminal.Gui.Editor.Highlighting;
 
@@ -41,7 +42,8 @@ internal sealed class RegexHighlightingDefinition : IHighlightingDefinition
         (new Regex(@"\b\d+(\.\d+)?\s?(GiB|MiB|KiB|Mbps|Gbps|ms|msg)\b|\b\d{2,5}[×x]\d{2,5}\b", RegexOptions.Compiled), Fg(ColorName16.BrightYellow)),
         (new Regex(@"\b\d{1,3}(\.\d{1,3}){3}(:\d+)?\b|\b[0-9a-f:]*:[0-9a-f:]+\b|\b[\w.-]+\.[a-z]{2,}(:\d+)?\b",
             RegexOptions.Compiled | RegexOptions.IgnoreCase), Fg(ColorName16.BrightBlue)),
-        (new Regex(@"\[(MacOS|Windows|Linux)\]", RegexOptions.Compiled), Fg(ColorName16.BrightMagenta)),
+        (new Regex($@"\[({string.Join('|', Enum.GetValues<PeerPlatform>().Where(p => p != PeerPlatform.Unknown).Select(p => p.DisplayName()))})\]",
+            RegexOptions.Compiled), Fg(ColorName16.BrightMagenta)),
         (new Regex(@"\((none|none detected|not hosting an embedded relay|collecting samples|no peers online)\)|\bunavailable\b|\bn/a\b",
             RegexOptions.Compiled | RegexOptions.IgnoreCase), Fg(ColorName16.DarkGray)),
     ]);

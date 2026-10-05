@@ -1,6 +1,7 @@
+// mirrors Xlib, XInput2, XFixes, XTest, XRandR, XScreenSaver and DPMS headers (<X11/*.h>, <X11/extensions/*.h>) and <poll.h>
+// ReSharper disable InconsistentNaming
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-// ReSharper disable InconsistentNaming
 
 namespace Hydra.Platform.Linux;
 
@@ -129,12 +130,12 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial int XConnectionNumber(nint display);
 
-    // poll() — block until fd is readable or timeout_ms elapses (timeout -1 = block forever)
+    // poll() — block until fd is readable or timeoutMs elapses (timeout -1 = block forever)
     internal const short POLLIN = 0x0001;
 
     [LibraryImport("libc", EntryPoint = "poll")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    internal static partial int poll(ref PollFd fds, uint nfds, int timeout_ms);
+    internal static partial int Poll(ref PollFd fds, uint nfds, int timeoutMs);
 
     // -- events --
 

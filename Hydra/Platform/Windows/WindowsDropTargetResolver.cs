@@ -36,21 +36,27 @@ public sealed class WindowsDropTargetResolver(ILogger<WindowsDropTargetResolver>
         // double-null-terminated source list required by SHFileOperation
         var from = string.Join('\0', entries) + "\0\0";
         var to = destDir + "\0\0";
-        var op = new NativeMethods.SHFILEOPSTRUCTW
-        {
-            wFunc = NativeMethods.FO_MOVE,
-            pFrom = from,
-            pTo = to,
-            fFlags = NativeMethods.FOF_NOCONFIRMMKDIR | NativeMethods.FOF_ALLOWUNDO,
-        };
 
-        // SHFileOperation requires STA thread for its conflict dialog message pump
+        // SHFileOperation requires STA thread for its conflict dialog message pump. The lists are freed on that
+        // thread, after the call: a timed-out move may still be reading them when we stop waiting below.
         int moveResult = 0;
         var thread = new Thread(() =>
         {
+            var op = new NativeMethods.SHFILEOPSTRUCTW
+            {
+                wFunc = NativeMethods.FO_MOVE,
+                pFrom = Marshal.StringToHGlobalUni(from),
+                pTo = Marshal.StringToHGlobalUni(to),
+                fFlags = NativeMethods.FOF_NOCONFIRMMKDIR | NativeMethods.FOF_ALLOWUNDO,
+            };
             _ = NativeMethods.OleInitialize(nint.Zero);
             try { moveResult = NativeMethods.SHFileOperationW(ref op); }
-            finally { NativeMethods.OleUninitialize(); }
+            finally
+            {
+                NativeMethods.OleUninitialize();
+                Marshal.FreeHGlobal(op.pFrom);
+                Marshal.FreeHGlobal(op.pTo);
+            }
         });
         thread.SetApartmentState(ApartmentState.STA);
         thread.IsBackground = true;

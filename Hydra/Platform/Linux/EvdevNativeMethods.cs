@@ -1,8 +1,7 @@
+// mirrors <linux/input.h>, <fcntl.h>/<unistd.h> and <xkbcommon/xkbcommon.h>
+// ReSharper disable InconsistentNaming
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-// ReSharper disable InconsistentNaming
-// ReSharper disable RedundantCast
-// ReSharper disable RedundantOverflowCheckingContext
 
 namespace Hydra.Platform.Linux;
 
@@ -23,7 +22,7 @@ internal static partial class EvdevNativeMethods
     // -- ioctl commands (_IOC(dir, type, nr, size) = (dir<<30)|(size<<16)|(type<<8)|nr) --
 
     // EVIOCGRAB: exclusive device grab — _IOW('E', 0x90, int) = 0x40044590
-    internal const int EVIOCGRAB = unchecked((int)0x40044590);
+    internal const int EVIOCGRAB = 0x40044590;
     // EVIOCGBIT(0, 1): which event types device supports — 0x80014520
     internal const int EVIOCGBIT_EV = unchecked((int)0x80014520);
     // EVIOCGBIT(EV_KEY=1, 96): key capabilities (96 bytes = 768 bits, covers KEY_MAX=0x2FF) — 0x80604521
@@ -64,15 +63,15 @@ internal static partial class EvdevNativeMethods
 
     [LibraryImport(Libc, EntryPoint = "open", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    internal static partial int open(string path, int flags);
+    internal static partial int Open(string path, int flags);
 
     [LibraryImport(Libc, EntryPoint = "close")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    internal static partial int close(int fd);
+    internal static partial int Close(int fd);
 
     [LibraryImport(Libc, EntryPoint = "read")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    internal static partial nint read(int fd, ref InputEvent buf, nuint count);
+    internal static partial nint Read(int fd, ref InputEvent buf, nuint count);
 
     // -- ioctl overloads --
 
@@ -137,15 +136,11 @@ internal static partial class EvdevNativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial uint xkb_state_serialize_layout(nint state, uint components);
 
-    // returns the number of keysyms and writes a pointer to the keysym array into syms_out.
-    // syms_out points into keymap-owned memory — do not free.
+    // returns the number of keysyms and writes a pointer to the keysym array into symsOut.
+    // symsOut points into keymap-owned memory — do not free.
     [LibraryImport(Xkb)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    internal static partial int xkb_keymap_key_get_syms_by_level(nint keymap, uint key, uint layout, uint level, out nint syms_out);
-
-    // -- helpers --
-
-    internal static bool TestBit(byte[] bits, int n) => n / 8 < bits.Length && (bits[n / 8] & (1 << (n % 8))) != 0;
+    internal static partial int xkb_keymap_key_get_syms_by_level(nint keymap, uint key, uint layout, uint level, out nint symsOut);
 }
 
 // Linux input_event struct (24 bytes on 64-bit: 8+8 timeval, 2 type, 2 code, 4 value)

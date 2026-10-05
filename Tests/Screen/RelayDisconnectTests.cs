@@ -1,3 +1,4 @@
+using Hydra.Relay;
 using Hydra.Screen;
 using Tests.Setup;
 
@@ -61,7 +62,7 @@ public class RelayDisconnectTests
     [Test]
     public void Disconnected_BlocksEdgeTransition()
     {
-        _relay.IsConnected = false;
+        _relay.Connected = false;
 
         _platform.HideCursorCalled = false;
         _platform.FireMouseMove(2559, 720);
@@ -97,13 +98,50 @@ public class RelayDisconnectTests
     public void Reconnected_AllowsEdgeTransitionAgain()
     {
         // disconnect then reconnect
-        _relay.IsConnected = false;
+        _relay.Connected = false;
         _platform.FireMouseMove(2559, 720);
         Assert.That(_platform.IsOnVirtualScreen, Is.False, "pre-condition: blocked while disconnected");
 
-        _relay.IsConnected = true;
+        _relay.Connected = true;
         _platform.HideCursorCalled = false;
         _platform.FireMouseMove(2559, 720);
         Assert.That(_platform.HideCursorCalled, Is.True, "transition should work after reconnect");
+    }
+
+    // the disconnect event returns the cursor home, but a crossing in the gap before it lands must still be refused
+    [Test]
+    public async Task Disconnected_BlocksCrossingBetweenRemotes_AbsolutePath()
+    {
+        await AssertCrossingWaitsForRelay(p => p.FireMouseMove(p.WarpX + 100, p.WarpY));
+    }
+
+    [Test]
+    public async Task Disconnected_BlocksCrossingBetweenRemotes_DeltaPath()
+    {
+        await AssertCrossingWaitsForRelay(p => p.FireMouseDelta(100, 0));
+    }
+
+    private static async Task AssertCrossingWaitsForRelay(Action<FakePlatform> pushRight)
+    {
+        var (platform, relay, service) = TransitionTestHelper.CreateService(profile: TransitionTestHelper.ChainConfig);
+        await service.StartAsync(CancellationToken.None);
+        await TransitionTestHelper.BringHostsOnline(relay, ["remote", "remote2"]);
+        platform.FireMouseMove(2559, 720);
+        Assert.That(platform.IsOnVirtualScreen, Is.True, "pre-condition: on remote");
+
+        relay.Connected = false;
+        for (var i = 0; i < 30; i++)
+            pushRight(platform);
+
+        // still parked against remote's edge, so the first push after reconnecting is what crosses
+        relay.Connected = true;
+        relay.ClearSent();
+        pushRight(platform);
+
+        Assert.That(relay.Snapshot().Any(s => s.Kind == MessageKind.EnterScreen && s.Targets.Contains("remote2")), Is.True,
+            "should only cross to remote2 once the relay is back");
+
+        await service.StopAsync(CancellationToken.None);
+        await platform.DisposeAsync();
     }
 }

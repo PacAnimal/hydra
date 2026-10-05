@@ -15,22 +15,19 @@ internal sealed class RemoteApplyStore(
     private readonly TimeSpan _confirmationWindow = confirmationWindow ?? ConfirmationWindow;
     private readonly TimeSpan _rollbackRetryDelay = rollbackRetryDelay ?? TimeSpan.FromSeconds(5);
     private readonly SemaphoreSlim _lock = new(1, 1);
-    private string MarkerPath => MarkerPathFor(runtime.ConfigPath);
-    private string BackupPath => BackupPathFor(runtime.ConfigPath);
+    private readonly ConfigDir _dir = new(runtime.ConfigPath);
 
     /// <summary>
-    /// <b>Deliberately does NOT hold the config lock across its read and save.</b> It does not need to:
-    /// <c>SaveAsync</c> re-checks the revision under that lock, so a config that changed in between is
-    /// refused there rather than overwritten here. Taking it across this whole method would ALSO deadlock,
-    /// because the calls it makes take it themselves and it is not re-entrant — which is exactly how
-    /// <c>RollbackAsync</c> broke when the lock was widened, and why that one uses <c>ReadUnlockedAsync</c>.
+    /// Does not hold the config lock across its read and save: <c>SaveAsync</c> re-checks the revision under
+    /// that lock, so a config that changed in between is refused there. Holding it here would deadlock, since
+    /// the calls it makes take it themselves and it is not re-entrant.
     /// </summary>
     internal async Task<RemoteApplyAccepted> BeginAsync(string expectedRevision, string maskedJson, CancellationToken cancel)
     {
         await _lock.WaitAsync(cancel);
         try
         {
-            if (File.Exists(MarkerPath))
+            if (File.Exists(_dir.RemoteApplyMarker))
                 throw new InvalidOperationException("A remote configuration transaction is already awaiting confirmation or rollback.");
             if (new FileInfo(runtime.ConfigPath).LinkTarget != null)
                 throw new IOException("Remote configuration apply refuses a symbolic-link config path.");
@@ -51,20 +48,18 @@ internal sealed class RemoteApplyStore(
             var marker = new RemoteApplyMarker(transactionId, candidateRevision, current.Revision,
                 DateTimeOffset.UtcNow + _confirmationWindow);
 
-            await WritePrivateAsync(BackupPath, current.Json,
-                UnixFileMode.UserRead | UnixFileMode.UserWrite, cancel);
-            var persistedBackup = await File.ReadAllTextAsync(BackupPath, cancel);
+            await PrivateFile.Write(_dir.RemoteApplyBackup, current.Json, PrivateFile.OwnerOnly, cancel);
+            var persistedBackup = await File.ReadAllTextAsync(_dir.RemoteApplyBackup, cancel);
             if (!TransactionalConfigStore.Revision(persistedBackup).Equals(current.Revision, StringComparison.Ordinal))
                 throw new IOException("Remote configuration backup verification failed.");
-            await WritePrivateAsync(MarkerPath, ManagementJson.Serialize(marker),
-                UnixFileMode.UserRead | UnixFileMode.UserWrite, cancel);
+            await PrivateFile.Write(_dir.RemoteApplyMarker, ManagementJson.Serialize(marker), PrivateFile.OwnerOnly, cancel);
             try
             {
                 _ = await config.SaveAsync(expectedRevision, candidateJson, cancel, allowPendingRemoteApply: true);
             }
             catch
             {
-                DeleteTransactionFiles();
+                DeleteTransactionFiles(_dir);
                 throw;
             }
 
@@ -97,7 +92,7 @@ internal sealed class RemoteApplyStore(
             var current = await config.ReadAsync(cancel);
             if (!current.Revision.Equals(marker.CandidateRevision, StringComparison.Ordinal))
                 throw new InvalidOperationException("The candidate revision is not active and cannot be confirmed.");
-            DeleteTransactionFiles();
+            DeleteTransactionFiles(_dir);
         }
         finally { _lock.Release(); }
     }
@@ -122,7 +117,8 @@ internal sealed class RemoteApplyStore(
             }
             catch (Exception ex)
             {
-                log.LogCritical(ex, "Remote configuration rollback failed; retrying in {Delay}", _rollbackRetryDelay);
+                if (log.IsEnabled(LogLevel.Critical))
+                    log.LogCritical(ex, "Remote configuration rollback failed; retrying in {Delay}", _rollbackRetryDelay);
                 await Task.Delay(_rollbackRetryDelay, stoppingToken);
             }
         }
@@ -136,84 +132,87 @@ internal sealed class RemoteApplyStore(
             // The config lock spans the revision check AND the overwrite: rollback replaces hydra.conf, and
             // the TUI in another process saves the same file under the same lock. ReadUnlockedAsync because
             // the lock is not re-entrant and we are holding it.
-            await using var fileLock = await ConfigFileLock.Acquire(ConfigFileLock.ConfigPathFor(runtime.ConfigPath), cancel);
+            await using var fileLock = await ConfigFileLock.Acquire(_dir.ConfigLock, cancel);
 
-            if (!File.Exists(BackupPath))
+            if (!File.Exists(_dir.RemoteApplyBackup))
                 throw new IOException("Remote configuration backup is missing; automatic rollback cannot continue.");
             var marker = await ReadMarkerAsync(cancel)
                 ?? throw new IOException("Remote configuration marker is missing; automatic rollback cannot continue.");
             var current = await config.ReadUnlockedAsync(cancel);
-            if (current.Revision.Equals(marker.PreviousRevision, StringComparison.Ordinal))
+            var outcome = await TryRestoreCore(_dir, runtime.ConfigPath, marker, current.Revision, cancel);
+            switch (outcome.Result)
             {
-                DeleteTransactionFiles();
-                return;
+                case RestoreResult.Refused:
+                    throw new IOException("hydra.conf changed outside the active remote transaction; automatic rollback refused to overwrite it.");
+                case RestoreResult.InvalidBackup:
+                    throw new InvalidOperationException($"Remote configuration backup is invalid: {outcome.Error}");
             }
-            if (!current.Revision.Equals(marker.CandidateRevision, StringComparison.Ordinal))
-                throw new IOException("hydra.conf changed outside the active remote transaction; automatic rollback refused to overwrite it.");
-            var backup = await File.ReadAllTextAsync(BackupPath, cancel);
-            var validation = TransactionalConfigStore.Validate(backup);
-            if (!validation.Valid) throw new InvalidOperationException($"Remote configuration backup is invalid: {validation.Error}");
-            await WritePrivateAsync(runtime.ConfigPath, backup, ConfigMode(), cancel);
-            DeleteTransactionFiles();
         }
         finally { _lock.Release(); }
     }
 
+    /// <summary>
+    /// The same restore as <see cref="RollbackAsync"/>, before anything else is running, and it never throws
+    /// over the transaction: false leaves startup to load whatever is there. It differs where startup must:
+    /// it checks expiry itself, which the running store leaves to its timer, and it accepts a MISSING
+    /// hydra.conf, since the backup is then the only config there is.
+    /// </summary>
     internal static async Task<bool> RestoreExpiredBeforeStartupAsync(string configPath, CancellationToken cancel = default)
     {
-        var markerPath = MarkerPathFor(configPath);
-        if (!File.Exists(markerPath)) return false;
+        var dir = new ConfigDir(configPath);
+        if (!File.Exists(dir.RemoteApplyMarker)) return false;
         // Startup, but not alone: a TUI may already be running against this config directory.
-        await using var fileLock = await ConfigFileLock.Acquire(ConfigFileLock.ConfigPathFor(configPath), cancel);
+        await using var fileLock = await ConfigFileLock.Acquire(dir.ConfigLock, cancel);
         RemoteApplyMarker marker;
-        try { marker = ManagementJson.Deserialize<RemoteApplyMarker>(await File.ReadAllTextAsync(markerPath, cancel)); }
+        try { marker = ManagementJson.Deserialize<RemoteApplyMarker>(await File.ReadAllTextAsync(dir.RemoteApplyMarker, cancel)); }
         catch { return false; }
         if (marker.ExpiresAt > DateTimeOffset.UtcNow) return false;
-        var backupPath = BackupPathFor(configPath);
-        if (!File.Exists(backupPath)) return false;
-        string? currentJson = File.Exists(configPath)
-            ? await File.ReadAllTextAsync(configPath, cancel)
+        if (!File.Exists(dir.RemoteApplyBackup)) return false;
+        var currentRevision = File.Exists(configPath)
+            ? TransactionalConfigStore.Revision(await File.ReadAllTextAsync(configPath, cancel))
             : null;
-        var currentRevision = currentJson == null ? null : TransactionalConfigStore.Revision(currentJson);
+        var outcome = await TryRestoreCore(dir, configPath, marker, currentRevision, cancel);
+        return outcome.Result is RestoreResult.Restored or RestoreResult.AlreadyPrevious;
+    }
+
+    /// <summary>
+    /// Puts the backup back over the candidate and ends the transaction. The caller holds the config lock and
+    /// has checked the backup exists; a null <paramref name="currentRevision"/> means hydra.conf is missing.
+    /// </summary>
+    private static async Task<RestoreOutcome> TryRestoreCore(ConfigDir dir, string configPath, RemoteApplyMarker marker,
+        string? currentRevision, CancellationToken cancel)
+    {
         if (currentRevision?.Equals(marker.PreviousRevision, StringComparison.Ordinal) == true)
         {
-            File.Delete(markerPath);
-            File.Delete(backupPath);
-            return true;
+            DeleteTransactionFiles(dir);
+            return new RestoreOutcome(RestoreResult.AlreadyPrevious);
         }
-        if (currentRevision != null && !currentRevision.Equals(marker.CandidateRevision, StringComparison.Ordinal)) return false;
-        var backup = await File.ReadAllTextAsync(backupPath, cancel);
+        if (currentRevision != null && !currentRevision.Equals(marker.CandidateRevision, StringComparison.Ordinal))
+            return new RestoreOutcome(RestoreResult.Refused);
+        var backup = await File.ReadAllTextAsync(dir.RemoteApplyBackup, cancel);
         var validation = TransactionalConfigStore.Validate(backup);
-        if (!validation.Valid) return false;
-        var mode = !OperatingSystem.IsWindows() && File.Exists(configPath)
-            ? File.GetUnixFileMode(configPath)
-            : UnixFileMode.UserRead | UnixFileMode.UserWrite;
-        await WritePrivateAsync(configPath, backup, mode, cancel);
-        File.Delete(markerPath);
-        File.Delete(backupPath);
-        return true;
+        if (!validation.Valid) return new RestoreOutcome(RestoreResult.InvalidBackup, validation.Error);
+        await PrivateFile.Write(configPath, backup, null, cancel);
+        DeleteTransactionFiles(dir);
+        return new RestoreOutcome(RestoreResult.Restored);
     }
 
     private async Task<RemoteApplyMarker?> ReadMarkerAsync(CancellationToken cancel)
     {
-        if (!File.Exists(MarkerPath)) return null;
-        return ManagementJson.Deserialize<RemoteApplyMarker>(await File.ReadAllTextAsync(MarkerPath, cancel));
+        if (!File.Exists(_dir.RemoteApplyMarker)) return null;
+        return ManagementJson.Deserialize<RemoteApplyMarker>(await File.ReadAllTextAsync(_dir.RemoteApplyMarker, cancel));
     }
 
-    private UnixFileMode ConfigMode() => !OperatingSystem.IsWindows()
-        ? File.GetUnixFileMode(runtime.ConfigPath)
-        : UnixFileMode.UserRead | UnixFileMode.UserWrite;
-
-    private void DeleteTransactionFiles()
+    // File.Delete is a no-op for a file that is not there
+    private static void DeleteTransactionFiles(ConfigDir dir)
     {
-        if (File.Exists(MarkerPath)) File.Delete(MarkerPath);
-        if (File.Exists(BackupPath)) File.Delete(BackupPath);
+        File.Delete(dir.RemoteApplyMarker);
+        File.Delete(dir.RemoteApplyBackup);
     }
 
-    private static string MarkerPathFor(string configPath) => Path.Combine(Path.GetDirectoryName(Path.GetFullPath(configPath))!, ".hydra-remote-apply.json");
-    private static string BackupPathFor(string configPath) => Path.Combine(Path.GetDirectoryName(Path.GetFullPath(configPath))!, ".hydra-remote-backup.conf");
-    internal static bool HasPendingTransaction(string configPath) => File.Exists(MarkerPathFor(configPath));
+    internal static bool HasPendingTransaction(string configPath) => File.Exists(new ConfigDir(configPath).RemoteApplyMarker);
 
-    private static Task WritePrivateAsync(string path, string content, UnixFileMode mode, CancellationToken cancel) =>
-        PrivateFile.Write(path, content, mode, cancel);
+    private enum RestoreResult { Restored, AlreadyPrevious, Refused, InvalidBackup }
+
+    private sealed record RestoreOutcome(RestoreResult Result, string? Error = null);
 }

@@ -117,8 +117,19 @@ public record MouseMoveMessage(string Screen, int X, int Y);
 public record MouseMoveDeltaMessage(int Dx, int Dy);
 public record ScreenInfoEntry(string Name, int X, int Y, int Width, int Height, decimal MouseScale, decimal? RelativeMouseScale = null);
 
-// ReSharper disable once InconsistentNaming
-public enum PeerPlatform : byte { Unknown = 0, Linux = 1, MacOS = 2, Windows = 3 }
+public enum PeerPlatform : byte { Unknown = 0, Linux = 1, MacOs = 2, Windows = 3 }
+
+public static class PeerPlatformNames
+{
+    // the one place a platform becomes text a person reads
+    public static string DisplayName(this PeerPlatform platform) => platform switch
+    {
+        PeerPlatform.Linux => "Linux",
+        PeerPlatform.MacOs => "macOS",
+        PeerPlatform.Windows => "Windows",
+        _ => "unknown",
+    };
+}
 
 /// <param name="Capabilities">
 /// What this peer can do, by NAME — see <see cref="PeerCapabilities"/>. Null or empty is what every build
@@ -296,5 +307,5 @@ public record DecodedMessage(MessageKind Kind, ReadOnlyMemory<byte> Bytes)
 {
     // lazy string conversion — only used in tests and low-frequency paths
     public string Json => Encoding.UTF8.GetString(Bytes.Span);
-    public T Deserialize<T>() => Bytes.FromSaneJson<T>()!;
+    public T Deserialize<T>() => Bytes.DecodeBody<T>()!;
 }

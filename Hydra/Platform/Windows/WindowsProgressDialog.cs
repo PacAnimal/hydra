@@ -72,8 +72,7 @@ public sealed class WindowsProgressDialog : IFileTransferDialog, IDisposable
         StopOnSta();
         try
         {
-            // ReSharper disable once SuspiciousTypeConversion.Global
-            var dlg = (IProgressDialog)new ProgressDialogCom();
+            var dlg = new IProgressDialog();
             dlg.StartProgressDialog(nint.Zero, null, ProgdlgAutotime | ProgdlgNominimize, nint.Zero);
             dlg.SetTitle("Hydra File Transfer");
             dlg.SetLine(1, BuildFileNames(info.FileNames), false, nint.Zero);
@@ -153,7 +152,7 @@ public sealed class WindowsProgressDialog : IFileTransferDialog, IDisposable
     public void ShowError(string message)
     {
         PostToSta(StopOnSta);
-        _log.LogDebug("Transfer error: {Message}", message);
+        if (_log.IsEnabled(LogLevel.Debug)) _log.LogDebug("Transfer error: {Message}", message);
         _ = Task.Run(() => NativeMethods.MessageBoxW(nint.Zero, message, "Hydra — Transfer Failed",
             NativeMethods.MB_OK | NativeMethods.MB_ICONERROR));
     }
@@ -238,6 +237,7 @@ public sealed class WindowsProgressDialog : IFileTransferDialog, IDisposable
 [ComImport]
 [Guid("EBBC7C04-315E-11d2-B62F-006097DF5BD4")]
 [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+[CoClass(typeof(ProgressDialogCom))]
 internal interface IProgressDialog
 {
     void StartProgressDialog(nint hwndParent, [MarshalAs(UnmanagedType.IUnknown)] object? punkEnableModless, uint dwFlags, nint pvReserved);

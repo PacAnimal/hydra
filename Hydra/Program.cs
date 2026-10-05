@@ -3,6 +3,7 @@ using System.Text;
 using Cathedral.Extensions;
 using Cathedral.Logging;
 using Cathedral.Utils;
+using Hydra;
 using Hydra.Config;
 using Hydra.FileTransfer;
 using Hydra.Management;
@@ -35,40 +36,42 @@ TaskScheduler.UnobservedTaskException += (_, e) =>
     e.SetObserved();
 };
 
-if (args.FirstOrDefault()?.Equals("tui", StringComparison.OrdinalIgnoreCase) == true)
+var commandLine = HydraArgs.SplitCommand(args);
+if (HydraArgs.TuiCommand.EqualsIgnoreCase(commandLine.Command))
 {
-    await HydraTui.RunAsync(args[1..]);
+    Environment.ExitCode = HydraTui.Run(commandLine.Arguments);
     return;
 }
 
-if (args.FirstOrDefault()?.Equals("pair", StringComparison.OrdinalIgnoreCase) == true)
+if (HydraArgs.PairCommand.EqualsIgnoreCase(commandLine.Command))
 {
-    string? explicitConfig;
-    if (args.Length == 1)
-        explicitConfig = null;
-    else if (args.Length == 3 && args[1] == "--config" && !string.IsNullOrWhiteSpace(args[2]))
-        explicitConfig = args[2];
-    else
-    {
-        Console.Error.WriteLine("Usage: hydra pair [--config /path/to/hydra.conf]");
-        Environment.ExitCode = 2;
-        return;
-    }
-    var pairConfigPath = HydraConfigFile.ResolvePath(explicitConfig ?? Environment.GetEnvironmentVariable("CONFIG"));
-    var pairingStore = new RemoteManagementStore(pairConfigPath);
-    var pairingCode = await pairingStore.CreatePairingCodeAsync();
-    Console.WriteLine("Enter this one-time code in the controlling Hydra TUI within 10 minutes:");
-    Console.WriteLine(pairingCode);
+    Environment.ExitCode = await PairCommand.Run(commandLine.Arguments, Console.Out, Console.Error);
     return;
 }
 
-if (args.Contains("--install"))
+HydraArgs hydraArgs;
+try { hydraArgs = HydraArgs.Parse(args); }
+catch (ArgumentException ex)
 {
-    if (OperatingSystem.IsWindows()) ServiceCommands.Install();
-    else if (OperatingSystem.IsMacOS()) AgentCommands.Install();
+    Console.Error.WriteLine(ex.Message);
+    Environment.ExitCode = 2;
     return;
 }
-if (args.Contains("--uninstall"))
+if (hydraArgs.UnknownArgument(HydraArgs.InstallOption, HydraArgs.UninstallOption, HydraArgs.ServiceOption, HydraArgs.SessionOption) is { } unknown)
+{
+    Console.Error.WriteLine($"Unknown argument: {unknown}");
+    Console.Error.WriteLine(HydraArgs.DaemonUsage);
+    Environment.ExitCode = 2;
+    return;
+}
+
+if (hydraArgs.Has(HydraArgs.InstallOption))
+{
+    if (OperatingSystem.IsWindows()) ServiceCommands.Install(hydraArgs.InstallConfigPath);
+    else if (OperatingSystem.IsMacOS()) AgentCommands.Install(hydraArgs.InstallConfigPath);
+    return;
+}
+if (hydraArgs.Has(HydraArgs.UninstallOption))
 {
     if (OperatingSystem.IsWindows()) ServiceCommands.Uninstall();
     else if (OperatingSystem.IsMacOS()) AgentCommands.Uninstall();
@@ -82,8 +85,8 @@ var priorityResult = ProcessPriority.Raise();
 
 if (OperatingSystem.IsWindows())
 {
-    if (args.Contains("--service")) { ServiceHost.Run(args); return; }
-    if (args.Contains("--session"))
+    if (hydraArgs.Has(HydraArgs.ServiceOption)) { ServiceHost.Run(args); return; }
+    if (hydraArgs.Has(HydraArgs.SessionOption))
         RunMode.IsSessionChild = true;
 }
 
@@ -95,14 +98,16 @@ while (true)
 {
     try
     {
-        var recoveryConfigPath = HydraConfigFile.ResolvePath(Env.Config.GetStringOrNull("CONFIG"));
+        var recoveryConfigPath = HydraConfigFile.ResolvePath(hydraArgs.ConfigPath);
         if (await RemoteApplyStore.RestoreExpiredBeforeStartupAsync(recoveryConfigPath))
             Console.Error.WriteLine("Remote configuration was not confirmed; restored the last-known-good config.");
-        (configFile, configPath) = HydraConfigFile.LoadAll(Env.Config);
+        var loaded = HydraConfigFile.LoadAll(hydraArgs.ConfigPath);
+        configFile = loaded.File;
+        configPath = loaded.Path;
         profiles = configFile.Profiles;
         break;
     }
-    catch (Exception ex) when (ex is IOException or InvalidOperationException or System.Text.Json.JsonException)
+    catch (Exception ex) when (HydraConfigFile.IsRetryableStartupFailure(ex))
     {
         // don't hard-exit on a missing/invalid config: under launchd/service KeepAlive that turns into a
         // ~5s relaunch storm that spams the redirect logs forever. Stay alive and retry so a corrected
@@ -199,13 +204,16 @@ if (logFileSetting is { } logFile)
 }
 
 var startupLog = await services.CreateLogger<HydraProfile>();
-startupLog.LogInformation("Active profile: {ProfileName}", profile.ProfileName ?? "<none>");
-startupLog.LogInformation("Process priority: {Priority}", priorityResult);
+if (startupLog.IsEnabled(LogLevel.Information))
+{
+    startupLog.LogInformation("Active profile: {ProfileName}", profile.ProfileName ?? "<none>");
+    startupLog.LogInformation("Process priority: {Priority}", priorityResult);
+}
 
 foreach (var hotkeyError in profile.Hotkeys.Errors)
     startupLog.LogWarning("Hotkey config: {Error}", hotkeyError);
 
-if (config?.EmbeddedStyxServer != null)
+if (config?.EmbeddedStyxServer != null && startupLog.IsEnabled(LogLevel.Information))
 {
     startupLog.LogInformation("Embedded Styx relay on port {Port}", config.EmbeddedStyxServer.Port);
     startupLog.LogInformation("Remote hosts can connect with: embeddedStyx: {{\"server\": \"http://<your-ip>:{Port}\", \"password\": \"<password>\"}}", config.EmbeddedStyxServer.Port);
@@ -218,17 +226,15 @@ services.AddSingleton(runtimeInfo);
 services.AddSingleton<TransactionalConfigStore>();
 services.AddSingleton<HydraLifetimeController>();
 services.AddSingleton<IHydraLifetimeController>(sp => sp.GetRequiredService<HydraLifetimeController>());
-services.AddSingleton<RemoteApplyStore>();
-services.AddHostedService(sp => sp.GetRequiredService<RemoteApplyStore>());
+services.AddHostedSingleton<RemoteApplyStore>();
 
 // shared services always registered
 services.AddSingleton(profiles);
 services.AddSingleton<ICmdRunner, CmdRunner>();
 services.AddSingleton<INetworkDetector>(_ => detector);
 services.AddSingleton<IWorldState, WorldState>();
-services.AddSingleton<DormancyState>();
+services.AddHostedSingleton<DormancyState>();
 services.AddSingleton<IDormancyState>(sp => sp.GetRequiredService<DormancyState>());
-services.AddHostedService(sp => sp.GetRequiredService<DormancyState>());
 services.AddLazyResolvers(); // enables Lazy<T> injection — used to break circular deps (e.g. ActivityTracker ↔ IRelaySender)
 
 // shield always runs on macOS — handles cursor shielding + network state detection
@@ -236,12 +242,11 @@ if (OperatingSystem.IsMacOS() && macShield != null && macNetworkState != null)
 {
     macShield.DebugShield = profile.DebugShield;
     services.AddSingleton(macNetworkState);
-    services.AddSingleton(macShield);
-    services.AddHostedService(_ => macShield);
+    services.AddHostedSingleton(macShield);
 }
 
 // network watcher always runs — logs state on startup, triggers restarts on change
-services.AddSingleton(sp => new NetworkWatcher(
+services.AddHostedSingleton(sp => new NetworkWatcher(
     sp.GetRequiredService<INetworkDetector>(),
     GetScreenCount,
     profiles,
@@ -249,7 +254,6 @@ services.AddSingleton(sp => new NetworkWatcher(
     configFile.Profile,
     sp.GetRequiredService<IDormancyState>(),
     sp.GetRequiredService<ILogger<NetworkWatcher>>()));
-services.AddHostedService(sp => sp.GetRequiredService<NetworkWatcher>());
 
 if (config != null)
 {
@@ -289,38 +293,17 @@ if (config != null)
             throw new PlatformNotSupportedException($"Unsupported OS: {Environment.OSVersion}");
 
         services.AddHostedService<ICursorHider, CursorHiderService>();
-        services.AddSingleton<InputRouter>();
-        services.AddHostedService(sp => sp.GetRequiredService<InputRouter>());
+        services.AddHostedSingleton<InputRouter>();
     }
     else if (profile.Mode == Mode.Slave)
     {
         if (OperatingSystem.IsMacOS())
-        {
-            services.AddSingleton<MacOutputHandler>();
-            services.AddSingleton<IPlatformOutput>(sp => new CoalescingOutputWrapper(
-                sp.GetRequiredService<MacOutputHandler>(), sp.GetRequiredService<ILogger<CoalescingOutputWrapper>>()));
-            services.AddSingleton<ICursor>(sp => sp.GetRequiredService<MacOutputHandler>());
-        }
+            services.AddCoalescedOutput<MacOutputHandler>();
         else if (OperatingSystem.IsWindows())
-        {
-            services.AddSingleton<WindowsOutputHandler>();
-#pragma warning disable CA1416
-            services.AddSingleton<IPlatformOutput>(sp =>
-            {
-                var handler = sp.GetRequiredService<WindowsOutputHandler>();
-                handler.Initialize();
-                return new CoalescingOutputWrapper(handler, sp.GetRequiredService<ILogger<CoalescingOutputWrapper>>());
-            });
-            services.AddSingleton<ICursor>(sp => sp.GetRequiredService<WindowsOutputHandler>());
-#pragma warning restore CA1416
-        }
+            // guarded again: the platform analyzer does not follow the branch into a lambda
+            services.AddCoalescedOutput<WindowsOutputHandler>(handler => { if (OperatingSystem.IsWindows()) handler.Initialize(); });
         else if (OperatingSystem.IsLinux())
-        {
-            services.AddSingleton<XorgOutputHandler>();
-            services.AddSingleton<IPlatformOutput>(sp => new CoalescingOutputWrapper(
-                sp.GetRequiredService<XorgOutputHandler>(), sp.GetRequiredService<ILogger<CoalescingOutputWrapper>>()));
-            services.AddSingleton<ICursor>(sp => sp.GetRequiredService<XorgOutputHandler>());
-        }
+            services.AddCoalescedOutput<XorgOutputHandler>();
         else
             throw new PlatformNotSupportedException($"Unsupported OS: {Environment.OSVersion}");
 
@@ -404,8 +387,7 @@ if (config != null)
     if (config.EmbeddedStyxServer != null)
     {
         services.AddSingleton(config.EmbeddedStyxServer);
-        services.AddSingleton<EmbeddedStyxServer>();
-        services.AddHostedService(sp => sp.GetRequiredService<EmbeddedStyxServer>());
+        services.AddHostedSingleton<EmbeddedStyxServer>();
     }
 
     if (profile.Mode == Mode.Slave)
@@ -424,14 +406,12 @@ if (config != null)
             services.AddHostedService<LinuxSystemSleepMonitor>();
     }
 
-    services.AddSingleton<RelayLatencyService>();
-    services.AddHostedService(sp => sp.GetRequiredService<RelayLatencyService>());
-    services.AddSingleton<RemoteManagementStore>();
-    services.AddSingleton<RemoteManagementService>();
-    services.AddHostedService(sp => sp.GetRequiredService<RemoteManagementService>());
+    services.AddHostedSingleton<RelayLatencyService>();
+    services.AddHostedSingleton<RemoteManagementService>();
     services.AddSingleton<IActivityTracker, ActivityTracker>();
 }
 
+services.AddSingleton<RemoteManagementStore>();
 if (OperatingSystem.IsWindows() && RunMode.IsSessionChild)
     services.AddHostedService<SessionChildLifetime>();
 
@@ -444,9 +424,10 @@ if (macShield != null)
 {
     var shieldLog = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Shield");
     macShield.Log = shieldLog;
-    shieldLog.LogInformation("auth={Auth} ssid={Ssid}",
-        macNetworkState!.WifiAuthStatus switch { 0 => "notDetermined", 1 => "restricted", 2 => "denied", 3 or 4 => "authorized", _ => "none" },
-        macNetworkState.Ssid ?? "(none)");
+    if (shieldLog.IsEnabled(LogLevel.Information))
+        shieldLog.LogInformation("auth={Auth} ssid={Ssid}",
+            macNetworkState!.WifiAuthStatus switch { 0 => "notDetermined", 1 => "restricted", 2 => "denied", 3 or 4 => "authorized", _ => "none" },
+            macNetworkState.Ssid ?? "(none)");
 
     // wire shield state changes to immediate network re-check
     macShield.OnNetworkStateChanged = () => app.Services.GetRequiredService<NetworkWatcher>().TriggerCheck();

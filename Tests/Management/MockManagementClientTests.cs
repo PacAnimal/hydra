@@ -1,4 +1,5 @@
 using Hydra.Management;
+using Hydra.Relay;
 
 namespace Tests.Management;
 
@@ -19,6 +20,26 @@ public class MockManagementClientTests
             Assert.That(status.Peers[0].Connected, Is.True);
             Assert.That(status.UptimeSeconds, Is.GreaterThan(0));
         }
+    }
+
+    // the demo is what the screenshots show, so its peer reads as people name the platform
+    [Test]
+    public async Task ThePeersPlatformIsItsDisplayName()
+    {
+        var status = await new MockManagementClient().GetStatusAsync();
+
+        Assert.That(status.Peers[0].Platform, Is.EqualTo(PeerPlatform.MacOs.DisplayName()));
+    }
+
+    // the demo's countdown is the real one
+    [Test]
+    public async Task ApplyExpiresAfterTheRealConfirmationWindow()
+    {
+        var before = DateTimeOffset.UtcNow;
+
+        var accepted = await new MockManagementClient().ApplyRemoteConfigAsync(new RemoteApplyRequest("peer", "demo0000", "{}"));
+
+        Assert.That(accepted.ExpiresAt, Is.InRange(before + RemoteApplyStore.ConfirmationWindow, DateTimeOffset.UtcNow + RemoteApplyStore.ConfirmationWindow));
     }
 
     [Test]

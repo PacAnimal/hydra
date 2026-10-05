@@ -4,6 +4,13 @@ namespace Hydra.Platform.Windows;
 // (SPI_SETCURSORS reloads from HKCU which maps to the wrong user when running under a winlogon token)
 internal sealed class WindowsCursorSnapshot : IDisposable
 {
+    private static readonly uint[] AllCursorIds =
+    [
+        NativeMethods.OCR_NORMAL, NativeMethods.OCR_IBEAM, NativeMethods.OCR_WAIT, NativeMethods.OCR_CROSS, NativeMethods.OCR_UP,
+        NativeMethods.OCR_SIZENWSE, NativeMethods.OCR_SIZENESW, NativeMethods.OCR_SIZEWE, NativeMethods.OCR_SIZENS,
+        NativeMethods.OCR_SIZEALL, NativeMethods.OCR_NO, NativeMethods.OCR_HAND, NativeMethods.OCR_APPSTARTING,
+    ];
+
     private nint[]? _saved;
     public bool IsHidden { get; private set; }
 
@@ -11,7 +18,7 @@ internal sealed class WindowsCursorSnapshot : IDisposable
     {
         if (IsHidden) return;
 
-        var ids = NativeMethods.AllCursorIds;
+        var ids = AllCursorIds;
         _saved = new nint[ids.Length];
         for (var i = 0; i < ids.Length; i++)
         {
@@ -43,7 +50,7 @@ internal sealed class WindowsCursorSnapshot : IDisposable
     private void Restore()
     {
         if (_saved == null) return;
-        var ids = NativeMethods.AllCursorIds;
+        var ids = AllCursorIds;
         for (var i = 0; i < ids.Length; i++)
         {
             if (_saved[i] == nint.Zero) continue;

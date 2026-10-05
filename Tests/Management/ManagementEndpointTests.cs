@@ -1,5 +1,7 @@
+using System.Runtime.Versioning;
 using Hydra.Management;
 using System.Net.Sockets;
+using Tests.Setup;
 
 namespace Tests.Management;
 
@@ -20,6 +22,17 @@ public class ManagementEndpointTests
         }
     }
 
+    // the id names the socket or pipe, so a TUI and a daemon of different versions must agree on it
+    [Test]
+    public void ForConfig_InstanceIdIsTheConfigPathsSha256Prefix()
+    {
+        if (OperatingSystem.IsWindows()) Assert.Ignore("Windows upper-cases the path first");
+
+        var endpoint = ManagementEndpoint.ForConfig("/etc/hydra/hydra.conf");
+
+        Assert.That(endpoint.InstanceId, Is.EqualTo("569f987a0058"));
+    }
+
     [Test]
     public void ForConfig_NormalizesWindowsPathCasing()
     {
@@ -33,14 +46,13 @@ public class ManagementEndpointTests
     }
 
     [Test]
+    [UnsupportedOSPlatform("windows")]
     public void ForConfig_UsesPrivateUnixRuntimeDirectory()
     {
         if (OperatingSystem.IsWindows()) Assert.Ignore("Unix permission test");
         var endpoint = ManagementEndpoint.ForConfig(Path.Combine(TestContext.CurrentContext.WorkDirectory, "hydra.conf"));
         var directory = Path.GetDirectoryName(endpoint.Address)!;
-#pragma warning disable CA1416
         var mode = File.GetUnixFileMode(directory);
-#pragma warning restore CA1416
 
         using (Assert.EnterMultipleScope())
         {
@@ -54,7 +66,7 @@ public class ManagementEndpointTests
     public async Task RemoveStaleUnixSocket_PreservesActiveEndpointAndDeletesStaleOne()
     {
         if (OperatingSystem.IsWindows()) Assert.Ignore("Unix socket test");
-        var endpoint = ManagementEndpoint.ForConfig(Path.Combine(TestContext.CurrentContext.WorkDirectory, $"stale-{Guid.NewGuid():N}.conf"));
+        var endpoint = ManagementEndpoint.ForConfig(Path.Combine(TestPaths.FreshFixtureRoot(nameof(ManagementEndpointTests)), "stale.conf"));
         if (File.Exists(endpoint.Address)) File.Delete(endpoint.Address);
 
         using (var listener = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified))

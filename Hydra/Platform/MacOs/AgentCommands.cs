@@ -1,14 +1,13 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
-using System.Security;
 
 namespace Hydra.Platform.MacOs;
 
 [SupportedOSPlatform("macos")]
 internal static partial class AgentCommands
 {
-    private const string Label = "com.cathedral.hydra";
+    private const string Label = AgentPlist.Label;
     private const string ShieldLabel = "com.cathedral.hydra.shield";
     private const string PlistFileName = "com.cathedral.hydra.plist";
 
@@ -17,7 +16,7 @@ internal static partial class AgentCommands
 
     private static string DomainTarget() => $"gui/{getuid()}";
 
-    internal static void Install()
+    internal static void Install(string? configPath)
     {
         var exePath = Environment.ProcessPath
             ?? throw new InvalidOperationException("cannot determine process path");
@@ -44,7 +43,7 @@ internal static partial class AgentCommands
         // remove any running instance before overwriting the plist
         RunLaunchctl(tolerateFailure: true, "bootout", $"{DomainTarget()}/{Label}");
 
-        File.WriteAllText(plistPath, GeneratePlist(exePath, workingDir, logDir), new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        File.WriteAllText(plistPath, AgentPlist.Generate(exePath, workingDir, logDir, configPath), new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
 
         RunLaunchctl("bootstrap", DomainTarget(), plistPath);
         Console.WriteLine("Hydra agent installed and started.");
@@ -52,8 +51,7 @@ internal static partial class AgentCommands
 
     internal static void Uninstall()
     {
-        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        var plistPath = Path.Combine(home, "Library", "LaunchAgents", PlistFileName);
+        var plistPath = PlistPath();
 
         if (!File.Exists(plistPath))
         {
@@ -73,21 +71,21 @@ internal static partial class AgentCommands
         RunLaunchctl(tolerateFailure: true, "bootout", $"{DomainTarget()}/{Label}");
     }
 
-    internal static bool IsInstalled()
-    {
-        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        return File.Exists(Path.Combine(home, "Library", "LaunchAgents", PlistFileName));
-    }
+    internal static bool IsInstalled() => File.Exists(PlistPath());
 
     internal static void Start()
     {
-        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        var plistPath = Path.Combine(home, "Library", "LaunchAgents", PlistFileName);
+        var plistPath = PlistPath();
         if (!File.Exists(plistPath))
             throw new InvalidOperationException("Hydra LaunchAgent is not installed.");
 
         RunLaunchctl("bootstrap", DomainTarget(), plistPath);
     }
+
+    internal static string InstalledConfigPath() => AgentPlist.ConfigPathOf(File.ReadAllText(PlistPath()));
+
+    private static string PlistPath() =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Library", "LaunchAgents", PlistFileName);
 
     internal static void Codesign(string path, string identifier)
     {
@@ -155,48 +153,5 @@ internal static partial class AgentCommands
         if (proc.ExitCode != 0 && !tolerateFailure)
             throw new InvalidOperationException(
                 $"launchctl {string.Join(' ', args)} failed (exit {proc.ExitCode}): {output}{error}");
-    }
-
-    internal static string GeneratePlist(string exePath, string workingDir, string logDir)
-    {
-        var exe = SecurityElement.Escape(exePath);
-        var wd = SecurityElement.Escape(workingDir);
-        var stdout = SecurityElement.Escape(Path.Combine(logDir, "hydra.stdout.log"));
-        var stderr = SecurityElement.Escape(Path.Combine(logDir, "hydra.stderr.log"));
-
-        // ProcessType and Nice are the whole reason this agent can keep up on a loaded machine. Without
-        // ProcessType launchd classifies us as a background job and throttles our CPU and I/O; Nice is
-        // privileged and launchd is the only one in a position to apply it on our behalf — the process
-        // itself runs as the user and cannot. ProcessPriority.Raise() then only matches what we hold.
-        return $"""
-            <?xml version="1.0" encoding="UTF-8"?>
-            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-            <plist version="1.0">
-            <dict>
-                <key>Label</key>
-                <string>{Label}</string>
-                <key>ProgramArguments</key>
-                <array>
-                    <string>{exe}</string>
-                </array>
-                <key>RunAtLoad</key>
-                <true/>
-                <key>KeepAlive</key>
-                <true/>
-                <key>StandardOutPath</key>
-                <string>{stdout}</string>
-                <key>StandardErrorPath</key>
-                <string>{stderr}</string>
-                <key>WorkingDirectory</key>
-                <string>{wd}</string>
-                <key>ThrottleInterval</key>
-                <integer>5</integer>
-                <key>ProcessType</key>
-                <string>Interactive</string>
-                <key>Nice</key>
-                <integer>{ProcessPriority.UnixNice}</integer>
-            </dict>
-            </plist>
-            """;
     }
 }

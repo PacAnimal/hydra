@@ -1,10 +1,10 @@
 using System.Runtime.Versioning;
 using Cathedral.Logging;
-using Cathedral.Utils;
 using Hydra.Config;
 using Hydra.Update;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform.Windows;
 
@@ -18,10 +18,12 @@ internal static class ServiceHost
         string configPath;
         try
         {
-            (configFile, configPath) = HydraConfigFile.LoadAll(Env.Config);
+            var loaded = HydraConfigFile.LoadAll(HydraArgs.Parse(args).ConfigPath);
+            configFile = loaded.File;
+            configPath = loaded.Path;
             profiles = configFile.Profiles;
         }
-        catch (Exception ex) when (ex is FileNotFoundException or InvalidOperationException)
+        catch (Exception ex) when (ex is FileNotFoundException or InvalidOperationException or ArgumentException)
         {
             Console.Error.WriteLine(ex.Message);
             return;
@@ -44,7 +46,8 @@ internal static class ServiceHost
             services.AddSereneFileLogging(logPath, c => c.MinLogLevel = profile.LogLevel);
         }
         services.AddSingleton<IHydraProfile>(profile);
-        services.AddSingleton<SessionWatchdog>();
+        services.AddSingleton(sp =>
+            new SessionWatchdog(sp.GetRequiredService<ILogger<SessionWatchdog>>(), HydraArgs.SessionChildArguments(configPath)));
         services.AddHostedService(sp => sp.GetRequiredService<SessionWatchdog>());
         services.AddHostedService<SasService>();
         services.AddSingleton<SelfUpdater>();

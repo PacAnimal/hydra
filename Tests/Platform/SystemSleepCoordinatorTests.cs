@@ -126,6 +126,21 @@ public class SystemSleepCoordinatorTests
         }
     }
 
+    [Test]
+    public void PrepareForSleepBlocking_SuspendsTheRelayUnderABoundedDeadline()
+    {
+        var relay = new SleepRelay();
+        var coordinator = Make(enabled: true, relay);
+
+        coordinator.PrepareForSleepBlocking();
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(relay.SuspendCount, Is.EqualTo(1));
+            Assert.That(relay.SuspensionWasBounded, Is.True, "a native sleep callback must not wait on the relay forever");
+        }
+    }
+
     private static SystemSleepCoordinator Make(bool enabled, SleepRelay relay) => new(
         TransitionTestHelper.Profile("host", new HydraConfig
         {
@@ -133,7 +148,7 @@ public class SystemSleepCoordinatorTests
             AllowSystemSleep = enabled
         }), relay, NullLogger<SystemSleepCoordinator>.Instance);
 
-    private sealed class SleepRelay : IRelaySender
+    private sealed class SleepRelay : NullRelaySender
     {
         internal bool BlockSuspension { get; init; }
         internal TaskCompletionSource SuspensionStarted { get; } =
@@ -141,38 +156,34 @@ public class SystemSleepCoordinatorTests
         internal TaskCompletionSource AllowSuspensionToComplete { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal int SuspendCount { get; private set; }
+        internal bool SuspensionWasBounded { get; private set; }
         internal List<long> SleepGenerations { get; } = [];
         internal int BeginWakeCount { get; private set; }
         internal int CompleteWakeCount { get; private set; }
         internal List<long> WakeGenerations { get; } = [];
-        public bool IsConnected => true;
-        public void Send(string[] targetHosts, byte[] payload) { }
-        public async ValueTask SuspendConnectionAsync(CancellationToken cancel = default)
+        public override bool IsConnected => true;
+        public override async ValueTask SuspendConnectionAsync(CancellationToken cancel = default)
         {
             SuspendCount++;
+            SuspensionWasBounded = cancel.CanBeCanceled;
             SuspensionStarted.TrySetResult();
             if (BlockSuspension)
                 await AllowSuspensionToComplete.Task.WaitAsync(cancel);
         }
-        public ValueTask SuspendForSystemSleepAsync(long generation, CancellationToken cancel = default)
+        public override ValueTask SuspendForSystemSleepAsync(long generation, CancellationToken cancel = default)
         {
             SleepGenerations.Add(generation);
             return SuspendConnectionAsync(cancel);
         }
-        public void BeginSystemWake(long generation)
+        public override void BeginSystemWake(long generation)
         {
             BeginWakeCount++;
             WakeGenerations.Add(generation);
         }
-        public void CompleteSystemWake(long generation)
+        public override void CompleteSystemWake(long generation)
         {
             CompleteWakeCount++;
             WakeGenerations.Add(generation);
         }
-#pragma warning disable CS0067
-        public event Func<string[], Task>? PeersChanged;
-        public event Func<string, MessageKind, ReadOnlyMemory<byte>, Task>? MessageReceived;
-        public event Func<Task>? Disconnected;
-#pragma warning restore CS0067
     }
 }

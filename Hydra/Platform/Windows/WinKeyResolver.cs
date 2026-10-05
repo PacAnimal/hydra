@@ -265,45 +265,11 @@ internal sealed class WinKeyResolver
     // state: a repeat never composes, and key-up replay must still match the original key-down's stored char.
     private KeyEvent[]? ResolveRepeatChar(int vk, uint scanCode, uint hookFlags, KeyModifiers mods)
     {
-        PrepareResolveState(out var altGrActive);
-        var hkl = GetForegroundKeyboardLayout();
-        // non-mutating: a repeat must never touch the kernel dead-key buffer (would corrupt later composition)
-        uint uFlags = (hookFlags & NativeMethods.LLKHF_EXTENDED) | NativeMethods.TOUNICODE_NOKERNELSTATE;
+        // a held dead key does not repeat; count == 0: nothing to repeat
+        var translation = Translate(vk, scanCode, hookFlags);
+        if (translation.Count <= 0) return null;
 
-        char rawChar;
-        unsafe
-        {
-            char* buff = stackalloc char[4];
-            fixed (byte* pState = _resolveState)
-            {
-                var count = NativeMethods.ToUnicodeEx((uint)vk, scanCode, pState, buff, 4, uFlags, hkl);
-                if (count == 0 && altGrActive)
-                {
-                    _resolveState[WinVirtualKey.LControl] = 0;
-                    _resolveState[WinVirtualKey.RControl] = 0;
-                    _resolveState[WinVirtualKey.Control] = 0;
-                    _resolveState[WinVirtualKey.LMenu] = 0;
-                    _resolveState[WinVirtualKey.RMenu] = 0;
-                    _resolveState[WinVirtualKey.Menu] = 0;
-                    count = NativeMethods.ToUnicodeEx((uint)vk, scanCode, pState, buff, 4, uFlags, hkl);
-                }
-
-                // count < 0 (held dead key): flush the system dead-key state so the next real key starts
-                // clean, then drop — a held dead key does not repeat. count == 0: nothing to repeat.
-                if (count < 0)
-                {
-                    char flush;
-                    _ = NativeMethods.ToUnicodeEx(NativeMethods.VK_SPACE, 0, pState, &flush, 1, 0, hkl);
-                }
-                if (count <= 0) return null;
-                rawChar = buff[0];
-            }
-        }
-
-        if ((mods & (KeyModifiers.Control | KeyModifiers.Super)) != 0 && rawChar > 0x7F)
-            rawChar = MapShortcutAscii(vk, rawChar);
-
-        var classified = KeyResolver.ClassifyChar(rawChar);
+        var classified = KeyResolver.ClassifyChar(ShortcutChar(vk, translation.Char, mods));
         if (classified.Ch.HasValue)
             return [KeyEvent.Char(KeyEventType.KeyDown, classified.Ch.Value, mods) with { IsRepeat = true }];
         if (classified.Key.HasValue)
@@ -313,79 +279,37 @@ internal sealed class WinKeyResolver
 
     private KeyEvent[]? ResolveCharacter(int vk, uint scanCode, uint hookFlags, KeyModifiers mods)
     {
-        PrepareResolveState(out var altGrActive);
+        var translation = Translate(vk, scanCode, hookFlags);
+        if (translation.Count == 0) return null;
 
-        // get keyboard layout of the foreground window's thread for correct character mapping
-        var hkl = GetForegroundKeyboardLayout();
-
-        // pass extended key flag through to ToUnicodeEx (same approach as input-leap MSWindowsKeyState).
-        // non-mutating (bit 2): dead keys still resolve to -1 but never arm the kernel buffer — Hydra composes
-        // dead keys itself (_pendingDeadKey), and a stale kernel dead key would otherwise make a later key
-        // resolve to a literal spacing char (e.g. AltGr+¨ then e → '~' instead of 'ẽ').
-        uint uFlags = (hookFlags & NativeMethods.LLKHF_EXTENDED) | NativeMethods.TOUNICODE_NOKERNELSTATE;
-
-        int count;
-        char rawChar;
-        unsafe
+        // dead key: Char is its standalone spacing form
+        if (translation.Count < 0)
         {
-            char* buff = stackalloc char[4];
-            fixed (byte* pState = _resolveState)
+            var spacingForm = translation.Char;
+
+            // if a different VK produced the current pending dead key, flush it now
+            // (two consecutive dead keys: dead_acute then dead_grave → emit '´' then record new).
+            // same VK = auto-repeat: don't flush (just re-record the same pending state).
+            var prevDeadFlush = (_pendingDeadKey != '\0' && _pendingDeadKeyVk != vk)
+                ? FlushPendingDeadKey() : null;
+
+            if (KeyResolver.SpacingToCombining.TryGetValue(spacingForm, out var combining))
             {
-                count = NativeMethods.ToUnicodeEx((uint)vk, scanCode, pState, buff, 4, uFlags, hkl);
-
-                // altGr fallback: if Ctrl+Alt didn't produce anything, retry without them
-                if (count == 0 && altGrActive)
-                {
-                    _resolveState[WinVirtualKey.LControl] = 0;
-                    _resolveState[WinVirtualKey.RControl] = 0;
-                    _resolveState[WinVirtualKey.Control] = 0;
-                    _resolveState[WinVirtualKey.LMenu] = 0;
-                    _resolveState[WinVirtualKey.RMenu] = 0;
-                    _resolveState[WinVirtualKey.Menu] = 0;
-                    count = NativeMethods.ToUnicodeEx((uint)vk, scanCode, pState, buff, 4, uFlags, hkl);
-                }
-
-                if (count == 0) return null;
-
-                // count == -1: dead key — buff[0] has the standalone dead character.
-                // flush the system dead key state with a space call so subsequent ToUnicodeEx
-                // calls start from a clean state (we track dead keys ourselves).
-                if (count < 0)
-                {
-                    char flush;
-                    _ = NativeMethods.ToUnicodeEx(NativeMethods.VK_SPACE, 0, pState, &flush, 1, 0, hkl);
-                    var spacingForm = buff[0];
-
-                    // if a different VK produced the current pending dead key, flush it now
-                    // (two consecutive dead keys: dead_acute then dead_grave → emit '´' then record new).
-                    // same VK = auto-repeat: don't flush (just re-record the same pending state).
-                    var prevDeadFlush = (_pendingDeadKey != '\0' && _pendingDeadKeyVk != vk)
-                        ? FlushPendingDeadKey() : null;
-
-                    if (KeyResolver.SpacingToCombining.TryGetValue(spacingForm, out var combining))
-                    {
-                        // standard dead key: spacing form → combining char (e.g. ´ → U+0301)
-                        _pendingDeadKey = combining;
-                        _pendingDeadSpacing = spacingForm;
-                    }
-                    else if (spacingForm is >= '\u0300' and <= '\u036F')
-                    {
-                        // some layouts (e.g. polytonic Greek) return the combining char directly
-                        _pendingDeadKey = spacingForm;
-                        _pendingDeadSpacing = '\0';
-                    }
-                    _pendingDeadKeyVk = vk;
-                    return prevDeadFlush;
-                }
-
-                rawChar = buff[0];
+                // standard dead key: spacing form → combining char (e.g. ´ → U+0301)
+                _pendingDeadKey = combining;
+                _pendingDeadSpacing = spacingForm;
             }
+            else if (spacingForm is >= '\u0300' and <= '\u036F')
+            {
+                // some layouts (e.g. polytonic Greek) return the combining char directly
+                _pendingDeadKey = spacingForm;
+                _pendingDeadSpacing = '\0';
+            }
+            _pendingDeadKeyVk = vk;
+            return prevDeadFlush;
         }
 
-        if ((mods & (KeyModifiers.Control | KeyModifiers.Super)) != 0 && rawChar > 0x7F)
-            rawChar = MapShortcutAscii(vk, rawChar);
-
-        var classified = KeyResolver.ClassifyChar(rawChar);
+        var classified = KeyResolver.ClassifyChar(ShortcutChar(vk, translation.Char, mods));
         if (!classified.Ch.HasValue && !classified.Key.HasValue) return null;
 
         // apply pending dead key composition
@@ -408,6 +332,44 @@ internal sealed class WinKeyResolver
         _keyDownId[vk] = new CharClassification(null, classified.Key);
         return [KeyEvent.Special(KeyEventType.KeyDown, classified.Key!.Value, mods)];
     }
+
+    // runs ToUnicodeEx on _resolveState with the foreground window's layout. Count < 0 is a dead key (Char is its
+    // spacing form), 0 is nothing. the extended-key flag passes through (as input-leap's MSWindowsKeyState does), and
+    // the call never touches the kernel dead-key buffer: Hydra composes dead keys itself (_pendingDeadKey), and a stale
+    // kernel dead key would make a later key resolve to a literal spacing char (AltGr+¨ then e → '~' instead of 'ẽ').
+    private Translation Translate(int vk, uint scanCode, uint hookFlags)
+    {
+        PrepareResolveState(out var altGrActive);
+        var hkl = GetForegroundKeyboardLayout();
+        uint uFlags = (hookFlags & NativeMethods.LLKHF_EXTENDED) | NativeMethods.TOUNICODE_NOKERNELSTATE;
+
+        unsafe
+        {
+            char* buff = stackalloc char[4];
+            fixed (byte* pState = _resolveState)
+            {
+                var count = NativeMethods.ToUnicodeEx((uint)vk, scanCode, pState, buff, 4, uFlags, hkl);
+
+                // altGr fallback: if Ctrl+Alt didn't produce anything, retry without them
+                if (count == 0 && altGrActive)
+                {
+                    _resolveState[WinVirtualKey.LControl] = 0;
+                    _resolveState[WinVirtualKey.RControl] = 0;
+                    _resolveState[WinVirtualKey.Control] = 0;
+                    _resolveState[WinVirtualKey.LMenu] = 0;
+                    _resolveState[WinVirtualKey.RMenu] = 0;
+                    _resolveState[WinVirtualKey.Menu] = 0;
+                    count = NativeMethods.ToUnicodeEx((uint)vk, scanCode, pState, buff, 4, uFlags, hkl);
+                }
+
+                return new Translation(count, count == 0 ? '\0' : buff[0]);
+            }
+        }
+    }
+
+    // MapShortcutAscii, applied only to a non-ASCII character under Ctrl/Super
+    private static char ShortcutChar(int vk, char rawChar, KeyModifiers mods) =>
+        (mods & (KeyModifiers.Control | KeyModifiers.Super)) != 0 && rawChar > 0x7F ? MapShortcutAscii(vk, rawChar) : rawChar;
 
     // yields key-up events for every currently held key; called before Reset() on desktop change
     // so the slave can release keys that were physically held when the desktop switched.
@@ -532,4 +494,6 @@ internal sealed class WinKeyResolver
         WinVirtualKey.Oem7 => '\'',
         _ => rawChar,
     };
+
+    private readonly record struct Translation(int Count, char Char);
 }

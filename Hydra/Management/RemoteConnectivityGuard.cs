@@ -15,8 +15,8 @@ internal static class RemoteConnectivityGuard
         Compare(current, candidate, "name", "machine name", changed);
         Compare(current, candidate, "profile", "forced profile", changed);
 
-        var currentProfiles = GetValue(current, "profiles") as JsonArray ?? [];
-        var candidateProfiles = GetValue(candidate, "profiles") as JsonArray ?? [];
+        var currentProfiles = current.GetIgnoreCase("profiles") as JsonArray ?? [];
+        var candidateProfiles = candidate.GetIgnoreCase("profiles") as JsonArray ?? [];
         if (currentProfiles.Count != candidateProfiles.Count)
         {
             changed.Add("profile collection");
@@ -39,9 +39,6 @@ internal static class RemoteConnectivityGuard
 
     private static void Compare(JsonObject before, JsonObject after, string property, string label, List<string> changed)
     {
-        if (!JsonNode.DeepEquals(GetValue(before, property), GetValue(after, property))) changed.Add(label);
+        if (!JsonNode.DeepEquals(before.GetIgnoreCase(property), after.GetIgnoreCase(property))) changed.Add(label);
     }
-
-    private static JsonNode? GetValue(JsonObject source, string property) => source
-        .FirstOrDefault(item => item.Key.Equals(property, StringComparison.OrdinalIgnoreCase)).Value;
 }

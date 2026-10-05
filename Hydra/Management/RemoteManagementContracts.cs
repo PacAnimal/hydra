@@ -1,5 +1,16 @@
 namespace Hydra.Management;
 
+// the operations one daemon asks of another over the relay. The config ones are spelled like local
+// methods but act on the PEER's config, so the two sets stay apart.
+internal static class RemoteOperations
+{
+    internal const string Pair = "pair";
+    internal const string ConfigGet = "config.get";
+    internal const string ConfigValidate = "config.validate";
+    internal const string ConfigApply = "config.apply";
+    internal const string ConfigConfirm = "config.confirm";
+}
+
 internal static class RemoteManagementProtocol
 {
     internal const int Version = 1;

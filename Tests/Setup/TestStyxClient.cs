@@ -35,13 +35,16 @@ public sealed class TestStyxClient : IStyxClient, IAsyncDisposable
     }
 
     // connect without authenticating — for testing unauthenticated behaviour
-    public async Task ConnectRaw(WebApplicationFactory<global::Styx.Program> factory)
+    public Task ConnectRaw(WebApplicationFactory<global::Styx.Program> factory) =>
+        ConnectRaw(new HubConnectionBuilder().WithUrl($"{factory.Server.BaseAddress}relay",
+            options => options.UseTestServer(factory.Server)));
+
+    // the same, against a relay listening on a real socket, such as the embedded one
+    public Task ConnectRaw(string serverUrl) => ConnectRaw(new HubConnectionBuilder().WithUrl($"{serverUrl}/relay"));
+
+    private async Task ConnectRaw(IHubConnectionBuilder builder)
     {
-        _hub = new HubConnectionBuilder()
-            .WithUrl($"{factory.Server.BaseAddress}relay",
-                options => options.HttpMessageHandlerFactory = _ => factory.Server.CreateHandler())
-            .AddMessagePackProtocol()
-            .Build();
+        _hub = builder.AddMessagePackProtocol().Build();
 
         await _hub.StartAsync();
         _registration = _hub.Register<IStyxClient>(this);

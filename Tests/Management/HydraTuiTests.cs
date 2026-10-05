@@ -1,10 +1,78 @@
 using Hydra.Management;
+using Hydra.Relay;
 using Hydra.Tui;
+using Tests.Setup;
 
 namespace Tests.Management;
 
 public class HydraTuiTests
 {
+    // refused before the terminal is touched, so this runs headless
+    [Test]
+    public void AConfigOptionWithoutAPath_ExitsWithTheUsageCode() =>
+        Assert.That(HydraTui.Run(["--config"]), Is.EqualTo(2));
+
+    [TestCase("--conifg", "x.conf")]
+    [TestCase("tui")]
+    public void AnUnknownArgument_ExitsWithTheUsageCode(params string[] args) =>
+        Assert.That(HydraTui.Run(args), Is.EqualTo(2));
+
+    // the demo writes its fabricated config to its path, so it never gets a real one
+    [Test]
+    public void TheDemoRefusesARealConfig()
+    {
+        var path = Path.Combine(TestPaths.FreshFixtureRoot(nameof(HydraTuiTests)), "hydra.conf");
+        File.WriteAllText(path, "{\"real\":true}");
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(HydraTui.Run(["--demo", "--config", path]), Is.EqualTo(2));
+            Assert.That(File.ReadAllText(path), Is.EqualTo("{\"real\":true}"));
+        }
+    }
+
+    [Test]
+    public void ATimedOutCallSaysItTimedOut()
+    {
+        using var timeout = new CancellationTokenSource();
+        timeout.Cancel();
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(HydraTui.FailureMessage(new OperationCanceledException(timeout.Token)), Does.Contain("did not answer in time"));
+            Assert.That(HydraTui.FailureMessage(new TaskCanceledException()), Does.Contain("did not answer in time"));
+            Assert.That(HydraTui.FailureMessage(new IOException("pipe broken")), Is.EqualTo("pipe broken"));
+        }
+    }
+
+    // quitting mid-poll cancels the poll, and that is the TUI leaving rather than Hydra failing to answer
+    [Test]
+    public async Task QuittingDuringACallReportsNothing()
+    {
+        using var shutdown = new CancellationTokenSource();
+        var reported = new List<string>();
+
+        await HydraTui.ReportFailures(async () =>
+        {
+            await shutdown.CancelAsync();
+            await Task.Delay(Timeout.Infinite, shutdown.Token);
+        }, reported.Add, shutdown.Token);
+
+        Assert.That(reported, Is.Empty);
+    }
+
+    [Test]
+    public async Task ACallThatFailsWhileTheTuiRunsIsReported()
+    {
+        using var shutdown = new CancellationTokenSource();
+        var reported = new List<string>();
+
+        await HydraTui.ReportFailures(() => throw new TaskCanceledException(), reported.Add, shutdown.Token);
+        await HydraTui.ReportFailures(() => throw new IOException("pipe broken"), reported.Add, shutdown.Token);
+
+        Assert.That(reported, Is.EqualTo(["Hydra did not answer in time.", "pipe broken"]));
+    }
+
     [Test]
     public void RestartCompletionDetectsWindowsProcessReplacement()
     {
@@ -129,6 +197,20 @@ public class HydraTuiTests
     }
 
     [Test]
+    public void OverviewShowsConnectedForInWholeSecondsLikeUptime()
+    {
+        var status = Status(processId: 10, uptime: 4117, relayAttempts: 1, connectedFor: new TimeSpan(0, 1, 8, 37, 90, 685));
+
+        var overview = HydraTui.TuiController.FormatOverview(status);
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(overview, Does.Contain("Connected for 1:08:37\n"));
+            Assert.That(overview, Does.Contain("Uptime        1:08:37\n"));
+        }
+    }
+
+    [Test]
     public void OverviewReportsDormantAndUnroutedState()
     {
         var status = Status(processId: 10, uptime: 30) with { Dormant = true };
@@ -182,7 +264,7 @@ public class HydraTuiTests
         {
             Peers =
             [
-                new PeerStatus("laptop", "MacOS", Connected: true,
+                new PeerStatus("laptop", "macOS", Connected: true,
                 [
                     new ScreenStatus("laptop-built-in", "laptop", 2560, 1600, 1.0m, null),
                     new ScreenStatus("laptop-external", "laptop", 3840, 2160, 1.0m, 1.0m),
@@ -201,11 +283,20 @@ public class HydraTuiTests
     }
 
     [Test]
+    public void StatusHighlightingColoursEveryPlatformName()
+    {
+        var rules = RegexHighlightingDefinition.Status.MainRuleSet.Rules;
+
+        Assert.That(Enum.GetValues<PeerPlatform>().Where(p => p != PeerPlatform.Unknown),
+            Has.All.Matches<PeerPlatform>(p => rules.Any(r => r.Regex.IsMatch($"[{p.DisplayName()}]"))));
+    }
+
+    [Test]
     public void PeersViewMarksADisconnectedPeerDistinctlyFromAConnectedOne()
     {
         var status = Status(processId: 10, uptime: 30) with
         {
-            Peers = [new PeerStatus("laptop", "MacOS", Connected: false, [])],
+            Peers = [new PeerStatus("laptop", "macOS", Connected: false, [])],
         };
 
         var peers = HydraTui.TuiController.FormatPeers(status);
@@ -249,6 +340,21 @@ public class HydraTuiTests
     }
 
     [Test]
+    public void DiagnosticsCountsF5RefreshesOnlyWhenGivenACount()
+    {
+        var live = HydraTui.TuiController.FormatDiagnostics(
+            connected: true, configPath: "/etc/hydra.conf", configRevision: null, lastSnapshot: null, logCursor: 0);
+        var demo = HydraTui.TuiController.FormatDiagnostics(
+            connected: true, configPath: "/etc/hydra.conf", configRevision: null, lastSnapshot: null, logCursor: 0, f5Refreshes: 3);
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(live, Does.Not.Contain("F5 refreshes"));
+            Assert.That(demo, Does.Contain("F5 refreshes   3"));
+        }
+    }
+
+    [Test]
     public void ShortCategoryLeavesACategoryThatAlreadyFitsUnchanged()
     {
         Assert.That(HydraTui.TuiController.ShortCategory("Hydra.Config"), Is.EqualTo("Hydra.Config"));
@@ -273,11 +379,15 @@ public class HydraTuiTests
         Assert.That(truncated, Has.Length.EqualTo(24));
     }
 
-    private static HydraStatusSnapshot Status(int processId, long uptime, long? relayAttempts = null) => new(
-        DateTimeOffset.UtcNow, "0.0.0", processId, uptime, "config", "revision", "host", "profile",
-        Hydra.Config.Mode.Master, false, relayAttempts != null,
-        relayAttempts == null ? null : new RelayConnectionStatus(
-            "en0", "Ethernet", "127.0.0.1", 50000, "relay", "127.0.0.1", 51600,
-            DateTimeOffset.UtcNow, relayAttempts.Value, 0, 0, 0, 0),
-        [], [], [], false, [], [], null);
+    private static HydraStatusSnapshot Status(int processId, long uptime, long? relayAttempts = null, TimeSpan connectedFor = default)
+    {
+        var capturedAt = DateTimeOffset.UtcNow;
+        return new HydraStatusSnapshot(
+            capturedAt, "0.0.0", processId, uptime, "config", "revision", "host", "profile",
+            Hydra.Config.Mode.Master, false, relayAttempts != null,
+            relayAttempts == null ? null : new RelayConnectionStatus(
+                "en0", "Ethernet", "127.0.0.1", 50000, "relay", "127.0.0.1", 51600,
+                capturedAt - connectedFor, relayAttempts.Value, 0, 0, 0, 0),
+            [], [], [], false, [], [], null);
+    }
 }

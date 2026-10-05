@@ -32,7 +32,8 @@ public class ManagementLogBufferTests
     {
         using var buffer = new ManagementLogBuffer();
         var logger = buffer.CreateLogger("Hydra.Test");
-        for (var i = 0; i < 2005; i++) logger.LogInformation("entry {Index}", i);
+        for (var i = 0; i < 2005; i++)
+            if (logger.IsEnabled(LogLevel.Information)) logger.LogInformation("entry {Index}", i);
 
         var page = buffer.Read(0);
 

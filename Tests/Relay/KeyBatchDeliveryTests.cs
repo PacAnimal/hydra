@@ -100,10 +100,10 @@ public class KeyBatchDeliveryTests
         // MasterConfig is what makes a slave answer with its screens — and therefore with what it can do.
         await slave.SimulateReceive(Master, MessageKind.MasterConfig, Json(new MasterConfigMessage(null)));
 
-        var screenInfo = slave.Sent.LastOrDefault(s => s.Kind == MessageKind.ScreenInfo);
-        Assert.That(screenInfo.Json, Is.Not.Null, "the slave never sent ScreenInfo, so it never advertised anything");
+        var screenInfo = slave.Snapshot().LastOrDefault(s => s.Kind == MessageKind.ScreenInfo)?.Json;
+        Assert.That(screenInfo, Is.Not.Null, "the slave never sent ScreenInfo, so it never advertised anything");
 
-        var advertised = JsonDocument.Parse(screenInfo.Json).RootElement.TryGetProperty("capabilities", out var list)
+        var advertised = JsonDocument.Parse(screenInfo!).RootElement.TryGetProperty("capabilities", out var list)
             ? PeerCapabilities.Parse([.. list.EnumerateArray().Select(e => e.GetString()!)])
             : PeerCapabilities.Parse(null);
 

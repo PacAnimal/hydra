@@ -2,10 +2,7 @@ using Cathedral.Config;
 using Cathedral.Extensions;
 using Cathedral.Logging;
 using Cathedral.Utils;
-using Microsoft.AspNetCore.Connections.Features;
-using Microsoft.AspNetCore.SignalR;
 using Styx;
-using Styx.Filters;
 using Styx.Services;
 using System.Net;
 
@@ -20,7 +17,6 @@ if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable(Constants.RelayPassw
 var builder = WebApplication.CreateBuilder(args);
 var services = builder.Services;
 
-builder.DisableEventLog();
 services.AddSereneConsoleLogging(logging =>
 {
     logging.TimestampFormat = "yyyy-MM-dd HH:mm:ss";
@@ -28,34 +24,15 @@ services.AddSereneConsoleLogging(logging =>
     logging.FilterMicrosoftSpam = true;
 });
 services.ConfigureHttpJsonOptions(options => SaneJson.Configure(options.SerializerOptions));
-services.AddDataProtection().PersistKeysToNowhere();
-
-services.AddStyxSignalR();
 
 var debugMessages = Environment.GetEnvironmentVariable(Constants.DebugMessagesEnvVar)?.EqualsIgnoreCase("true") ?? false;
-services.AddSingleton(new StyxOptions(debugMessages));
-
-services.AddSingleton<IClientRegistry, ClientRegistry>();
-services.AddHostedService<IPeerBroadcaster, PeerBroadcastService>();
-services.AddSingleton<IStyxPasswordProvider, EnvironmentStyxPasswordProvider>();
-services.AddSingleton<AuthenticationHubFilter>();
-services.Configure<HubOptions>(options => options.AddFilter<AuthenticationHubFilter>());
-
-services.AddCathedralForwardedHeaders();
+builder.AddStyxRelay(new EnvironmentStyxPasswordProvider(), new StyxOptions(debugMessages));
 
 var port = int.Parse(config.GetString("LOCAL_PORT", "5000"));
 var localOnly = Environment.GetEnvironmentVariable(Constants.LocalOnlyEnvVar)?.EqualsIgnoreCase("true") ?? false;
 builder.WebHost.ConfigureKestrel(options =>
 {
-    void ConfigureListener(IPAddress address) => options.Listen(address, port, listenOptions =>
-    {
-        listenOptions.Use(next => ctx =>
-        {
-            var socketFeature = ctx.Features.Get<IConnectionSocketFeature>();
-            if (socketFeature != null) socketFeature.Socket.NoDelay = true;
-            return next(ctx);
-        });
-    });
+    void ConfigureListener(IPAddress address) => options.Listen(address, port, listenOptions => listenOptions.UseTcpNoDelay());
 
     if (localOnly)
     {
@@ -75,9 +52,10 @@ app.UseStaticFiles();
 
 app.MapHub<StyxHub>("/relay");
 
-app.MapGet("/api/status", async (HttpContext http, IStyxPasswordProvider passwordProvider, IClientRegistry registry, CancellationToken ct) =>
+app.MapGet("/api/status", async (HttpContext http, IStyxPasswordProvider passwordProvider, IClientRegistry registry, ResponseThrottle throttler,
+    CancellationToken ct) =>
 {
-    var throttle = Task.Delay(TimeSpan.FromSeconds(Constants.StatusThrottleSeconds), ct);
+    var throttle = throttler.Start(Constants.StatusThrottleSeconds, ct);
 
     var bearer = http.Request.Headers.Authorization.ToString();
     var token = bearer.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) ? bearer["Bearer ".Length..] : null;
@@ -98,9 +76,10 @@ app.MapGet("/api/status", async (HttpContext http, IStyxPasswordProvider passwor
     return Results.Ok(new StatusResponse([.. clients.Select(c => c.HostName)]));
 });
 
-app.MapPost("/api/network-config", async (NetworkConfigRequest request, IStyxPasswordProvider passwordProvider, CancellationToken ct) =>
+app.MapPost("/api/network-config", async (NetworkConfigRequest request, IStyxPasswordProvider passwordProvider, ResponseThrottle throttler,
+    CancellationToken ct) =>
 {
-    var throttle = Task.Delay(TimeSpan.FromSeconds(Constants.NetworkConfigThrottleSeconds), ct);
+    var throttle = throttler.Start(Constants.NetworkConfigThrottleSeconds, ct);
 
     string password;
     try { password = passwordProvider.Password; }
@@ -119,7 +98,8 @@ app.MapPost("/api/network-config", async (NetworkConfigRequest request, IStyxPas
 });
 
 
-app.Logger.LogInformation("Styx listening on port {Port}{LocalOnly}", port, localOnly ? " (localhost only)" : "");
+if (app.Logger.IsEnabled(LogLevel.Information))
+    app.Logger.LogInformation("Styx listening on port {Port}{LocalOnly}", port, localOnly ? " (localhost only)" : "");
 if (debugMessages) app.Logger.LogInformation("Message debug logging enabled");
 app.Run();
 return 0;

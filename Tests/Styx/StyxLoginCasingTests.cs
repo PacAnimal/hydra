@@ -1,5 +1,4 @@
 using Common.DTO;
-using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
 using Tests.Setup;
@@ -8,32 +7,16 @@ namespace Tests.Styx;
 
 // a third-party client picks its own member-name casing; both hub protocols must accept either.
 [TestFixture]
-public class StyxLoginCasingTests
+public class StyxLoginCasingTests : StyxFixtureBase
 {
-    private static WebApplicationFactory<global::Styx.Program>? _factory;
-
-    [OneTimeSetUp]
-    public static void OneTimeSetUp()
-    {
-        _factory = StyxTestServer.Create();
-        _ = _factory.Server;
-    }
-
-    [OneTimeTearDown]
-    public static async Task OneTimeTearDown()
-    {
-        if (_factory != null)
-            await _factory.DisposeAsync();
-    }
-
     public enum Protocol { Json, MessagePack }
 
     // invokes Authenticate with a hand-built argument map, bypassing the typed client's own casing
-    private static async Task<RelayLoginResponse> Authenticate(Protocol protocol, Dictionary<string, string> login)
+    private async Task<RelayLoginResponse> Authenticate(Protocol protocol, Dictionary<string, string> login)
     {
         var builder = new HubConnectionBuilder()
-            .WithUrl($"{_factory!.Server.BaseAddress}relay",
-                options => options.HttpMessageHandlerFactory = _ => _factory.Server.CreateHandler());
+            .WithUrl($"{Factory.Server.BaseAddress}relay",
+                options => options.UseTestServer(Factory.Server));
 
         if (protocol == Protocol.MessagePack) builder.AddMessagePackProtocol();
 

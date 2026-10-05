@@ -1,5 +1,4 @@
-using System.Security.Cryptography;
-using System.Text;
+using Cathedral.Extensions;
 using Hydra.Config;
 
 namespace Hydra.Management;
@@ -7,6 +6,7 @@ namespace Hydra.Management;
 internal sealed class TransactionalConfigStore(HydraRuntimeInfo runtime)
 {
     private readonly SemaphoreSlim _writeLock = new(1, 1);
+    private readonly ConfigDir _dir = new(runtime.ConfigPath);
 
     /// <summary>
     /// Reads under the cross-process config lock — the TUI is a SEPARATE PROCESS from the service and both
@@ -14,16 +14,13 @@ internal sealed class TransactionalConfigStore(HydraRuntimeInfo runtime)
     /// not merely read a stale copy: the reader's handle refuses the saver's replace and the SAVE fails, so
     /// a user's config edit is lost because something else happened to be reading.
     ///
-    /// <para><b>THIS lock has no portable test, and that is not an oversight to be fixed by trying harder.</b>
-    /// Its only symptom is a refused replace, which is a Windows behaviour — a POSIX rename ignores open
-    /// handles, so removing this acquisition changes nothing any mac or linux lane can observe. Measured:
-    /// it passes 5 of 5 with the acquisition deleted. The SAVE side's lock is different and is covered
-    /// everywhere by <c>ConcurrentSavesLoseNoEdit</c>, because a lost update needs no platform to be
-    /// visible. Do not read that test as cover for this line.</para>
+    /// <para><b>This lock has no portable test.</b> Its only symptom is a refused replace, which is Windows
+    /// behaviour — a POSIX rename ignores open handles. The save side's lock is covered everywhere by
+    /// <c>ConcurrentSavesLoseNoEdit</c>, which is no cover for this one.</para>
     /// </summary>
     internal async Task<ConfigDocument> ReadAsync(CancellationToken cancel = default)
     {
-        await using var fileLock = await ConfigFileLock.Acquire(ConfigFileLock.ConfigPathFor(runtime.ConfigPath), cancel);
+        await using var fileLock = await ConfigFileLock.Acquire(_dir.ConfigLock, cancel);
         return await ReadUnlockedAsync(cancel);
     }
 
@@ -65,22 +62,17 @@ internal sealed class TransactionalConfigStore(HydraRuntimeInfo runtime)
             // The cross-process lock spans the compare AND the write. Held only for the write, the revision
             // check is a TOCTOU across processes: the TUI and the service can both read, both find the
             // revision they expected, and both save — and the second silently discards the first.
-            await using var fileLock = await ConfigFileLock.Acquire(ConfigFileLock.ConfigPathFor(runtime.ConfigPath), cancel);
+            await using var fileLock = await ConfigFileLock.Acquire(_dir.ConfigLock, cancel);
 
             var current = await File.ReadAllTextAsync(runtime.ConfigPath, cancel);
             if (!Revision(current).Equals(expectedRevision, StringComparison.Ordinal))
                 throw new InvalidOperationException("hydra.conf changed outside the TUI. Reload before saving.");
 
-            var mode = OperatingSystem.IsWindows() ? default : File.GetUnixFileMode(runtime.ConfigPath);
-            await PrivateFile.Write(runtime.ConfigPath, json, mode, cancel);
+            await PrivateFile.Write(runtime.ConfigPath, json, null, cancel);
 
-            // Re-parsed from DISK, because the claim worth making is that what LANDED is loadable — the
-            // content was already validated at :52, so the only failure left is bytes not surviving the
-            // trip. And a failure here PUTS THE OLD CONFIG BACK. The hand-rolled write this replaced parsed
-            // its temp before promoting it, so a bad write could never become hydra.conf; parsing after the
-            // rename demoted that gate to an alarm, leaving the caller told it failed while the disk said
-            // otherwise. For a KVM whose whole remote-apply machinery exists to stop a config change
-            // bricking a distant box, the guarantee is worth restoring even at the cost of a second write.
+            // Re-parsed from disk: the content was validated above, so what is left to catch is bytes that
+            // did not survive the trip, and a failure puts the old config back so an unloadable write never
+            // stays hydra.conf.
             try
             {
                 _ = HydraConfigFile.Parse(await File.ReadAllTextAsync(runtime.ConfigPath, cancel), runtime.ConfigPath);
@@ -90,7 +82,7 @@ internal sealed class TransactionalConfigStore(HydraRuntimeInfo runtime)
                 // NOT the caller's token: a rollback that puts the previous config back is not something to
                 // abandon because whoever asked has stopped waiting. The alternative is leaving hydra.conf
                 // holding content we just decided was unloadable.
-                await PrivateFile.Write(runtime.ConfigPath, current, mode, CancellationToken.None);
+                await PrivateFile.Write(runtime.ConfigPath, current, null, CancellationToken.None);
                 throw;
             }
 
@@ -102,5 +94,5 @@ internal sealed class TransactionalConfigStore(HydraRuntimeInfo runtime)
         }
     }
 
-    internal static string Revision(string json) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(json))).ToLowerInvariant();
+    internal static string Revision(string json) => json.GetSha256Hash();
 }

@@ -1,4 +1,5 @@
 using Hydra.Config;
+using Hydra.Relay;
 
 namespace Hydra.Management;
 
@@ -69,14 +70,14 @@ internal sealed class MockManagementClient : IManagementClient
                     2_900_000_000 + drift * 3_000, 2_700_000_000 + drift * 3_000, 0, 0, 0, 0),
             ],
             [
-                new EmbeddedRelayPeerStatus("desktop", "127.0.0.1", "127.0.0.1", "lo0", "Loopback"),
+                new EmbeddedRelayPeerStatus("desktop", "127.0.0.1", "127.0.0.1", "lo0", "loopback"),
                 new EmbeddedRelayPeerStatus("laptop", "192.168.1.55", "192.168.1.42", "en0", "Wi-Fi"),
             ],
             [new PeerLatencyStatus("laptop", 2.1, 6.8, 24.0, 1.9, 340 + uptime, 0, DateTimeOffset.UtcNow)],
             Dormant: false,
             [new ScreenStatus("desktop", "desktop", 3840, 2160, 1.0m, null)],
             [
-                new PeerStatus("laptop", "MacOS", Connected: true,
+                new PeerStatus("laptop", PeerPlatform.MacOs.DisplayName(), Connected: true,
                     [new ScreenStatus("laptop", "laptop", 2560, 1600, 1.0m, 1.0m)]),
             ],
             new RouterStatus(IsRemote: false, ActiveHost: null, ActiveScreen: null,
@@ -127,7 +128,7 @@ internal sealed class MockManagementClient : IManagementClient
         Task.FromResult(new ConfigValidation(true));
 
     public Task<RemoteApplyAccepted> ApplyRemoteConfigAsync(RemoteApplyRequest request, CancellationToken cancel = default) =>
-        Task.FromResult(new RemoteApplyAccepted(Guid.NewGuid(), "demo0001", DateTimeOffset.UtcNow.AddSeconds(90),
+        Task.FromResult(new RemoteApplyAccepted(Guid.NewGuid(), "demo0001", DateTimeOffset.UtcNow + RemoteApplyStore.ConfirmationWindow,
             "Candidate saved. (demo mode — nothing actually happened)"));
 
     public Task<CommandResult> ConfirmRemoteConfigAsync(RemoteConfirmRequest request, CancellationToken cancel = default) =>

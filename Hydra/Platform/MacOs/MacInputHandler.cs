@@ -1,4 +1,3 @@
-using System.Runtime.InteropServices;
 using Cathedral.Extensions;
 using Cathedral.Utils;
 using Hydra.Config;
@@ -39,10 +38,10 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
 
     public bool IsAccessibilityTrusted()
     {
-        if (NativeMethods.PollAccessibilityTrusted()) return true;
-        return NativeMethods.ShowAccessibilityPrompt();
+        if (NativeHelpers.PollAccessibilityTrusted()) return true;
+        return NativeHelpers.ShowAccessibilityPrompt();
     }
-    public Task WaitForAccessibilityTrusted(CancellationToken cancel) => NativeMethods.WaitForAccessibilityTrusted(cancel);
+    public Task WaitForAccessibilityTrusted(CancellationToken cancel) => NativeHelpers.WaitForAccessibilityTrusted(cancel);
 
     public void WarpCursor(int x, int y)
     {
@@ -80,7 +79,7 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
         if (!_cursorHidden)
         {
             _cursorHidden = true;
-            NativeMethods.EnableBackgroundCursorManipulation();
+            NativeHelpers.EnableBackgroundCursorManipulation();
             _ = NativeMethods.CGAssociateMouseAndMouseCursorPosition(true);
             // near-zero suppression interval prevents CGWarpMouseCursorPosition from resetting acceleration
             NativeMethods.CGSetLocalEventsSuppressionInterval(0.0001);
@@ -105,7 +104,7 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
         _cursorHidden = false;
         // matches Synergy pattern: call EnableBackgroundCursorManipulation in both hide and show
         // so the CGS connection property is warmed up before the next HideCursor attempt
-        NativeMethods.EnableBackgroundCursorManipulation();
+        NativeHelpers.EnableBackgroundCursorManipulation();
         if (!_shield.DebugShield)
         {
             // balance every CGDisplayHideCursor call made during this hide session
@@ -141,7 +140,7 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
         await CreateTapThread();
     }
 
-    private Task CreateTapThread()
+    private Task<bool> CreateTapThread()
     {
         var ready = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -166,9 +165,8 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
                 return;
             }
 
-            var commonModes = GetCfRunLoopCommonModes();
             var runLoopSource = NativeMethods.CFMachPortCreateRunLoopSource(nint.Zero, tapPort, 0);
-            NativeMethods.CFRunLoopAddSource(runLoop, runLoopSource, commonModes);
+            NativeMethods.CFRunLoopAddSource(runLoop, runLoopSource, NativeMethods.KCFRunLoopCommonModes);
             NativeMethods.CGEventTapEnable(tapPort, true);
 
             ready.TrySetResult(true);
@@ -184,6 +182,8 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
         _tapThread.Start();
         return ready.Task;
     }
+
+    public bool RecentresItself => false;
 
     public bool AnyMouseButtonHeld()
     {
@@ -338,32 +338,9 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
         var nxKeyType = (uint)((data1 & 0xFFFF0000L) >> 16);
         var isDown = (data1 & 0x100) == 0;
 
-        var specialKey = NxKeyTypeToSpecialKey(nxKeyType);
-        if (!specialKey.HasValue) return;
+        if (!MacMediaKeyMap.TryGetKey(nxKeyType, out var specialKey)) return;
 
-        var keyEvent = KeyEvent.Special(isDown ? KeyEventType.KeyDown : KeyEventType.KeyUp, specialKey.Value, KeyModifiers.None);
+        var keyEvent = KeyEvent.Special(isDown ? KeyEventType.KeyDown : KeyEventType.KeyUp, specialKey, KeyModifiers.None);
         _onKeyEvent?.Invoke(keyEvent);
     }
-
-    private static SpecialKey? NxKeyTypeToSpecialKey(uint type) => type switch
-    {
-        NativeMethods.NXKeytypeSoundUp => SpecialKey.AudioVolumeUp,
-        NativeMethods.NXKeytypeSoundDown => SpecialKey.AudioVolumeDown,
-        NativeMethods.NXKeytypeMute => SpecialKey.AudioMute,
-        NativeMethods.NXKeytypeEject => SpecialKey.Eject,
-        NativeMethods.NXKeytypePlay => SpecialKey.AudioPlay,
-        NativeMethods.NXKeytypeNext or NativeMethods.NXKeytypeFast => SpecialKey.AudioNext,
-        NativeMethods.NXKeytypePrevious or NativeMethods.NXKeytypeRewind => SpecialKey.AudioPrev,
-        NativeMethods.NXKeytypeBrightnessUp => SpecialKey.BrightnessUp,
-        NativeMethods.NXKeytypeBrightnessDown => SpecialKey.BrightnessDown,
-        _ => null,
-    };
-
-    private static nint GetCfRunLoopCommonModes() => ReadCoreFoundationSymbol("kCFRunLoopCommonModes");
-
-    private static readonly nint CoreFoundation =
-        NativeLibrary.Load("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation");
-
-    private static nint ReadCoreFoundationSymbol(string name) =>
-        Marshal.ReadIntPtr(NativeLibrary.GetExport(CoreFoundation, name));
 }

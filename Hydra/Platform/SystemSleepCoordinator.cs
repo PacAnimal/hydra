@@ -13,6 +13,9 @@ internal sealed class SystemSleepCoordinator(
     IRelaySender relay,
     ILogger<SystemSleepCoordinator> log)
 {
+    // how long a sleep notification waits for the relay to close before letting the system sleep anyway
+    internal static readonly TimeSpan RelayCloseTimeout = TimeSpan.FromSeconds(5);
+
     private readonly Lock _stateLock = new();
     private int _sleepRequested;
     private bool _wakeStarted;
@@ -70,6 +73,13 @@ internal sealed class SystemSleepCoordinator(
             log.LogInformation("System began resuming during relay shutdown — reconnecting relay");
             relay.BeginSystemWake(generation);
         }
+    }
+
+    // for native power callbacks, which have to finish their work before they return
+    internal void PrepareForSleepBlocking()
+    {
+        using var timeout = new CancellationTokenSource(RelayCloseTimeout);
+        PrepareForSleepAsync(timeout.Token).GetAwaiter().GetResult();
     }
 
     internal void BeginResumeAfterSleep()

@@ -22,7 +22,7 @@ public sealed class MacClipboardSync : IClipboardSync
         _log = log;
         // NSPasteboard lives in AppKit — must be loaded before objc_getClass can find it.
         // Slaves don't open an event tap, so AppKit may not be loaded otherwise.
-        NativeMethods.EnsureAppKitLoaded();
+        NativeHelpers.EnsureAppKitLoaded();
     }
 
     public string? GetText()
@@ -44,13 +44,13 @@ public sealed class MacClipboardSync : IClipboardSync
         var pasteboard = GetGeneralPasteboard();
         if (pasteboard == nint.Zero) return null;
 
-        var typeStr = NativeMethods.MakeNsString(PasteboardTypeString);
+        var typeStr = NativeHelpers.MakeNsString(PasteboardTypeString);
         var sel = NativeMethods.sel_registerName("stringForType:");
         var result = NativeMethods.objc_msgSend(pasteboard, sel, typeStr);
         NativeMethods.CFRelease(typeStr);
 
         if (result == nint.Zero) return null;
-        var text = NativeMethods.CfStringToManaged(result);
+        var text = NativeHelpers.CfStringToManaged(result);
         return OwnsCurrentClipboard(pasteboard) ? _echo.FilterText(text) : text;
     }
 
@@ -96,7 +96,7 @@ public sealed class MacClipboardSync : IClipboardSync
         var pasteboard = GetGeneralPasteboard();
         if (pasteboard == nint.Zero) return null;
 
-        var typeStr = NativeMethods.MakeNsString(PasteboardTypePng);
+        var typeStr = NativeHelpers.MakeNsString(PasteboardTypePng);
         var sel = NativeMethods.sel_registerName("dataForType:");
         var nsData = NativeMethods.objc_msgSend(pasteboard, sel, typeStr);
         NativeMethods.CFRelease(typeStr);
@@ -139,13 +139,13 @@ public sealed class MacClipboardSync : IClipboardSync
             var pasteboard = GetGeneralPasteboard();
             if (pasteboard == nint.Zero) return null;
 
-            var typeStr = NativeMethods.MakeNsString(PasteboardTypeHtml);
+            var typeStr = NativeHelpers.MakeNsString(PasteboardTypeHtml);
             var sel = NativeMethods.sel_registerName("stringForType:");
             var result = NativeMethods.objc_msgSend(pasteboard, sel, typeStr);
             NativeMethods.CFRelease(typeStr);
 
             if (result == nint.Zero) return null;
-            var html = NativeMethods.CfStringToManaged(result);
+            var html = NativeHelpers.CfStringToManaged(result);
             return OwnsCurrentClipboard(pasteboard) ? _echo.FilterHtml(html) : html;
         }
         catch (Exception ex)
@@ -163,7 +163,7 @@ public sealed class MacClipboardSync : IClipboardSync
             var pasteboard = GetGeneralPasteboard();
             if (pasteboard == nint.Zero) return null;
 
-            var typeStr = NativeMethods.MakeNsString(PasteboardTypeRtf);
+            var typeStr = NativeHelpers.MakeNsString(PasteboardTypeRtf);
             var sel = NativeMethods.sel_registerName("dataForType:");
             var nsData = NativeMethods.objc_msgSend(pasteboard, sel, typeStr);
             NativeMethods.CFRelease(typeStr);
@@ -238,7 +238,7 @@ public sealed class MacClipboardSync : IClipboardSync
             {
                 var type = NativeMethods.objc_msgSend_nuint(types, objectAtIndex, (nuint)i);
                 if (type == nint.Zero) continue;
-                var name = NativeMethods.CfStringToManaged(type);
+                var name = NativeHelpers.CfStringToManaged(type);
                 if (name is PasteboardTypeFileUrl or PasteboardTypeLegacyFileNames) return true;
             }
             return false;
@@ -265,8 +265,8 @@ public sealed class MacClipboardSync : IClipboardSync
 
     private static void WriteText(nint pasteboard, string text)
     {
-        var nsStr = NativeMethods.MakeNsString(text);
-        var typeStr = NativeMethods.MakeNsString(PasteboardTypeString);
+        var nsStr = NativeHelpers.MakeNsString(text);
+        var typeStr = NativeHelpers.MakeNsString(PasteboardTypeString);
         var setSel = NativeMethods.sel_registerName("setString:forType:");
         NativeMethods.objc_msgSend_2arg(pasteboard, setSel, nsStr, typeStr);
         NativeMethods.CFRelease(nsStr);
@@ -275,8 +275,8 @@ public sealed class MacClipboardSync : IClipboardSync
 
     private static void WriteHtml(nint pasteboard, string html)
     {
-        var nsStr = NativeMethods.MakeNsString(html);
-        var typeStr = NativeMethods.MakeNsString(PasteboardTypeHtml);
+        var nsStr = NativeHelpers.MakeNsString(html);
+        var typeStr = NativeHelpers.MakeNsString(PasteboardTypeHtml);
         var setSel = NativeMethods.sel_registerName("setString:forType:");
         NativeMethods.objc_msgSend_2arg(pasteboard, setSel, nsStr, typeStr);
         NativeMethods.CFRelease(nsStr);
@@ -292,7 +292,7 @@ public sealed class MacClipboardSync : IClipboardSync
             nsData = NativeMethods.objc_msgSend_ptr_nuint(nsDataClass, dataSel, ptr, (nuint)rtf.Length);
         if (nsData == nint.Zero) return;
 
-        var typeStr = NativeMethods.MakeNsString(PasteboardTypeRtf);
+        var typeStr = NativeHelpers.MakeNsString(PasteboardTypeRtf);
         var setSel = NativeMethods.sel_registerName("setData:forType:");
         NativeMethods.objc_msgSend_2arg(pasteboard, setSel, nsData, typeStr);
         NativeMethods.CFRelease(typeStr);
@@ -307,7 +307,7 @@ public sealed class MacClipboardSync : IClipboardSync
             nsData = NativeMethods.objc_msgSend_ptr_nuint(nsDataClass, dataSel, ptr, (nuint)pngData.Length);
         if (nsData == nint.Zero) return;
 
-        var typeStr = NativeMethods.MakeNsString(PasteboardTypePng);
+        var typeStr = NativeHelpers.MakeNsString(PasteboardTypePng);
         var setSel = NativeMethods.sel_registerName("setData:forType:");
         NativeMethods.objc_msgSend_2arg(pasteboard, setSel, nsData, typeStr);
         NativeMethods.CFRelease(typeStr);

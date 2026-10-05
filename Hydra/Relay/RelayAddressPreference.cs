@@ -4,6 +4,7 @@ using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Text.RegularExpressions;
+using Hydra.Platform.Windows;
 
 namespace Hydra.Relay;
 
@@ -14,12 +15,23 @@ internal static partial class RelayAddressPreference
     internal static async Task<IReadOnlyList<IPAddress>> OrderAsync(
         IReadOnlyList<IPAddress> addresses,
         int port,
+        CancellationToken cancellationToken) =>
+        await OrderAsync(addresses, address => FindRouteInterface(address, port), InterfacePreferenceCache.Shared.GetAsync, cancellationToken);
+
+    internal static async Task<IReadOnlyList<IPAddress>> OrderAsync(
+        IReadOnlyList<IPAddress> addresses,
+        Func<IPAddress, string?> interfaceResolver,
+        Func<CancellationToken, Task<IReadOnlyDictionary<string, int>>> preferencesQuery,
         CancellationToken cancellationToken)
     {
-        var preferences = await GetInterfacePreferencesAsync(cancellationToken);
+        var routes = addresses.Distinct().ToDictionary(address => address, interfaceResolver);
+        // one route has nothing to be preferred over, and the query spawns a process on macOS and Linux
+        if (routes.Values.Distinct().Count() <= 1) return addresses;
+
+        var preferences = await preferencesQuery(cancellationToken);
         if (preferences.Count == 0) return addresses;
 
-        return OrderByInterfacePreference(addresses, address => FindRouteInterface(address, port), preferences);
+        return OrderByInterfacePreference(addresses, address => routes[address], preferences);
     }
 
     internal static IReadOnlyList<IPAddress> OrderByInterfacePreference(
@@ -48,7 +60,7 @@ internal static partial class RelayAddressPreference
             : int.MaxValue;
     }
 
-    private static async Task<IReadOnlyDictionary<string, int>> GetInterfacePreferencesAsync(
+    internal static async Task<IReadOnlyDictionary<string, int>> QueryInterfacePreferencesAsync(
         CancellationToken cancellationToken)
     {
         using var queryCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -69,14 +81,7 @@ internal static partial class RelayAddressPreference
                 return ParseLinuxDefaultRoutes(string.Join('\n', ipv4, ipv6));
             }
 
-            if (OperatingSystem.IsWindows())
-            {
-                const string script = "Get-NetIPInterface -ConnectionState Connected | "
-                    + "Sort-Object InterfaceMetric,InterfaceIndex | "
-                    + "ForEach-Object { '{0}|{1}' -f $_.InterfaceIndex,$_.InterfaceMetric }";
-                var output = await RunAsync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], queryCancellation.Token);
-                return output == null ? EmptyPreferences() : ParseWindowsInterfaceMetrics(output);
-            }
+            if (OperatingSystem.IsWindows()) return PreferencesFromMetrics(IpInterfaceTable.ConnectedMetrics());
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -95,53 +100,19 @@ internal static partial class RelayAddressPreference
         return EmptyPreferences();
     }
 
-    private static string? FindRouteInterface(IPAddress address, int port)
+    internal static string? FindRouteInterface(IPAddress address, int port)
     {
         try
         {
-            if (address.AddressFamily == AddressFamily.InterNetworkV6 && address.ScopeId > 0)
-                return FindInterfaceByIndex((int)address.ScopeId, AddressFamily.InterNetworkV6)?.Name;
-
             using var socket = new Socket(address.AddressFamily, SocketType.Dgram, ProtocolType.Udp);
             socket.Connect(new IPEndPoint(address, port));
-            return socket.LocalEndPoint is IPEndPoint local ? FindInterfaceByAddress(local.Address)?.Name : null;
+            return socket.LocalEndPoint is IPEndPoint local ? NetworkInterfaceLookup.FindByAddress(local.Address)?.Name : null;
         }
         catch (Exception exception) when (exception is SocketException or NetworkInformationException)
         {
             return null;
         }
     }
-
-    private static NetworkInterface? FindInterfaceByAddress(IPAddress address)
-    {
-        var normalized = address.IsIPv4MappedToIPv6 ? address.MapToIPv4() : address;
-        return NetworkInterface.GetAllNetworkInterfaces().FirstOrDefault(network =>
-            network.GetIPProperties().UnicastAddresses.Any(unicast =>
-            {
-                var candidate = unicast.Address.IsIPv4MappedToIPv6 ? unicast.Address.MapToIPv4() : unicast.Address;
-                return candidate.Equals(normalized);
-            }));
-    }
-
-    private static NetworkInterface? FindInterfaceByIndex(int index, AddressFamily family) =>
-        NetworkInterface.GetAllNetworkInterfaces().FirstOrDefault(network =>
-        {
-            try
-            {
-                var properties = network.GetIPProperties();
-                return family == AddressFamily.InterNetwork
-                    ? properties.GetIPv4Properties().Index == index
-                    : properties.GetIPv6Properties().Index == index;
-            }
-            catch (NetworkInformationException)
-            {
-                // This interface doesn't support the queried address family (IPv6 disabled on an
-                // Ethernet adapter, a Teredo/ISATAP tunnel with no IPv4 side, etc.) — skip just this
-                // one interface rather than letting the exception abort the whole search, which would
-                // silently discard preference ordering for every interface via the outer catch-all.
-                return false;
-            }
-        });
 
     internal static IReadOnlyDictionary<string, int> ParseMacServiceOrder(string output)
     {
@@ -188,30 +159,20 @@ internal static partial class RelayAddressPreference
         return result;
     }
 
-    internal static IReadOnlyDictionary<string, int> ParseWindowsInterfaceMetrics(string output) =>
-        ParseWindowsInterfaceMetrics(output, index => FindInterfaceByIndex(index, AddressFamily.InterNetwork)?.Name
-            ?? FindInterfaceByIndex(index, AddressFamily.InterNetworkV6)?.Name);
+    internal static IReadOnlyDictionary<string, int> PreferencesFromMetrics(IEnumerable<InterfaceMetric> metrics) =>
+        PreferencesFromMetrics(metrics, index => NetworkInterfaceLookup.FindByIndex(index, AddressFamily.InterNetwork)?.Name
+            ?? NetworkInterfaceLookup.FindByIndex(index, AddressFamily.InterNetworkV6)?.Name);
 
-    internal static IReadOnlyDictionary<string, int> ParseWindowsInterfaceMetrics(
-        string output,
+    internal static IReadOnlyDictionary<string, int> PreferencesFromMetrics(
+        IEnumerable<InterfaceMetric> metrics,
         Func<int, string?> interfaceResolver)
     {
-        var metrics = new Dictionary<int, int>();
-        foreach (var line in output.Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
-        {
-            var parts = line.Split('|', StringSplitOptions.TrimEntries);
-            if (parts.Length == 2
-                && int.TryParse(parts[0], CultureInfo.InvariantCulture, out var index)
-                && int.TryParse(parts[1], CultureInfo.InvariantCulture, out var metric))
-                metrics[index] = metric;
-        }
-
         var result = new Dictionary<string, int>(StringComparer.Ordinal);
-        foreach (var (index, metric) in metrics)
+        foreach (var metric in metrics)
         {
-            var interfaceName = interfaceResolver(index);
-            if (interfaceName != null && (!result.TryGetValue(interfaceName, out var current) || metric < current))
-                result[interfaceName] = metric;
+            var interfaceName = interfaceResolver(metric.Index);
+            if (interfaceName != null && (!result.TryGetValue(interfaceName, out var current) || metric.Metric < current))
+                result[interfaceName] = metric.Metric;
         }
 
         return result;
@@ -258,8 +219,8 @@ internal static partial class RelayAddressPreference
         }
     }
 
-    private static IReadOnlyDictionary<string, int> EmptyPreferences() =>
-        new Dictionary<string, int>(StringComparer.Ordinal);
+    private static Dictionary<string, int> EmptyPreferences() =>
+        new(StringComparer.Ordinal);
 
     [GeneratedRegex(@"^\((\d+)\)\s")]
     private static partial Regex MacOrderLine();

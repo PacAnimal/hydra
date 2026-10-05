@@ -1,5 +1,4 @@
 using System.Text.Json;
-using Hydra.Config;
 using Hydra.Keyboard;
 using Hydra.Relay;
 using Tests.Setup;
@@ -21,61 +20,15 @@ namespace Tests.Styx;
 /// its close is deleted. These tests park the drain to hold that window open on purpose.</para>
 /// </summary>
 [TestFixture]
-public class KeyBundleTests
+public class KeyBundleTests : StyxFixtureBase
 {
-    private static Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactory<global::Styx.Program>? _factory;
-
     private const string Receiver = "receiver";
-
-    [OneTimeSetUp]
-    public static void OneTimeSetUp()
-    {
-        _factory = StyxTestServer.Create();
-        _ = _factory.Server;
-    }
-
-    [OneTimeTearDown]
-    public static async Task OneTimeTearDown()
-    {
-        if (_factory != null) await _factory.DisposeAsync();
-    }
-
-    private static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
 
     /// <summary>
     /// What the spill test's frame counts assume. Pinned against the real constant rather than read from
     /// it, so a retune fails an assertion that names the choice instead of silently sliding the goalposts.
     /// </summary>
     private const int ExpectedCapacity = 64;
-
-    /// <param name="peerTakesBundles">
-    /// What the receiver advertised. FALSE is the un-upgraded peer, and it is not a corner case — it is
-    /// every slave in the field until it is updated.
-    /// </param>
-    private static async Task<(HydraTestClient Sender, HydraTestClient Receiver)> ConnectedPair(bool peerTakesBundles = true)
-    {
-        var cfg = await StyxTestServer.BuildNetworkConfig(_factory!, Guid.NewGuid());
-
-        var sender = new HydraTestClient(_factory!, TransitionTestHelper.Profile("sender", new HydraConfig { Mode = Mode.Master, NetworkConfig = cfg }));
-        var receiver = new HydraTestClient(_factory!, TransitionTestHelper.Profile(Receiver, new HydraConfig { Mode = Mode.Master, NetworkConfig = cfg }));
-
-        sender.World.SetPeerCapabilities(Receiver,
-            PeerCapabilities.Parse(peerTakesBundles ? PeerCapabilities.Advertise() : null));
-
-        await sender.StartAsync(CancellationToken.None);
-        await receiver.StartAsync(CancellationToken.None);
-        await sender.WaitForReady();
-        await receiver.WaitForReady();
-
-        return (sender, receiver);
-    }
-
-    /// <summary>One key event, identified by the character it carries so a sequence can be checked exactly.</summary>
-    private static KeyEventMessage KeyMessage(int n, KeyEventType type = KeyEventType.KeyDown) =>
-        new(type, KeyModifiers.None, (char)('a' + n % 26), null);
-
-    private static byte[] Key(int n, KeyEventType type = KeyEventType.KeyDown) =>
-        MessageSerializer.Encode(MessageKind.KeyEvent, KeyMessage(n, type));
 
     /// <summary>
     /// One key, through whichever of the two entry points the case names.
@@ -91,11 +44,9 @@ public class KeyBundleTests
     /// </summary>
     private static void SendKey(bool typed, HydraTestClient sender, string[] targets, int n, KeyEventType type = KeyEventType.KeyDown)
     {
-        if (typed) sender.SendKeyEvent(targets, KeyMessage(n, type));
-        else sender.Send(targets, Key(n, type));
+        if (typed) sender.SendKeyEvent(targets, TestMessages.KeyMessage(n, type));
+        else sender.Send(targets, TestMessages.Key(n, type));
     }
-
-    private static byte[] Move(int n) => MessageSerializer.Encode(MessageKind.MouseMove, new MouseMoveMessage("", n, n));
 
     /// <summary>
     /// Every key event that arrived, flattened out of whatever frames carried them, in arrival order.
@@ -187,15 +138,14 @@ public class KeyBundleTests
     [TestCase(true)]
     public async Task ABurstOfKeysArrivesCompleteAndInOrder(bool typed)
     {
-        var (sender, receiver) = await ConnectedPair();
-        await using var _ = sender;
-        await using var __ = receiver;
+        await using var pair = await ConnectedPair(peerTakesBundles: true);
+        var (sender, receiver) = pair;
 
         const int count = 40;
 
         sender.HoldLane(RelayLane.Input);
-        var blocker = sender.SendReliableAsync([Receiver], Key(0)).AsTask();
-        await WaitFor(() => sender.Held == 1, "the input lane to park");
+        var blocker = sender.SendReliableAsync([Receiver], TestMessages.Key(0)).AsTask();
+        await sender.WaitUntilLaneHeld();
 
         for (var i = 1; i <= count; i++) SendKey(typed, sender, [Receiver], i);
 
@@ -224,13 +174,12 @@ public class KeyBundleTests
     [TestCase(true)]
     public async Task ADownAndItsUpInOneBundleBothArriveInOrder(bool typed)
     {
-        var (sender, receiver) = await ConnectedPair();
-        await using var _ = sender;
-        await using var __ = receiver;
+        await using var pair = await ConnectedPair(peerTakesBundles: true);
+        var (sender, receiver) = pair;
 
         sender.HoldLane(RelayLane.Input);
-        var blocker = sender.SendReliableAsync([Receiver], Move(1)).AsTask();
-        await WaitFor(() => sender.Held == 1, "the input lane to park");
+        var blocker = sender.SendReliableAsync([Receiver], TestMessages.Move(1)).AsTask();
+        await sender.WaitUntilLaneHeld();
 
         SendKey(typed, sender, [Receiver], 0);
         SendKey(typed, sender, [Receiver], 0, KeyEventType.KeyUp);
@@ -266,16 +215,15 @@ public class KeyBundleTests
     [TestCase(true)]
     public async Task MoreKeysThanOneBundleHoldsSpillIntoTheNextWithoutLoss(bool typed)
     {
-        var (sender, receiver) = await ConnectedPair();
-        await using var _ = sender;
-        await using var __ = receiver;
+        await using var pair = await ConnectedPair(peerTakesBundles: true);
+        var (sender, receiver) = pair;
 
         // Comfortably over the cap, so at least three frames are needed.
         const int count = 150;
 
         sender.HoldLane(RelayLane.Input);
-        var blocker = sender.SendReliableAsync([Receiver], Move(1)).AsTask();
-        await WaitFor(() => sender.Held == 1, "the input lane to park");
+        var blocker = sender.SendReliableAsync([Receiver], TestMessages.Move(1)).AsTask();
+        await sender.WaitUntilLaneHeld();
 
         for (var i = 0; i < count; i++) SendKey(typed, sender, [Receiver], i);
 
@@ -318,17 +266,16 @@ public class KeyBundleTests
     [Test]
     public async Task AMoveBetweenKeysKeepsEverythingInOrder()
     {
-        var (sender, receiver) = await ConnectedPair();
-        await using var _ = sender;
-        await using var __ = receiver;
+        await using var pair = await ConnectedPair(peerTakesBundles: true);
+        var (sender, receiver) = pair;
 
         sender.HoldLane(RelayLane.Input);
-        var blocker = sender.SendReliableAsync([Receiver], Key(25)).AsTask();
-        await WaitFor(() => sender.Held == 1, "the input lane to park");
+        var blocker = sender.SendReliableAsync([Receiver], TestMessages.Key(25)).AsTask();
+        await sender.WaitUntilLaneHeld();
 
-        sender.Send([Receiver], Key(0));
-        sender.Send([Receiver], Move(7));
-        sender.Send([Receiver], Key(1));
+        sender.Send([Receiver], TestMessages.Key(0));
+        sender.Send([Receiver], TestMessages.Move(7));
+        sender.Send([Receiver], TestMessages.Key(1));
 
         sender.Send([Receiver], Sentinel());
         sender.ReleaseLane();
@@ -355,23 +302,22 @@ public class KeyBundleTests
     /// typed.</para>
     ///
     /// <para>The gate is what makes the window deterministic rather than a race: it parks the drain at the
-    /// ENCRYPT step, which is after <c>TryReadQueued</c> has taken the snapshot. So when <c>Held</c> reaches
-    /// one, the first bundle has provably been read — and the key sent next is landing in exactly the gap
+    /// ENCRYPT step, which is after <c>TryReadQueued</c> has taken the snapshot. So once <c>WaitUntilLaneHeld</c>
+    /// returns, the first bundle has provably been read — and the key sent next is landing in exactly the gap
     /// that loses it. With the clear in place it starts a fresh bundle; without it, it vanishes.</para>
     /// </summary>
     [TestCase(false)]
     [TestCase(true)]
     public async Task AKeySentAfterTheDrainTookTheBundleStillArrives(bool typed)
     {
-        var (sender, receiver) = await ConnectedPair();
-        await using var _ = sender;
-        await using var __ = receiver;
+        await using var pair = await ConnectedPair(peerTakesBundles: true);
+        var (sender, receiver) = pair;
 
         sender.HoldLane(RelayLane.Input);
 
         // Read and snapshotted by the drain, which then parks — so the bundle behind it is spent.
         SendKey(typed, sender, [Receiver], 0);
-        await WaitFor(() => sender.Held == 1, "the drain to take the first bundle and park");
+        await sender.WaitUntilLaneHeld();
 
         // Into the gap. This must NOT join the bundle that has already been read.
         SendKey(typed, sender, [Receiver], 1);
@@ -400,17 +346,16 @@ public class KeyBundleTests
     [Test]
     public async Task AMouseDeltaBetweenKeysKeepsEverythingInOrder()
     {
-        var (sender, receiver) = await ConnectedPair();
-        await using var _ = sender;
-        await using var __ = receiver;
+        await using var pair = await ConnectedPair(peerTakesBundles: true);
+        var (sender, receiver) = pair;
 
         sender.HoldLane(RelayLane.Input);
-        var blocker = sender.SendReliableAsync([Receiver], Move(1)).AsTask();
-        await WaitFor(() => sender.Held == 1, "the input lane to park");
+        var blocker = sender.SendReliableAsync([Receiver], TestMessages.Move(1)).AsTask();
+        await sender.WaitUntilLaneHeld();
 
-        sender.Send([Receiver], Key(0));
+        sender.Send([Receiver], TestMessages.Key(0));
         sender.SendMouseDelta([Receiver], 7, 9);
-        sender.Send([Receiver], Key(1));
+        sender.Send([Receiver], TestMessages.Key(1));
 
         sender.Send([Receiver], Sentinel());
         sender.ReleaseLane();
@@ -436,17 +381,16 @@ public class KeyBundleTests
     [Test]
     public async Task AReliableMessageBetweenKeysKeepsEverythingInOrder()
     {
-        var (sender, receiver) = await ConnectedPair();
-        await using var _ = sender;
-        await using var __ = receiver;
+        await using var pair = await ConnectedPair(peerTakesBundles: true);
+        var (sender, receiver) = pair;
 
         sender.HoldLane(RelayLane.Input);
-        var blocker = sender.SendReliableAsync([Receiver], Move(1)).AsTask();
-        await WaitFor(() => sender.Held == 1, "the input lane to park");
+        var blocker = sender.SendReliableAsync([Receiver], TestMessages.Move(1)).AsTask();
+        await sender.WaitUntilLaneHeld();
 
-        sender.Send([Receiver], Key(0));
+        sender.Send([Receiver], TestMessages.Key(0));
         var between = sender.SendReliableAsync([Receiver], MessageSerializer.Encode(MessageKind.LockScreen, new LockScreenMessage(0))).AsTask();
-        sender.Send([Receiver], Key(1));
+        sender.Send([Receiver], TestMessages.Key(1));
 
         sender.Send([Receiver], Sentinel());
         sender.ReleaseLane();
@@ -483,15 +427,14 @@ public class KeyBundleTests
     [TestCase(true)]
     public async Task APeerThatNeverAdvertisedSupportIsNeverSentABatch(bool typed)
     {
-        var (sender, receiver) = await ConnectedPair(peerTakesBundles: false);
-        await using var _ = sender;
-        await using var __ = receiver;
+        await using var pair = await ConnectedPair(peerTakesBundles: false);
+        var (sender, receiver) = pair;
 
         const int count = 20;
 
         sender.HoldLane(RelayLane.Input);
-        var blocker = sender.SendReliableAsync([Receiver], Move(1)).AsTask();
-        await WaitFor(() => sender.Held == 1, "the input lane to park");
+        var blocker = sender.SendReliableAsync([Receiver], TestMessages.Move(1)).AsTask();
+        await sender.WaitUntilLaneHeld();
 
         for (var i = 0; i < count; i++) SendKey(typed, sender, [Receiver], i);
 
@@ -523,13 +466,12 @@ public class KeyBundleTests
     [TestCase(true)]
     public async Task APeerThatAdvertisedSupportIsSentOne(bool typed)
     {
-        var (sender, receiver) = await ConnectedPair();
-        await using var _ = sender;
-        await using var __ = receiver;
+        await using var pair = await ConnectedPair(peerTakesBundles: true);
+        var (sender, receiver) = pair;
 
         sender.HoldLane(RelayLane.Input);
-        var blocker = sender.SendReliableAsync([Receiver], Move(1)).AsTask();
-        await WaitFor(() => sender.Held == 1, "the input lane to park");
+        var blocker = sender.SendReliableAsync([Receiver], TestMessages.Move(1)).AsTask();
+        await sender.WaitUntilLaneHeld();
 
         for (var i = 0; i < 20; i++) SendKey(typed, sender, [Receiver], i);
 
@@ -556,16 +498,15 @@ public class KeyBundleTests
     [TestCase(true)]
     public async Task ARandomisedStreamOfKeysRoundTripsExactly(bool typed)
     {
-        var (sender, receiver) = await ConnectedPair();
-        await using var _ = sender;
-        await using var __ = receiver;
+        await using var pair = await ConnectedPair(peerTakesBundles: true);
+        var (sender, receiver) = pair;
 
         var random = new Random(20260921);
         var sent = new List<(KeyEventType Type, char Character)>();
 
         sender.HoldLane(RelayLane.Input);
-        var blocker = sender.SendReliableAsync([Receiver], Move(1)).AsTask();
-        await WaitFor(() => sender.Held == 1, "the input lane to park");
+        var blocker = sender.SendReliableAsync([Receiver], TestMessages.Move(1)).AsTask();
+        await sender.WaitUntilLaneHeld();
 
         for (var i = 0; i < 300; i++)
         {
@@ -596,17 +537,16 @@ public class KeyBundleTests
     [Test]
     public async Task AMoveMadeAfterAKeyIsNeverDeliveredBeforeIt()
     {
-        var (sender, receiver) = await ConnectedPair();
-        await using var _ = sender;
-        await using var __ = receiver;
+        await using var pair = await ConnectedPair(peerTakesBundles: true);
+        var (sender, receiver) = pair;
 
         sender.HoldLane(RelayLane.Input);
-        var blocker = sender.SendReliableAsync([Receiver], Key(25)).AsTask();
-        await WaitFor(() => sender.Held == 1, "the input lane to park");
+        var blocker = sender.SendReliableAsync([Receiver], TestMessages.Key(25)).AsTask();
+        await sender.WaitUntilLaneHeld();
 
-        sender.Send([Receiver], Move(3));
-        sender.Send([Receiver], Key(0));
-        sender.Send([Receiver], Move(9));
+        sender.Send([Receiver], TestMessages.Move(3));
+        sender.Send([Receiver], TestMessages.Key(0));
+        sender.Send([Receiver], TestMessages.Move(9));
 
         sender.Send([Receiver], Sentinel());
         sender.ReleaseLane();
@@ -631,13 +571,12 @@ public class KeyBundleTests
     [TestCase(true)]
     public async Task ALoneKeyTravelsAsAPlainKeyEventNotABatchOfOne(bool typed)
     {
-        var (sender, receiver) = await ConnectedPair();
-        await using var _ = sender;
-        await using var __ = receiver;
+        await using var pair = await ConnectedPair(peerTakesBundles: true);
+        var (sender, receiver) = pair;
 
         sender.HoldLane(RelayLane.Input);
-        var blocker = sender.SendReliableAsync([Receiver], Move(1)).AsTask();
-        await WaitFor(() => sender.Held == 1, "the input lane to park");
+        var blocker = sender.SendReliableAsync([Receiver], TestMessages.Move(1)).AsTask();
+        await sender.WaitUntilLaneHeld();
 
         SendKey(typed, sender, [Receiver], 0);
 
@@ -671,20 +610,19 @@ public class KeyBundleTests
     [Test]
     public async Task AKeyForAnotherTargetNeverJoinsThisOnesFrame()
     {
-        var (sender, receiver) = await ConnectedPair();
-        await using var _ = sender;
-        await using var __ = receiver;
+        await using var pair = await ConnectedPair(peerTakesBundles: true);
+        var (sender, receiver) = pair;
 
         const string other = "somebody-else";
         sender.World.SetPeerCapabilities(other, PeerCapabilities.Parse(PeerCapabilities.Advertise()));
 
         sender.HoldLane(RelayLane.Input);
-        var blocker = sender.SendReliableAsync([Receiver], Move(1)).AsTask();
-        await WaitFor(() => sender.Held == 1, "the input lane to park");
+        var blocker = sender.SendReliableAsync([Receiver], TestMessages.Move(1)).AsTask();
+        await sender.WaitUntilLaneHeld();
 
-        sender.Send([Receiver], Key(0));
-        sender.Send([other], Key(1));
-        sender.Send([Receiver], Key(2));
+        sender.Send([Receiver], TestMessages.Key(0));
+        sender.Send([other], TestMessages.Key(1));
+        sender.Send([Receiver], TestMessages.Key(2));
 
         sender.Send([Receiver], Sentinel());
         sender.ReleaseLane();
@@ -693,18 +631,5 @@ public class KeyBundleTests
         Assert.That(KeysIn(await ReadUntilSentinel(receiver)),
             Is.EqualTo([(KeyEventType.KeyDown, 'a'), (KeyEventType.KeyDown, 'c')]),
             "a key addressed to another host was delivered here, which means it was never delivered there");
-    }
-
-    private static async Task WaitFor(Func<bool> condition, string what, int timeoutMs = 15000)
-    {
-        using var cancel = new CancellationTokenSource(timeoutMs);
-        try
-        {
-            while (!condition()) await Task.Delay(10, cancel.Token);
-        }
-        catch (OperationCanceledException)
-        {
-            Assert.Fail($"Timed out waiting for {what}");
-        }
     }
 }

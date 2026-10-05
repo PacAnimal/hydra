@@ -15,21 +15,8 @@ internal sealed class MacMediaRemoteController
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void SendCommandDelegate(uint command, nint completion);
 
-    private readonly SendCommandDelegate? _sendCommand;
-
-    internal MacMediaRemoteController()
-    {
-        try
-        {
-            var library = NativeLibrary.Load(Framework);
-            _sendCommand = Marshal.GetDelegateForFunctionPointer<SendCommandDelegate>(
-                NativeLibrary.GetExport(library, "MRMediaRemoteSendCommand"));
-        }
-        catch
-        {
-            _sendCommand = null;
-        }
-    }
+    private readonly SendCommandDelegate? _sendCommand =
+        OptionalNative.LoadDelegate<SendCommandDelegate>(OptionalNative.LoadLibrary(Framework), "MRMediaRemoteSendCommand");
 
     internal bool TrySend(SpecialKey key)
     {

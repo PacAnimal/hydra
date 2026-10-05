@@ -63,7 +63,8 @@ internal sealed class XGrabSession(
 
             if (result != NativeMethods.GrabSuccess)
             {
-                log.LogDebug("XGrab{Label} retry {Attempt}/{Max} failed (result={Result})", label, i + 1, maxAttempts, result);
+                if (log.IsEnabled(LogLevel.Debug))
+                    log.LogDebug("XGrab{Label} retry {Attempt}/{Max} failed (result={Result})", label, i + 1, maxAttempts, result);
                 continue;
             }
 
@@ -77,7 +78,7 @@ internal sealed class XGrabSession(
                 }
                 _grabbed = true;
             }
-            log.LogInformation("XGrab{Label} succeeded on retry {Attempt}", label, i + 1);
+            if (log.IsEnabled(LogLevel.Information)) log.LogInformation("XGrab{Label} succeeded on retry {Attempt}", label, i + 1);
             return;
         }
         log.LogWarning("XGrab{Label} failed after {Max} retries", label, maxAttempts);

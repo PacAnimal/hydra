@@ -8,9 +8,6 @@ namespace Hydra.Platform.MacOs;
 internal sealed class MacBrightnessController
 {
     private const string DisplayServices = "/System/Library/PrivateFrameworks/DisplayServices.framework/DisplayServices";
-    // matches Apple's own "IOKit" capitalization, not the standard identifier casing rule
-    // ReSharper disable once InconsistentNaming
-    private const string IOKit = "/System/Library/Frameworks/IOKit.framework/IOKit";
     private const int KernSuccess = 0;
     private const uint DdcDisplayAddress = 0x37;
     private const uint DdcHostAddress = 0x51;
@@ -36,8 +33,8 @@ internal sealed class MacBrightnessController
     private unsafe delegate int I2CDelegate(nint avService, uint address, uint senderAddress, byte* data, uint length);
 
     private readonly Lock _gate = new();
-    private readonly nint _displayServicesHandle = LoadLibrary(DisplayServices);
-    private readonly nint _ioKitHandle = LoadLibrary(IOKit);
+    private readonly nint _displayServicesHandle = OptionalNative.LoadLibrary(DisplayServices);
+    private readonly nint _ioKitHandle = OptionalNative.LoadLibrary(NativeMethods.IOKit);
     private readonly GetBrightnessDelegate? _getDisplayBrightness;
     private readonly SetBrightnessDelegate? _setDisplayBrightness;
     private readonly CanChangeBrightnessDelegate? _canChangeDisplayBrightness;
@@ -48,13 +45,13 @@ internal sealed class MacBrightnessController
 
     internal MacBrightnessController()
     {
-        _getDisplayBrightness = LoadDelegate<GetBrightnessDelegate>(_displayServicesHandle, "DisplayServicesGetBrightness");
-        _setDisplayBrightness = LoadDelegate<SetBrightnessDelegate>(_displayServicesHandle, "DisplayServicesSetBrightness");
-        _canChangeDisplayBrightness = LoadDelegate<CanChangeBrightnessDelegate>(_displayServicesHandle, "DisplayServicesCanChangeBrightness");
-        _displayBrightnessChanged = LoadDelegate<BrightnessChangedDelegate>(_displayServicesHandle, "DisplayServicesBrightnessChanged");
-        _createWithService = LoadDelegate<CreateWithServiceDelegate>(_ioKitHandle, "IOAVServiceCreateWithService");
-        _readI2C = LoadDelegate<I2CDelegate>(_ioKitHandle, "IOAVServiceReadI2C");
-        _writeI2C = LoadDelegate<I2CDelegate>(_ioKitHandle, "IOAVServiceWriteI2C");
+        _getDisplayBrightness = OptionalNative.LoadDelegate<GetBrightnessDelegate>(_displayServicesHandle, "DisplayServicesGetBrightness");
+        _setDisplayBrightness = OptionalNative.LoadDelegate<SetBrightnessDelegate>(_displayServicesHandle, "DisplayServicesSetBrightness");
+        _canChangeDisplayBrightness = OptionalNative.LoadDelegate<CanChangeBrightnessDelegate>(_displayServicesHandle, "DisplayServicesCanChangeBrightness");
+        _displayBrightnessChanged = OptionalNative.LoadDelegate<BrightnessChangedDelegate>(_displayServicesHandle, "DisplayServicesBrightnessChanged");
+        _createWithService = OptionalNative.LoadDelegate<CreateWithServiceDelegate>(_ioKitHandle, "IOAVServiceCreateWithService");
+        _readI2C = OptionalNative.LoadDelegate<I2CDelegate>(_ioKitHandle, "IOAVServiceReadI2C");
+        _writeI2C = OptionalNative.LoadDelegate<I2CDelegate>(_ioKitHandle, "IOAVServiceWriteI2C");
     }
 
     internal bool TryAdjustMainDisplay(bool increase, out float normalizedBrightness)
@@ -182,18 +179,5 @@ internal sealed class MacBrightnessController
         byte checksum = 0x6E ^ (byte)DdcHostAddress;
         foreach (var value in packet[..^1]) checksum ^= value;
         return checksum;
-    }
-
-    private static nint LoadLibrary(string path)
-    {
-        try { return NativeLibrary.Load(path); }
-        catch { return nint.Zero; }
-    }
-
-    private static T? LoadDelegate<T>(nint handle, string symbol) where T : Delegate
-    {
-        if (handle == nint.Zero) return null;
-        try { return Marshal.GetDelegateForFunctionPointer<T>(NativeLibrary.GetExport(handle, symbol)); }
-        catch { return null; }
     }
 }

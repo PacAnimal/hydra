@@ -1,22 +1,27 @@
 using Hydra.Management;
 using Microsoft.Extensions.Logging.Abstractions;
+using Tests.Setup;
 
 namespace Tests.Management;
 
 public class ManagementServerTests
 {
+    private string _configPath = null!;
+
+    [SetUp]
+    public void SetUp() => _configPath = Path.Combine(TestPaths.FreshFixtureRoot(nameof(ManagementServerTests)), "hydra.conf");
+
     [TestCase(true, "Hydra shutdown requested.")]
     [TestCase(false, "Shutdown is unavailable.")]
     public async Task ShutdownDispatchReturnsTheLifetimeDecision(bool accepted, string message)
     {
-        var lifetime = new FakeLifetime(new CommandResult(accepted, message));
+        var lifetime = new FakeLifetimeController(new CommandResult(accepted, message));
         var server = new ManagementServer(
             null!,
-            new HydraRuntimeInfo(Path.Combine(TestContext.CurrentContext.WorkDirectory,
-                $"server-{Guid.NewGuid():N}.conf"), DateTimeOffset.UtcNow),
+            new HydraRuntimeInfo(_configPath, DateTimeOffset.UtcNow),
             null!, null!, null!, lifetime, null!, NullLogger<ManagementServer>.Instance);
 
-        var response = await server.DispatchAsync(new ManagementRequest("hydra.shutdown"), CancellationToken.None);
+        var response = await server.DispatchAsync(new ManagementRequest(ManagementMethods.HydraShutdown), CancellationToken.None);
 
         using (Assert.EnterMultipleScope())
         {
@@ -27,16 +32,18 @@ public class ManagementServerTests
         }
     }
 
-    private sealed class FakeLifetime(CommandResult shutdownResult) : IHydraLifetimeController
+    // the entry assembly is the test host here, and a published single-file app's is Hydra by luck
+    [Test]
+    public async Task HelloReportsHydrasOwnVersion()
     {
-        internal int ShutdownRequests { get; private set; }
+        var server = new ManagementServer(
+            null!,
+            new HydraRuntimeInfo(_configPath, DateTimeOffset.UtcNow),
+            null!, null!, null!, new FakeLifetimeController(), null!, NullLogger<ManagementServer>.Instance);
 
-        public void RestartAfterResponse() { }
+        var response = await server.DispatchAsync(new ManagementRequest(ManagementMethods.Hello), CancellationToken.None);
 
-        public CommandResult ShutdownAfterResponse()
-        {
-            ShutdownRequests++;
-            return shutdownResult;
-        }
+        Assert.That(ManagementJson.Deserialize<ServerHello>(response.Json).HydraVersion,
+            Is.EqualTo(typeof(ManagementServer).Assembly.GetName().Version!.ToString(3)));
     }
 }

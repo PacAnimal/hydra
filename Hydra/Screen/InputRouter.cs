@@ -75,6 +75,8 @@ public class InputRouter(
     private readonly IFileSelectionDetector _selectionDetector = selectionDetector;
     private ClipboardSnapshot? _lastReceived;
     private string? _lastPulledFrom;
+    // cancelled when stopping begins: abandons a selection query and refuses new ones
+    private readonly CancellationTokenSource _stopping = new();
 
 
     public async Task StartAsync(CancellationToken cancellationToken)
@@ -87,7 +89,8 @@ public class InputRouter(
             log.LogInformation("Accessibility permission granted");
         }
 
-        log.LogInformation("Host: {Name}", profile.Name);
+        if (log.IsEnabled(LogLevel.Information))
+            log.LogInformation("Host: {Name}", profile.Name);
 
         if (!profile.RemoteOnly && profile.LocalHost == null && profile.Hosts.Count > 0)
         {
@@ -116,8 +119,11 @@ public class InputRouter(
         st.Screens = BuildAllScreens(st.LocalScreens);
         st.Layout = new ScreenLayout(st.Screens, profile.Hosts, profile.DeadCorners, BuildScaleMap(st.LocalScreenEntries, []), log);
 
-        foreach (var remote in st.Screens.Where(r => !r.IsLocal))
-            log.LogInformation("Remote screen '{Name}': waiting for peer", remote.Name);
+        if (log.IsEnabled(LogLevel.Information))
+        {
+            foreach (var remote in st.Screens.Where(r => !r.IsLocal))
+                log.LogInformation("Remote screen '{Name}': waiting for peer", remote.Name);
+        }
 
         relay.PeersChanged += OnPeersChanged;
         relay.MessageReceived += OnMessageReceived;
@@ -145,6 +151,7 @@ public class InputRouter(
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {
+        await _stopping.CancelAsync();
         _pollCts?.Cancel();
         _pollCts?.Dispose();
         relay.PeersChanged -= OnPeersChanged;
@@ -292,6 +299,7 @@ public class InputRouter(
                 host = LeaveVirtualScreen(st, out wx, out wy);
 
             if (delta.AnyDeparted) RebuildLayout(st, delta.PeerScreensSnapshot);
+            if (st.RemoteCopyHost != null && !current.Contains(st.RemoteCopyHost)) AbandonRemoteCopy(st, "it left the relay");
             return (host, wx, wy);
         }, (null, 0, 0));
 
@@ -299,7 +307,8 @@ public class InputRouter(
         {
             ReturnToLocalScreen(warpX, warpY);
             ShowCursorOnReturn();
-            log.LogInformation("Remote peer '{Name}' disconnected — returned to local screen", disconnectedHost);
+            if (log.IsEnabled(LogLevel.Information))
+                log.LogInformation("Remote peer '{Name}' disconnected — returned to local screen", disconnectedHost);
         }
 
         // abort a transfer only if ITS peer actually left — not merely because the cursor's current screen
@@ -311,7 +320,8 @@ public class InputRouter(
         {
             var payload = MessageSerializer.Encode(MessageKind.MasterConfig, new MasterConfigMessage(profile.LogLevel));
             relay.Send([host], payload);
-            log.LogDebug("Sent MasterConfig to {Host}", host);
+            if (log.IsEnabled(LogLevel.Debug))
+                log.LogDebug("Sent MasterConfig to {Host}", host);
         }
 
         if (profile.RemoteOnly)
@@ -325,6 +335,7 @@ public class InputRouter(
         var (disconnectedHost, warpX, warpY) = await RunFence<(string?, int, int)>(st =>
         {
             var host = LeaveVirtualScreen(st, out var wx, out var wy);
+            if (st.RemoteCopyHost != null) AbandonRemoteCopy(st, "the relay disconnected");
             return (host, wx, wy);
         }, (null, 0, 0));
 
@@ -398,7 +409,8 @@ public class InputRouter(
                     AnchorAtWarpPoint(st);
                     await platform.WarpToPark(st.WarpX, st.WarpY);
                     SendEnterScreen(dest, savedX, savedY);
-                    log.LogInformation("Restored cursor to '{Screen}' after screensaver", savedScreen);
+                    if (log.IsEnabled(LogLevel.Information))
+                        log.LogInformation("Restored cursor to '{Screen}' after screensaver", savedScreen);
                 }
             }
         });
@@ -452,7 +464,8 @@ public class InputRouter(
             if (string.IsNullOrEmpty(clip.Text) && string.IsNullOrEmpty(clip.PrimaryText) && clip.ImagePng == null && clip.Html == null && clip.Rtf == null)
                 return; // nothing to push
             var hash = ClipboardUtils.ClipboardHash(clip);
-            log.LogDebug("Sending clipboard hash to {Host}", host);
+            if (log.IsEnabled(LogLevel.Debug))
+                log.LogDebug("Sending clipboard hash to {Host}", host);
             relay.Send([host], MessageSerializer.Encode(MessageKind.ClipboardHash, new ClipboardHashMessage(hash)));
         }
         catch (Exception ex)
@@ -481,7 +494,8 @@ public class InputRouter(
     private void PullClipboardFromHost(string host)
     {
         if (!UseHydraClipboard(host)) return;
-        log.LogDebug("Pulling clipboard from {Host}", host);
+        if (log.IsEnabled(LogLevel.Debug))
+            log.LogDebug("Pulling clipboard from {Host}", host);
         _lastPulledFrom = host;
         var localClip = ClipboardUtils.ReadWithFallback(_clipboardSync, _lastReceived, log, "pull");
         var masterHash = ClipboardUtils.ClipboardHash(localClip);
@@ -506,7 +520,7 @@ public class InputRouter(
                     {
                         await _peerState.SetPeerPlatform(sourceHost, info.Platform.Value);
                         _peerPlatforms[sourceHost] = info.Platform.Value;
-                        if (!UseHydraClipboard(sourceHost))
+                        if (!UseHydraClipboard(sourceHost) && log.IsEnabled(LogLevel.Information))
                             log.LogInformation("Clipboard sync with {Host}: using macOS Universal Clipboard; Hydra is standing down", sourceHost);
                     }
                     var snapshot = await _peerState.GetPeerScreensSnapshot();
@@ -515,7 +529,8 @@ public class InputRouter(
                         RebuildLayout(st, snapshot);
                         if (profile.RemoteOnly) await TryEnterRemoteOnly(st);
                     });
-                    log.LogInformation("Screen info from {Host}: {Count} screen(s)", sourceHost, info.Screens.Count);
+                    if (log.IsEnabled(LogLevel.Information))
+                        log.LogInformation("Screen info from {Host}: {Count} screen(s)", sourceHost, info.Screens.Count);
                 }
                 break;
             case MessageKind.SlaveLog:
@@ -536,7 +551,7 @@ public class InputRouter(
                         false);
                     if (onThatScreen)
                         OnClipboardPullRequest(sourceHost);
-                    else
+                    else if (log.IsEnabled(LogLevel.Debug))
                         log.LogDebug("Clipboard pull request from {Host} ignored (cursor not on that screen)", sourceHost);
                     break;
                 }
@@ -548,16 +563,19 @@ public class InputRouter(
                     // only apply if from the slave we last pulled from
                     if (!sourceHost.EqualsIgnoreCase(_lastPulledFrom))
                     {
-                        log.LogDebug("Clipboard pull response from {Host} ignored (not last pulled from)", sourceHost);
+                        if (log.IsEnabled(LogLevel.Debug))
+                            log.LogDebug("Clipboard pull response from {Host} ignored (not last pulled from)", sourceHost);
                         break;
                     }
                     if (clip.Unchanged == true)
                     {
-                        log.LogDebug("Clipboard pull response from {Host}: unchanged", sourceHost);
+                        if (log.IsEnabled(LogLevel.Debug))
+                            log.LogDebug("Clipboard pull response from {Host}: unchanged", sourceHost);
                         break;
                     }
-                    log.LogDebug("Clipboard pull response from {Host}: text={TextLen}, primary={PrimaryLen}, image={ImageLen}",
-                        sourceHost, clip.Text?.Length, clip.PrimaryText?.Length, clip.ImagePng?.Length);
+                    if (log.IsEnabled(LogLevel.Debug))
+                        log.LogDebug("Clipboard pull response from {Host}: text={TextLen}, primary={PrimaryLen}, image={ImageLen}",
+                            sourceHost, clip.Text?.Length, clip.PrimaryText?.Length, clip.ImagePng?.Length);
                     var validated = ClipboardUtils.ValidateFields(clip.Text, clip.PrimaryText, clip.ImagePng, clip.Html, clip.Rtf, log, "pull response", sourceHost);
                     if (!ClipboardUtils.TrySetClipboardPreservingFiles(_clipboardSync, validated, log, $"pull response from {sourceHost}"))
                         break;
@@ -573,41 +591,152 @@ public class InputRouter(
                 break;
             case MessageKind.FileSelectionResponse:
                 {
-                    var osdText = _fileTransfer.HandleSelectionResponse(sourceHost, body);
-                    var osdPayload = MessageSerializer.Encode(MessageKind.Osd, new OsdMessage(osdText));
-                    relay.Send([sourceHost], osdPayload);
+                    var response = body.ParseMessage<FileSelectionResponseMessage>(log, $"FileSelectionResponse from {sourceHost}");
+                    // on the consumer, so no copy can be pressed between the check and the buffer write
+                    var outcome = await RunFence(st => ApplyRemoteSelection(st, sourceHost, response), RemoteSelectionOutcome.NotApplied);
+                    if (outcome == RemoteSelectionOutcome.Superseded && log.IsEnabled(LogLevel.Debug))
+                        log.LogDebug("Copy hotkey: dropping superseded selection response from {Host}", sourceHost);
+                    else if (outcome == RemoteSelectionOutcome.NotApplied && log.IsEnabled(LogLevel.Debug))
+                        log.LogDebug("Copy hotkey: selection response from {Host} not applied: the router has stopped or the command failed", sourceHost);
                     break;
                 }
             case MessageKind.FileTransferBusy:
                 {
                     _fileTransfer.HandleBusy(sourceHost);
-                    _ = _commands.Writer.TryWrite(st => { ShowOsd(st, "Transfer in progress"); return ValueTask.CompletedTask; });
+                    _ = _commands.Writer.TryWrite(st =>
+                    {
+                        if (IsAwaitedRemoteCopy(st, sourceHost)) AbandonRemoteCopy(st, "it is busy with a transfer");
+                        ShowOsd(st, "Transfer in progress");
+                        return ValueTask.CompletedTask;
+                    });
                     break;
                 }
             case var _ when FileTransferService.IsFileTransferMessage(kind):
                 {
                     var wasSendingTo = _fileTransfer.IsSendingTo(sourceHost);
                     var wasCoordinating = _fileTransfer.IsCoordinatingTransferTo(sourceHost);
-                    var wasReceivingFrom = _fileTransfer.IsReceivingFrom(sourceHost);
                     if (wasSendingTo || wasCoordinating)
                     {
                         if (kind == MessageKind.FileTransferAccepted)
-                            SendOsd(sourceHost, "Pasted!");
+                            SendOsd(sourceHost, FileTransferService.PastingOsd);
                         else if (kind == MessageKind.FileTransferAbort)
                         {
-                            var abort = body.FromSaneJson<FileTransferAbortMessage>();
+                            var abort = body.TryDecodeBody<FileTransferAbortMessage>();
                             if (abort?.Reason == FileTransferService.ReasonNoFolder)
                                 SendOsd(sourceHost, "Invalid paste target");
                         }
                     }
-                    await _fileTransfer.OnMessageAsync(sourceHost, kind, body, relay);
-                    if (wasReceivingFrom && kind == MessageKind.FileTransferDone)
-                        osd.Show("Pasted!");
+                    if (await _fileTransfer.OnMessageAsync(sourceHost, kind, body, relay))
+                        osd.Show(FileTransferService.PastedOsd);
                     break;
                 }
             default:
-                log.LogDebug("Unhandled message kind {Kind} from {Host}", kind, sourceHost);
+                if (log.IsEnabled(LogLevel.Debug))
+                    log.LogDebug("Unhandled message kind {Kind} from {Host}", kind, sourceHost);
                 break;
+        }
+    }
+
+    // the latest local selection query, done once its report is queued on the consumer or it was cancelled
+    internal Task LocalSelectionQuery { get; private set; } = Task.CompletedTask;
+
+    // queries off the consumer and reports back through it, so routing carries on meanwhile
+    private void CopyLocalSelection(LocalMasterState st)
+    {
+        if (_stopping.IsCancellationRequested)
+        {
+            if (log.IsEnabled(LogLevel.Debug))
+                log.LogDebug("Copy hotkey: stopping, so not asking {Name}", _selectionDetector.FileManagerName);
+            return;
+        }
+        var generation = ++st.CopyGeneration;
+        st.CopyPending = true;
+        st.RemoteCopyHost = null;
+        var stopping = _stopping.Token;
+        LocalSelectionQuery = Task.Run(() =>
+        {
+            FileSelectionResult result;
+            try
+            {
+                result = _selectionDetector.GetSelectedPaths(stopping);
+            }
+            catch (OperationCanceledException) when (stopping.IsCancellationRequested)
+            {
+                log.LogDebug("Copy hotkey: selection query abandoned by stopping");
+                return;
+            }
+            catch (Exception ex)
+            {
+                log.LogError(ex, "Copy hotkey: file selection query failed");
+                result = FileSelectionResult.Failure;
+            }
+            _ = _commands.Writer.TryWrite(s =>
+            {
+                ReportLocalSelection(s, generation, result);
+                return ValueTask.CompletedTask;
+            });
+        });
+    }
+
+    // a remote copy supersedes any local query still running, and only the latest press's host may answer
+    private static void CopyRemoteSelection(LocalMasterState st, string host)
+    {
+        st.CopyGeneration++;
+        st.CopyPending = true;
+        st.RemoteCopyHost = host;
+    }
+
+    private static bool IsAwaitedRemoteCopy(LocalMasterState st, string host) => st.RemoteCopyHost?.EqualsIgnoreCase(host) == true;
+
+    // each remote press takes its host's first answer, shown wherever the cursor is now
+    private RemoteSelectionOutcome ApplyRemoteSelection(LocalMasterState st, string host, FileSelectionResponseMessage? response)
+    {
+        if (!IsAwaitedRemoteCopy(st, host)) return RemoteSelectionOutcome.Superseded;
+        st.CopyPending = false;
+        st.RemoteCopyHost = null;
+        ShowOsd(st, response == null ? FileSelectionResult.FailedMessage : _fileTransfer.HandleSelectionResponse(host, response));
+        return RemoteSelectionOutcome.Applied;
+    }
+
+    // the awaited host will not answer, so a paste need not wait for it
+    private void AbandonRemoteCopy(LocalMasterState st, string reason)
+    {
+        if (log.IsEnabled(LogLevel.Information))
+            log.LogInformation("Copy hotkey: no selection coming from {Host}: {Reason}", st.RemoteCopyHost, reason);
+        st.CopyPending = false;
+        st.RemoteCopyHost = null;
+    }
+
+    // only the latest press reports; an earlier query answering late is dropped
+    private void ReportLocalSelection(LocalMasterState st, long generation, FileSelectionResult result)
+    {
+        if (generation != st.CopyGeneration)
+        {
+            log.LogDebug("Copy hotkey: dropping superseded selection result");
+            return;
+        }
+        st.CopyPending = false;
+        if (result.Failed)
+            ShowOsd(st, FileSelectionResult.FailedMessage);
+        else if (!result.FileManagerFocused)
+        {
+            if (log.IsEnabled(LogLevel.Information))
+                log.LogInformation("Copy hotkey: {Name} is not focused", _selectionDetector.FileManagerName);
+            ShowOsd(st, $"{_selectionDetector.FileManagerName} is not focused");
+        }
+        else if (result.Paths != null)
+        {
+            if (log.IsEnabled(LogLevel.Information))
+                log.LogInformation("Copy hotkey: {Count} file(s) selected locally: {Paths}", result.Paths.Count, string.Join(", ", result.Paths));
+            _fileTransfer.SetCopyBuffer(profile.Name, result.Paths);
+            var n = result.Paths.Count;
+            ShowOsd(st, $"{n} {(n == 1 ? "item" : "items")} copied");
+        }
+        else
+        {
+            log.LogInformation("Copy hotkey: no files selected locally");
+            _fileTransfer.ClearCopyBuffer();
+            ShowOsd(st, "0 items selected");
         }
     }
 
@@ -641,12 +770,11 @@ public class InputRouter(
         var logger = _peerState.GetOrCreateSlaveLogger(category, loggerFactory);
 
         var level = (LogLevel)entry.Level;
-        // ReSharper disable TemplateIsNotCompileTimeConstantProblem
+        if (!logger.IsEnabled(level)) return;
         if (entry.Exception != null)
             logger.Log(level, "{Message}\n{Exception}", entry.Message, entry.Exception);
         else
             logger.Log(level, "{Message}", entry.Message);
-        // ReSharper restore TemplateIsNotCompileTimeConstantProblem
     }
 
     // rebuilds screens/layout from localScreens/peerScreens; must be called from consumer
@@ -737,7 +865,7 @@ public class InputRouter(
         {
             st.LastInputTick = _getTickCount();
             await activityTracker.LocalActivity();
-            if (st.Mouse.IsOnVirtualScreen)
+            if (st.Mouse.IsOnVirtualScreen && log.IsEnabled(LogLevel.Debug))
                 log.LogDebug("Key: {Type}{Label} mods={Modifiers}", keyEvent.Type, label, keyEvent.Modifiers);
 
             // consume both KeyDown and KeyUp for hotkeys so the slave never sees either half
@@ -757,8 +885,9 @@ public class InputRouter(
                     {
                         st.ConfinedToScreen = !st.ConfinedToScreen;
                         ShowOsd(st, st.ConfinedToScreen ? "Cursor lock: On" : "Cursor lock: Off");
-                        log.LogInformation("Cursor lock: {State} (remote-only, no local screen)",
-                            st.ConfinedToScreen ? "confined to current screen" : "free to roam");
+                        if (log.IsEnabled(LogLevel.Information))
+                            log.LogInformation("Cursor lock: {State} (remote-only, no local screen)",
+                                st.ConfinedToScreen ? "confined to current screen" : "free to roam");
                     }
                     else
                     {
@@ -794,7 +923,8 @@ public class InputRouter(
                         else
                         {
                             ShowOsd(st, st.LockedToScreen ? "Mouse lock: On" : "Mouse lock: Off");
-                            log.LogInformation("Screen lock: {State}", st.LockedToScreen ? "locked" : "unlocked");
+                            if (log.IsEnabled(LogLevel.Information))
+                                log.LogInformation("Screen lock: {State}", st.LockedToScreen ? "locked" : "unlocked");
                         }
                     }
                 }
@@ -814,7 +944,8 @@ public class InputRouter(
                     var screenName = st.Mouse.CurrentScreen.Name;
                     var isNowRelative = !st.RelativeMouseScreens.GetValueOrDefault(screenName);
                     st.RelativeMouseScreens[screenName] = isNowRelative;
-                    log.LogInformation("Mouse mode for '{Screen}': {Mode}", screenName, isNowRelative ? "relative" : "absolute");
+                    if (log.IsEnabled(LogLevel.Information))
+                        log.LogInformation("Mouse mode for '{Screen}': {Mode}", screenName, isNowRelative ? "relative" : "absolute");
                     ShowOsd(st, isNowRelative ? "Relative mouse: On" : "Relative mouse: Off");
                 }
                 else if (hotkeyAction == HotkeyAction.CopyFiles)
@@ -832,37 +963,22 @@ public class InputRouter(
                         }
                         else
                         {
-                            var result = _selectionDetector.GetSelectedPaths();
-                            if (!result.FileManagerFocused)
-                            {
-                                log.LogInformation("Copy hotkey: {Name} is not focused", _selectionDetector.FileManagerName);
-                                ShowOsd(st, $"{_selectionDetector.FileManagerName} is not focused");
-                            }
-                            else if (result.Paths != null)
-                            {
-                                log.LogInformation("Copy hotkey: {Count} file(s) selected locally: {Paths}", result.Paths.Count, string.Join(", ", result.Paths));
-                                _fileTransfer.SetCopyBuffer(profile.Name, result.Paths);
-                                var n = result.Paths.Count;
-                                ShowOsd(st, $"{n} {(n == 1 ? "item" : "items")} copied");
-                            }
-                            else
-                            {
-                                log.LogInformation("Copy hotkey: no files selected locally");
-                                _fileTransfer.ClearCopyBuffer();
-                                ShowOsd(st, "0 items selected");
-                            }
+                            CopyLocalSelection(st);
                         }
                     }
                     else if (st.Mouse.CurrentScreen != null && relay.IsConnected)
                     {
-                        log.LogInformation("Copy hotkey: querying file selection on {Host}", st.Mouse.CurrentScreen.Host);
+                        if (log.IsEnabled(LogLevel.Information))
+                            log.LogInformation("Copy hotkey: querying file selection on {Host}", st.Mouse.CurrentScreen.Host);
+                        CopyRemoteSelection(st, st.Mouse.CurrentScreen.Host);
                         var queryPayload = MessageSerializer.Encode(MessageKind.FileSelectionQuery, new FileSelectionQueryMessage());
                         relay.Send([st.Mouse.CurrentScreen.Host], queryPayload);
                     }
                 }
                 else if (hotkeyAction == HotkeyAction.MissionControl && st.Mouse.IsOnVirtualScreen && st.Mouse.CurrentScreen != null)
                 {
-                    log.LogInformation("Mission Control hotkey: sending to {Host}", st.Mouse.CurrentScreen.Host);
+                    if (log.IsEnabled(LogLevel.Information))
+                        log.LogInformation("Mission Control hotkey: sending to {Host}", st.Mouse.CurrentScreen.Host);
                     var host = st.Mouse.CurrentScreen.Host;
                     relay.Send([host], MessageSerializer.Encode(MessageKind.KeyEvent, new KeyEventMessage(KeyEventType.KeyDown, KeyModifiers.None, null, SpecialKey.MissionControl)));
                     relay.Send([host], MessageSerializer.Encode(MessageKind.KeyEvent, new KeyEventMessage(KeyEventType.KeyUp, KeyModifiers.None, null, SpecialKey.MissionControl)));
@@ -878,6 +994,11 @@ public class InputRouter(
                         log.LogInformation("Paste hotkey: file transfer not supported on this platform");
                         ShowOsd(st, "Action not supported");
                     }
+                    else if (st.CopyPending)
+                    {
+                        log.LogInformation("Paste hotkey: the latest copy is still waiting for the selection");
+                        ShowOsd(st, FileSelectionResult.InProgressMessage);
+                    }
                     else if (_fileTransfer.GetCopyBuffer() is { } copyBuffer)
                     {
                         var targetHost = st.Mouse.IsOnVirtualScreen && st.Mouse.CurrentScreen != null
@@ -885,12 +1006,15 @@ public class InputRouter(
                             : profile.Name;
                         if (string.Equals(copyBuffer.SourceHost, targetHost, StringComparison.OrdinalIgnoreCase))
                         {
-                            log.LogInformation("Paste hotkey: source and target are the same host ({Host}), nothing to do", targetHost);
+                            if (log.IsEnabled(LogLevel.Information))
+                                log.LogInformation("Paste hotkey: source and target are the same host ({Host}), nothing to do", targetHost);
                             ShowOsd(st, "Invalid paste target");
                         }
                         else
                         {
-                            log.LogInformation("Paste hotkey: {Count} file(s) from {Source} → {Target}", copyBuffer.Paths.Length, copyBuffer.SourceHost, targetHost);
+                            if (log.IsEnabled(LogLevel.Information))
+                                log.LogInformation("Paste hotkey: {Count} file(s) from {Source} → {Target}",
+                                    copyBuffer.Paths.Length, copyBuffer.SourceHost, targetHost);
                             if (!_fileTransfer.InitiatePaste(copyBuffer, targetHost, profile.Name, relay))
                                 SendOsd(targetHost, "Invalid paste target");
                         }
@@ -921,7 +1045,8 @@ public class InputRouter(
             await activityTracker.LocalActivity();
             if (st.Mouse.IsOnVirtualScreen && relay.IsConnected)
             {
-                log.LogDebug("Mouse: {Type} {Button}", e.IsPressed ? "down" : "up", e.Button);
+                if (log.IsEnabled(LogLevel.Debug))
+                    log.LogDebug("Mouse: {Type} {Button}", e.IsPressed ? "down" : "up", e.Button);
                 ForwardToVirtualScreen(st, MessageKind.MouseButton, new MouseButtonMessage(e.Button, e.IsPressed));
             }
         });
@@ -936,7 +1061,8 @@ public class InputRouter(
             await activityTracker.LocalActivity();
             if (st.Mouse.IsOnVirtualScreen && relay.IsConnected)
             {
-                log.LogDebug("Scroll: x={X} y={Y}", e.XDelta, e.YDelta);
+                if (log.IsEnabled(LogLevel.Debug))
+                    log.LogDebug("Scroll: x={X} y={Y}", e.XDelta, e.YDelta);
                 ForwardToVirtualScreen(st, MessageKind.MouseScroll, new MouseScrollMessage(e.XDelta, e.YDelta));
             }
         });
@@ -956,7 +1082,7 @@ public class InputRouter(
             if (intDx == 0 && intDy == 0) return;
             st.PendingDx -= intDx;
             st.PendingDy -= intDy;
-            if (profile.DebugMouse)
+            if (profile.DebugMouse && log.IsEnabled(LogLevel.Information))
                 log.LogInformation("[mouse] delta to {Host}: dx={Dx} dy={Dy}", screen.Host, intDx, intDy);
             st.LastMouseSendTick = now;
             relay.SendMouseDelta([screen.Host], intDx, intDy);
@@ -966,7 +1092,7 @@ public class InputRouter(
         // absolute mode: send current virtual position, discard accumulated deltas
         st.PendingDx = 0;
         st.PendingDy = 0;
-        if (profile.DebugMouse)
+        if (profile.DebugMouse && log.IsEnabled(LogLevel.Information))
             log.LogInformation("[mouse] move to {Host}: screen={Screen} x={X} y={Y}", screen.Host, screen.Name, (int)st.Mouse.X, (int)st.Mouse.Y);
         var payload = MessageSerializer.Encode(MessageKind.MouseMove, new MouseMoveMessage(screen.Name, (int)st.Mouse.X, (int)st.Mouse.Y));
         st.LastMouseSendTick = now;
@@ -1048,7 +1174,8 @@ public class InputRouter(
         // but delay the physical warp until the shield is actually absorbing (avoids hover at the park point)
         AnchorAtWarpPoint(st);
         await platform.WarpToPark(st.WarpX, st.WarpY);
-        log.LogInformation("Entered remote screen '{Name}' → ({X}, {Y})", hit.Destination.Name, hit.EntryX, hit.EntryY);
+        if (log.IsEnabled(LogLevel.Information))
+            log.LogInformation("Entered remote screen '{Name}' → ({X}, {Y})", hit.Destination.Name, hit.EntryX, hit.EntryY);
         SendEnterScreen(hit.Destination, hit.EntryX, hit.EntryY);
     }
 
@@ -1073,72 +1200,17 @@ public class InputRouter(
         if (now - st.LastVirtualLogTick >= 100)
         {
             st.LastVirtualLogTick = now;
-            if (st.Mouse.CurrentScreen != null && st.RelativeMouseScreens.GetValueOrDefault(st.Mouse.CurrentScreen.Name))
+            if (st.Mouse.CurrentScreen != null && st.RelativeMouseScreens.GetValueOrDefault(st.Mouse.CurrentScreen.Name) && log.IsEnabled(LogLevel.Debug))
                 log.LogDebug("Mouse: ({X}, {Y})  Offset: ({DX}, {DY})", (int)st.Mouse.X, (int)st.Mouse.Y, (int)st.PendingDx, (int)st.PendingDy);
-            else
+            else if (log.IsEnabled(LogLevel.Debug))
                 log.LogDebug("Mouse: ({X}, {Y})", (int)st.Mouse.X, (int)st.Mouse.Y);
         }
 
-        // check edge exit
-        {
-            var virtualScreen = st.Mouse.CurrentScreen!;
-            var hit = st.Layout!.DetectEdgeExit(virtualScreen, (int)st.Mouse.X, (int)st.Mouse.Y);
-            if (hit is not null)
-            {
-                if (!hit.Destination.IsLocal)
-                {
-                    if (profile.RemoteOnly ? !st.ConfinedToScreen : !st.LockedToScreen)
-                    {
-                        if (!platform.AnyMouseButtonHeld())
-                        {
-                            var leavingScreen = st.Mouse.CurrentScreen;
-                            FlushMouseDelta(st);
-                            var peerScreens = await _peerState.GetPeerScreensSnapshot();
-                            var remoteInfo = GetRemoteScreensAndScales(st.Screens, peerScreens, hit.Destination);
-                            ApplyEnterScreen(st, hit.Destination, remoteInfo, hit.EntryX, hit.EntryY);
-                            log.LogInformation("Switched to remote screen '{Name}' → ({X}, {Y})", hit.Destination.Name, hit.EntryX, hit.EntryY);
+        var leavingScreen = st.Mouse.CurrentScreen;
+        if (leavingScreen != null && await TryHandleEdgeExit(st, leavingScreen)) return;
 
-                            if (relay.IsConnected)
-                            {
-                                if (leavingScreen != null && leavingScreen.Host != hit.Destination.Host)
-                                    LeaveRemoteScreen(leavingScreen.Host);
-                                SendEnterScreen(hit.Destination, hit.EntryX, hit.EntryY);
-                            }
-                            return;
-                        }
-                    }
-                }
-                else if (!st.LockedToScreen && !profile.RemoteOnly)
-                {
-                    if (!platform.AnyMouseButtonHeld())
-                    {
-                        var targetScreen = hit.Destination;
-
-                        FlushMouseDelta(st);
-
-                        var globalX = targetScreen.X + hit.EntryX;
-                        var globalY = targetScreen.Y + hit.EntryY;
-                        var leavingScreen = st.Mouse.CurrentScreen;
-                        st.Mouse.LeaveScreen();
-                        ReturnToLocalScreen(globalX, globalY);
-                        ShowCursorOnReturn();
-                        st.ActiveLocalScreen = targetScreen;
-                        UpdateWarpPoint(st, targetScreen);
-                        log.LogInformation("Returned to local screen ← ({X}, {Y})", globalX, globalY);
-
-                        if (relay.IsConnected && leavingScreen != null)
-                            LeaveRemoteScreen(leavingScreen.Host);
-                        return;
-                    }
-                }
-            }
-        }
-
-        // throttle mouse sends to the configured rate
-        if (now - st.LastMouseSendTick >= _minMouseIntervalMs)
-            SendMousePosition(st, now);
-
-        RecenterIfDrifted(st, dx, dy, isClampable: true);
+        SendMousePositionIfDue(st, now);
+        if (!platform.RecentresItself) Recenter(st);
     }
 
     private void HandleIntraHostTransition(LocalMasterState st)
@@ -1200,7 +1272,8 @@ public class InputRouter(
         platform.IsOnVirtualScreen = true;
         ApplyEnterScreen(st, target, remoteInfo, entryX, entryY);
         st.LockedToScreen = true;
-        log.LogInformation("Remote-only: entered '{Name}' → ({X}, {Y})", target.Name, entryX, entryY);
+        if (log.IsEnabled(LogLevel.Information))
+            log.LogInformation("Remote-only: entered '{Name}' → ({X}, {Y})", target.Name, entryX, entryY);
         SendEnterScreen(target, entryX, entryY);
     }
 
@@ -1295,70 +1368,86 @@ public class InputRouter(
     {
         if (!st.Mouse.IsOnVirtualScreen) return;
 
-        // Windows recentres itself, synchronously, on the hook thread, on every raw sample — see
-        // WindowsInputHandler.MouseHookCallback. A router-side recentre call for the same physical
-        // cursor is not merely redundant there: it is a second, uncoordinated writer to the exact
-        // fields the hook thread also writes with no synchronisation between them, and adversarial
-        // review confirmed that combination can produce a torn X/Y pair (a warp to a mismatched
-        // pair of old-X/new-Y, or a self-echo filter stuck on a stale value) — precisely the kind
-        // of spurious jump recentring every sample was meant to eliminate, reintroduced via a race
-        // instead of routinely. Linux's XI_RawMotion has no such self-recentre and still needs this.
-        var routerRecentres = _localPlatform != PeerPlatform.Windows;
-
         var leavingScreen = st.Mouse.CurrentScreen!;
         var prevScreen = st.Mouse.ApplyDelta(dx, dy);
         if (prevScreen != null)
         {
             HandleIntraHostTransition(st);
-            if (routerRecentres) Recenter(st);
+            if (!platform.RecentresItself) Recenter(st);
             return;
         }
 
-        var hit = st.Layout?.DetectEdgeExit(st.Mouse.CurrentScreen!, (int)st.Mouse.X, (int)st.Mouse.Y);
-        if (hit is not null)
-        {
-            if (!hit.Destination.IsLocal)
-            {
-                // Cursor lock in remote-only mode: refuse to leave this machine. Falling through
-                // rather than returning lets the normal send path run, and ApplyDelta has already
-                // clamped the position, so the cursor simply stops against the edge.
-                // Confinement is per host: moving between a slave's own monitors is unaffected,
-                // since that happens inside ApplyDelta as an intra-host transition.
-                if (profile.RemoteOnly && st.ConfinedToScreen)
-                {
-                    log.LogDebug("Cursor lock: blocked transition to '{Name}'", hit.Destination.Name);
-                }
-                else if (relay.IsConnected && !platform.AnyMouseButtonHeld())
-                {
-                    await HandleEvdevCrossHostTransitionAsync(st, leavingScreen, hit);
-                    return;
-                }
-            }
-            else if (!st.LockedToScreen && !profile.RemoteOnly && !platform.AnyMouseButtonHeld())
-            {
-                var targetScreen = hit.Destination;
-                FlushMouseDelta(st);
-                var globalX = targetScreen.X + hit.EntryX;
-                var globalY = targetScreen.Y + hit.EntryY;
-                st.Mouse.LeaveScreen();
-                ReturnToLocalScreen(globalX, globalY);
-                ShowCursorOnReturn();
-                st.ActiveLocalScreen = targetScreen;
-                UpdateWarpPoint(st, targetScreen);
-                log.LogInformation("Returned to local screen ← ({X}, {Y})", globalX, globalY);
-                if (relay.IsConnected)
-                    LeaveRemoteScreen(leavingScreen.Host);
-                return;
-            }
-        }
+        if (await TryHandleEdgeExit(st, leavingScreen)) return;
 
         AccumulateScaled(st, dx, dy);
+        SendMousePositionIfDue(st, _getTickCount());
 
-        var now = _getTickCount();
+        if (!platform.RecentresItself) RecenterIfDrifted(st, dx, dy);
+    }
+
+    // Crosses to the edge's neighbour, unless locked or a button is held. Confinement holds a remote-only master on
+    // its host, and the lock holds any other master on its screen; moves between one host's own monitors happen
+    // inside ApplyDelta and are unaffected. Buttons are asked last: on Xorg that is a server round-trip.
+    // Returns true when the cursor left the screen.
+    private async ValueTask<bool> TryHandleEdgeExit(LocalMasterState st, ScreenRect leavingScreen)
+    {
+        var hit = st.Layout?.DetectEdgeExit(leavingScreen, (int)st.Mouse.X, (int)st.Mouse.Y);
+        if (hit is null) return false;
+
+        if (hit.Destination.IsLocal)
+        {
+            if (st.LockedToScreen || profile.RemoteOnly || platform.AnyMouseButtonHeld()) return false;
+            ReturnToLocal(st, leavingScreen, hit);
+            return true;
+        }
+
+        if (profile.RemoteOnly ? st.ConfinedToScreen : st.LockedToScreen)
+        {
+            if (log.IsEnabled(LogLevel.Debug))
+                log.LogDebug("Cursor lock: blocked transition to '{Name}'", hit.Destination.Name);
+            return false;
+        }
+
+        if (!relay.IsConnected || platform.AnyMouseButtonHeld()) return false;
+        await CrossToRemote(st, leavingScreen, hit);
+        return true;
+    }
+
+    private void ReturnToLocal(LocalMasterState st, ScreenRect leavingScreen, EdgeHit hit)
+    {
+        var targetScreen = hit.Destination;
+        FlushMouseDelta(st);
+        var globalX = targetScreen.X + hit.EntryX;
+        var globalY = targetScreen.Y + hit.EntryY;
+        st.Mouse.LeaveScreen();
+        ReturnToLocalScreen(globalX, globalY);
+        ShowCursorOnReturn();
+        st.ActiveLocalScreen = targetScreen;
+        UpdateWarpPoint(st, targetScreen);
+        if (log.IsEnabled(LogLevel.Information))
+            log.LogInformation("Returned to local screen ← ({X}, {Y})", globalX, globalY);
+        if (relay.IsConnected)
+            LeaveRemoteScreen(leavingScreen.Host);
+    }
+
+    private async ValueTask CrossToRemote(LocalMasterState st, ScreenRect leavingScreen, EdgeHit hit)
+    {
+        FlushMouseDelta(st);
+        var peerScreens = await _peerState.GetPeerScreensSnapshot();
+        var remoteInfo = GetRemoteScreensAndScales(st.Screens, peerScreens, hit.Destination);
+        ApplyEnterScreen(st, hit.Destination, remoteInfo, hit.EntryX, hit.EntryY);
+        if (log.IsEnabled(LogLevel.Information))
+            log.LogInformation("Switched to remote screen '{Name}' → ({X}, {Y})", hit.Destination.Name, hit.EntryX, hit.EntryY);
+        if (leavingScreen.Host != hit.Destination.Host)
+            LeaveRemoteScreen(leavingScreen.Host);
+        SendEnterScreen(hit.Destination, hit.EntryX, hit.EntryY);
+    }
+
+    // throttles mouse sends to the configured rate
+    private void SendMousePositionIfDue(LocalMasterState st, long now)
+    {
         if (now - st.LastMouseSendTick >= _minMouseIntervalMs)
             SendMousePosition(st, now);
-
-        if (routerRecentres) RecenterIfDrifted(st, dx, dy, isClampable: false);
     }
 
     private enum MouseInputKind { Absolute, Delta }
@@ -1384,14 +1473,7 @@ public class InputRouter(
         st.DriftY = 0;
     }
 
-    // Warps to centre and re-anchors the drift reference, nothing else — the original form, from
-    // before any of this warp machinery existed. Two things were tried and removed here: reading
-    // the position back to detect a warp that landed somewhere else (never once observed to fire
-    // across two real-machine captures; pure cost for a failure mode with no evidence behind it),
-    // and reading a residual position before warping to recover movement lost in the gap between
-    // measuring and warping (a real gap only when recentring is rare — once this runs every
-    // sample, on Windows synchronously on the hook thread itself, that gap is microseconds and the
-    // read raced the hook thread's own delivery instead of recovering anything real).
+    // warps to centre and re-anchors the drift reference
     private void Recenter(LocalMasterState st)
     {
         if (st.ActiveLocalScreen == null) return;
@@ -1399,36 +1481,13 @@ public class InputRouter(
         AnchorAtWarpPoint(st);
     }
 
-    // Keeps the physical cursor clear of the local screen edges while the pointer is on a virtual
-    // screen. Only reached with isClampable: true from Mac's absolute-position path
-    // (HandleVirtualScreenMove) — Windows has the identical clamping requirement (MSLLHOOKSTRUCT.pt
-    // is GetCursorPos in disguise, bounded by the real monitor same as Mac's position read) but
-    // WindowsInputHandler now satisfies it itself, synchronously on the hook thread, every raw
-    // sample, before this is ever called (HandleMouseDelta skips calling this at all for Windows —
-    // see routerRecentres there). Linux's XI_RawMotion is the one source with no clamping
-    // requirement at all: it is a raw hardware-delta stream with no notion of an on-screen position
-    // to begin with, so nothing it reports can ever run into an edge — that path always calls this
-    // with isClampable: false and safely waits for drift to cross WarpDeadZone, costing nothing but
-    // an X warp + socket flush at up to MaxMouseHz.
-    //
-    // isClampable: true recentres every sample and does not read a residual position before doing
-    // so. That read used to exist to recover movement a warp would otherwise discard between the
-    // sample being handled and the warp landing — real, at dead-zone frequency, where many samples
-    // separated one warp from the next. At every-sample frequency that gap is just the time between
-    // taking a batch snapshot and calling WarpCursor a few lines later, and a live GetCursorPos()
-    // read in there instead raced whatever was concurrently updating the cursor — folding that
-    // race's outcome in as "movement" was noise, not signal.
-    private void RecenterIfDrifted(LocalMasterState st, double dx, double dy, bool isClampable)
+    // XI_RawMotion is raw hardware motion with no on-screen position, so it can never run into an edge: warp only
+    // once the drift leaves the dead zone
+    private void RecenterIfDrifted(LocalMasterState st, double dx, double dy)
     {
         if (st.ActiveLocalScreen == null) return;
         st.DriftX += dx;
         st.DriftY += dy;
-
-        if (isClampable)
-        {
-            Recenter(st);
-            return;
-        }
 
         if (Math.Abs(st.DriftX) < st.HalfW * WarpDeadZone && Math.Abs(st.DriftY) < st.HalfH * WarpDeadZone)
         {
@@ -1439,19 +1498,6 @@ public class InputRouter(
         }
 
         Recenter(st);
-    }
-
-    // evdev cross-host transitions; called from consumer, so st access is safe
-    private async ValueTask HandleEvdevCrossHostTransitionAsync(LocalMasterState st, ScreenRect leavingScreen, EdgeHit hit)
-    {
-        FlushMouseDelta(st);
-        var peerScreens = await _peerState.GetPeerScreensSnapshot();
-        var remoteInfo = GetRemoteScreensAndScales(st.Screens, peerScreens, hit.Destination);
-        ApplyEnterScreen(st, hit.Destination, remoteInfo, hit.EntryX, hit.EntryY);
-        log.LogInformation("Switched to remote screen '{Name}' → ({X}, {Y})", hit.Destination.Name, hit.EntryX, hit.EntryY);
-        if (leavingScreen.Host != hit.Destination.Host)
-            LeaveRemoteScreen(leavingScreen.Host);
-        SendEnterScreen(hit.Destination, hit.EntryX, hit.EntryY);
     }
 
     // updates mouse state when entering a remote screen; always called before sending relay messages
@@ -1485,10 +1531,10 @@ public class InputRouter(
     }
 
     internal static bool UseHydraClipboard(ClipboardSyncMode mode, PeerPlatform localPlatform, PeerPlatform remotePlatform) =>
-        mode != ClipboardSyncMode.System || localPlatform != PeerPlatform.MacOS || remotePlatform != PeerPlatform.MacOS;
+        mode != ClipboardSyncMode.System || localPlatform != PeerPlatform.MacOs || remotePlatform != PeerPlatform.MacOs;
 
     private static PeerPlatform DetectLocalPlatform() =>
-        OperatingSystem.IsMacOS() ? PeerPlatform.MacOS :
+        OperatingSystem.IsMacOS() ? PeerPlatform.MacOs :
         OperatingSystem.IsWindows() ? PeerPlatform.Windows :
         OperatingSystem.IsLinux() ? PeerPlatform.Linux :
         PeerPlatform.Unknown;
@@ -1509,6 +1555,7 @@ public class InputRouter(
 
     private void LogDetectedScreens(List<ScreenRect> detected)
     {
+        if (!log.IsEnabled(LogLevel.Information)) return;
         log.LogInformation("Detected {Count} local screen(s):", detected.Count);
         for (var i = 0; i < detected.Count; i++)
             if (detected[i].Identity != null)
@@ -1557,7 +1604,20 @@ public class InputRouter(
 
         // last time any input event was processed, regardless of destination (local or remote)
         public long LastInputTick;
+
+        // copy hotkey: press count, whether the latest press is still waiting for the selection, and the host it
+        // is waiting on if it was a remote one
+        public long CopyGeneration;
+        public bool CopyPending;
+        public string? RemoteCopyHost;
     }
 
     private record RemoteScreenInfo(List<ScreenRect> Screens, Dictionary<string, decimal> ScaleMap, Dictionary<string, decimal?> RelativeScaleMap);
+
+    private enum RemoteSelectionOutcome
+    {
+        Applied,
+        Superseded,
+        NotApplied,
+    }
 }

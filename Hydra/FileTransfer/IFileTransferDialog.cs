@@ -36,7 +36,5 @@ public sealed class NullFileTransferDialog : IFileTransferDialog
     public void ShowCompleted() { }
     public void ShowError(string message) { }
     public void Close() { }
-#pragma warning disable CS0067
-    public event Action? CancelRequested;
-#pragma warning restore CS0067
+    public event Action? CancelRequested { add { } remove { } }
 }

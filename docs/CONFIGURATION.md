@@ -33,11 +33,14 @@ See the [project README](../README.md) for installation and a quick-start guide.
 
 ## Config file location
 
-Hydra first looks for `hydra.conf` next to the running binary, then in the current working directory. Set the `CONFIG` environment variable to use an explicit path:
+Hydra first looks for `hydra.conf` next to the running binary, then in the current working directory. Pass `--config` (or set the `CONFIG` environment variable) to use an explicit path:
 
 ```bash
+./hydra --config /path/to/hydra.conf
 CONFIG=/path/to/hydra.conf ./hydra
 ```
+
+`--config` may stand before or after `tui` and `pair`. With `--install`, the macOS LaunchAgent or Windows service is registered to run that config; without it, the installed copy uses the `hydra.conf` beside its binary. Unknown arguments are refused rather than ignored.
 
 ## Terminal control center
 
@@ -54,7 +57,7 @@ The views provide runtime status, the exact interface and socket selected by the
 
 The Overview tab also provides a confirmed **Shutdown Hydra** action. On macOS, shutdown unloads but preserves the current LaunchAgent so its `KeepAlive` setting does not immediately relaunch Hydra. Windows service-managed sessions must instead be stopped through Windows Services or an elevated terminal.
 
-After the TUI confirms shutdown, **Start Hydra** becomes available. It starts the installed macOS LaunchAgent when available, or launches the current executable directly with the selected configuration. A generic management connection failure does not enable Start because Hydra may still be running.
+After the TUI confirms shutdown, **Start Hydra** becomes available. It starts the installed macOS LaunchAgent when available — refusing, with a message, if that agent was installed for a different config than the TUI's — or launches the current executable directly with the selected configuration. A generic management connection failure does not enable Start because Hydra may still be running.
 
 When a relay hostname resolves to addresses reachable through more than one interface, Hydra tries addresses in the operating system's configured network preference order before falling back to the remaining addresses. It follows Network Service Order on macOS, connected-interface metrics on Windows, and default-route metrics on Linux. If preference discovery is unavailable, Hydra preserves the resolver's address order and still attempts every resolved address.
 
@@ -69,7 +72,7 @@ Remote management is opt-in per machine. On the peer to manage, generate a singl
 ./hydra pair --config /path/to/hydra.conf
 ```
 
-The code expires after 10 minutes. In the controlling TUI, open **Remote**, enter the peer's Hydra host name and code, and select **Pair**. Pairing creates a separate management credential in `.hydra-management.json` beside `hydra.conf`; the ordinary shared relay configuration does not grant remote-admin rights. The sidecar contains secrets and is written with user-only permissions on Unix-like systems. A user-only `.hydra-management.lock` coordinates updates from the running daemon and the `pair` command. Do not copy either file into source control or diagnostics.
+The code expires after 10 minutes. In the controlling TUI, open **Remote**, enter the peer's Hydra host name and code, and select **Pair**. Pairing creates a separate management credential in `.hydra-management.json` beside `hydra.conf`; the ordinary shared relay configuration does not grant remote-admin rights. The sidecar contains secrets and is written with user-only permissions: mode 0600 on Unix-like systems, and on Windows a DACL that inherits nothing and grants only the account that wrote it, SYSTEM and Administrators — plus, when the service (SYSTEM) writes it, the user signed in at the console, so an unelevated `hydra pair` run by that user can use it too. Hydra re-stamps that grant whenever a user signs in at the console, and never while nobody is signed in, so the user who signs in is covered within a moment of reaching their desktop. Run as any other account, `hydra pair` cannot read a sidecar the service wrote and says so; run it from an elevated terminal, or restart the Hydra service and run it as the console user. A `.hydra-management.lock` coordinates updates from the running daemon and the `pair` command; it holds no secrets, and is user-only on Unix-like systems while on Windows it takes the directory's permissions. Do not copy either file into source control or diagnostics.
 
 After pairing, **Load Config** fetches a source-redacted document: `password` and `networkConfig` values never leave the peer. Unchanged placeholders are restored on the peer before validation or apply. **Save & Apply** stages the candidate, preserves the last-known-good configuration, and restarts Hydra. The controller confirms only after the peer reconnects and reports the expected revision. Without confirmation within 90 seconds, Hydra restores the backup and restarts automatically; expired transactions are also recovered before normal config bootstrap when the candidate is invalid.
 

@@ -1,6 +1,5 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
-using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Win32.SafeHandles;
 
@@ -8,48 +7,28 @@ namespace Hydra.Platform.Linux;
 
 // systemd-logind emits PrepareForSleep before and after suspend. A delay inhibitor keeps the
 // pre-suspend window open until Hydra has disconnected the relay (or logind's own deadline expires).
-internal sealed partial class LinuxSystemSleepMonitor : IHostedService, IDisposable
+internal sealed partial class LinuxSystemSleepMonitor : ThreadedSleepMonitor
 {
     private const ulong PollIntervalMicroseconds = 1_000_000;
-    private static readonly TimeSpan RelayCloseTimeout = TimeSpan.FromSeconds(5);
     private const string SleepMatch =
         "type='signal',sender='org.freedesktop.login1',path='/org/freedesktop/login1'," +
         "interface='org.freedesktop.login1.Manager',member='PrepareForSleep'";
 
-    private readonly SystemSleepCoordinator _coordinator;
-    private readonly ILogger<LinuxSystemSleepMonitor> _log;
     private readonly SystemdNative.BusMessageHandler _messageHandler;
     private readonly Lock _inhibitorLock = new();
-    private Thread? _thread;
     private SafeFileHandle? _inhibitor;
-    private volatile bool _stopping;
 
     public LinuxSystemSleepMonitor(
         SystemSleepCoordinator coordinator,
-        ILogger<LinuxSystemSleepMonitor> log)
+        ILogger<LinuxSystemSleepMonitor> log) : base(coordinator, log)
     {
-        _coordinator = coordinator;
-        _log = log;
         _messageHandler = OnPrepareForSleep;
     }
 
-    public async Task StartAsync(CancellationToken cancellationToken)
-    {
-        if (!_coordinator.Enabled) return;
+    protected override string NotificationSource => "systemd-logind sleep notifications";
+    protected override string MonitorName => "Linux system sleep monitor";
 
-        var ready = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _thread = new Thread(() => RunMessageLoop(ready))
-        {
-            IsBackground = true,
-            Name = "HydraSystemSleep"
-        };
-        _thread.Start();
-
-        if (!await ready.Task.WaitAsync(cancellationToken))
-            _log.LogWarning("systemd-logind sleep notifications are unavailable; relay sleep suspension is disabled");
-    }
-
-    private void RunMessageLoop(TaskCompletionSource<bool> ready)
+    protected override void RunLoop(TaskCompletionSource<bool> ready)
     {
         nint bus = nint.Zero;
         nint slot = nint.Zero;
@@ -61,18 +40,18 @@ internal sealed partial class LinuxSystemSleepMonitor : IHostedService, IDisposa
 
             TryAcquireDelayInhibitor(bus);
             ready.TrySetResult(true);
-            _log.LogInformation("Watching Linux system sleep and wake notifications through systemd-logind");
+            Log.LogInformation("Watching Linux system sleep and wake notifications through systemd-logind");
 
-            while (!_stopping)
+            while (!Stopping)
             {
                 int processed;
                 do
                 {
                     processed = SystemdNative.sd_bus_process(bus, nint.Zero);
                     ThrowIfFailed(processed, "process system bus messages");
-                } while (processed > 0 && !_stopping);
+                } while (processed > 0 && !Stopping);
 
-                if (!_stopping)
+                if (!Stopping)
                     ThrowIfFailed(SystemdNative.sd_bus_wait(bus, PollIntervalMicroseconds),
                         "wait for system bus messages");
             }
@@ -80,7 +59,7 @@ internal sealed partial class LinuxSystemSleepMonitor : IHostedService, IDisposa
         catch (Exception ex)
         {
             ready.TrySetResult(false);
-            _log.LogWarning(ex, "Linux system sleep monitor stopped unexpectedly");
+            Log.LogWarning(ex, "Linux system sleep monitor stopped unexpectedly");
         }
         finally
         {
@@ -100,14 +79,13 @@ internal sealed partial class LinuxSystemSleepMonitor : IHostedService, IDisposa
 
             if (preparing != 0)
             {
-                using var timeout = new CancellationTokenSource(RelayCloseTimeout);
-                _coordinator.PrepareForSleepAsync(timeout.Token).GetAwaiter().GetResult();
+                Coordinator.PrepareForSleepBlocking();
                 // Releasing the delay inhibitor tells logind Hydra has finished its pre-sleep work.
                 ReleaseDelayInhibitor();
             }
             else
             {
-                _coordinator.ResumeAfterSleep();
+                Coordinator.ResumeAfterSleep();
                 var bus = SystemdNative.sd_bus_message_get_bus(message);
                 if (bus != nint.Zero) TryAcquireDelayInhibitor(bus);
             }
@@ -117,7 +95,7 @@ internal sealed partial class LinuxSystemSleepMonitor : IHostedService, IDisposa
         {
             // Do not let a managed exception cross the native callback boundary. logind will still
             // enforce its own delay deadline if the inhibitor could not be released here.
-            _log.LogWarning(ex, "Failed to handle Linux PrepareForSleep notification");
+            Log.LogWarning(ex, "Failed to handle Linux PrepareForSleep notification");
             ReleaseDelayInhibitor();
             return 0;
         }
@@ -131,7 +109,7 @@ internal sealed partial class LinuxSystemSleepMonitor : IHostedService, IDisposa
         }
         catch (Exception ex)
         {
-            _log.LogWarning(ex,
+            Log.LogWarning(ex,
                 "Could not take the systemd-logind delay inhibitor; sleep notification handling is best effort");
         }
     }
@@ -163,7 +141,7 @@ internal sealed partial class LinuxSystemSleepMonitor : IHostedService, IDisposa
                 ThrowIfFailed(SystemdNative.sd_bus_message_read_basic(reply, (byte)'h', out var borrowedFd),
                     "read logind inhibitor descriptor");
 
-                var ownedFd = SystemdNative.dup(borrowedFd);
+                var ownedFd = SystemdNative.Dup(borrowedFd);
                 if (ownedFd < 0) throw new Win32Exception(Marshal.GetLastPInvokeError(), "dup inhibitor descriptor");
                 _inhibitor = new SafeFileHandle(ownedFd, ownsHandle: true);
             }
@@ -190,18 +168,6 @@ internal sealed partial class LinuxSystemSleepMonitor : IHostedService, IDisposa
         }
         inhibitor?.Dispose();
     }
-
-    public Task StopAsync(CancellationToken cancellationToken)
-    {
-        _stopping = true;
-        var thread = _thread;
-        _thread = null;
-        if (thread?.Join(RelayCloseTimeout + TimeSpan.FromSeconds(2)) == false)
-            _log.LogWarning("Linux system sleep monitor did not stop before its shutdown deadline");
-        return Task.CompletedTask;
-    }
-
-    public void Dispose() => StopAsync(CancellationToken.None).GetAwaiter().GetResult();
 
     private static void ThrowIfFailed(int result, string operation, SystemdNative.SdBusError error = default)
     {
@@ -296,10 +262,8 @@ internal sealed partial class LinuxSystemSleepMonitor : IHostedService, IDisposa
         [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
         internal static partial void sd_bus_error_free(ref SdBusError error);
 
-        // matches the POSIX libc function's own name
-        // ReSharper disable once InconsistentNaming
-        [LibraryImport("libc", SetLastError = true)]
+        [LibraryImport("libc", EntryPoint = "dup", SetLastError = true)]
         [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
-        internal static partial int dup(int oldFileDescriptor);
+        internal static partial int Dup(int oldFileDescriptor);
     }
 }

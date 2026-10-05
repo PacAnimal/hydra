@@ -4,13 +4,8 @@ root = true
 # Allow .Add() calls instead of collection initializers (Rider CA2000 conflicts with initializer form)
 dotnet_style_collection_initializer = false
 
-# Suppress CA1859: Use concrete type for improved performance (interface field is intentional)
-dotnet_diagnostic.CA1859.severity = none
-
-# Suppress CA1873: Expensive logging argument evaluation
-dotnet_diagnostic.CA1873.severity = none
-
-# Suppress SYSLIB1045: Use GeneratedRegex attribute
+# Suppress SYSLIB1045: Use GeneratedRegex attribute. A generated regex must live outside the function that uses
+# it, and the codebase rule is never to move a Regex out of that function.
 dotnet_diagnostic.SYSLIB1045.severity = none
 
 # Remove unnecessary using directives

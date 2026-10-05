@@ -36,9 +36,6 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
     private Process? _process;
     private TaskCompletionSource? _initialStateTcs;
     private volatile TaskCompletionSource? _authSettledTcs; // completed when location auth leaves notDetermined
-    // interlocked internally, so the bare reads outside _processLock are safe — the lock only guards
-    // the compound stopping-plus-_process operations
-    // ReSharper disable once InconsistentlySynchronizedField
     private readonly Toggle _stopping = new();
     private readonly Lock _processLock = new();
     private volatile string _lastState = CmdHide; // last show/hide command; re-applied after unexpected restart
@@ -100,7 +97,7 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
     internal Task Show()
     {
         var target = DebugShield ? CmdDebug : CmdShow;
-        if (_lastState != target) Log?.LogDebug("Shield → {State} (show/absorb)", target);
+        if (_lastState != target && Log?.IsEnabled(LogLevel.Debug) == true) Log.LogDebug("Shield → {State} (show/absorb)", target);
         _lastState = target;
         return SendWithReply(target);
     }
@@ -177,6 +174,11 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
 
         _ = Task.Run(ReadOutput);
         _ = Task.Run(ReadErrors);
+    }
+
+    private bool IsStopping()
+    {
+        lock (_processLock) return _stopping;
     }
 
     private void Stop()
@@ -290,14 +292,15 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
                 else if (line.StartsWith(PfxWifiAuth, StringComparison.Ordinal) && int.TryParse(line[PfxWifiAuth.Length..], out var authStatus))
                 {
                     networkState.WifiAuthStatus = authStatus;
-                    Log?.LogDebug("Location services auth: {Status}", authStatus switch
-                    {
-                        0 => "notDetermined",
-                        1 => "restricted",
-                        2 => "denied",
-                        3 or 4 => "authorized",
-                        _ => authStatus.ToString()
-                    });
+                    if (Log?.IsEnabled(LogLevel.Debug) == true)
+                        Log.LogDebug("Location services auth: {Status}", authStatus switch
+                        {
+                            0 => "notDetermined",
+                            1 => "restricted",
+                            2 => "denied",
+                            3 or 4 => "authorized",
+                            _ => authStatus.ToString()
+                        });
                     if (authStatus != 0) _authSettledTcs?.TrySetResult();
                 }
                 else if (line == PfxTransferCancel)
@@ -306,8 +309,7 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
                 }
             }
 
-            // ReSharper disable once InconsistentlySynchronizedField
-            if (!_stopping)
+            if (!IsStopping())
             {
                 // unexpected exit — restart with exponential backoff to avoid rapid crash-loops.
                 // StartProcess re-applies _lastState, so the shield resumes its pre-crash absorb state.

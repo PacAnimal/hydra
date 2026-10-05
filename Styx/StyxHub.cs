@@ -7,13 +7,14 @@ using Styx.Services;
 
 namespace Styx;
 
-public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, IStyxPasswordProvider passwordProvider, ILogger<StyxHub> log, StyxOptions options) : Hub<IStyxClient>, IStyxServer
+public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, IStyxPasswordProvider passwordProvider, ILogger<StyxHub> log, StyxOptions options,
+    ResponseThrottle throttler) : Hub<IStyxClient>, IStyxServer
 {
     [AllowAnonymousHub]
     public async Task<RelayLoginResponse> Authenticate(RelayLogin? login)
     {
         // throttle — minimum response time regardless of outcome
-        var throttle = Task.Delay(TimeSpan.FromSeconds(Constants.AuthThrottleSeconds), Context.ConnectionAborted);
+        var throttle = throttler.Start(Constants.AuthThrottleSeconds, Context.ConnectionAborted);
 
         string password;
         try
@@ -69,7 +70,9 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, IStyxPass
             return new RelayLoginResponse { Authenticated = false, Message = "Connection aborted" };
         }
 
-        log.LogInformation("Authentication accepted for \"{HostName}\" (connectionId:{ConnectionId}) from {RemoteIp} on network {NetworkId}", hostName, Context.ConnectionId, remoteIp, networkId);
+        if (log.IsEnabled(LogLevel.Information))
+            log.LogInformation("Authentication accepted for \"{HostName}\" (connectionId:{ConnectionId}) from {RemoteIp} on network {NetworkId}",
+                hostName, Context.ConnectionId, remoteIp, networkId);
         await throttle;
 
         // a reconnecting host has to be seen leaving before it is seen arriving, or the pair is an identical
@@ -106,7 +109,7 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, IStyxPass
         var identity = await registry.GetIdentity(Context.ConnectionId);
         if (identity == null) return;
 
-        if (options.DebugMessages)
+        if (options.DebugMessages && log.IsEnabled(LogLevel.Information))
             log.LogInformation("MSG net={NetworkId} {Sender} → [{Targets}] {Size}B",
                 identity.NetworkId, identity.HostName, string.Join(", ", targetHosts), payload.Length);
 
@@ -118,10 +121,10 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, IStyxPass
                 continue;
             }
 
-            var targetConnectionId = await registry.GetConnectionId(identity.NetworkId, targetHost.ToLowerInvariant());
+            var targetConnectionId = await registry.GetConnectionId(identity.NetworkId, targetHost);
             if (targetConnectionId == null)
             {
-                log.LogDebug("Target {TargetHost} not found on network {NetworkId}", targetHost, identity.NetworkId);
+                if (log.IsEnabled(LogLevel.Debug)) log.LogDebug("Target {TargetHost} not found on network {NetworkId}", targetHost, identity.NetworkId);
                 continue;
             }
 
@@ -129,8 +132,8 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, IStyxPass
         }
     }
 
-    private string RemoteIp => Context.GetHttpContext()?.Connection.RemoteIpAddress?.ToString() ?? "unknown";
-    private string LocalIp => Context.GetHttpContext()?.Connection.LocalIpAddress?.ToString() ?? "unknown";
+    private string RemoteIp => Context.GetHttpContext()?.Connection.RemoteIpAddress?.ToString() ?? ClientRegistry.Unknown;
+    private string LocalIp => Context.GetHttpContext()?.Connection.LocalIpAddress?.ToString() ?? ClientRegistry.Unknown;
 
     public override async Task OnDisconnectedAsync(Exception? exception)
     {

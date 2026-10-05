@@ -53,9 +53,7 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
 
     public XorgClipboardSync()
     {
-        _display = XlibRuntime.OpenDisplay();
-        if (_display == nint.Zero)
-            throw new InvalidOperationException("Failed to open X11 display for clipboard");
+        _display = XlibRuntime.OpenDisplayOrThrow("the clipboard");
 
         var root = NativeMethods.XDefaultRootWindow(_display);
         _window = NativeMethods.XCreateSimpleWindow(_display, root, 0, 0, 1, 1, 0, nint.Zero, nint.Zero);
@@ -220,7 +218,7 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
                 HandleEvent(ref ev);
             }
             else
-                NativeMethods.poll(ref pfd, 1, 100);
+                NativeMethods.Poll(ref pfd, 1, 100);
         }
     }
 

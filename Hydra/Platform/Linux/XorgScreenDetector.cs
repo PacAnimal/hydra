@@ -11,9 +11,7 @@ public class XorgScreenDetector : ScreenDetector
 
     public XorgScreenDetector(IHydraProfile profile, ILogger<XorgScreenDetector> log) : base(profile, log)
     {
-        _display = XlibRuntime.OpenDisplay();
-        if (_display == nint.Zero)
-            throw new InvalidOperationException("XOpenDisplay failed — is DISPLAY set?");
+        _display = XlibRuntime.OpenDisplayOrThrow("screen detection");
         _rootWindow = NativeMethods.XDefaultRootWindow(_display);
     }
 

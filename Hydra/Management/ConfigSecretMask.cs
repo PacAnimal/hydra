@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Cathedral.Extensions;
 
 namespace Hydra.Management;
 
@@ -11,7 +12,7 @@ internal static class ConfigSecretMask
     {
         var node = JsonNode.Parse(json) ?? throw new JsonException("Configuration is empty.");
         Visit(node, (_, value) => value.ReplaceWith(Placeholder));
-        return node.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+        return node.ToIndentedJson();
     }
 
     internal static string Restore(string editedJson, string sourceJson)
@@ -19,7 +20,7 @@ internal static class ConfigSecretMask
         var edited = JsonNode.Parse(editedJson) ?? throw new JsonException("Configuration is empty.");
         var source = JsonNode.Parse(sourceJson) ?? throw new JsonException("Source configuration is empty.");
         RestoreNode(edited, source);
-        return edited.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+        return edited.ToIndentedJson();
     }
 
     private static void RestoreNode(JsonNode edited, JsonNode? source)
@@ -32,14 +33,14 @@ internal static class ConfigSecretMask
                 if (IsSecret(property.Key) && property.Value?.GetValueKind() == JsonValueKind.String
                     && property.Value.GetValue<string>() == Placeholder)
                 {
-                    var original = sourceObject?.FirstOrDefault(p => p.Key.Equals(property.Key, StringComparison.OrdinalIgnoreCase)).Value;
+                    var original = sourceObject?.GetIgnoreCase(property.Key);
                     if (original != null) editedObject[property.Key] = original.DeepClone();
                     continue;
                 }
 
                 if (property.Value != null)
                 {
-                    var original = sourceObject?.FirstOrDefault(p => p.Key.Equals(property.Key, StringComparison.OrdinalIgnoreCase)).Value;
+                    var original = sourceObject?.GetIgnoreCase(property.Key);
                     RestoreNode(property.Value, original);
                 }
             }
@@ -73,6 +74,5 @@ internal static class ConfigSecretMask
     }
 
     private static bool IsSecret(string name) =>
-        name.Equals("password", StringComparison.OrdinalIgnoreCase)
-        || name.Equals("networkConfig", StringComparison.OrdinalIgnoreCase);
+        name.EqualsIgnoreCase("password") || name.EqualsIgnoreCase("networkConfig");
 }

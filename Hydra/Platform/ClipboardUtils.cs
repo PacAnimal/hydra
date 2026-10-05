@@ -72,7 +72,8 @@ public static class ClipboardUtils
     {
         if (sync.HasFileClipboard())
         {
-            log.LogDebug("Clipboard {Context} contains files; preserving the native file clipboard", context);
+            if (log.IsEnabled(LogLevel.Debug))
+                log.LogDebug("Clipboard {Context} contains files; preserving the native file clipboard", context);
             return new ClipboardSnapshot(null, null, null);
         }
 
@@ -100,7 +101,8 @@ public static class ClipboardUtils
     {
         if (sync.HasFileClipboard())
         {
-            log.LogInformation("Clipboard {Context} skipped because the local clipboard contains files", context);
+            if (log.IsEnabled(LogLevel.Information))
+                log.LogInformation("Clipboard {Context} skipped because the local clipboard contains files", context);
             return false;
         }
 

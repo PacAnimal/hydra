@@ -1,23 +1,19 @@
+using System.Runtime.Versioning;
 using Hydra.Management;
+using Tests.Setup;
 
 namespace Tests.Management;
 
 public class TransactionalConfigStoreTests
 {
-    private string _directory = null!;
     private string _path = null!;
 
     [SetUp]
     public void SetUp()
     {
-        _directory = Path.Combine(TestContext.CurrentContext.WorkDirectory, "management-config", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(_directory);
-        _path = Path.Combine(_directory, "hydra.conf");
+        _path = Path.Combine(TestPaths.FreshFixtureRoot(nameof(TransactionalConfigStoreTests)), "hydra.conf");
         File.WriteAllText(_path, Valid("Home"));
     }
-
-    [TearDown]
-    public void TearDown() => Directory.Delete(_directory, true);
 
     [Test]
     public async Task Save_ValidatesAndUpdatesRevision()
@@ -35,12 +31,24 @@ public class TransactionalConfigStoreTests
         }
     }
 
+    // a revision crosses the wire and outlives an upgrade mid-transaction, so its encoding is fixed:
+    // lowercase hex SHA-256 of the UTF-8 text
     [Test]
+    public void Revision_IsLowercaseHexSha256()
+    {
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(TransactionalConfigStore.Revision(""), Is.EqualTo("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"));
+            Assert.That(TransactionalConfigStore.Revision("ø"), Is.EqualTo("d48b452a88ac264c8b303ab6ecd9e7d12e38fa4b8cd21aa104b5b3acf83accf3"));
+        }
+    }
+
+    [Test]
+    [UnsupportedOSPlatform("windows")]
     public async Task Save_PreservesUnixFileMode()
     {
         if (OperatingSystem.IsWindows()) Assert.Ignore("Unix permission test");
         const UnixFileMode expected = UnixFileMode.UserRead | UnixFileMode.UserWrite;
-#pragma warning disable CA1416
         File.SetUnixFileMode(_path, expected);
         var store = new TransactionalConfigStore(new HydraRuntimeInfo(_path, DateTimeOffset.UtcNow));
         var before = await store.ReadAsync();
@@ -48,7 +56,6 @@ public class TransactionalConfigStoreTests
         await store.SaveAsync(before.Revision, Valid("Work"), CancellationToken.None);
 
         Assert.That(File.GetUnixFileMode(_path), Is.EqualTo(expected));
-#pragma warning restore CA1416
     }
 
     [Test]
@@ -134,7 +141,7 @@ public class TransactionalConfigStoreTests
     [Test]
     public async Task TheConfigLockAdmitsOneHolderAtATime()
     {
-        var lockPath = ConfigFileLock.ConfigPathFor(_path);
+        var lockPath = new ConfigDir(_path).ConfigLock;
         var inside = 0;
         var overlapped = false;
 
@@ -233,7 +240,7 @@ public class TransactionalConfigStoreTests
     [Test]
     public async Task AWaitAgainstALockThisProcessHoldsSaysSo()
     {
-        var lockPath = ConfigFileLock.ConfigPathFor(_path);
+        var lockPath = new ConfigDir(_path).ConfigLock;
         await using var held = await ConfigFileLock.Acquire(lockPath, CancellationToken.None);
 
         // A short budget, because the point is WHICH error it ends with, not how long it waits for it.

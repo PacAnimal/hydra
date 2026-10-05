@@ -17,6 +17,14 @@ internal static class XlibRuntime
         return NativeMethods.XOpenDisplay(null);
     }
 
+    internal static nint OpenDisplayOrThrow(string purpose)
+    {
+        var display = OpenDisplay();
+        return display != nint.Zero
+            ? display
+            : throw new InvalidOperationException($"Failed to open the X11 display for {purpose} — is DISPLAY set?");
+    }
+
     internal static void EnsureThreadsInitialized()
     {
         if (!TryInitializeThreads())

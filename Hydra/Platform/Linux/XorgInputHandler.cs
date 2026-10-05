@@ -46,9 +46,7 @@ public sealed class XorgInputHandler : IPlatformInput
     public XorgInputHandler(ILogger<XorgInputHandler> log)
     {
         _log = log;
-        _display = XlibRuntime.OpenDisplay();
-        if (_display == nint.Zero)
-            throw new InvalidOperationException("XOpenDisplay failed — is DISPLAY set?");
+        _display = XlibRuntime.OpenDisplayOrThrow("input capture");
 
         _rootWindow = NativeMethods.XDefaultRootWindow(_display);
         _inputSink = CreateInputSink();
@@ -209,7 +207,7 @@ public sealed class XorgInputHandler : IPlatformInput
                     _ = NativeMethods.XFlush(_display);
                     if (NativeMethods.XEventsQueued(_display, NativeMethods.QueuedAfterReading) == 0)
                     {
-                        NativeMethods.poll(ref pfd, 1, 100);  // block up to 100ms, then check _running
+                        NativeMethods.Poll(ref pfd, 1, 100);  // block up to 100ms, then check _running
                         continue;
                     }
                 }
@@ -224,6 +222,8 @@ public sealed class XorgInputHandler : IPlatformInput
         _eventThread.Start();
         await ready.Task;
     }
+
+    public bool RecentresItself => false;
 
     public bool AnyMouseButtonHeld()
     {

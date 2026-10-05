@@ -130,7 +130,7 @@ public class MasterSlaveProtocolTests
 
         await relay.FirePeersChanged("slave-pc");
         await relay.FirePeersChanged();           // slave disappears
-        relay.Sent.Clear();
+        relay.ClearSent();
         await relay.FirePeersChanged("slave-pc"); // slave reappears
 
         Assert.That(MasterConfigTargets(relay), Is.EqualTo(["slave-pc"]));
@@ -147,7 +147,7 @@ public class MasterSlaveProtocolTests
         await service.StartAsync(CancellationToken.None);
 
         await relay.FirePeersChanged("slave-pc");
-        relay.Sent.Clear();
+        relay.ClearSent();
         await relay.FirePeersChanged("slave-pc", "another-peer"); // slave still present
 
         Assert.That(MasterConfigTargets(relay), Is.Empty);
@@ -231,10 +231,10 @@ public class MasterSlaveProtocolTests
         var relay = new FakeRelay();
         var sender = new SlaveLogSender(relay, forwarder, state, NullLogger<SlaveLogSender>.Instance);
         await sender.StartAsync(CancellationToken.None);
-        await Task.Delay(200);
+        await relay.WaitForSent(MessageKind.SlaveLog, TimeSpan.FromSeconds(5));
         await sender.StopAsync(CancellationToken.None);
 
-        var sent = relay.Sent.Where(s => s.Kind == MessageKind.SlaveLog).ToList();
+        var sent = relay.Snapshot().Where(s => s.Kind == MessageKind.SlaveLog).ToList();
         Assert.That(sent, Has.Count.EqualTo(1));
         Assert.That(sent[0].Targets, Is.EquivalentTo(["verbose-master"]));
     }
@@ -247,14 +247,18 @@ public class MasterSlaveProtocolTests
 
         var forwarder = new SlaveLogForwarder();
         await forwarder.ForwardAsync(new LogEntry(LogLevel.Debug, "Test", default, "debug msg", "debug msg", null));
+        // entries go out in order, so this one arriving means the debug entry before it was already judged
+        await forwarder.ForwardAsync(new LogEntry(LogLevel.Warning, "Test", default, "warning msg", "warning msg", null));
 
         var relay = new FakeRelay();
         var sender = new SlaveLogSender(relay, forwarder, state, NullLogger<SlaveLogSender>.Instance);
         await sender.StartAsync(CancellationToken.None);
-        await Task.Delay(200);
+        await relay.WaitForSent(MessageKind.SlaveLog, TimeSpan.FromSeconds(5));
         await sender.StopAsync(CancellationToken.None);
 
-        Assert.That(relay.Sent.Where(s => s.Kind == MessageKind.SlaveLog), Is.Empty);
+        var sent = relay.Snapshot().Where(s => s.Kind == MessageKind.SlaveLog).ToList();
+        Assert.That(sent, Has.Count.EqualTo(1));
+        Assert.That(sent[0].Json, Does.Contain("warning msg"), "the debug entry below every master's level went out");
     }
 
     // -- helpers --
@@ -274,7 +278,7 @@ public class MasterSlaveProtocolTests
     }
 
     private static List<string> MasterConfigTargets(FakeRelay relay) =>
-        [.. relay.Sent.Where(s => s.Kind == MessageKind.MasterConfig).SelectMany(s => s.Targets)];
+        [.. relay.Snapshot().Where(s => s.Kind == MessageKind.MasterConfig).SelectMany(s => s.Targets)];
 
     private sealed class TestableMasterRelay : MasterRelayConnection
     {

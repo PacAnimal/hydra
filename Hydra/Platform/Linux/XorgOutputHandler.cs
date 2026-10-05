@@ -24,9 +24,7 @@ public sealed class XorgOutputHandler : IPlatformOutput, ICursor
     public XorgOutputHandler(ILogger<XorgOutputHandler> log)
     {
         _log = log;
-        _display = XlibRuntime.OpenDisplay();
-        if (_display == nint.Zero)
-            throw new InvalidOperationException("XOpenDisplay failed — is DISPLAY set?");
+        _display = XlibRuntime.OpenDisplayOrThrow("input injection");
 
         _screen = NativeMethods.XDefaultScreen(_display);
         _rootWindow = NativeMethods.XDefaultRootWindow(_display);

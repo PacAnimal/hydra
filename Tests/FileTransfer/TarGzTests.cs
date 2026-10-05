@@ -25,7 +25,7 @@ public class TarGzStreamerTests
 
         var chunks = new List<byte[]>();
         var sha = await TarGzStreamer.StreamAsync([file],
-            (data, _, _) => { chunks.Add(data); return Task.CompletedTask; },
+            (data, _, _) => { chunks.Add(data); return ValueTask.CompletedTask; },
             NoFileStart, CancellationToken.None);
 
         using (Assert.EnterMultipleScope())
@@ -45,7 +45,7 @@ public class TarGzStreamerTests
 
         var chunks = new List<byte[]>();
         await TarGzStreamer.StreamAsync([dir],
-            (data, _, _) => { chunks.Add(data); return Task.CompletedTask; },
+            (data, _, _) => { chunks.Add(data); return ValueTask.CompletedTask; },
             NoFileStart, CancellationToken.None);
 
         // decompress and verify both files are in the archive
@@ -62,7 +62,7 @@ public class TarGzStreamerTests
         Directory.CreateDirectory(dir);
 
         var sha = await TarGzStreamer.StreamAsync([dir],
-            (_, _, _) => Task.CompletedTask,
+            (_, _, _) => ValueTask.CompletedTask,
             NoFileStart, CancellationToken.None);
 
         // valid archive with a hash, even if empty
@@ -78,7 +78,7 @@ public class TarGzStreamerTests
 
         var chunks = new List<byte[]>();
         await TarGzStreamer.StreamAsync([real, missing],
-            (data, _, _) => { chunks.Add(data); return Task.CompletedTask; },
+            (data, _, _) => { chunks.Add(data); return ValueTask.CompletedTask; },
             NoFileStart, CancellationToken.None);
 
         var entries = await ExtractEntryNames(Combine(chunks));
@@ -101,7 +101,7 @@ public class TarGzStreamerTests
 
         Assert.ThrowsAsync<OperationCanceledException>(async () =>
             await TarGzStreamer.StreamAsync([file],
-                (_, _, _) => Task.CompletedTask,
+                (_, _, _) => ValueTask.CompletedTask,
                 NoFileStart, token));
     }
 
@@ -139,7 +139,7 @@ public class TarGzStreamerTests
 
         var sequences = new List<int>();
         await TarGzStreamer.StreamAsync([file],
-            (_, seq, _) => { sequences.Add(seq); return Task.CompletedTask; },
+            (_, seq, _) => { sequences.Add(seq); return ValueTask.CompletedTask; },
             NoFileStart, CancellationToken.None);
 
         for (var i = 0; i < sequences.Count; i++)
@@ -156,11 +156,30 @@ public class TarGzStreamerTests
 
         var sizes = new List<int>();
         await TarGzStreamer.StreamAsync([file],
-            (data, _, _) => { sizes.Add(data.Length); return Task.CompletedTask; },
+            (data, _, _) => { sizes.Add(data.Length); return ValueTask.CompletedTask; },
             NoFileStart, CancellationToken.None);
 
         Assert.That(sizes, Has.Count.GreaterThan(1));
         Assert.That(sizes, Has.All.LessThanOrEqualTo(TarGzStreamer.ChunkSize));
+    }
+
+    // the sender's backpressure: the next chunk is not produced while the previous one is still being sent
+    [Test]
+    public async Task StreamAsync_AwaitsEachChunkBeforeProducingTheNext()
+    {
+        var file = Path.Combine(_tempRoot, "random.bin");
+        var bytes = new byte[TarGzStreamer.ChunkSize * 3];
+        Random.Shared.NextBytes(bytes);
+        await File.WriteAllBytesAsync(file, bytes);
+        var chunks = new AwaitedCalls();
+
+        await TarGzStreamer.StreamAsync([file], (_, _, _) => chunks.Next(), NoFileStart, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(chunks.MostOutstanding, Is.EqualTo(1), "onChunk must be awaited before the next chunk is produced");
+            Assert.That(chunks.Count, Is.GreaterThan(1));
+        }
     }
 
     private static byte[] Combine(List<byte[]> chunks) => [.. chunks.SelectMany(c => c)];
@@ -486,7 +505,7 @@ public class TarGzExtractorTests
     {
         var chunks = new List<byte[]>();
         var hash = await TarGzStreamer.StreamAsync(paths,
-            (data, _, _) => { chunks.Add(data); return Task.CompletedTask; },
+            (data, _, _) => { chunks.Add(data); return ValueTask.CompletedTask; },
             NoFileStart, CancellationToken.None);
         return (chunks, hash);
     }

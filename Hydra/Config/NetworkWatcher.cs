@@ -153,7 +153,8 @@ internal sealed class NetworkWatcher : SimpleHostedService
         {
             if (_dormancy.IsDormant)
             {
-                _log.LogInformation("Conditions match {Profile} again — waking from dormancy", _activeConfig?.ProfileName ?? "<unnamed>");
+                if (_log.IsEnabled(LogLevel.Information))
+                    _log.LogInformation("Conditions match {Profile} again — waking from dormancy", _activeConfig?.ProfileName ?? "<unnamed>");
                 await _dormancy.Exit();
             }
             return;
@@ -162,19 +163,20 @@ internal sealed class NetworkWatcher : SimpleHostedService
         var onlyScreensLost = resolved == null && OnlyScreensLost(ssids, screenCount, isPluggedIn);
         if (onlyScreensLost && !_activeConfig!.AllowSystemSleep)
         {
-            if (!_dormancy.IsDormant)
+            if (!_dormancy.IsDormant && _log.IsEnabled(LogLevel.Information))
                 _log.LogInformation("Screens no longer match {Profile} — going dormant: staying on the relay, refusing input until input wakes us", _activeConfig!.ProfileName ?? "<unnamed>");
             await _dormancy.Enter();
             return;
         }
 
-        if (onlyScreensLost)
+        if (onlyScreensLost && _log.IsEnabled(LogLevel.Information))
             _log.LogInformation("Screens no longer match {Profile} — system sleep is allowed, leaving the relay instead of remaining remotely wakeable",
                 _activeConfig!.ProfileName ?? "<unnamed>");
 
         var from = _activeConfig != null ? $"{_activeConfig.Mode}" : "idle";
         var to = resolved != null ? $"{resolved.Mode}" : "idle";
-        _log.LogInformation("Conditions changed: switching from {From} to {To}, restarting", from, to);
+        if (_log.IsEnabled(LogLevel.Information))
+            _log.LogInformation("Conditions changed: switching from {From} to {To}, restarting", from, to);
         _restart();
     }
 
@@ -196,13 +198,15 @@ internal sealed class NetworkWatcher : SimpleHostedService
         var prevStr = FormatSsids(previous);
         var currStr = FormatSsids(current);
         if (prevStr == currStr) return;
-        _log.LogInformation("Network: {Previous} → {Current}", prevStr, currStr);
+        if (_log.IsEnabled(LogLevel.Information))
+            _log.LogInformation("Network: {Previous} → {Current}", prevStr, currStr);
     }
 
     private void LogScreenCountTransition(int? previous, int current)
     {
         if (previous == null || previous == current) return;
-        _log.LogInformation("Screens: {Previous} → {Current}", previous, current);
+        if (_log.IsEnabled(LogLevel.Information))
+            _log.LogInformation("Screens: {Previous} → {Current}", previous, current);
     }
 
     private void LogIsPluggedInTransition(bool? previous, bool? current)
@@ -211,11 +215,12 @@ internal sealed class NetworkWatcher : SimpleHostedService
         if (previous == null)
         {
             // startup: log current state unless detection is unavailable
-            if (current != null) _log.LogInformation("Power: {Current}", Format(current));
+            if (current != null && _log.IsEnabled(LogLevel.Information)) _log.LogInformation("Power: {Current}", Format(current));
             return;
         }
         if (previous == current) return;
-        _log.LogInformation("Power: {Previous} → {Current}", Format(previous), Format(current));
+        if (_log.IsEnabled(LogLevel.Information))
+            _log.LogInformation("Power: {Previous} → {Current}", Format(previous), Format(current));
     }
 
     private static string FormatSsids(List<string>? ssids)

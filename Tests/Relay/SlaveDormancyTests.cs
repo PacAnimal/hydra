@@ -20,7 +20,7 @@ public class SlaveDormancyTests
         await relay.SimulateConnected();
         await relay.SimulateMasterConfig(Master);
         if (dormant) await relay.Dormancy.Enter();
-        relay.Sent.Clear();
+        relay.ClearSent();
         return (relay, sync);
     }
 
@@ -101,7 +101,7 @@ public class SlaveDormancyTests
     {
         var (relay, _) = await Setup();
         await relay.SimulateReceive(Master, MessageKind.ClipboardHash, """{"hash":12345}""");
-        Assert.That(relay.Sent, Is.Empty);
+        Assert.That(relay.Snapshot(), Is.Empty);
     }
 
     // a sleeping display enumerates to whatever the OS still lists — that is not our real geometry
@@ -111,7 +111,7 @@ public class SlaveDormancyTests
         var (relay, _) = await Setup();
         relay.Screens.Snapshot = OneScreen;
         await relay.Screens.FireChange();
-        Assert.That(relay.Sent, Is.Empty);
+        Assert.That(relay.Snapshot(), Is.Empty);
     }
 
     // the master must keep seeing us as a normal, fully-sized peer: it reconnects while we sleep, asks
@@ -125,7 +125,7 @@ public class SlaveDormancyTests
 
         await relay.SimulateMasterConfig("second-master");
 
-        var (_, _, json) = relay.Sent.Single(m => m.Kind == MessageKind.ScreenInfo);
+        var (_, _, json) = relay.Snapshot().Single(m => m.Kind == MessageKind.ScreenInfo);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(json, Does.Contain("home:0"), "must advertise the geometry we had while awake");
@@ -138,7 +138,7 @@ public class SlaveDormancyTests
     {
         var (relay, _) = await Setup();
         await relay.Dormancy.Exit();
-        Assert.That(relay.Sent.Select(m => m.Kind), Does.Contain(MessageKind.ScreenInfo));
+        Assert.That(relay.Snapshot().Select(m => m.Kind), Does.Contain(MessageKind.ScreenInfo));
     }
 
     // the master keeps its cursor parked on us while we sleep, so the KeyUp for anything held right now

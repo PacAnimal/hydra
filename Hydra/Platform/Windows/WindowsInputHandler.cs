@@ -224,6 +224,8 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
         _hookThread?.Join(TimeSpan.FromSeconds(2));
     }
 
+    public bool RecentresItself => true;
+
     public bool AnyMouseButtonHeld()
     {
         // VK_LBUTTON=0x01, VK_RBUTTON=0x02, VK_MBUTTON=0x04, VK_XBUTTON1=0x05, VK_XBUTTON2=0x06
@@ -335,26 +337,7 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
                         var dy = info.pt.y - lastWarpY;
                         _onMouseDelta?.Invoke(dx, dy);
 
-                        // Re-centre on THIS raw sample, synchronously, right here — not once per
-                        // batch InputRouter gets around to processing (up to ~8ms and a whole
-                        // batch's worth of real movement later). Windows' own cursor position is
-                        // still the real, monitor-clamped one underneath this delta; nothing has
-                        // changed that. What changed is HOW BIG the periodic reset jump looks to
-                        // Windows' own ballistics/acceleration state: warping back every raw sample
-                        // (~900/s) undoes at most one sample's worth of real movement each time —
-                        // small, indistinguishable from ordinary jitter, exactly what commit
-                        // 8964546 did and what never had this problem. Warping once per processed
-                        // batch instead (what recentring every PROCESSED sample amounts to) undoes
-                        // up to a whole batch's worth in one jump, and Windows can't tell that
-                        // artificial reset apart from real input — its own documented behaviour is
-                        // that continual SetCursorPos resets "can cause mouse movement recording to
-                        // malfunction", and a batch-sized jump repeating every 8ms is precisely the
-                        // pattern that provokes it. Keeping the reset sample-sized keeps it invisible
-                        // to that state machine, same as it always was. The relay send/actor-post
-                        // this delta feeds (PostMouseInput, upstream) is unaffected and stays
-                        // batched to MaxMouseHz — only the warp itself moved back to per-sample,
-                        // and a bare SetCursorPos costs nothing like the channel post that the
-                        // batching in d2742e3 was actually paying for.
+                        // recentre per raw sample, see RecentresItself
                         var (targetX, targetY) = RecentreToTarget();
                         NativeMethods.SetCursorPos(targetX, targetY);
                     }

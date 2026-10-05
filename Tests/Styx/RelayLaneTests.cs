@@ -1,5 +1,3 @@
-using Hydra.Config;
-using Hydra.Keyboard;
 using Hydra.Relay;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.DependencyInjection;
@@ -17,52 +15,12 @@ namespace Tests.Styx;
 /// key held down on somebody's machine and nothing downstream could tell.</para>
 ///
 /// <para>Nothing here is timed. The tests that need a lane to be slow park it on a gate and wait for
-/// <c>Held</c> to say it is genuinely parked; the rest assert arrival ORDER, which is a fact rather than a
+/// <c>WaitUntilLaneHeld</c> to say it is genuinely parked; the rest assert arrival ORDER, which is a fact rather than a
 /// duration.</para>
 /// </summary>
 [TestFixture]
-public class RelayLaneTests
+public class RelayLaneTests : StyxFixtureBase
 {
-    private static Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactory<global::Styx.Program>? _factory;
-
-    [OneTimeSetUp]
-    public static void OneTimeSetUp()
-    {
-        _factory = StyxTestServer.Create();
-        _ = _factory.Server;
-    }
-
-    [OneTimeTearDown]
-    public static async Task OneTimeTearDown()
-    {
-        if (_factory != null) await _factory.DisposeAsync();
-    }
-
-    private static async Task<(HydraTestClient Sender, HydraTestClient Receiver)> ConnectedPair()
-    {
-        var cfg = await StyxTestServer.BuildNetworkConfig(_factory!, Guid.NewGuid());
-
-        var sender = new HydraTestClient(_factory!, TransitionTestHelper.Profile("sender", new HydraConfig { Mode = Mode.Master, NetworkConfig = cfg }));
-        var receiver = new HydraTestClient(_factory!, TransitionTestHelper.Profile("receiver", new HydraConfig { Mode = Mode.Master, NetworkConfig = cfg }));
-
-        await sender.StartAsync(CancellationToken.None);
-        await receiver.StartAsync(CancellationToken.None);
-        await sender.WaitForReady();
-        await receiver.WaitForReady();
-
-        return (sender, receiver);
-    }
-
-    /// <summary>Everything here is bounded. A test that can hang takes the run with it.</summary>
-    private static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
-
-    private static byte[] Move(int n) => MessageSerializer.Encode(MessageKind.MouseMove, new MouseMoveMessage("", n, n));
-
-    /// <summary>A KeyEvent, which unlike a mouse move is never coalesced — so N calls are N queue entries.</summary>
-    private static byte[] Press(int n) =>
-        MessageSerializer.Encode(MessageKind.KeyEvent, new KeyEventMessage(KeyEventType.KeyDown, KeyModifiers.None, (char)('a' + n % 26), null));
-    private static byte[] Chunk(int n, int bytes = 8) => MessageSerializer.Encode(MessageKind.FileTransferChunk, new FileTransferChunkMessage(n, new byte[bytes]));
-
     /// <summary>
     /// The next message, or a failure that NAMES what never came.
     ///
@@ -110,16 +68,15 @@ public class RelayLaneTests
     [Test]
     public async Task ABurstOfInputArrivesInOrder()
     {
-        var (sender, receiver) = await ConnectedPair();
-        await using var _ = sender;
-        await using var __ = receiver;
+        await using var pair = await ConnectedPair();
+        var (sender, receiver) = pair;
 
         // NOT awaited one by one. SendReliableAsync completes only once its payload has reached the
         // wire, so awaiting each in turn puts exactly one message in flight and the arrival order is
         // guaranteed by this loop rather than by the code under test — the test would pass against a
         // lane implementation that was arbitrarily wrong. Queue them all, then wait.
         const int count = 60;
-        var sent = Enumerable.Range(0, count).Select(i => sender.SendReliableAsync(["receiver"], Move(i)).AsTask()).ToArray();
+        var sent = Enumerable.Range(0, count).Select(i => sender.SendReliableAsync(["receiver"], TestMessages.Move(i)).AsTask()).ToArray();
 
         var arrived = new List<int>();
         for (var i = 0; i < count; i++) arrived.Add(PositionOf((await receiver.WaitForNextMessage()).Json));
@@ -137,13 +94,12 @@ public class RelayLaneTests
     [Test]
     public async Task ABurstOfBulkArrivesInOrder()
     {
-        var (sender, receiver) = await ConnectedPair();
-        await using var _ = sender;
-        await using var __ = receiver;
+        await using var pair = await ConnectedPair();
+        var (sender, receiver) = pair;
 
         // Queued all at once, for the reason ABurstOfInputArrivesInOrder gives.
         const int count = 60;
-        var sent = Enumerable.Range(0, count).Select(i => sender.SendReliableAsync(["receiver"], Chunk(i)).AsTask()).ToArray();
+        var sent = Enumerable.Range(0, count).Select(i => sender.SendReliableAsync(["receiver"], TestMessages.Chunk(i)).AsTask()).ToArray();
 
         var arrived = new List<int>();
         for (var i = 0; i < count; i++) arrived.Add(SequenceOf((await receiver.WaitForNextMessage()).Json));
@@ -160,9 +116,8 @@ public class RelayLaneTests
     [Test]
     public async Task TwoBusyLanesEachKeepTheirOwnOrder()
     {
-        var (sender, receiver) = await ConnectedPair();
-        await using var _ = sender;
-        await using var __ = receiver;
+        await using var pair = await ConnectedPair();
+        var (sender, receiver) = pair;
 
         // Every message queued before anything is awaited, so both channels genuinely hold a backlog and
         // the two drains really do run at once. Awaiting each send in turn would serialise the whole test
@@ -171,8 +126,8 @@ public class RelayLaneTests
         var sent = new List<Task>();
         for (var i = 0; i < count; i++)
         {
-            sent.Add(sender.SendReliableAsync(["receiver"], Chunk(i, 4096)).AsTask());
-            sent.Add(sender.SendReliableAsync(["receiver"], Move(i)).AsTask());
+            sent.Add(sender.SendReliableAsync(["receiver"], TestMessages.Chunk(i, 4096)).AsTask());
+            sent.Add(sender.SendReliableAsync(["receiver"], TestMessages.Move(i)).AsTask());
         }
 
         var input = new List<int>();
@@ -199,7 +154,7 @@ public class RelayLaneTests
     /// <b>The reason the split exists.</b> A keystroke sent AFTER a stalled file chunk arrives while that
     /// chunk is still stuck — which on one queue was impossible by construction.
     ///
-    /// <para>Deterministic: the bulk lane is parked on a gate and the test waits for <c>Held</c> to
+    /// <para>Deterministic: the bulk lane is parked on a gate and the test waits for <c>WaitUntilLaneHeld</c> to
     /// confirm it before sending the keystroke, so the assertion does not depend on a chunk being slower
     /// than a keypress on this particular machine. On the single-queue code this test cannot pass — the
     /// keystroke is queued behind the held chunk and never arrives.</para>
@@ -207,18 +162,17 @@ public class RelayLaneTests
     [Test]
     public async Task AKeystrokeOvertakesAStalledFileChunk()
     {
-        var (sender, receiver) = await ConnectedPair();
-        await using var _ = sender;
-        await using var __ = receiver;
+        await using var pair = await ConnectedPair();
+        var (sender, receiver) = pair;
 
         sender.HoldLane(RelayLane.Bulk);
 
         // NOT awaited: a reliable send completes only once the payload has actually left, and this one is
-        // about to be parked on the gate. Waiting for Held is what says it is queued and stuck.
-        var stalled = sender.SendReliableAsync(["receiver"], Chunk(7)).AsTask();
-        await WaitFor(() => sender.Held == 1, "the bulk lane to park on the gate");
+        // about to be parked on the gate. WaitUntilLaneHeld is what says it is queued and stuck.
+        var stalled = sender.SendReliableAsync(["receiver"], TestMessages.Chunk(7)).AsTask();
+        await sender.WaitUntilLaneHeld();
 
-        sender.Send(["receiver"], Move(1));
+        sender.Send(["receiver"], TestMessages.Move(1));
 
         var (_, kind, _) = await NextOrFail(receiver,
             "nothing arrived at all while the chunk was parked — the keystroke is queued behind it, so the lanes are one queue again");
@@ -241,9 +195,8 @@ public class RelayLaneTests
     [Test]
     public async Task TheTransferStreamKeepsItsOrderWhileInputFloodsTheOtherLane()
     {
-        var (sender, receiver) = await ConnectedPair();
-        await using var _ = sender;
-        await using var __ = receiver;
+        await using var pair = await ConnectedPair();
+        var (sender, receiver) = pair;
 
         // KeyEvent, not MouseMove: movement COALESCES, so a flood of moves collapses to a handful of
         // queue entries and the input lane is never actually loaded.
@@ -253,10 +206,10 @@ public class RelayLaneTests
         // chunks on the bulk one — the very split its own summary says must never happen.
         const int chunks = 25;
         var sent = new List<Task>();
-        for (var i = 0; i < 200; i++) sent.Add(sender.SendReliableAsync(["receiver"], Press(i)).AsTask());
+        for (var i = 0; i < 200; i++) sent.Add(sender.SendReliableAsync(["receiver"], TestMessages.Key(i)).AsTask());
 
         sent.Add(sender.SendReliableAsync(["receiver"], MessageSerializer.Encode(MessageKind.FileTransferStart, new FileTransferStartMessage(["f"], 100))).AsTask());
-        for (var i = 0; i < chunks; i++) sent.Add(sender.SendReliableAsync(["receiver"], Chunk(i, 2048)).AsTask());
+        for (var i = 0; i < chunks; i++) sent.Add(sender.SendReliableAsync(["receiver"], TestMessages.Chunk(i, 2048)).AsTask());
         sent.Add(sender.SendReliableAsync(["receiver"], MessageSerializer.Encode(MessageKind.FileTransferDone, new FileTransferDoneMessage(100, new byte[32]))).AsTask());
 
         var stream = new List<MessageKind>();
@@ -284,13 +237,12 @@ public class RelayLaneTests
     [Test]
     public async Task AnAbortOvertakesTheChunksItCancels()
     {
-        var (sender, receiver) = await ConnectedPair();
-        await using var _ = sender;
-        await using var __ = receiver;
+        await using var pair = await ConnectedPair();
+        var (sender, receiver) = pair;
 
         sender.HoldLane(RelayLane.Bulk);
-        var held = sender.SendReliableAsync(["receiver"], Chunk(1)).AsTask();
-        await WaitFor(() => sender.Held == 1, "the bulk lane to park");
+        var held = sender.SendReliableAsync(["receiver"], TestMessages.Chunk(1)).AsTask();
+        await sender.WaitUntilLaneHeld();
 
         sender.Send(["receiver"], MessageSerializer.Encode(MessageKind.FileTransferAbort, new FileTransferAbortMessage("cancelled")));
 
@@ -319,25 +271,24 @@ public class RelayLaneTests
     [Test]
     public async Task AMessageBetweenTwoMouseMovesKeepsThemApart()
     {
-        var (sender, receiver) = await ConnectedPair();
-        await using var _ = sender;
-        await using var __ = receiver;
+        await using var pair = await ConnectedPair();
+        var (sender, receiver) = pair;
 
         // Park the input drain on something ahead of everything below, so nothing is read while the batch
         // is being built and the close is the ONLY thing that can separate the two moves.
         sender.HoldLane(RelayLane.Input);
-        var blocker = sender.SendReliableAsync(["receiver"], Press(9)).AsTask();
-        await WaitFor(() => sender.Held == 1, "the input lane to park");
+        var blocker = sender.SendReliableAsync(["receiver"], TestMessages.Key(9)).AsTask();
+        await sender.WaitUntilLaneHeld();
 
-        sender.Send(["receiver"], Move(1));
-        var separator = sender.SendReliableAsync(["receiver"], Press(0)).AsTask();
-        sender.Send(["receiver"], Move(2));
+        sender.Send(["receiver"], TestMessages.Move(1));
+        var separator = sender.SendReliableAsync(["receiver"], TestMessages.Key(0)).AsTask();
+        sender.Send(["receiver"], TestMessages.Move(2));
 
         // A SENTINEL, so the count is read off what actually arrived. Waiting for a fixed number of
         // messages would make a merge — which produces one FEWER — fail by timing out on a message that
         // was never coming, and a timeout says "something is slow" where this needs to say "the moves
         // merged". It is enqueued last and cannot coalesce, so it is always the final arrival.
-        var sentinel = sender.SendReliableAsync(["receiver"], Press(1)).AsTask();
+        var sentinel = sender.SendReliableAsync(["receiver"], TestMessages.Key(1)).AsTask();
 
         sender.ReleaseLane();
         await Task.WhenAll(blocker, separator, sentinel).WaitAsync(Bound);
@@ -367,19 +318,18 @@ public class RelayLaneTests
     [TestCase(RelayLane.Input)]
     public async Task ADroppedConnectionFailsWhatIsQueuedOnALane(RelayLane lane)
     {
-        var (sender, receiver) = await ConnectedPair();
-        await using var _ = sender;
-        await using var __ = receiver;
+        await using var pair = await ConnectedPair();
+        var sender = pair.Sender;
 
         // BOTH lanes are exercised, one per case. Holding only the bulk one would leave
         // FailQueued(_inputQueue.Reader) uncovered — deleting that line would still pass.
         sender.HoldLane(lane);
-        var payload = lane == RelayLane.Bulk ? Chunk(1) : Move(1);
+        var payload = lane == RelayLane.Bulk ? TestMessages.Chunk(1) : TestMessages.Move(1);
 
         // One parks inside the lane's encrypt step; the next stays in the channel behind it. The two are
         // emptied by different code, so both have to be here.
         var parked = sender.SendReliableAsync(["receiver"], payload).AsTask();
-        await WaitFor(() => sender.Held == 1, $"the {lane} lane to park");
+        await sender.WaitUntilLaneHeld();
         var behind = sender.SendReliableAsync(["receiver"], payload).AsTask();
 
         // BOUNDED. If the drain ever goes back to encrypting on the app-lifetime token, the parked lane
@@ -399,19 +349,6 @@ public class RelayLaneTests
         }
 
         sender.ReleaseLane();
-    }
-
-    private static async Task WaitFor(Func<bool> condition, string what, int timeoutMs = 15000)
-    {
-        using var cancel = new CancellationTokenSource(timeoutMs);
-        try
-        {
-            while (!condition()) await Task.Delay(10, cancel.Token);
-        }
-        catch (OperationCanceledException)
-        {
-            Assert.Fail($"Timed out waiting for {what}");
-        }
     }
 
     /// <summary>
@@ -439,7 +376,7 @@ public class RelayLaneTests
     [Test]
     public void TheRelayDispatchesAtLeastAsManyInvocationsAsAPeerHasLanes()
     {
-        var configured = _factory!.Services.GetRequiredService<IOptions<HubOptions>>().Value.MaximumParallelInvocationsPerClient;
+        var configured = Factory.Services.GetRequiredService<IOptions<HubOptions>>().Value.MaximumParallelInvocationsPerClient;
 
         Assert.That(configured, Is.GreaterThanOrEqualTo(Enum.GetValues<RelayLane>().Length),
             "a lane's invocation is not finished until the hub method returns, so fewer slots than lanes means a lane waits for another lane's frame to be delivered");

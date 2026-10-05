@@ -23,71 +23,58 @@ public class ActivityTrackerTests
     private static IHydraProfile SleepableSlaveProfile =>
         TransitionTestHelper.Profile("slave", new HydraConfig { Mode = Mode.Slave, AllowSystemSleep = true });
 
-    private sealed class SpySender : IRelaySender
-    {
-        public readonly List<(string[] Targets, MessageKind Kind)> Sent = [];
-        public bool IsConnected => true;
-        public void Send(string[] targets, byte[] payload) =>
-            Sent.Add((targets, MessageSerializer.Decode(payload).Kind));
-#pragma warning disable CS0067
-        public event Func<string[], Task>? PeersChanged;
-        public event Func<string, MessageKind, ReadOnlyMemory<byte>, Task>? MessageReceived;
-        public event Func<Task>? Disconnected;
-#pragma warning restore CS0067
-    }
-
-    private static ActivityTracker Make(IHydraProfile profile, SpySender relay, IWorldState world, Func<long>? clock = null) =>
+    private static ActivityTracker Make(IHydraProfile profile, FakeRelay relay, IWorldState world, Func<long>? clock = null) =>
         new(profile, new Lazy<IRelaySender>(() => relay), world, new NullScreenSaverSync(), NullLogger<ActivityTracker>.Instance, clock);
 
     [Test]
     public async Task LocalActivity_SlaveMode_BroadcastsToMaster()
     {
-        var spy = new SpySender();
+        var spy = new FakeRelay();
         var world = new WorldState();
         await world.AddMaster("master-pc", new MasterConfigMessage(null));
         var tracker = Make(SlaveProfile, spy, world);
 
         await tracker.LocalActivity();
 
-        Assert.That(spy.Sent, Has.Count.EqualTo(1));
+        Assert.That(spy.Snapshot(), Has.Count.EqualTo(1));
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(spy.Sent[0].Targets, Is.EqualTo(["master-pc"]));
-            Assert.That(spy.Sent[0].Kind, Is.EqualTo(MessageKind.ActivityPing));
+            Assert.That(spy.Snapshot()[0].Targets, Is.EqualTo(["master-pc"]));
+            Assert.That(spy.Snapshot()[0].Kind, Is.EqualTo(MessageKind.ActivityPing));
         }
     }
 
     [Test]
     public async Task LocalActivity_MasterWithSyncOn_BroadcastsToSlaves()
     {
-        var spy = new SpySender();
+        var spy = new FakeRelay();
         var world = new WorldState();
         await world.SetPeerScreens("slave-pc", []);
         var tracker = Make(MasterProfile(sync: true), spy, world);
 
         await tracker.LocalActivity();
 
-        Assert.That(spy.Sent, Has.Count.EqualTo(1));
-        Assert.That(spy.Sent[0].Targets, Is.EqualTo(["slave-pc"]));
+        Assert.That(spy.Snapshot(), Has.Count.EqualTo(1));
+        Assert.That(spy.Snapshot()[0].Targets, Is.EqualTo(["slave-pc"]));
     }
 
     [Test]
     public async Task LocalActivity_MasterWithSyncOff_DoesNotBroadcast()
     {
-        var spy = new SpySender();
+        var spy = new FakeRelay();
         var world = new WorldState();
         await world.SetPeerScreens("slave-pc", []);
         var tracker = Make(MasterProfile(sync: false), spy, world);
 
         await tracker.LocalActivity();
 
-        Assert.That(spy.Sent, Is.Empty);
+        Assert.That(spy.Snapshot(), Is.Empty);
     }
 
     [Test]
     public async Task LocalActivity_Throttled_SecondCallSkipped()
     {
-        var spy = new SpySender();
+        var spy = new FakeRelay();
         var world = new WorldState();
         await world.AddMaster("master-pc", new MasterConfigMessage(null));
         var clock = 10_000L;
@@ -96,13 +83,13 @@ public class ActivityTrackerTests
         await tracker.LocalActivity();
         await tracker.LocalActivity();
 
-        Assert.That(spy.Sent, Has.Count.EqualTo(1));
+        Assert.That(spy.Snapshot(), Has.Count.EqualTo(1));
     }
 
     [Test]
     public async Task LocalActivity_AfterThrottleWindow_BroadcastsAgain()
     {
-        var spy = new SpySender();
+        var spy = new FakeRelay();
         var world = new WorldState();
         await world.AddMaster("master-pc", new MasterConfigMessage(null));
         var clock = new[] { 10_000L };
@@ -112,13 +99,13 @@ public class ActivityTrackerTests
         clock[0] += 6_000;
         await tracker.LocalActivity();
 
-        Assert.That(spy.Sent, Has.Count.EqualTo(2));
+        Assert.That(spy.Snapshot(), Has.Count.EqualTo(2));
     }
 
     [Test]
     public async Task RemoteActivity_SyncOff_DoesNotBroadcast()
     {
-        var spy = new SpySender();
+        var spy = new FakeRelay();
         var world = new WorldState();
         await world.SetPeerScreens("slave1", []);
         await world.SetPeerScreens("slave2", []);
@@ -126,13 +113,13 @@ public class ActivityTrackerTests
 
         await tracker.RemoteActivity("slave1");
 
-        Assert.That(spy.Sent, Is.Empty);
+        Assert.That(spy.Snapshot(), Is.Empty);
     }
 
     [Test]
     public async Task RemoteActivity_SyncOn_BroadcastsExcludingSource()
     {
-        var spy = new SpySender();
+        var spy = new FakeRelay();
         var world = new WorldState();
         await world.SetPeerScreens("slave1", []);
         await world.SetPeerScreens("slave2", []);
@@ -140,8 +127,8 @@ public class ActivityTrackerTests
 
         await tracker.RemoteActivity("slave1");
 
-        Assert.That(spy.Sent, Has.Count.EqualTo(1));
-        Assert.That(spy.Sent[0].Targets, Is.EqualTo(["slave2"]));
+        Assert.That(spy.Snapshot(), Has.Count.EqualTo(1));
+        Assert.That(spy.Snapshot()[0].Targets, Is.EqualTo(["slave2"]));
     }
 
     [Test]
@@ -150,7 +137,7 @@ public class ActivityTrackerTests
         var sync = new FakeScreenSaverSync();
         var world = new WorldState();
         await world.SetPeerScreens("slave1", []);
-        var spy = new SpySender();
+        var spy = new FakeRelay();
         var tracker = new ActivityTracker(MasterProfile(sync: true), new Lazy<IRelaySender>(() => spy), world, sync,
             NullLogger<ActivityTracker>.Instance);
 
@@ -165,7 +152,7 @@ public class ActivityTrackerTests
         var sync = new FakeScreenSaverSync();
         var world = new WorldState();
         await world.AddMaster("master-pc", new MasterConfigMessage(null));
-        var spy = new SpySender();
+        var spy = new FakeRelay();
         var tracker = new ActivityTracker(SlaveProfile, new Lazy<IRelaySender>(() => spy), world, sync,
             NullLogger<ActivityTracker>.Instance);
 
@@ -179,7 +166,7 @@ public class ActivityTrackerTests
     {
         var sync = new FakeScreenSaverSync();
         var world = new WorldState();
-        var spy = new SpySender();
+        var spy = new FakeRelay();
         var tracker = new ActivityTracker(SlaveProfile, new Lazy<IRelaySender>(() => spy), world, sync,
             NullLogger<ActivityTracker>.Instance);
 
@@ -192,7 +179,7 @@ public class ActivityTrackerTests
     public async Task IncomingPing_WhenSystemSleepAllowed_DoesNotResetLocalIdleTimer()
     {
         var sync = new FakeScreenSaverSync();
-        var tracker = new ActivityTracker(SleepableSlaveProfile, new Lazy<IRelaySender>(() => new SpySender()),
+        var tracker = new ActivityTracker(SleepableSlaveProfile, new Lazy<IRelaySender>(() => new FakeRelay()),
             new WorldState(), sync, NullLogger<ActivityTracker>.Instance);
 
         await tracker.IncomingPing();
@@ -205,7 +192,7 @@ public class ActivityTrackerTests
     {
         var sync = new FakeScreenSaverSync();
         var tracker = new ActivityTracker(MasterProfile(allowSystemSleep: true),
-            new Lazy<IRelaySender>(() => new SpySender()), new WorldState(), sync,
+            new Lazy<IRelaySender>(() => new FakeRelay()), new WorldState(), sync,
             NullLogger<ActivityTracker>.Instance);
 
         await tracker.RemoteActivity("slave1");
@@ -217,7 +204,7 @@ public class ActivityTrackerTests
     public async Task IncomingPing_DoesNotUpdateLocalActivityTick()
     {
         var clock = new[] { 10_000L };
-        var spy = new SpySender();
+        var spy = new FakeRelay();
         var world = new WorldState();
         var tracker = Make(SlaveProfile, spy, world, () => clock[0]);
         // baseline: MsSinceLocalActivity is huge (no activity recorded)

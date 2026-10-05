@@ -1,6 +1,7 @@
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Text;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 
@@ -108,7 +109,7 @@ internal sealed class WindowsOsdNotification : IOsdNotification, IDisposable
 
         NativeMethods.GetCursorPos(out var cursor);
         var hMonitor = NativeMethods.MonitorFromPoint(cursor, NativeMethods.MONITOR_DEFAULTTONEAREST);
-        var mi = new MONITORINFOEX { Size = (uint)Marshal.SizeOf<MONITORINFOEX>() };
+        var mi = new MONITORINFOEX { Size = (uint)Unsafe.SizeOf<MONITORINFOEX>() };
         NativeMethods.GetMonitorInfoW(hMonitor, ref mi);
         var mx = mi.Monitor.Left;
         var my = mi.Monitor.Top;

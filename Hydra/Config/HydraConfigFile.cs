@@ -1,7 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Cathedral.Extensions;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
 namespace Hydra.Config;
@@ -41,20 +40,10 @@ public class HydraConfigFile
 
     public List<HydraConfig> Profiles { get; init; } = [];
 
-    // convenience method for single-profile scenarios (tests, simple setups)
-    public static HydraConfigFile Load(IConfiguration config)
+    public static Loaded LoadAll(string? explicitPath)
     {
-        var (file, _) = LoadAll(config);
-        return file;
-    }
-
-    public static (HydraConfigFile file, string path) LoadAll(IConfiguration config)
-    {
-        var path = ResolvePath(config.GetStringOrNull("CONFIG"));
-
-        var json = File.ReadAllText(path);
-        var file = Parse(json, path);
-        return (file, path);
+        var path = ResolvePath(explicitPath);
+        return new Loaded(Parse(File.ReadAllText(path), path), path);
     }
 
     internal static string ResolvePath(string? explicitPath = null)
@@ -63,7 +52,7 @@ public class HydraConfigFile
         var binaryDir = Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory;
         return FindConfig(Path.Combine(binaryDir, "hydra.conf"))
             ?? FindConfig(Path.Combine(Directory.GetCurrentDirectory(), "hydra.conf"))
-            ?? throw new FileNotFoundException("No hydra.conf found. Set CONFIG=/path/to/hydra.conf and try again.");
+            ?? throw new FileNotFoundException("No hydra.conf found. Pass --config /path/to/hydra.conf or set CONFIG=/path/to/hydra.conf and try again.");
     }
 
     internal static HydraConfigFile Parse(string json, string path)
@@ -75,7 +64,13 @@ public class HydraConfigFile
         return file;
     }
 
+    // a failure startup waits out and retries rather than exiting into a supervisor's relaunch storm
+    internal static bool IsRetryableStartupFailure(Exception ex) =>
+        ex is IOException or InvalidOperationException or JsonException or TimeoutException or UnauthorizedAccessException;
+
     private static string? FindConfig(string path) => File.Exists(path) ? path : null;
+
+    public sealed record Loaded(HydraConfigFile File, string Path);
 }
 
 // maps SereneLogger short names (trce/dbug/info/warn/fail/crit) to LogLevel

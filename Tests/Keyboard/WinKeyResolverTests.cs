@@ -224,18 +224,16 @@ public class WinKeyResolverDeadKeyTests
 
         // VK_OEM_3 (0xC0) is dead_grave on US-International / US-Extended layouts.
         // if the running layout does not produce a dead key here, skip.
-        // ReSharper disable InconsistentNaming
-        const uint VkOem3 = 0xC0;
-        const uint VkA = 0x41;
-        // ReSharper restore InconsistentNaming
-        var deadEvents = Down(r, VkOem3);
+        const uint vkOem3 = 0xC0;
+        const uint vkA = 0x41;
+        var deadEvents = Down(r, vkOem3);
         if (deadEvents is null || deadEvents.All(e => e.Character == null))
             Assert.Ignore("VK_OEM_3 did not produce a character/dead-key on this layout — cannot test shortcut flush");
 
         // a dead key was registered (_pendingDeadKey set internally).
         // now press Ctrl+A: should flush spacing form first, then emit 'a' with Control.
         Down(r, WinVirtualKey.LControl);
-        var events = Down(r, VkA);
+        var events = Down(r, vkA);
 
         Assert.That(events, Is.Not.Null, "Ctrl+A after dead key must produce events");
         var chars = events!.Where(e => e.Character != null).ToArray();

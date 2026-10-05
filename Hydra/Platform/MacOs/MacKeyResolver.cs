@@ -1,4 +1,3 @@
-using System.Runtime.InteropServices;
 using Hydra.Keyboard;
 
 namespace Hydra.Platform.MacOs;
@@ -14,13 +13,6 @@ internal sealed class MacKeyResolver
     private bool _scrollLockOn;
     private readonly HashSet<int> _pressedModifierVks = [];
     private readonly Dictionary<int, CharClassification> _keyDownId = [];
-
-    private static readonly nint Carbon =
-        NativeLibrary.Load("/System/Library/Frameworks/Carbon.framework/Carbon");
-
-    // symbol pointer for kTISPropertyUnicodeKeyLayoutData (loaded once)
-    private static readonly nint TisPropertyUnicodeKeyLayoutData =
-        Marshal.ReadIntPtr(NativeLibrary.GetExport(Carbon, "kTISPropertyUnicodeKeyLayoutData"));
 
     internal KeyEvent?[]? Resolve(int eventType, nint eventRef)
     {
@@ -177,7 +169,7 @@ internal sealed class MacKeyResolver
 
         try
         {
-            var layoutData = NativeMethods.TISGetInputSourceProperty(layoutSource, TisPropertyUnicodeKeyLayoutData);
+            var layoutData = NativeMethods.TISGetInputSourceProperty(layoutSource, NativeMethods.KTISPropertyUnicodeKeyLayoutData);
             if (layoutData == nint.Zero) return null;
 
             var layoutPtr = NativeMethods.CFDataGetBytePtr(layoutData);
@@ -274,6 +266,23 @@ internal sealed class MacKeyResolver
         _keyDownId.Clear();
     }
 
+    // reverse of MapModifiers(): KeyModifiers → CGEventFlags.
+    // note: KeyModifiers.NumLock is NOT mapped to kCGEventFlagMaskNumericPad here.
+    // on Linux, NumLock is a system-wide lock state present on all key events.
+    // on macOS, kCGEventFlagMaskNumericPad means "this key is a numpad key" — a per-key identity.
+    // injecting it on regular keys (e.g. 'a') causes Chromium-based apps to reject the event.
+    internal static ulong MapModifiersToFlags(KeyModifiers mods)
+    {
+        ulong flags = 0;
+        if ((mods & KeyModifiers.Shift) != 0) flags |= NativeMethods.KCGEventFlagMaskShift;
+        if ((mods & KeyModifiers.Control) != 0) flags |= NativeMethods.KCGEventFlagMaskControl;
+        if ((mods & KeyModifiers.Alt) != 0) flags |= NativeMethods.KCGEventFlagMaskAlternate;
+        if ((mods & KeyModifiers.Super) != 0) flags |= NativeMethods.KCGEventFlagMaskCommand;
+        if ((mods & KeyModifiers.CapsLock) != 0) flags |= NativeMethods.KCGEventFlagMaskAlphaShift;
+        if ((mods & KeyModifiers.AltGr) != 0) flags |= NativeMethods.KCGEventFlagMaskAlternate;
+        return flags;
+    }
+
     // maps CGEventFlags to the platform-independent KeyModifiers bitmask.
     // command (macOS) maps to Super (cross-platform); option maps to Alt.
     internal static KeyModifiers MapModifiers(ulong cgFlags)
@@ -304,7 +313,7 @@ internal sealed class MacKeyResolver
 
         try
         {
-            var layoutData = NativeMethods.TISGetInputSourceProperty(source, TisPropertyUnicodeKeyLayoutData);
+            var layoutData = NativeMethods.TISGetInputSourceProperty(source, NativeMethods.KTISPropertyUnicodeKeyLayoutData);
             if (layoutData == nint.Zero) return null;
 
             var layoutPtr = NativeMethods.CFDataGetBytePtr(layoutData);

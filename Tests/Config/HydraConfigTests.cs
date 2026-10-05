@@ -1,15 +1,11 @@
 using Hydra.Config;
 using Hydra.Screen;
-using Microsoft.Extensions.Configuration;
 
 namespace Tests.Config;
 
 [TestFixture]
 public class HydraConfigTests
 {
-    private static IConfiguration ConfigFor(string path) =>
-        new ConfigurationBuilder().AddInMemoryCollection([new("CONFIG", path)]).Build();
-
     private static HydraConfig MakeConfig(Mode mode = Mode.Master, ConfigConditions? conditions = null) =>
         new() { Mode = mode, Conditions = conditions };
 
@@ -61,9 +57,28 @@ public class HydraConfigTests
     }
 
     [Test]
+    public void KeysDifferingOnlyInCase_TheLastOneWins()
+    {
+        var lowerLast = HydraConfig.ParseAndValidate(AsFile($$"""
+            [{"mode":"Master","HideCursor":true,"hideCursor":false,"Conditions":{"ssid":"Home"},"conditions":{"screenCount":2}{{Relay}}}]
+            """));
+        var upperLast = HydraConfig.ParseAndValidate(AsFile($$"""
+            [{"mode":"Master","hideCursor":false,"HideCursor":true{{Relay}}}]
+            """));
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(lowerLast[0].HideCursor, Is.False);
+            Assert.That(lowerLast[0].Conditions!.Ssid, Is.Null, "a later duplicate object replaces the earlier one, it does not merge");
+            Assert.That(lowerLast[0].Conditions!.ScreenCount, Is.EqualTo(2));
+            Assert.That(upperLast[0].HideCursor, Is.True);
+        }
+    }
+
+    [Test]
     public void Load_ReturnsValidConfig()
     {
-        var file = HydraConfigFile.Load(ConfigFor("test.conf"));
+        var file = HydraConfigFile.LoadAll("test.conf").File;
         Assert.That(file.Profiles, Is.Not.Empty);
         Assert.That(file.Profiles[0].Hosts, Is.Not.Empty);
     }
@@ -71,14 +86,14 @@ public class HydraConfigTests
     [Test]
     public void Load_HasMainHost()
     {
-        var file = HydraConfigFile.Load(ConfigFor("test.conf"));
+        var file = HydraConfigFile.LoadAll("test.conf").File;
         Assert.That(file.Profiles[0].Hosts.Any(s => s.Name == "main"), Is.True);
     }
 
     [Test]
     public void Load_MainHost_HasNeighbour()
     {
-        var file = HydraConfigFile.Load(ConfigFor("test.conf"));
+        var file = HydraConfigFile.LoadAll("test.conf").File;
         var main = file.Profiles[0].Hosts.First(s => s.Name == "main");
         Assert.That(main.Neighbours, Is.Not.Empty);
     }
@@ -86,7 +101,7 @@ public class HydraConfigTests
     [Test]
     public void Load_Neighbour_HasDirection()
     {
-        var file = HydraConfigFile.Load(ConfigFor("test.conf"));
+        var file = HydraConfigFile.LoadAll("test.conf").File;
         var main = file.Profiles[0].Hosts.First(s => s.Name == "main");
         var neighbour = main.Neighbours.First();
         Assert.That(neighbour.Direction, Is.EqualTo(Direction.Right));
@@ -95,7 +110,7 @@ public class HydraConfigTests
     [Test]
     public void Load_Neighbour_RangeDefaultsToFullEdge()
     {
-        var file = HydraConfigFile.Load(ConfigFor("test.conf"));
+        var file = HydraConfigFile.LoadAll("test.conf").File;
         var main = file.Profiles[0].Hosts.First(s => s.Name == "main");
         var neighbour = main.Neighbours.First();
         using (Assert.EnterMultipleScope())
@@ -110,7 +125,7 @@ public class HydraConfigTests
     [Test]
     public void Load_Neighbour_ScreenIdentifiersDefaultToNull()
     {
-        var file = HydraConfigFile.Load(ConfigFor("test.conf"));
+        var file = HydraConfigFile.LoadAll("test.conf").File;
         var main = file.Profiles[0].Hosts.First(s => s.Name == "main");
         var neighbour = main.Neighbours.First();
         using (Assert.EnterMultipleScope())
@@ -218,9 +233,24 @@ public class HydraConfigTests
     [Test]
     public void Load_ThrowsFileNotFound_WhenNoConfigFound()
     {
-        var config = new ConfigurationBuilder().Build(); // no CONFIG set, no hydra.conf on disk
-        Assert.That(() => HydraConfigFile.Load(config), Throws.InstanceOf<FileNotFoundException>()
+        // no path given, no hydra.conf on disk
+        Assert.That(() => HydraConfigFile.LoadAll(null), Throws.InstanceOf<FileNotFoundException>()
             .With.Message.Contains("CONFIG="));
+    }
+
+    // the config lock's budget running out, or a file we may not read, must not kill startup
+    [Test]
+    public void StartupRetries_ALockTimeoutAndADeniedRead()
+    {
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(HydraConfigFile.IsRetryableStartupFailure(new TimeoutException()), Is.True);
+            Assert.That(HydraConfigFile.IsRetryableStartupFailure(new UnauthorizedAccessException()), Is.True);
+            Assert.That(HydraConfigFile.IsRetryableStartupFailure(new FileNotFoundException()), Is.True);
+            Assert.That(HydraConfigFile.IsRetryableStartupFailure(new System.Text.Json.JsonException()), Is.True);
+            Assert.That(HydraConfigFile.IsRetryableStartupFailure(new InvalidOperationException()), Is.True);
+            Assert.That(HydraConfigFile.IsRetryableStartupFailure(new NullReferenceException()), Is.False);
+        }
     }
 
     // HasConditions

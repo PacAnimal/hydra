@@ -23,7 +23,7 @@ internal sealed class MacNetworkDetector(MacNetworkState? networkState = null) :
         {
             var typeRef = NativeMethods.IOPSGetProvidingPowerSourceType(snapshot);
             if (typeRef == nint.Zero) return null;
-            return NativeMethods.CfStringToManaged(typeRef) == "AC Power";
+            return NativeHelpers.CfStringToManaged(typeRef) == "AC Power";
         }
         finally
         {

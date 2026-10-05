@@ -1,6 +1,5 @@
+using Cathedral.Extensions;
 using System.Runtime.InteropServices;
-using System.Security.Cryptography;
-using System.Text;
 using System.Net.Sockets;
 
 namespace Hydra.Management;
@@ -11,7 +10,7 @@ internal sealed partial record ManagementEndpoint(string InstanceId, string Addr
     {
         var canonical = Path.GetFullPath(configPath);
         if (OperatingSystem.IsWindows()) canonical = canonical.ToUpperInvariant();
-        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical))).ToLowerInvariant()[..12];
+        var hash = canonical.GetSha256Hash()[..12];
         if (OperatingSystem.IsWindows())
             return new ManagementEndpoint(hash, $"hydra-{hash}", true);
 

@@ -1,11 +1,11 @@
 using System.IO.Pipes;
 using System.Net.Sockets;
-using System.Reflection;
 using System.Runtime.Versioning;
 using Hydra.Config;
 using Hydra.Platform;
 using Hydra.Platform.Windows;
 using Hydra.Relay;
+using Hydra.Update;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.DependencyInjection;
@@ -154,48 +154,47 @@ internal sealed class ManagementServer(
     {
         switch (request.Method)
         {
-            case "hello":
-                var version = Assembly.GetEntryAssembly()?.GetName().Version?.ToString(3) ?? "0.0.0";
-                return ManagementResponse.Ok(new ServerHello(ManagementProtocol.Version, version, _endpoint.InstanceId, Environment.ProcessId));
-            case "status":
+            case ManagementMethods.Hello:
+                return ManagementResponse.Ok(new ServerHello(ManagementProtocol.Version, HydraVersion.Current, _endpoint.InstanceId, Environment.ProcessId));
+            case ManagementMethods.Status:
                 return ManagementResponse.Ok(await status.GetAsync(cancel));
-            case "logs":
+            case ManagementMethods.Logs:
                 return ManagementResponse.Ok(logs.Read(ManagementJson.Deserialize<long>(request.Json)));
-            case "config.get":
+            case ManagementMethods.ConfigGet:
                 return ManagementResponse.Ok(await config.ReadAsync(cancel));
-            case "config.validate":
+            case ManagementMethods.ConfigValidate:
                 return ManagementResponse.Ok(TransactionalConfigStore.Validate(ManagementJson.Deserialize<string>(request.Json)));
-            case "config.save":
+            case ManagementMethods.ConfigSave:
                 {
                     var save = ManagementJson.Deserialize<SaveConfigRequest>(request.Json);
                     var document = await config.SaveAsync(save.ExpectedRevision, save.Json, cancel);
                     if (save.Restart) lifetime.RestartAfterResponse();
                     return ManagementResponse.Ok(document);
                 }
-            case "relay.reconnect":
+            case ManagementMethods.RelayReconnect:
                 {
                     var relay = services.GetService(typeof(IRelaySender)) as IRelaySender;
                     var accepted = relay?.RequestReconnect() == true;
                     return ManagementResponse.Ok(new CommandResult(accepted, accepted ? "Relay reconnect requested." : "Relay is not connected."));
                 }
-            case "hydra.restart":
+            case ManagementMethods.HydraRestart:
                 lifetime.RestartAfterResponse();
                 return ManagementResponse.Ok(new CommandResult(true, "Hydra restart requested."));
-            case "hydra.shutdown":
+            case ManagementMethods.HydraShutdown:
                 return ManagementResponse.Ok(lifetime.ShutdownAfterResponse());
-            case "remote.pair":
+            case ManagementMethods.RemotePair:
                 return ManagementResponse.Ok(await services.GetRequiredService<RemoteManagementService>()
                     .PairAsync(ManagementJson.Deserialize<RemotePairRequest>(request.Json), cancel));
-            case "remote.config.get":
+            case ManagementMethods.RemoteConfigGet:
                 return ManagementResponse.Ok(await services.GetRequiredService<RemoteManagementService>()
                     .GetConfigAsync(ManagementJson.Deserialize<RemoteHostRequest>(request.Json).Host, cancel));
-            case "remote.config.validate":
+            case ManagementMethods.RemoteConfigValidate:
                 return ManagementResponse.Ok(await services.GetRequiredService<RemoteManagementService>()
                     .ValidateConfigAsync(ManagementJson.Deserialize<RemoteValidateRequest>(request.Json), cancel));
-            case "remote.config.apply":
+            case ManagementMethods.RemoteConfigApply:
                 return ManagementResponse.Ok(await services.GetRequiredService<RemoteManagementService>()
                     .ApplyConfigAsync(ManagementJson.Deserialize<RemoteApplyRequest>(request.Json), cancel));
-            case "remote.config.confirm":
+            case ManagementMethods.RemoteConfigConfirm:
                 await services.GetRequiredService<RemoteManagementService>()
                     .ConfirmConfigAsync(ManagementJson.Deserialize<RemoteConfirmRequest>(request.Json), cancel);
                 return ManagementResponse.Ok(new CommandResult(true, "Remote configuration confirmed."));

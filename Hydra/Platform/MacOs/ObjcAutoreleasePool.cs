@@ -19,11 +19,9 @@ internal readonly partial struct ObjcAutoreleasePool : IDisposable
             objc_autoreleasePoolPop(_context);
     }
 
-    // ReSharper disable InconsistentNaming
     [LibraryImport("libobjc.dylib")]
     private static partial nint objc_autoreleasePoolPush();
 
     [LibraryImport("libobjc.dylib")]
     private static partial void objc_autoreleasePoolPop(nint context);
-    // ReSharper restore InconsistentNaming
 }

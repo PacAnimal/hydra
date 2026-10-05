@@ -1,3 +1,4 @@
+using Cathedral.Extensions;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -27,8 +28,7 @@ internal static class RemoteManagementCrypto
         catch (FormatException) { return false; }
     }
 
-    internal static string HashPairingCode(string code) =>
-        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(code))).ToLowerInvariant();
+    internal static string HashPairingCode(string code) => code.GetSha256Hash();
 
     // hex is fixed-width per input length, so a straight byte compare here carries no timing signal
     // beyond what the hex decode itself does — same fixed-time guarantee as FixedEquals, hex form

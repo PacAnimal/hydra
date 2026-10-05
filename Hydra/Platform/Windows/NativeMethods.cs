@@ -1,6 +1,7 @@
+// mirrors the Win32 SDK headers (winuser.h, winbase.h, wingdi.h, shellscalingapi.h, wtsapi32.h, commctrl.h, ole2.h, shellapi.h, sas.h)
+// ReSharper disable InconsistentNaming
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-// ReSharper disable InconsistentNaming
 
 namespace Hydra.Platform.Windows;
 
@@ -60,10 +61,6 @@ internal static partial class NativeMethods
 
     internal const uint LLKHF_EXTENDED = 0x01;
     internal const uint LLKHF_INJECTED = 0x10;
-
-    // -- virtual key codes --
-
-    internal const uint VK_SPACE = 0x20;
 
     // -- hooks --
 
@@ -138,13 +135,6 @@ internal static partial class NativeMethods
     internal const uint OCR_HAND = 32649;
     internal const uint OCR_APPSTARTING = 32650;
 
-    internal static readonly uint[] AllCursorIds =
-    [
-        OCR_NORMAL, OCR_IBEAM, OCR_WAIT, OCR_CROSS, OCR_UP,
-        OCR_SIZENWSE, OCR_SIZENESW, OCR_SIZEWE, OCR_SIZENS,
-        OCR_SIZEALL, OCR_NO, OCR_HAND, OCR_APPSTARTING,
-    ];
-
     // SPI_SETCURSORS = restore all system cursors to their defaults
     internal const uint SPI_SETCURSORS = 0x0057;
 
@@ -158,7 +148,7 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     internal static unsafe partial nint CreateCursor(
         nint hInst, int xHotSpot, int yHotSpot, int nWidth, int nHeight,
-        byte* pvANDPlane, byte* pvXORPlane);
+        byte* andPlane, byte* xorPlane);
 
     [LibraryImport(User32, EntryPoint = "LoadCursorW")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
@@ -198,11 +188,9 @@ internal static partial class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool EnumDisplayMonitors(nint hdc, nint lprcClip, MonitorEnumProc lpfnEnum, nint dwData);
 
-#pragma warning disable SYSLIB1054 // ByValTStr not supported by LibraryImport source generator
-    [DllImport(User32, EntryPoint = "GetMonitorInfoW", SetLastError = true)]
+    [LibraryImport(User32, SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    internal static extern bool GetMonitorInfoW(nint hMonitor, ref MONITORINFOEX lpmi);
-#pragma warning restore SYSLIB1054
+    internal static partial bool GetMonitorInfoW(nint hMonitor, ref MONITORINFOEX lpmi);
 
     [LibraryImport(User32)]
     internal static partial nint MonitorFromPoint(WINPOINT pt, uint dwFlags);
@@ -459,7 +447,7 @@ internal static partial class NativeMethods
 
     [LibraryImport(User32)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
-    internal static partial int ReleaseDC(nint hWnd, nint hDC);
+    internal static partial int ReleaseDC(nint hWnd, nint hdc);
 
     [LibraryImport(User32)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
@@ -468,12 +456,12 @@ internal static partial class NativeMethods
 
     [LibraryImport(User32)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
-    internal static partial nuint SetTimer(nint hWnd, nuint nIDEvent, uint uElapse, nint lpTimerFunc);
+    internal static partial nuint SetTimer(nint hWnd, nuint idEvent, uint uElapse, nint lpTimerFunc);
 
     [LibraryImport(User32)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     [return: MarshalAs(UnmanagedType.Bool)]
-    internal static partial bool KillTimer(nint hWnd, nuint uIDEvent);
+    internal static partial bool KillTimer(nint hWnd, nuint idEvent);
 
     // -- foreground window (for keyboard layout detection) --
 
@@ -673,13 +661,11 @@ internal static partial class NativeMethods
 
     // -- window finding --
 
-#pragma warning disable SYSLIB1054
-    [DllImport(User32, EntryPoint = "FindWindowW", CharSet = CharSet.Unicode)]
-    internal static extern nint FindWindowW(string? lpClassName, string? lpWindowName);
+    [LibraryImport(User32, StringMarshalling = StringMarshalling.Utf16)]
+    internal static partial nint FindWindowW(string? lpClassName, string? lpWindowName);
 
-    [DllImport(User32, EntryPoint = "FindWindowExW", CharSet = CharSet.Unicode)]
-    internal static extern nint FindWindowExW(nint hWndParent, nint hWndChildAfter, string? lpszClass, string? lpszWindow);
-#pragma warning restore SYSLIB1054
+    [LibraryImport(User32, StringMarshalling = StringMarshalling.Utf16)]
+    internal static partial nint FindWindowExW(nint hWndParent, nint hWndChildAfter, string? lpszClass, string? lpszWindow);
 
     // -- listview messages --
 
@@ -777,14 +763,11 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     internal static partial int RevokeDragDrop(nint hwnd);
 
-#pragma warning disable SYSLIB1054
-    // DllImport required — LibraryImport's new COM marshaller returns ComObject which can't cast to legacy IDataObject
-    [DllImport(Ole32)]
-    internal static extern int OleGetClipboard([MarshalAs(UnmanagedType.Interface)] out System.Runtime.InteropServices.ComTypes.IDataObject ppDataObj);
+    // -- sas.dll --
 
-    [DllImport(Ole32)]
-    internal static extern void ReleaseStgMedium(ref System.Runtime.InteropServices.ComTypes.STGMEDIUM pMedium);
-#pragma warning restore SYSLIB1054
+    // asUser=false means the call comes from a service (SYSTEM) — required for it to work
+    [LibraryImport("sas.dll")]
+    internal static partial void SendSAS([MarshalAs(UnmanagedType.Bool)] bool asUser);
 
     // -- shell: drag-and-drop file query --
 
@@ -801,24 +784,22 @@ internal static partial class NativeMethods
     internal const ushort FOF_NOCONFIRMMKDIR = 0x0200;
     internal const ushort FOF_ALLOWUNDO = 0x0040;
 
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    // pFrom and pTo are double-NUL-terminated UTF-16 lists the caller allocates and frees
+    [StructLayout(LayoutKind.Sequential)]
     internal struct SHFILEOPSTRUCTW
     {
         internal nint hwnd;
         internal uint wFunc;
-        [MarshalAs(UnmanagedType.LPWStr)] internal string pFrom;
-        [MarshalAs(UnmanagedType.LPWStr)] internal string pTo;
+        internal nint pFrom;
+        internal nint pTo;
         internal ushort fFlags;
-        [MarshalAs(UnmanagedType.Bool)] internal bool fAnyOperationsAborted;
+        internal int fAnyOperationsAborted;
         internal nint hNameMappings;
-        [MarshalAs(UnmanagedType.LPWStr)] internal string? lpszProgressTitle;
+        internal nint lpszProgressTitle;
     }
 
-#pragma warning disable SYSLIB1054
-    // DllImport required — struct contains LPWStr fields that LibraryImport cannot marshal
-    [DllImport(Shell32, CharSet = CharSet.Unicode)]
-    internal static extern int SHFileOperationW(ref SHFILEOPSTRUCTW lpFileOp);
-#pragma warning restore SYSLIB1054
+    [LibraryImport(Shell32)]
+    internal static partial int SHFileOperationW(ref SHFILEOPSTRUCTW lpFileOp);
 
 }
 
@@ -913,13 +894,12 @@ internal struct POINTL
     internal int x, y;
 }
 
-[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode, Pack = 4)]
+[StructLayout(LayoutKind.Sequential, Pack = 4)]
 internal struct MONITORINFOEX
 {
     internal uint Size;
     internal WINRECT Monitor;
     internal WINRECT Work;
     internal uint Flags;
-    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
-    internal string DeviceName;
+    internal WideChars32 DeviceName;
 }

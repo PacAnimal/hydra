@@ -76,7 +76,8 @@ public sealed class ActivityTracker(IHydraProfile profile, Lazy<IRelaySender> re
             ? peers
             : [.. peers.Where(p => !p.EqualsIgnoreCase(excludePeer))];
         if (targets.Length == 0) return;
-        log.LogDebug("Activity ping → {Targets}", string.Join(", ", targets));
+        if (log.IsEnabled(LogLevel.Debug))
+            log.LogDebug("Activity ping → {Targets}", string.Join(", ", targets));
         relay.Value.Send(targets, MessageSerializer.Encode(MessageKind.ActivityPing, new ActivityPingMessage()));
     }
 }

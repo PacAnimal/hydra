@@ -1,4 +1,5 @@
 using System.Text;
+using Cathedral.Utils;
 using Hydra.Config;
 using Hydra.Relay;
 using Microsoft.AspNetCore.Http.Connections.Client;
@@ -40,18 +41,24 @@ public sealed class HydraTestClient : RelayConnection, IAsyncDisposable
     /// <summary>Evaluates the default exactly once, so the base and <see cref="World"/> share one instance.</summary>
     private static (IWorldState, bool) Shared(IWorldState? world) => (world ?? new WorldState(), true);
 
+    // a master named host on the network the config describes
+    public static HydraTestClient Master(WebApplicationFactory<global::Styx.Program> factory, string host, string networkConfig) =>
+        new(factory, TransitionTestHelper.Profile(host, new HydraConfig { Mode = Mode.Master, NetworkConfig = networkConfig }));
+
+    private readonly Toggle _disposed = new();
+    public bool Disposed => _disposed;
+
     private readonly SemaphoreSlim _readySignal = new(0);
     private readonly NotificationQueue<string[]> _peers = new();
     private readonly NotificationQueue<(string Source, MessageKind Kind, string Json)> _messages = new();
     private readonly SemaphoreSlim _receiveSignal = new(0);
     private readonly SemaphoreSlim _kickSignal = new(0);
+    private readonly SemaphoreSlim _parkedSignal = new(0);
 
     private (string Source, MessageKind Kind, string Json)? _lastMessage;
     private string? _kickReason;
 
-    private volatile TaskCompletionSource? _gate;
-    private RelayLane _gatedLane;
-    private int _held;
+    private volatile LaneGate? _gate;
 
     public (string Source, MessageKind Kind, string Json)? LastMessage => _lastMessage;
     public string? KickReason => _kickReason;
@@ -60,52 +67,54 @@ public sealed class HydraTestClient : RelayConnection, IAsyncDisposable
 
     protected override Task OnAuthenticated() { _readySignal.Release(); return Task.CompletedTask; }
 
+    protected override void OnParkedUntilResumed() => _parkedSignal.Release();
+
     /// <summary>
     /// Parks one lane just before it encrypts, until <see cref="ReleaseLane"/>.
     ///
     /// <para>A GATE, never a delay: the claims under test are about what can overtake what, and a test that
     /// raced a big payload against a small one would be asserting that this machine happened to be fast
-    /// enough. <see cref="Held"/> says when the lane is genuinely parked, so a test waits on a fact.</para>
+    /// enough. <see cref="WaitUntilLaneHeld"/> says when the lane is genuinely parked, so a test waits on a fact.</para>
     ///
     /// <para>Either lane, because both need parking: the bulk one to show input overtaking it, the input
     /// one to show a dropped connection failing what is queued there. Holding one says nothing about the
     /// other — that is the whole point of them being separate.</para>
     /// </summary>
-    public void HoldLane(RelayLane lane)
+    public void HoldLane(RelayLane lane) => _gate = new LaneGate(lane);
+
+    // blocks until a payload is parked on the lane HoldLane gated
+    public async Task WaitUntilLaneHeld(int timeoutMs = 15000)
     {
-        _gatedLane = lane;
-        _gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var gate = _gate ?? throw new InvalidOperationException("no lane is held");
+        try { await gate.Held.Task.WaitAsync(TimeSpan.FromMilliseconds(timeoutMs)); }
+        catch (TimeoutException) { throw new TimeoutException($"Timed out waiting for the {gate.Lane} lane to park"); }
     }
 
-    /// <summary>How many payloads the gated lane is parked on right now.</summary>
-    public int Held => Volatile.Read(ref _held);
-
-    /// <summary>
-    /// Lets the parked lane through, and STOPS GATING.
-    ///
-    /// <para>Clearing the gate is the load-bearing half. Leaving a completed one in place would send every
-    /// later payload through the counter — increment, await an already-finished task, decrement — so
-    /// <see cref="Held"/> would briefly report a payload as held that is not held at all, and the next test
-    /// to wait on that would be waiting on a lie.</para>
-    /// </summary>
-    public void ReleaseLane() => Interlocked.Exchange(ref _gate, null)?.TrySetResult();
+    /// <summary>Lets the parked lane through, and STOPS GATING, so later payloads pass untouched.</summary>
+    public void ReleaseLane() => Interlocked.Exchange(ref _gate, null)?.Release.TrySetResult();
 
     protected override async ValueTask<byte[]> EncryptForSend(byte[] payload, CancellationToken cancel)
     {
-        if (_gate is { } gate && MessageLane.Of(payload) == _gatedLane)
+        if (_gate is { } gate && MessageLane.Of(payload) == gate.Lane)
         {
-            Interlocked.Increment(ref _held);
-            try { await gate.Task.WaitAsync(cancel); }
-            finally { Interlocked.Decrement(ref _held); }
+            gate.Held.TrySetResult();
+            await gate.Release.Task.WaitAsync(cancel);
         }
 
         return await base.EncryptForSend(payload, cancel);
     }
 
+    private sealed class LaneGate(RelayLane lane)
+    {
+        public RelayLane Lane { get; } = lane;
+        public TaskCompletionSource Held { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
     // route the hub connection through the in-memory test server handler
     protected override void ConfigureHubUrl(HttpConnectionOptions options)
     {
-        options.HttpMessageHandlerFactory = _ => _factory.Server.CreateHandler();
+        options.UseTestServer(_factory.Server);
     }
 
     protected override Task OnReceive(string sourceHost, MessageKind kind, ReadOnlyMemory<byte> body)
@@ -131,10 +140,24 @@ public sealed class HydraTestClient : RelayConnection, IAsyncDisposable
     }
 
     // blocks until _server and _encryption are set — use this as the connection-ready barrier
-    public async Task WaitForReady(int timeoutMs = 15000)
+    public async Task WaitForReady(int timeoutMs = 15000, CancellationToken cancel = default)
     {
-        if (!await _readySignal.WaitAsync(timeoutMs))
+        if (!await _readySignal.WaitAsync(timeoutMs, cancel))
             throw new TimeoutException("Timed out waiting for relay connection");
+    }
+
+    // blocks until the reconnect loop is parked on a suspension, after which it cannot connect until resumed
+    public async Task WaitUntilParked(int timeoutMs = 15000)
+    {
+        if (!await _parkedSignal.WaitAsync(timeoutMs))
+            throw new TimeoutException("Timed out waiting for the suspended relay to park");
+    }
+
+    // starts the client and waits until it has authenticated
+    public async Task StartReady(CancellationToken cancel = default)
+    {
+        await StartAsync(CancellationToken.None);
+        await WaitForReady(cancel: cancel);
     }
 
     // blocks until the next Peers broadcast arrives
@@ -161,6 +184,7 @@ public sealed class HydraTestClient : RelayConnection, IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        if (!_disposed.TrySet()) return;
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         try { await StopAsync(cts.Token); }
         catch { /* ignore stop errors in cleanup */ }

@@ -1,6 +1,7 @@
 using System.IO.Pipes;
 using System.Net.Sockets;
 using Hydra.Management;
+using Tests.Setup;
 
 namespace Tests.Management;
 
@@ -9,7 +10,7 @@ public class ManagementTransportTests
     [Test]
     public async Task Client_ExchangesBoundedJsonMessageOverLocalTransport()
     {
-        var configPath = Path.Combine(TestContext.CurrentContext.WorkDirectory, $"transport-{Guid.NewGuid():N}.conf");
+        var configPath = Path.Combine(TestPaths.FreshFixtureRoot(nameof(ManagementTransportTests)), "transport.conf");
         var endpoint = ManagementEndpoint.ForConfig(configPath);
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
 
@@ -49,7 +50,7 @@ public class ManagementTransportTests
     [Test]
     public async Task Client_SendsShutdownCommandOverLocalTransport()
     {
-        var configPath = Path.Combine(TestContext.CurrentContext.WorkDirectory, $"shutdown-{Guid.NewGuid():N}.conf");
+        var configPath = Path.Combine(TestPaths.FreshFixtureRoot(nameof(ManagementTransportTests)), "shutdown.conf");
         var endpoint = ManagementEndpoint.ForConfig(configPath);
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
 
@@ -101,12 +102,12 @@ public class ManagementTransportTests
         var request = await ManagementFraming.ReadAsync<ManagementRequest>(stream, cancel);
         if (expectShutdown)
         {
-            Assert.That(request.Method, Is.EqualTo("hydra.shutdown"));
+            Assert.That(request.Method, Is.EqualTo(ManagementMethods.HydraShutdown));
             await ManagementFraming.WriteAsync(stream,
                 ManagementResponse.Ok(new CommandResult(true, "Shutdown requested.")), cancel);
             return;
         }
-        Assert.That(request.Method, Is.EqualTo("hello"));
+        Assert.That(request.Method, Is.EqualTo(ManagementMethods.Hello));
         await ManagementFraming.WriteAsync(stream,
             ManagementResponse.Ok(new ServerHello(ManagementProtocol.Version, "1.2.3", instanceId, 42)), cancel);
     }

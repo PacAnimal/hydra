@@ -1,6 +1,7 @@
+// mirrors CoreGraphics, CoreFoundation, ApplicationServices, Carbon, IOKit, SystemConfiguration, CoreAudio and objc runtime headers
+// ReSharper disable InconsistentNaming
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-// ReSharper disable InconsistentNaming
 
 namespace Hydra.Platform.MacOs;
 
@@ -8,13 +9,9 @@ internal static partial class NativeMethods
 {
     private const string CoreGraphics = "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics";
     private const string CoreFoundation = "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation";
-    private const string ApplicationServices = "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices";
-    private const string AppKit = "/System/Library/Frameworks/AppKit.framework/AppKit";
-
-    // ensure frameworks are loaded before calling into objc_getClass for their classes.
-    // NativeLibrary.Load is idempotent — safe to call from multiple constructors.
-    internal static void EnsureAppKitLoaded() => NativeLibrary.Load(AppKit);
-    internal static void EnsureApplicationServicesLoaded() => NativeLibrary.Load(ApplicationServices);
+    internal const string ApplicationServices = "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices";
+    internal const string AppKit = "/System/Library/Frameworks/AppKit.framework/AppKit";
+    private const string LibSystem = "/usr/lib/libSystem.B.dylib";
 
     // -- event tap constants --
 
@@ -65,9 +62,6 @@ internal static partial class NativeMethods
 
     internal const uint KCFStringEncodingUtf8 = 0x08000100;
 
-    // convenience wrapper: creates a CFString/NSString from a managed string (toll-free bridged)
-    internal static nint MakeNsString(string s) => CFStringCreateWithCString(nint.Zero, s, KCFStringEncodingUtf8);
-
     // -- ApplicationServices --
 
     [LibraryImport(ApplicationServices)]
@@ -78,59 +72,7 @@ internal static partial class NativeMethods
     [LibraryImport(ApplicationServices)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static partial bool AXIsProcessTrustedWithOptions(nint options);
-
-    // polls for up to ~4s using CGEventTapCreate — the reliable live check, unlike AXIsProcessTrusted()
-    // which returns a cached value for a running process and won't reflect a live grant.
-    internal static bool PollAccessibilityTrusted()
-    {
-        for (var i = 0; i < 8; i++)
-        {
-            if (CanCreateEventTap()) return true;
-            Thread.Sleep(500);
-        }
-        return false;
-    }
-
-    // opens the system accessibility prompt (System Settings), returns current trust state.
-    internal static bool ShowAccessibilityPrompt()
-    {
-        EnsureAppKitLoaded();
-        var cls = objc_getClass("NSMutableDictionary");
-        var dict = objc_msgSend_noarg(objc_msgSend_noarg(cls, sel_registerName("alloc")), sel_registerName("init"));
-        var key = MakeNsString("AXTrustedCheckOptionPrompt");
-        objc_msgSend_2arg(dict, sel_registerName("setObject:forKey:"), KCFBooleanTrue, key);
-        CFRelease(key);
-        var trusted = AXIsProcessTrustedWithOptions(dict);
-        objc_msgSend_noarg(dict, sel_registerName("release"));
-        return trusted;
-    }
-
-    internal static async Task WaitForAccessibilityTrusted(CancellationToken cancel)
-    {
-        // AXIsProcessTrusted() returns a cached value for a running process and won't update after
-        // a live grant. CGEventTapCreate() tests the actual kernel capability and is not cached —
-        // it's the reliable detection method used by production macOS accessibility tools.
-        // com.apple.accessibility.api distributed notification also doesn't fire for processes that
-        // weren't trusted at startup, so polling is the only option.
-        while (!cancel.IsCancellationRequested)
-        {
-            try { await Task.Delay(500, cancel); }
-            catch (OperationCanceledException) { return; }
-            if (CanCreateEventTap()) return;
-        }
-    }
-
-    private static bool CanCreateEventTap()
-    {
-        CGEventTapCallBack probe = (_, _, eventRef, _) => eventRef;
-        var tap = CGEventTapCreate(KCGHidEventTap, KCGHeadInsertEventTap, KCGEventTapOptionDefault,
-            KCGEventMaskForAllEvents, probe, nint.Zero);
-        if (tap == nint.Zero) return false;
-        CFRelease(tap);
-        GC.KeepAlive(probe);
-        return true;
-    }
+    internal static partial bool AXIsProcessTrustedWithOptions(nint options);
 
     [LibraryImport(ApplicationServices)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
@@ -149,21 +91,6 @@ internal static partial class NativeMethods
     [LibraryImport(ApplicationServices)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial int AXUIElementCopyAttributeValue(nint element, nint attribute, out nint value);
-
-    // toll-free bridged NSString/CFString → managed string
-    internal static unsafe string? CfStringToManaged(nint cfStr)
-    {
-        if (cfStr == nint.Zero) return null;
-        var charCount = objc_msgSend_long(cfStr, sel_registerName("length"));
-        var bufSize = (nint)(charCount * 4 + 1);
-        var buf = Marshal.AllocHGlobal(bufSize);
-        try
-        {
-            return CFStringGetCString(cfStr, (byte*)buf, bufSize, KCFStringEncodingUtf8)
-                ? Marshal.PtrToStringUTF8(buf) : null;
-        }
-        finally { Marshal.FreeHGlobal(buf); }
-    }
 
     // -- CoreGraphics: display --
 
@@ -247,11 +174,11 @@ internal static partial class NativeMethods
 
     [LibraryImport(CoreGraphics)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    internal static partial nint CGEventSourceCreate(int stateID);
+    internal static partial nint CGEventSourceCreate(int stateId);
 
     [LibraryImport(CoreGraphics)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    internal static partial ulong CGEventSourceFlagsState(int stateID);
+    internal static partial ulong CGEventSourceFlagsState(int stateId);
 
     // -- CoreGraphics: event creation and injection --
 
@@ -337,17 +264,12 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void CFRelease(nint cf);
 
-    private static readonly nint KCFBooleanTrue = Marshal.ReadIntPtr(
-        NativeLibrary.GetExport(NativeLibrary.Load(CoreFoundation), "kCFBooleanTrue"));
+    internal static readonly nint KCFBooleanTrue = NativeHelpers.ReadSymbol(CoreFoundation, "kCFBooleanTrue");
 
-    // allow cursor manipulation from a background thread (private CGS API — matches synergy)
-    internal static void EnableBackgroundCursorManipulation()
-    {
-        var cid = CGSMainConnectionID();
-        var key = MakeNsString("SetsCursorInBackground");
-        _ = CGSSetConnectionProperty(cid, cid, key, KCFBooleanTrue);
-        CFRelease(key);
-    }
+    internal static readonly nint KCFRunLoopCommonModes = NativeHelpers.ReadSymbol(CoreFoundation, "kCFRunLoopCommonModes");
+
+    // a 32-bit global in libSystem, not a function: calling its address as code crashes
+    internal static readonly uint MachTaskSelf = (uint)Marshal.ReadInt32(NativeHelpers.SymbolAddress(LibSystem, "mach_task_self_"));
 
     // -- CoreFoundation: data --
 
@@ -358,6 +280,8 @@ internal static partial class NativeMethods
     // -- Carbon: text input sources --
 
     private const string Carbon = "/System/Library/Frameworks/Carbon.framework/Carbon";
+
+    internal static readonly nint KTISPropertyUnicodeKeyLayoutData = NativeHelpers.ReadSymbol(Carbon, "kTISPropertyUnicodeKeyLayoutData");
 
     [LibraryImport(Carbon)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
@@ -492,7 +416,7 @@ internal static partial class NativeMethods
     // This updates the system-wide modifier state read by [NSEvent modifierFlags] class method,
     // which CGEventPost alone does not do. Deprecated since macOS 11 but still functional.
 
-    private const string IOKit = "/System/Library/Frameworks/IOKit.framework/IOKit";
+    internal const string IOKit = "/System/Library/Frameworks/IOKit.framework/IOKit";
 
     // NX event types (IOLLEvent.h) — same numeric values as the CG equivalents
     internal const uint NxKeyDown = 10;
@@ -596,7 +520,7 @@ internal static partial class NativeMethods
 
     [LibraryImport(IOKit)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    internal static partial int IOPMAssertionDeclareUserActivity(nint assertionName, uint userType, out uint assertionID);
+    internal static partial int IOPMAssertionDeclareUserActivity(nint assertionName, uint userType, out uint assertionId);
 
     // -- IOKit: power sources (AC/battery state) --
 

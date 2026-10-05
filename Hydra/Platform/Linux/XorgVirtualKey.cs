@@ -1,3 +1,4 @@
+// mirrors <X11/keysymdef.h>
 // ReSharper disable InconsistentNaming
 namespace Hydra.Platform.Linux;
 

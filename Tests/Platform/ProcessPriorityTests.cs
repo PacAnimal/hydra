@@ -1,4 +1,3 @@
-using System.Runtime.Versioning;
 using System.Xml.Linq;
 using Hydra.Platform;
 using Hydra.Platform.MacOs;
@@ -23,15 +22,7 @@ public class ProcessPriorityTests
     {
         // an unprivileged macOS agent cannot nice itself down, so the plist is the only place the
         // priority can come from — if these keys are ever dropped the process silently runs throttled.
-        if (OperatingSystem.IsMacOS()) AssertPlistCarriesPriority();
-        else Assert.Ignore("macOS-only: AgentCommands is compiled for macOS");
-    }
-
-    [SupportedOSPlatform("macos")]
-    private static void AssertPlistCarriesPriority()
-    {
-        var plist = AgentCommands.GeneratePlist("/opt/hydra/Hydra", "/opt/hydra", "/tmp/logs");
-        var entries = ReadDict(plist);
+        var entries = ReadDict(AgentPlist.Generate("/opt/hydra/Hydra", "/opt/hydra", "/tmp/logs", null));
 
         using (Assert.EnterMultipleScope())
         {

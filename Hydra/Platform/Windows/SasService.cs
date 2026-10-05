@@ -1,4 +1,3 @@
-using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using Cathedral.Utils;
 using Microsoft.Extensions.Logging;
@@ -7,7 +6,7 @@ using Microsoft.Win32.SafeHandles;
 namespace Hydra.Platform.Windows;
 
 [SupportedOSPlatform("windows")]
-internal sealed partial class SasService(ILogger<SasService> log) : SimpleHostedService(log, TimeSpan.Zero, TimeSpan.FromSeconds(5))
+internal sealed class SasService(ILogger<SasService> log) : SimpleHostedService(log, TimeSpan.Zero, TimeSpan.FromSeconds(5))
 {
     private SafeFileHandle? _sasEvent;
 
@@ -15,7 +14,7 @@ internal sealed partial class SasService(ILogger<SasService> log) : SimpleHosted
     {
         _sasEvent ??= Win32Session.CreateGlobalEvent("HydraSendSAS", manualReset: false);
         if (Win32Session.WaitForEvent(_sasEvent, 1000))
-            SendSAS(asUser: false);
+            NativeMethods.SendSAS(asUser: false);
         return Task.CompletedTask;
     }
 
@@ -24,9 +23,4 @@ internal sealed partial class SasService(ILogger<SasService> log) : SimpleHosted
         _sasEvent?.Dispose();
         return Task.CompletedTask;
     }
-
-    // asUser=false means the call comes from a service (SYSTEM) — required for it to work
-    // ReSharper disable once InconsistentNaming
-    [LibraryImport("sas.dll")]
-    private static partial void SendSAS([MarshalAs(UnmanagedType.Bool)] bool asUser);
 }

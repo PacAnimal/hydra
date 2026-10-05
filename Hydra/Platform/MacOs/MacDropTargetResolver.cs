@@ -44,15 +44,15 @@ public sealed class MacDropTargetResolver(ILogger<MacDropTargetResolver> log) : 
             end tell
             """;
 
-        var result = OsaScript.Run(script);
+        var result = OsaScript.Run(script, OsaScript.FinderTimeout);
         if (!result.Success)
         {
-            _log.LogDebug("osascript exited {Code}: {Stderr}", result.ExitCode, result.Stderr.Trim());
+            result.LogFailure(_log, LogLevel.Debug);
             return null;
         }
 
         var stdout = result.Stdout.Trim();
-        _log.LogDebug("Finder paste target: {Path}", stdout);
+        if (_log.IsEnabled(LogLevel.Debug)) _log.LogDebug("Finder paste target: {Path}", stdout);
         if (stdout == "NOT_FINDER" || stdout.Length == 0) return null;
         return stdout;
     }

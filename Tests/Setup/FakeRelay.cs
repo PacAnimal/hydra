@@ -3,19 +3,23 @@ using Hydra.Relay;
 
 namespace Tests.Setup;
 
-public sealed class FakeRelay : IRelaySender
+public sealed class FakeRelay : NullRelaySender
 {
-    public readonly List<(string[] Targets, MessageKind Kind, string Json)> Sent = [];
-    public bool IsConnected { get; set; } = true;
-    public event Func<string[], Task>? PeersChanged;
-    public event Func<string, MessageKind, ReadOnlyMemory<byte>, Task>? MessageReceived;
-    public event Func<Task>? Disconnected;
+    public bool Connected { get; set; } = true;
+    public override bool IsConnected => Connected;
+    public override event Func<string[], Task>? PeersChanged;
+    public override event Func<string, MessageKind, ReadOnlyMemory<byte>, Task>? MessageReceived;
+    public override event Func<Task>? Disconnected;
 
-    public void Send(string[] targetHosts, byte[] payload)
-    {
-        var decoded = MessageSerializer.Decode(payload);
-        Sent.Add((targetHosts, decoded.Kind, decoded.Json));
-    }
+    private readonly SentSignals _signals = new();
+
+    public override void Send(string[] targetHosts, byte[] payload) => _signals.Record(targetHosts, payload);
+
+    public List<SentMessage> Snapshot() => _signals.Snapshot();
+    public void ClearSent() => _signals.Clear();
+
+    // completes once a message of this kind has been sent, for a sender working on its own thread
+    public Task WaitForSent(MessageKind kind, TimeSpan timeout) => _signals.WaitFor(kind, timeout);
 
     public async Task FirePeersChanged(params string[] hosts)
     {

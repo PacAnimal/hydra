@@ -7,10 +7,9 @@ using Microsoft.AspNetCore.Http.Connections.Client;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using System.Diagnostics;
 using System.Net;
-using System.Net.NetworkInformation;
 using System.Net.Sockets;
+using System.Net.WebSockets;
 using System.Threading.Channels;
 using TypedSignalR.Client;
 using StyxConstants = Styx.Constants;
@@ -22,8 +21,12 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
 {
     private IStyxServer? _server;
     private RelayEncryption? _encryption;
+    // set once the relay accepts us, cleared by EndSession
+    private bool _authenticated;
+    // set once this session handles any inbound message, handshake included; cleared by EndSession
+    private bool _handledInbound;
     private readonly Lock _connectionLock = new();
-    private CancellationTokenSource? _connectionCancellation;
+    private ConnectionCancellation? _connectionCancellation;
     private CancellationTokenSource? _reconnectDelayCancellation;
     private bool _connectionIterationActive;
     private bool _connectionSuspended;
@@ -66,9 +69,10 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     //
     // A lane's order is absolute because it never has two invocations in flight: TypedSignalR.Client
     // generates `Send` as InvokeCoreAsync, which completes when the HUB METHOD RETURNS, not when the frame
-    // is flushed. That matters — the relay sets MaximumParallelInvocationsPerClient to 4, so a peer that
-    // pipelined WOULD have its frames dispatched concurrently and could see them reordered. Check the
-    // generated proxy before assuming otherwise after a package bump.
+    // is flushed. That matters — the relay sets MaximumParallelInvocationsPerClient to
+    // StyxConstants.MaxParallelInvocations, so a peer that pipelined WOULD have its frames dispatched
+    // concurrently and could see them reordered. Check the generated proxy before assuming otherwise after a
+    // package bump.
     //
     // What the split buys is that a 256 KiB chunk no longer sits in front of every keystroke behind it,
     // which on a KVM is the product.
@@ -93,6 +97,10 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     protected virtual TimeSpan SystemWakeReconnectDelay => TimeSpan.FromSeconds(1);
     protected virtual TimeSpan EarlySystemWakeReconnectWindow => TimeSpan.FromSeconds(30);
     protected virtual TimeSpan SystemWakeReconnectGracePeriod => TimeSpan.FromSeconds(5);
+    // drives the auth timeout, so a test can expire it on demand
+    protected virtual TimeProvider AuthClock => TimeProvider.System;
+    // times the fast-reconnect window after a wake, so a test can step past it
+    protected virtual TimeProvider WakeClock => TimeProvider.System;
 
     // RR5: ±25% jitter so peers that all dropped at once (e.g. a relay restart) don't reconnect in lockstep
     private static TimeSpan WithJitter(TimeSpan baseDelay)
@@ -102,7 +110,8 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     }
 
     // IRelaySender
-    public bool IsConnected => _server != null;
+    // authenticated with the relay; CanEnqueue is weaker (session objects exist) so handshake replies can go out first
+    public bool IsConnected => Volatile.Read(ref _authenticated);
     public RelayTransportSnapshot? Transport
     {
         get
@@ -127,12 +136,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         OnSent(targetHosts, payload);
         lock (_sendOrderLock)
         {
-            // INSIDE the lock, with teardown clearing these under the same lock before it drains. Checked
-            // outside, a send preempted between the check and the lock enqueues AFTER FailQueued has run —
-            // stranding the item, and with it an open bundle, into the next connection, where later keys
-            // append to a frame from before the drop and the batch/plain decision was made against a
-            // capability map that has since been cleared. Silent key loss, reachable only by that race.
-            if (_server == null || _encryption == null) return;
+            if (!CanEnqueue) return;
 
             // Fallback for a key that reaches the generic Send() instead of SendKeyEvent, exactly as the
             // delta branch below is for SendMouseDelta — decoded once here so it still bundles. InputRouter,
@@ -144,17 +148,9 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
                 return;
             }
 
-            // Anything that is not a key closes the bundle, for the reason KeyBundle's summary gives: an
-            // append after the drain has read it goes nowhere at all. Only the key bundle here — the
-            // movement branches below append to their own batch, and the fallthrough closes both.
-            CloseKeyBundle();
-
             if (payload.Length > 0 && payload[0] == (byte)MessageKind.MouseMove)
             {
-                if (_openMovementBatch?.TryAppendAbsolute(targetHosts, payload) == true) return;
-                var movement = MovementBatch.CreateAbsolute(targetHosts, payload);
-                _openMovementBatch = movement;
-                _inputQueue.Writer.TryWrite(new OutboundMessage(targetHosts, payload, null, movement, null, CancellationToken.None));
+                EnqueueAbsolute(targetHosts, payload);
                 return;
             }
 
@@ -164,10 +160,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
             // hits this: it calls SendMouseDelta directly and never encodes/decodes at all to accumulate.
             if (payload.Length > 0 && payload[0] == (byte)MessageKind.MouseMoveDelta && TryDecodeDelta(payload, out var dx, out var dy))
             {
-                if (_openMovementBatch?.TryAppendDelta(targetHosts, dx, dy) == true) return;
-                var movement = MovementBatch.CreateDelta(targetHosts, dx, dy);
-                _openMovementBatch = movement;
-                _inputQueue.Writer.TryWrite(new OutboundMessage(targetHosts, payload, null, movement, null, CancellationToken.None));
+                EnqueueDelta(targetHosts, dx, dy);
                 return;
             }
 
@@ -176,7 +169,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
             // window where it would make a difference is one a test cannot open — and an optimisation
             // nothing can observe is not worth a special case in the one path that decides where clicks land.
             CloseOpenBatches();
-            LaneFor(payload).Writer.TryWrite(new OutboundMessage(targetHosts, payload, null, null, null, CancellationToken.None));
+            LaneFor(payload).Writer.TryWrite(OutboundMessage.Plain(targetHosts, payload));
         }
     }
 
@@ -194,7 +187,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         OnSent(targetHosts, payload);
         lock (_sendOrderLock)
         {
-            if (_server == null || _encryption == null) return;
+            if (!CanEnqueue) return;
             EnqueueKey(targetHosts, message, payload);
         }
     }
@@ -221,12 +214,40 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
 
             var bundle = KeyBundle.Create(targetHosts, keyEvent);
             _openKeyBundle = bundle;
-            _inputQueue.Writer.TryWrite(new OutboundMessage(targetHosts, payload, null, null, bundle, CancellationToken.None));
+            _inputQueue.Writer.TryWrite(OutboundMessage.ForKeys(targetHosts, bundle));
             return;
         }
 
         CloseOpenBatches();
-        _inputQueue.Writer.TryWrite(new OutboundMessage(targetHosts, payload, null, null, null, CancellationToken.None));
+        _inputQueue.Writer.TryWrite(OutboundMessage.Plain(targetHosts, payload));
+    }
+
+    /// <summary>
+    /// Queues an absolute move, joining the open movement batch where it can. Call with <c>_sendOrderLock</c>
+    /// HELD.
+    /// </summary>
+    private void EnqueueAbsolute(string[] targetHosts, byte[] payload)
+    {
+        CloseKeyBundle();
+        if (_openMovementBatch?.TryAppendAbsolute(targetHosts, payload) == true) return;
+        StartMovementBatch(targetHosts, MovementBatch.CreateAbsolute(targetHosts, payload));
+    }
+
+    /// <summary>
+    /// Queues a relative move, accumulating into the open movement batch where it can. Call with
+    /// <c>_sendOrderLock</c> HELD.
+    /// </summary>
+    private void EnqueueDelta(string[] targetHosts, int dx, int dy)
+    {
+        CloseKeyBundle();
+        if (_openMovementBatch?.TryAppendDelta(targetHosts, dx, dy) == true) return;
+        StartMovementBatch(targetHosts, MovementBatch.CreateDelta(targetHosts, dx, dy));
+    }
+
+    private void StartMovementBatch(string[] targetHosts, MovementBatch movement)
+    {
+        _openMovementBatch = movement;
+        _inputQueue.Writer.TryWrite(OutboundMessage.ForMovement(targetHosts, movement));
     }
 
     /// <summary>
@@ -252,9 +273,20 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
 
     /// <summary>
     /// Closes the key bundle alone, for the paths that are about to append to the MOVEMENT batch and must
-    /// not close the thing they are opening. Call with <c>_sendOrderLock</c> HELD.
+    /// not close the thing they are opening — closing that would cost every bit of coalescing. Call with
+    /// <c>_sendOrderLock</c> HELD.
     /// </summary>
     private void CloseKeyBundle() => _openKeyBundle = null;
+
+    /// <summary>
+    /// Whether a connection is up to send on. Check it INSIDE <c>_sendOrderLock</c>, because teardown clears
+    /// both under the same lock before it drains. Checked outside, a send preempted between the check and the
+    /// lock enqueues AFTER <c>FailQueued</c> has run — stranding the item, and with it an open bundle, into the
+    /// next connection, where later keys append to a frame from before the drop and the batch/plain decision
+    /// was made against a capability map that has since been cleared. Silent key loss, reachable only by that
+    /// race.
+    /// </summary>
+    private bool CanEnqueue => _server != null && _encryption != null;
 
     /// <summary>
     /// Whether EVERY target has advertised a capability. All of them, because one frame goes to all of them,
@@ -277,14 +309,8 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         OnSent(targetHosts, MessageSerializer.Encode(MessageKind.MouseMoveDelta, new MouseMoveDeltaMessage(dx, dy)));
         lock (_sendOrderLock)
         {
-            if (_server == null || _encryption == null) return;
-            // The KEY bundle only. This path is about to append to (or mint) the movement batch, so closing
-            // that would be closing the very thing it is opening — and would cost every bit of coalescing.
-            CloseKeyBundle();
-            if (_openMovementBatch?.TryAppendDelta(targetHosts, dx, dy) == true) return;
-            var movement = MovementBatch.CreateDelta(targetHosts, dx, dy);
-            _openMovementBatch = movement;
-            _inputQueue.Writer.TryWrite(new OutboundMessage(targetHosts, [], null, movement, null, CancellationToken.None));
+            if (!CanEnqueue) return;
+            EnqueueDelta(targetHosts, dx, dy);
         }
     }
 
@@ -297,7 +323,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     private async ValueTask SuspendConnectionCoreAsync(long? generation, CancellationToken cancel)
     {
         Task suspension;
-        CancellationTokenSource? connection;
+        ConnectionCancellation? connection;
         lock (_connectionLock)
         {
             if (generation is { } sleepGeneration)
@@ -321,12 +347,8 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
             connection = _connectionCancellation;
         }
 
-        try
-        {
-            if (connection != null)
-                await connection.CancelAsync().WaitAsync(cancel).ConfigureAwait(false);
-        }
-        catch (ObjectDisposedException) { }
+        if (connection != null)
+            await connection.CancelAsync().WaitAsync(cancel).ConfigureAwait(false);
         await suspension.WaitAsync(cancel).ConfigureAwait(false);
     }
 
@@ -366,8 +388,8 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
             _latestWakeGeneration = generation;
             if (completed) _completedWakeGeneration = generation;
             var window = completed ? SystemWakeReconnectGracePeriod : EarlySystemWakeReconnectWindow;
-            _fastReconnectUntil = Stopwatch.GetTimestamp()
-                + (long)(window.TotalSeconds * Stopwatch.Frequency);
+            _fastReconnectUntil = WakeClock.GetTimestamp()
+                + (long)(window.TotalSeconds * WakeClock.TimestampFrequency);
             _wakeStateVersion++;
 
             if (_connectionSuspended)
@@ -406,13 +428,13 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         var lane = LaneFor(payload);
         lock (_sendOrderLock)
         {
-            // Under the lock for the reason Send states: outside it, this enqueues past a teardown that has
+            // Under the lock for the reason CanEnqueue states: outside it, this enqueues past a teardown that has
             // already drained, and the caller waits on a completion nothing will set.
-            if (_server == null || _encryption == null)
+            if (!CanEnqueue)
                 throw new InvalidOperationException("Relay is not connected");
 
             CloseOpenBatches();
-            if (!lane.Writer.TryWrite(new OutboundMessage(targetHosts, payload, completion, null, null, cancel)))
+            if (!lane.Writer.TryWrite(OutboundMessage.Reliable(targetHosts, payload, completion, cancel)))
                 throw new InvalidOperationException("Relay send queue is closed");
         }
 
@@ -444,6 +466,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         try
         {
             var decoded = MessageSerializer.Decode(decrypted);
+            MarkInboundHandled();
             if (log.IsEnabled(LogLevel.Trace))
                 log.LogTrace("Received {Kind} from {SourceHost} ({Bytes} bytes)", decoded.Kind, sourceHost, payload.Length);
             await OnReceive(sourceHost, decoded.Kind, decoded.Bytes);
@@ -462,8 +485,18 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
 
     public async Task Peers(string[] hostNames)
     {
-        log.LogInformation("Peers online: {Peers}", hostNames.Length == 0 ? "(none)" : string.Join(", ", hostNames));
+        if (log.IsEnabled(LogLevel.Information))
+            log.LogInformation("Peers online: {Peers}", hostNames.Length == 0 ? "(none)" : string.Join(", ", hostNames));
+        MarkInboundHandled();
         await OnPeers(hostNames);
+    }
+
+    // only within a live session, so a straggler from a dead one cannot mark the next
+    private void MarkInboundHandled()
+    {
+        if (Volatile.Read(ref _handledInbound)) return;
+        lock (_sendOrderLock)
+            if (_server != null) _handledInbound = true;
     }
 
     // override in subclasses (e.g. tests, slave mode)
@@ -482,25 +515,48 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     protected virtual Task OnKicked(string reason) => Task.CompletedTask;
     // fires after _server and _encryption are set — guaranteed connection-ready signal
     protected virtual Task OnAuthenticated() => Task.CompletedTask;
-    // per-connection cancellation token: cancels when this connection drops. Valid only during
-    // OnAuthenticated (the source CTS is disposed once the connection loop unwinds, before OnDisconnected).
+    // per-connection cancellation token, cancelled when this connection ends. It is replaced as soon as the
+    // connection can deliver traffic, which is before the login completes, so work started by an inbound
+    // message should capture it on receipt and check it before answering. Captured, it stays readable after
+    // the connection unwinds; read later, it belongs to whichever connection is current.
     protected CancellationToken ConnectionToken { get; private set; }
-    // fires when a live connection drops (not on auth failure or clean shutdown)
+    // fires when a session that authenticated or handled inbound traffic ends (not on clean shutdown)
     protected virtual Task OnDisconnected() => Task.CompletedTask;
 
-    // override in tests to inject the in-memory handler; production default sets NoDelay
+    // override in tests to inject the in-memory handler. Both transports dial through ConnectRelaySocket: SignalR's
+    // own WebSocket factory opens its socket itself, which would skip address preference and the per-address timeout
     protected virtual void ConfigureHubUrl(HttpConnectionOptions options)
     {
-        options.HttpMessageHandlerFactory = _ => new SocketsHttpHandler
+        options.HttpMessageHandlerFactory = _ => CreateRelayHandler();
+        options.WebSocketFactory = async (context, cancel) =>
         {
-            ConnectCallback = async (ctx, cancel) =>
+            var webSocket = new ClientWebSocket();
+            try
             {
-                var socket = await RelaySocketConnector.ConnectAsync(ctx.DnsEndPoint, cancel);
-                CaptureTransport(socket, ctx.DnsEndPoint);
-                return new NetworkStream(socket, ownsSocket: true);
+                using var invoker = new HttpMessageInvoker(CreateRelayHandler());
+                await webSocket.ConnectAsync(context.Uri, invoker, cancel);
+                return webSocket;
+            }
+            catch
+            {
+                webSocket.Dispose();
+                throw;
             }
         };
     }
+
+    private SocketsHttpHandler CreateRelayHandler() => new()
+    {
+        ConnectCallback = async (ctx, cancel) =>
+        {
+            var socket = await ConnectRelaySocket(ctx.DnsEndPoint, cancel);
+            CaptureTransport(socket, ctx.DnsEndPoint);
+            return new NetworkStream(socket, ownsSocket: true);
+        }
+    };
+
+    protected virtual Task<Socket> ConnectRelaySocket(DnsEndPoint target, CancellationToken cancel) =>
+        RelaySocketConnector.ConnectAsync(target, cancel);
 
     protected override async Task Execute(CancellationToken cancel)
     {
@@ -518,7 +574,8 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         }
 
         var hostName = profile.Name;
-        log.LogInformation("Starting relay connection to {Server} as {HostName}", netConfig.StyxServer, hostName);
+        if (log.IsEnabled(LogLevel.Information))
+            log.LogInformation("Starting relay connection to {Server} as {HostName}", netConfig.StyxServer, hostName);
 
         while (!cancel.IsCancellationRequested)
         {
@@ -533,7 +590,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
             {
                 break;
             }
-            catch (OperationCanceledException) when (IsConnectionSuspended())
+            catch (OperationCanceledException) when (ConnectionSuspended)
             {
                 log.LogInformation("Relay connection suspended for system sleep");
             }
@@ -543,7 +600,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
             }
             catch (HttpRequestException ex)
             {
-                log.LogWarning("Relay connection failed — retrying in {ReconnectDelay}s: {Message}", CurrentReconnectDelay().TotalSeconds, ex.InnerException?.Message ?? ex.Message);
+                log.LogWarning("Relay connection failed — retrying in {ReconnectDelay}s: {Message}", CurrentReconnectDelay().TotalSeconds, ex.InnerMessage());
             }
             catch (Exception ex)
             {
@@ -551,25 +608,14 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
             }
             finally
             {
-                var wasConnected = _server != null;
-
-                // UNDER THE SEND LOCK, so a send is either wholly before this (and gets drained below) or
-                // wholly after it (and sees null and drops). Cleared outside, a send could slip between the
-                // two and leave an item — and an open bundle — in a queue nobody will read again.
-                lock (_sendOrderLock)
-                {
-                    _server = null;
-                    _encryption = null;
-                    CloseOpenBatches();
-                }
-
+                var wasLive = EndSession();
                 _transport = null;
                 // BOTH lanes. A caller parked in SendReliableAsync is waiting on a completion that only this
                 // drain will ever set, so a lane left unemptied is a caller hung until the process exits —
                 // and the bulk lane is the one whose callers actually await.
                 FailQueued(_inputQueue.Reader);
                 FailQueued(_bulkQueue.Reader);
-                if (wasConnected)
+                if (wasLive)
                 {
                     // guard the disconnect callbacks: a throw here would escape Execute, and because the
                     // base SimpleHostedService has no exceptionLoopTime it would permanently kill the
@@ -588,7 +634,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
                 EndConnectionIteration();
             }
 
-            if (!cancel.IsCancellationRequested && !IsConnectionSuspended())
+            if (!cancel.IsCancellationRequested && !ConnectionSuspended)
             {
                 // Re-evaluate after disconnect callbacks: they can outlive the wake grace window, and a
                 // delay observed in the catch block must not keep the fast cadence alive after expiry.
@@ -613,7 +659,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     {
         lock (_connectionLock)
         {
-            var delay = Stopwatch.GetTimestamp() < _fastReconnectUntil
+            var delay = WakeClock.GetTimestamp() < _fastReconnectUntil
                 ? SystemWakeReconnectDelay
                 : ReconnectDelay;
             return (delay, _wakeStateVersion);
@@ -649,8 +695,12 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     {
         Task resume;
         lock (_connectionLock) resume = _resumeConnection.Task;
+        if (!resume.IsCompleted) OnParkedUntilResumed();
         await resume.WaitAsync(cancel).ConfigureAwait(false);
     }
+
+    // the reconnect loop is suspended and will not connect again until resumed
+    protected virtual void OnParkedUntilResumed() { }
 
     private bool TryBeginConnectionIteration()
     {
@@ -660,11 +710,6 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
             _connectionIterationActive = true;
             return true;
         }
-    }
-
-    private bool IsConnectionSuspended()
-    {
-        lock (_connectionLock) return _connectionSuspended;
     }
 
     protected bool ConnectionSuspended
@@ -687,6 +732,34 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         complete?.TrySetResult();
     }
 
+    /// <summary>
+    /// Clears the session and reports whether it was live, which is what decides the disconnect callbacks.
+    /// Live means authenticated OR having handled an inbound message: the relay delivers traffic during the
+    /// handshake, so a slave may already hold keys or a master config by the time a login times out, and
+    /// that state needs the same unwinding as a dropped connection.
+    ///
+    /// <para>UNDER THE SEND LOCK, so a send is either wholly before this (and gets drained) or wholly after
+    /// it (and sees null and drops). Cleared outside, a send could slip between the two and leave an item —
+    /// and an open bundle — in a queue nobody will read again.</para>
+    /// </summary>
+    private bool EndSession()
+    {
+        lock (_sendOrderLock)
+        {
+            var wasLive = _authenticated || _handledInbound;
+            _authenticated = false;
+            _handledInbound = false;
+            _server = null;
+            _encryption = null;
+            CloseOpenBatches();
+            return wasLive;
+        }
+    }
+
+    // a close the attempt did not ask for, the relay or the network dropping it, ends the attempt too
+    private static void CancelOnClose(HubConnection con, ConnectionCancellation disco) =>
+        con.Closed += _ => disco.CancelAsync();
+
     private static TaskCompletionSource NewSignal() =>
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -699,7 +772,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
 
     private async Task Connect(NetworkConfig netConfig, string hostName, CancellationToken cancel)
     {
-        using var disco = CancellationTokenSource.CreateLinkedTokenSource(cancel);
+        using var disco = new ConnectionCancellation(cancel);
         using var connectionScope = new ConnectionCancellationScope(this, disco);
 
         await using var con = new HubConnectionBuilder()
@@ -709,12 +782,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
             .AddMessagePackProtocol()
             .Build();
 
-        // ReSharper disable once AccessToDisposedClosure
-        con.Closed += async _ =>
-        {
-            try { await disco.CancelAsync(); }
-            catch (ObjectDisposedException) { }
-        };
+        CancelOnClose(con, disco);
 
         await con.StartAsync(disco.Token);
         log.LogInformation("Connected to Styx relay");
@@ -727,6 +795,9 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         // so _encryption must be ready to decrypt that incoming message
         _encryption = new RelayEncryption(netConfig.EncryptionKey, peerState);
         _server = server;
+        // per-connection, NOT app-lifetime, so awaiters like WaitForAccessibilityTrusted in OnAuthenticated unwind on
+        // a drop; set here, with the server, because a message handled during the login belongs to this connection
+        ConnectionToken = disco.Token;
 
         // RR6: bound the auth round-trip so a server that accepts the socket then stalls the handshake
         // doesn't hang the connect attempt — WaitAsync surfaces a timeout/cancel to the reconnect loop.
@@ -734,20 +805,17 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         {
             Authorization = netConfig.Authorization,
             HostName = hostName
-        }).WaitAsync(TimeSpan.FromSeconds(Constants.AuthTimeoutSeconds), disco.Token);
+        }).WaitAsync(TimeSpan.FromSeconds(Constants.AuthTimeoutSeconds), AuthClock, disco.Token);
 
         if (!response.Authenticated)
         {
-            _server = null;
-            _encryption = null;
             log.LogError("Relay authentication failed: {Message}", response.Message);
             return;
         }
 
-        log.LogInformation("Authenticated on relay as {HostName}", hostName);
-        // R5: per-connection token (cancels when this connection drops), NOT the app-lifetime token — so
-        // awaiters like WaitForAccessibilityTrusted in OnAuthenticated unwind on a drop and reconnect.
-        ConnectionToken = disco.Token;
+        lock (_sendOrderLock) _authenticated = true;
+        if (log.IsEnabled(LogLevel.Information))
+            log.LogInformation("Authenticated on relay as {HostName}", hostName);
         await OnAuthenticated();
 
         // Drain both lanes until the connection drops. Concurrently, which is the entire point: a chunk
@@ -765,8 +833,8 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         // 48 bits are a timestamp and may well be identical; the counter is what separates them. Everything
         // else SimpleAes.Encrypt touches is immutable, and it builds a fresh AesGcm per call.
         //
-        // Either lane exiting ends the connection, exactly as the single loop's `break` used to: whatever
-        // stopped it (a cancelled send, a dead socket) has stopped the other too or is about to.
+        // Either lane exiting ends the connection: whatever stopped it (a cancelled send, a dead socket) has
+        // stopped the other too or is about to.
         await Task.WhenAll(
             Drain(_inputQueue.Reader, disco),
             Drain(_bulkQueue.Reader, disco));
@@ -779,10 +847,9 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     /// a connection cancels <c>disco</c> and then WAITS for this iteration to finish
     /// (<c>SuspendConnectionCoreAsync</c>), so a drain parked on work that only the app-lifetime token can
     /// cancel deadlocks the suspend — the reconnect, the sleep handler and a clean shutdown all go through
-    /// it. Encryption is fast enough that this never showed in the field; it is still the wrong token, and a
-    /// test that holds a lane still finds it immediately.</para>
+    /// it.</para>
     /// </summary>
-    private async Task Drain(ChannelReader<OutboundMessage> reader, CancellationTokenSource disco)
+    private async Task Drain(ChannelReader<OutboundMessage> reader, ConnectionCancellation disco)
     {
         try
         {
@@ -813,7 +880,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
                 catch (HttpRequestException ex)
                 {
                     item.Completion?.TrySetException(ex);
-                    log.LogWarning("Failed to send relay message to [{TargetHosts}]: {Message}", string.Join(", ", item.Targets), ex.InnerException?.Message ?? ex.Message);
+                    log.LogWarning("Failed to send relay message to [{TargetHosts}]: {Message}", string.Join(", ", item.Targets), ex.InnerMessage());
                 }
                 catch (Exception ex)
                 {
@@ -826,14 +893,12 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         {
             // One lane stopping means this connection is over, so wake the other rather than leaving it
             // parked in WaitToReadAsync until something else happens to cancel it.
-            try { await disco.CancelAsync(); }
-            catch (ObjectDisposedException) { /* the connect method already unwound */ }
+            await disco.CancelAsync();
         }
 
         // NOT caught. The cancellation has to reach Execute, which is where a drop is CLASSIFIED — lost,
         // suspended for sleep, or shutting down — and where the only log line a master ever writes about
-        // it comes from. Swallowing it here left an idle relay drop, which for a KVM is the common one,
-        // producing no output at all: the client reconnected in silence.
+        // it comes from, so an idle relay drop is never a silent reconnect.
     }
 
     /// <summary>
@@ -906,22 +971,12 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     private static bool TryDecodeDelta(byte[] payload, out int dx, out int dy)
     {
         dx = dy = 0;
-        try
-        {
-            var delta = System.Text.Json.JsonSerializer.Deserialize<MouseMoveDeltaMessage>(
-                payload.AsSpan(1), Cathedral.Config.SaneJson.Options);
-            if (delta == null) return false;
-            dx = delta.Dx;
-            dy = delta.Dy;
-            return true;
-        }
-        catch (System.Text.Json.JsonException) { return false; }
+        if (MessageSerializer.Decode(payload).Bytes.TryDecodeBody<MouseMoveDeltaMessage>() is not { } delta) return false;
+        dx = delta.Dx;
+        dy = delta.Dy;
+        return true;
     }
 
-    // Coalesces same-target movement queued faster than the drain loop can send it: an absolute move
-    // keeps only the latest position, a delta accumulates — either way only one message crosses the
-    // wire per burst instead of one per input event. Deltas arrive and stay as ints; only Snapshot()
-    // ever encodes, once, right before the batch actually goes out.
     /// <summary>
     /// Key events queued for one target while an earlier frame is still in flight, kept IN ORDER.
     ///
@@ -968,6 +1023,10 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
             : MessageSerializer.Encode(MessageKind.KeyEventBatch, new KeyEventBatchMessage([.. _events]));
     }
 
+    // Coalesces same-target movement queued faster than the drain loop can send it: an absolute move
+    // keeps only the latest position, a delta accumulates — either way only one message crosses the
+    // wire per burst instead of one per input event. Deltas arrive and stay as ints; only Snapshot()
+    // ever encodes, once, right before the batch actually goes out.
     private sealed class MovementBatch
     {
         private readonly MessageKind _kind;
@@ -1010,10 +1069,10 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     private void CaptureTransport(Socket socket, DnsEndPoint target)
     {
         if (socket.LocalEndPoint is not IPEndPoint local || socket.RemoteEndPoint is not IPEndPoint remote) return;
-        var network = FindInterface(local.Address);
+        var network = NetworkInterfaceLookup.FindByAddress(local.Address);
         _transport = new RelayTransportSnapshot(
             network?.Name ?? "unknown",
-            DescribeInterface(network),
+            NetworkInterfaceLookup.Describe(network),
             local.Address.ToString(),
             local.Port,
             target.Host,
@@ -1027,46 +1086,15 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
             Interlocked.Read(ref _bytesReceived));
     }
 
-    private static NetworkInterface? FindInterface(IPAddress address)
-    {
-        var normalized = address.IsIPv4MappedToIPv6 ? address.MapToIPv4() : address;
-        try
-        {
-            return NetworkInterface.GetAllNetworkInterfaces().FirstOrDefault(network =>
-                network.GetIPProperties().UnicastAddresses.Any(unicast =>
-                {
-                    var candidate = unicast.Address.IsIPv4MappedToIPv6 ? unicast.Address.MapToIPv4() : unicast.Address;
-                    return candidate.Equals(normalized);
-                }));
-        }
-        catch (NetworkInformationException)
-        {
-            return null;
-        }
-    }
-
-    private static string DescribeInterface(NetworkInterface? network) => network?.NetworkInterfaceType switch
-    {
-        NetworkInterfaceType.Wireless80211 => "Wi-Fi",
-        NetworkInterfaceType.Ethernet or NetworkInterfaceType.Ethernet3Megabit
-            or NetworkInterfaceType.FastEthernetFx or NetworkInterfaceType.FastEthernetT
-            or NetworkInterfaceType.GigabitEthernet => "Ethernet",
-        NetworkInterfaceType.Tunnel => "VPN / tunnel",
-        NetworkInterfaceType.Loopback => "loopback",
-        NetworkInterfaceType.Ppp => "PPP",
-        null => "unknown",
-        _ => network.NetworkInterfaceType.ToString()
-    };
-
     // Lets SuspendConnectionAsync/RequestReconnect cancel whichever Connect() attempt is currently in
     // flight, wherever it is in the connect/authenticate/drain sequence, without tearing down the
     // whole reconnect loop.
     private sealed class ConnectionCancellationScope : IDisposable
     {
         private readonly RelayConnection _owner;
-        private readonly CancellationTokenSource _cancellation;
+        private readonly ConnectionCancellation _cancellation;
 
-        internal ConnectionCancellationScope(RelayConnection owner, CancellationTokenSource cancellation)
+        internal ConnectionCancellationScope(RelayConnection owner, ConnectionCancellation cancellation)
         {
             _owner = owner;
             _cancellation = cancellation;
@@ -1079,11 +1107,14 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
             if (suspend) cancellation.Cancel();
         }
 
+        // an attempt can end without anything cancelling it, a refused login for one, and work tied to its
+        // ConnectionToken must still see it end
         public void Dispose()
         {
             lock (_owner._connectionLock)
                 if (ReferenceEquals(_owner._connectionCancellation, _cancellation))
                     _owner._connectionCancellation = null;
+            _cancellation.Cancel();
         }
     }
 
@@ -1093,5 +1124,20 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         TaskCompletionSource? Completion,
         MovementBatch? Movement,
         KeyBundle? Keys,
-        CancellationToken Cancel);
+        CancellationToken Cancel)
+    {
+        internal static OutboundMessage Plain(string[] targets, byte[] payload) =>
+            new(targets, payload, null, null, null, CancellationToken.None);
+
+        // no payload yet: the drain takes the batch's snapshot when it reads the item
+        internal static OutboundMessage ForMovement(string[] targets, MovementBatch movement) =>
+            new(targets, [], null, movement, null, CancellationToken.None);
+
+        // no payload yet, as for movement
+        internal static OutboundMessage ForKeys(string[] targets, KeyBundle keys) =>
+            new(targets, [], null, null, keys, CancellationToken.None);
+
+        internal static OutboundMessage Reliable(string[] targets, byte[] payload, TaskCompletionSource completion, CancellationToken cancel) =>
+            new(targets, payload, completion, null, null, cancel);
+    }
 }

@@ -1,4 +1,6 @@
 using System.Text.Json.Nodes;
+using Cathedral.Extensions;
+using Hydra.Config;
 using Hydra.Management;
 
 namespace Tests.Management;
@@ -44,5 +46,15 @@ public class ConfigSecretMaskTests
             Assert.That(profile["embeddedStyx"]!["password"]!.GetValue<string>(), Is.EqualTo("replacement"));
             Assert.That(restored["unknown"]!["keep"]!.GetValue<bool>(), Is.True);
         }
+    }
+
+    [Test]
+    public void Restore_PutsBackTheValueTheLoaderUses_WhenKeysDifferOnlyInCase()
+    {
+        const string source = """{"profiles":[{"mode":"Slave","networkConfig":"shadowed","NetworkConfig":"effective"}]}""";
+
+        var restored = ConfigSecretMask.Restore(ConfigSecretMask.Mask(source), source);
+
+        Assert.That(restored.FromSaneJson<HydraConfigFile>()!.Profiles[0].NetworkConfig, Is.EqualTo("effective"));
     }
 }

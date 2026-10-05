@@ -62,7 +62,15 @@ public sealed class FakePlatform : IPlatformInput, ICursorHider
     }
 
     public bool AnyMouseButtonHeld { get; set; }
-    bool IPlatformInput.AnyMouseButtonHeld() => AnyMouseButtonHeld;
+    public bool RecentresItself { get; set; }
+    // how often the router asked, which on Xorg is a server round-trip
+    public int ButtonQueries { get; private set; }
+
+    bool IPlatformInput.AnyMouseButtonHeld()
+    {
+        ButtonQueries++;
+        return AnyMouseButtonHeld;
+    }
     public void StopEventTap() { }
     public void WarpCursor(int x, int y) { WarpX = x; WarpY = y; WarpCount++; }
     public (int X, int Y)? GetCursorPosition() => null;

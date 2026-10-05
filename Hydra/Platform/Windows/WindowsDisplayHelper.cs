@@ -1,4 +1,4 @@
-using System.Runtime.InteropServices;
+using System.Runtime.CompilerServices;
 
 namespace Hydra.Platform.Windows;
 
@@ -10,7 +10,7 @@ internal static class WindowsDisplayHelper
 
         NativeMethods.EnumDisplayMonitors(nint.Zero, nint.Zero, (nint hMonitor, nint _, ref WINRECT _, nint _) =>
         {
-            var info = new MONITORINFOEX { Size = (uint)Marshal.SizeOf<MONITORINFOEX>() };
+            var info = new MONITORINFOEX { Size = (uint)Unsafe.SizeOf<MONITORINFOEX>() };
             if (!NativeMethods.GetMonitorInfoW(hMonitor, ref info)) return true;
 
             var r = info.Monitor;
@@ -18,7 +18,7 @@ internal static class WindowsDisplayHelper
                 X: r.Left, Y: r.Top,
                 Width: r.Right - r.Left, Height: r.Bottom - r.Top,
                 DisplayName: null,
-                OutputName: info.DeviceName.TrimEnd('\0'),
+                OutputName: info.DeviceName.ToString(),
                 PlatformId: hMonitor.ToString()));
             return true;
         }, nint.Zero);

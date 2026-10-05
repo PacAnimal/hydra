@@ -1,5 +1,6 @@
 using Hydra.Config;
 using Hydra.Relay;
+using Microsoft.AspNetCore.Connections;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -43,7 +44,7 @@ public class EmbeddedStyxTests
 
             var config = new EmbeddedStyxServerConfig { Port = _port, Password = TestPassword };
             _cts = new CancellationTokenSource();
-            _server = new EmbeddedStyxServer(config, TestLog.CreateLogger<EmbeddedStyxServer>());
+            _server = new EmbeddedStyxServer(config, TestLog.CreateLogger<EmbeddedStyxServer>()) { ThrottleClock = new InstantTimeProvider() };
 
             try
             {
@@ -64,10 +65,16 @@ public class EmbeddedStyxTests
     }
 
     /// <summary>Whether a start failed because something else holds the port — the one thing worth retrying.</summary>
-    private static bool IsPortUnavailable(Exception ex) =>
-        ex is SocketException { SocketErrorCode: SocketError.AddressAlreadyInUse }
-        || ex.InnerException is SocketException { SocketErrorCode: SocketError.AddressAlreadyInUse }
-        || ex is IOException { InnerException: SocketException { SocketErrorCode: SocketError.AddressAlreadyInUse } };
+    private static bool IsPortUnavailable(Exception ex)
+    {
+        // kestrel nests it as IOException -> AddressInUseException -> SocketException
+        for (var e = ex; e != null; e = e.InnerException)
+        {
+            if (e is SocketException { SocketErrorCode: SocketError.AddressAlreadyInUse })
+                return true;
+        }
+        return false;
+    }
 
     [TearDown]
     public async Task TearDown()
@@ -110,11 +117,34 @@ public class EmbeddedStyxTests
 
     // ─── auth ────────────────────────────────────────────────────────────────
 
+    // the embedded host composes its own pipeline, so its auth filter is pinned separately from Styx's
+    [Test]
+    public async Task Send_WithoutAuth_FailsWithException()
+    {
+        await using var client = new TestStyxClient();
+        await client.ConnectRaw(_serverUrl);
+
+        var send = client.Server!.Send(["any-host"], [1, 2, 3]);
+
+        Assert.That(async () => await send, Throws.Exception);
+    }
+
     [Test]
     public async Task Auth_CorrectPassword_Connects()
     {
         await using var client = await ConnectedClient("test-host", await Blob());
         Assert.That(client.IsConnected, Is.True);
+    }
+
+    // the hub's WebSocket must ride a connector socket, or address preference and the per-address timeout skip it
+    [Test]
+    public async Task TheLiveConnectionRidesASocketFromTheRelayConnector()
+    {
+        await using var client = await ConnectedClient("test-host", await Blob());
+
+        client.CloseConnectorSockets();
+
+        await client.WaitForReady();
     }
 
     [Test]
@@ -139,8 +169,7 @@ public class EmbeddedStyxTests
         await using var sender = await ConnectedClient("sender", cfg);
         await using var receiver = await ConnectedClient("receiver", cfg);
 
-        var payload = MessageSerializer.Encode(MessageKind.MouseMove, new MouseMoveMessage("", 42, 99));
-        sender.Send(["receiver"], payload);
+        sender.Send(["receiver"], TestMessages.Move(42, 99));
 
         var (source, kind, json) = await receiver.WaitForMessage();
 
@@ -161,11 +190,11 @@ public class EmbeddedStyxTests
         await using var alpha = await ConnectedClient("alpha", cfg);
         await using var beta = await ConnectedClient("beta", cfg);
 
-        alpha.Send(["beta"], MessageSerializer.Encode(MessageKind.MouseMove, new MouseMoveMessage("", 1, 2)));
+        alpha.Send(["beta"], TestMessages.Move(1, 2));
         var (fromAlpha, _, _) = await beta.WaitForMessage();
         Assert.That(fromAlpha, Is.EqualTo("alpha"));
 
-        beta.Send(["alpha"], MessageSerializer.Encode(MessageKind.MouseMove, new MouseMoveMessage("", 3, 4)));
+        beta.Send(["alpha"], TestMessages.Move(3, 4));
         var (fromBeta, _, _) = await alpha.WaitForMessage();
         Assert.That(fromBeta, Is.EqualTo("beta"));
     }
@@ -239,10 +268,9 @@ public class EmbeddedStyxTests
 
         try { await blocked.StartAsync(cts.Token); } catch { /* the hosted service may surface it here too */ }
 
-        // TWO assertions, because one cannot tell the bug from the fix. `Throws.Exception` around a
-        // `WaitAsync(20s)` is satisfied by the TimeoutException that the bound ITSELF raises — so the test
-        // passes whether readiness faulted or hung, which is exactly the defect it exists to catch. Verified:
-        // with the fault removed, that version still passed.
+        // TWO assertions, because one cannot tell the bug from the fix: `Throws.Exception` around a bounded
+        // wait is satisfied by the TimeoutException the bound itself raises, so it passes whether readiness
+        // faulted or hung.
         var ready = blocked.WaitForReady();
         var settled = await Task.WhenAny(ready, Task.Delay(TimeSpan.FromSeconds(20)));
 
@@ -256,6 +284,20 @@ public class EmbeddedStyxTests
 
         await cts.CancelAsync();
         try { await blocked.StopAsync(CancellationToken.None); } catch { /* best effort */ }
+    }
+
+    // the retry is only as good as this recognising a lost race in the shape kestrel actually throws it
+    [Test]
+    public void IsPortUnavailable_RecognisesKestrelsNestedAddressInUse()
+    {
+        var socket = new SocketException((int)SocketError.AddressAlreadyInUse);
+        var kestrel = new IOException("Failed to bind to address", new AddressInUseException(socket.Message, socket));
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(IsPortUnavailable(kestrel), Is.True);
+            Assert.That(IsPortUnavailable(new IOException("disk on fire")), Is.False);
+        }
     }
 
     private static int FindFreePort()

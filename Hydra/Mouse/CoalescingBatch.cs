@@ -4,9 +4,8 @@ namespace Hydra.Mouse;
 
 // Coalesces a burst of same-kind mouse samples into one pending value while it waits to be delivered:
 // an absolute sample keeps only the latest, a relative one accumulates. One slot, replaced whenever a
-// different Kind arrives. Shared by the three places raw input can arrive faster than it is drained —
-// the local input-processing pipeline, native output injection, and the relay send queue — so a change
-// to the coalescing rule only has one implementation to change.
+// different Kind arrives. Shared by the local input-processing pipeline and native output injection. The
+// relay send queue coalesces with its own MovementBatch, which matches on targets and clamps its sums.
 internal sealed class CoalescingBatch<TKind, TNum>(TKind kind, bool accumulate)
     where TNum : struct, INumber<TNum>
 {

@@ -1,15 +1,19 @@
-using System.Diagnostics;
+using System.Runtime.Versioning;
 
 namespace Hydra.Platform.MacOs;
 
 // CoreAudio is the public API behind macOS's default output volume. It avoids the synthetic
 // NX_SYSDEFINED path, which current macOS releases no longer accept from ordinary user processes.
+[SupportedOSPlatform("macos")]
 internal static class MacAudioController
 {
     private const int KernSuccess = 0;
     private const uint UInt32Size = sizeof(uint);
     private const uint FloatSize = sizeof(float);
     private const float Step = 1f / 16f;
+
+    // this is on the key path, so a stuck script is killed rather than waited on
+    private static readonly TimeSpan AppleScriptTimeout = TimeSpan.FromSeconds(1);
 
     private static readonly AudioObjectPropertyAddress DefaultOutputAddress = new(
         NativeMethods.KAudioHardwarePropertyDefaultOutputDevice,
@@ -73,17 +77,7 @@ internal static class MacAudioController
             + "if nextVolume > 100 then set nextVolume to 100\n"
             + "if nextVolume < 0 then set nextVolume to 0\n"
             + "set volume output volume nextVolume";
-        try
-        {
-            using var process = Process.Start(new ProcessStartInfo
-            {
-                FileName = "/usr/bin/osascript",
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                ArgumentList = { "-e", script.Replace("VOLUME_DELTA", increase ? "6" : "-6") },
-            });
-            return process is not null && process.WaitForExit(1000) && process.ExitCode == 0;
-        }
+        try { return OsaScript.Run(script.Replace("VOLUME_DELTA", increase ? "6" : "-6"), AppleScriptTimeout).Success; }
         catch { return false; }
     }
 }

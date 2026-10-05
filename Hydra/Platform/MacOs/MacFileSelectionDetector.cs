@@ -12,26 +12,26 @@ public sealed class MacFileSelectionDetector : IFileSelectionDetector
     public MacFileSelectionDetector(ILogger<MacFileSelectionDetector> log)
     {
         _log = log;
-        NativeMethods.EnsureAppKitLoaded();
+        NativeHelpers.EnsureAppKitLoaded();
     }
 
     public string FileManagerName => "Finder";
     public bool IsFileTransferSupported => true;
 
-    public FileSelectionResult GetSelectedPaths()
+    public FileSelectionResult GetSelectedPaths(CancellationToken cancel)
     {
         try
         {
-            return RunFinderSelectionScript();
+            return RunFinderSelectionScript(cancel);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogWarning(ex, "Failed to get Finder selection");
-            return new FileSelectionResult(false, null);
+            return FileSelectionResult.Failure;
         }
     }
 
-    private FileSelectionResult RunFinderSelectionScript()
+    private FileSelectionResult RunFinderSelectionScript(CancellationToken cancel)
     {
         // returns "NOT_FOCUSED" when Finder is not the active app; empty string when focused but nothing selected
         const string script = """
@@ -48,11 +48,15 @@ public sealed class MacFileSelectionDetector : IFileSelectionDetector
             end tell
             """;
 
-        var result = OsaScript.Run(script);
+        return FromScriptResult(OsaScript.Run(script, OsaScript.FinderTimeout, cancel), _log);
+    }
+
+    internal static FileSelectionResult FromScriptResult(OsaScript.Result result, ILogger log)
+    {
         if (!result.Success)
         {
-            _log.LogWarning("osascript exited {Code}: {Stderr}", result.ExitCode, result.Stderr.Trim());
-            return new FileSelectionResult(false, null);
+            result.LogFailure(log, LogLevel.Warning);
+            return FileSelectionResult.Failure;
         }
 
         if (result.Stdout.Trim() == "NOT_FOCUSED")

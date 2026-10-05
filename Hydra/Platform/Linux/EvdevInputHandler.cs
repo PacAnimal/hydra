@@ -44,6 +44,8 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
     public ValueTask ShowCursor() => ValueTask.CompletedTask;   // no-op: headless
     public void WarpCursor(int x, int y) { }          // no-op: remote-only uses deltas
 
+    public bool RecentresItself => false;
+
     // evdev is headless/remote-only — no local screen, no OS window snapping to worry about
     public bool AnyMouseButtonHeld() => false;
 
@@ -70,16 +72,18 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
         var xkb = LinuxInputConfig.ResolveXkb();
         _keyResolver?.Dispose();   // a re-tap would otherwise leak the previous xkb context/keymap
         _keyResolver = new EvdevKeyResolver(xkb);
-        log.LogInformation("Keyboard layout: {Layout} model: {Model}{Variant}",
-            xkb.Layout, xkb.Model, xkb.Variant is null ? "" : $" variant: {xkb.Variant}");
+        if (log.IsEnabled(LogLevel.Information))
+            log.LogInformation("Keyboard layout: {Layout} model: {Model}{Variant}",
+                xkb.Layout, xkb.Model, xkb.Variant is null ? "" : $" variant: {xkb.Variant}");
 
         DiscoverDevices();
 
         if (_devices.Count == 0)
             throw new InvalidOperationException("No input devices found in /dev/input/. Check permissions (user may need to be in 'input' group).");
 
-        log.LogInformation("Found {K} keyboard(s), {M} mouse/pointer device(s)",
-            _devices.Count(d => d.Keyboard), _devices.Count(d => d.Pointer));
+        if (log.IsEnabled(LogLevel.Information))
+            log.LogInformation("Found {K} keyboard(s), {M} mouse/pointer device(s)",
+                _devices.Count(d => d.Keyboard), _devices.Count(d => d.Pointer));
 
         _running = true;
         _thread = new Thread(EventLoop) { Name = "HydraEvdevEventLoop", IsBackground = true };
@@ -103,8 +107,8 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
 
         if (_grabbed) SetGrab(false);
         foreach (var device in _devices)
-            _ = EvdevNativeMethods.close(device.Fd);
-        log.LogDebug("Released {Count} input device(s)", _devices.Count);
+            _ = EvdevNativeMethods.Close(device.Fd);
+        if (log.IsEnabled(LogLevel.Debug)) log.LogDebug("Released {Count} input device(s)", _devices.Count);
         _devices.Clear();
         _grabbed = false;
     }
@@ -118,29 +122,29 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
 
         foreach (var path in paths)
         {
-            var fd = EvdevNativeMethods.open(path, EvdevNativeMethods.O_RDONLY | EvdevNativeMethods.O_NONBLOCK | EvdevNativeMethods.O_CLOEXEC);
+            var fd = EvdevNativeMethods.Open(path, EvdevNativeMethods.O_RDONLY | EvdevNativeMethods.O_NONBLOCK | EvdevNativeMethods.O_CLOEXEC);
             if (fd < 0) continue;
 
             // check which event types the device supports
             if (EvdevNativeMethods.ioctl_bit(fd, EvdevNativeMethods.EVIOCGBIT_EV, evTypeBuf) < 0)
             {
-                _ = EvdevNativeMethods.close(fd);
+                _ = EvdevNativeMethods.Close(fd);
                 continue;
             }
 
-            var hasKey = EvdevNativeMethods.TestBit(evTypeBuf, EvdevNativeMethods.EV_KEY);
-            var hasRel = EvdevNativeMethods.TestBit(evTypeBuf, EvdevNativeMethods.EV_REL);
+            var hasKey = TestBit(evTypeBuf, EvdevNativeMethods.EV_KEY);
+            var hasRel = TestBit(evTypeBuf, EvdevNativeMethods.EV_REL);
 
             // keyboard: supports EV_KEY with letter keys
             var isKeyboard = hasKey
                 && EvdevNativeMethods.ioctl_bit(fd, EvdevNativeMethods.EVIOCGBIT_EV_KEY, keyBuf) >= 0
-                && EvdevNativeMethods.TestBit(keyBuf, EvdevNativeMethods.KEY_A);
+                && TestBit(keyBuf, EvdevNativeMethods.KEY_A);
 
             // mouse/pointer: supports EV_REL with X and Y axes
             var isPointer = hasRel
                 && EvdevNativeMethods.ioctl_bit(fd, EvdevNativeMethods.EVIOCGBIT_EV_REL, relBuf) >= 0
-                && EvdevNativeMethods.TestBit(relBuf, EvdevNativeMethods.REL_X)
-                && EvdevNativeMethods.TestBit(relBuf, EvdevNativeMethods.REL_Y);
+                && TestBit(relBuf, EvdevNativeMethods.REL_X)
+                && TestBit(relBuf, EvdevNativeMethods.REL_Y);
 
             // Both tests run and BOTH answers are kept. These roles are not exclusive: a wireless
             // receiver presents one node that reports letter keys and relative axes together, so
@@ -151,19 +155,20 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
             // to make up the numbers.
             if (!isKeyboard && !isPointer)
             {
-                _ = EvdevNativeMethods.close(fd);
+                _ = EvdevNativeMethods.Close(fd);
                 continue;
             }
 
             var scale = isPointer ? LinuxInputConfig.MouseScale(path) : 1.0;
             _devices.Add(new InputDeviceRole(fd, isKeyboard, isPointer, scale));
 
-            if (isPointer && Math.Abs(scale - 1.0) > 0.001)
+            if (isPointer && Math.Abs(scale - 1.0) > 0.001 && log.IsEnabled(LogLevel.Information))
                 log.LogInformation("Mouse {Path}: MOUSE_DPI {Dpi} -> delta scale {Scale:0.##}",
                     path, LinuxInputConfig.MouseDpi(path), scale);
 
-            log.LogDebug("{Role}: {Path}",
-                isKeyboard && isPointer ? "Keyboard+Mouse" : isKeyboard ? "Keyboard" : "Mouse", path);
+            if (log.IsEnabled(LogLevel.Debug))
+                log.LogDebug("{Role}: {Path}",
+                    isKeyboard && isPointer ? "Keyboard+Mouse" : isKeyboard ? "Keyboard" : "Mouse", path);
         }
     }
 
@@ -176,7 +181,7 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
 
         while (_running)
         {
-            var ready = NativeMethods.poll(ref polls[0], (uint)polls.Length, 100);
+            var ready = NativeMethods.Poll(ref polls[0], (uint)polls.Length, 100);
             if (ready <= 0) continue;
 
             for (var i = 0; i < polls.Length; i++)
@@ -187,7 +192,7 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
                 while (true)
                 {
                     var ev = new InputEvent();
-                    var r = EvdevNativeMethods.read(device.Fd, ref ev, (nuint)System.Runtime.InteropServices.Marshal.SizeOf<InputEvent>());
+                    var r = EvdevNativeMethods.Read(device.Fd, ref ev, (nuint)System.Runtime.InteropServices.Marshal.SizeOf<InputEvent>());
                     if (r <= 0) break;
 
                     // Dispatch on the EVENT, not on the device. A combo device delivers keystrokes
@@ -283,6 +288,9 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
         _onMouseButton?.Invoke(new MouseButtonEvent(button, value == 1));
     }
 
+    // reads bit n of an EVIOCGBIT capability bitmap
+    private static bool TestBit(byte[] bits, int n) => n / 8 < bits.Length && (bits[n / 8] & (1 << (n % 8))) != 0;
+
     private void SetGrab(bool grab)
     {
         foreach (var fd in _devices.Select(d => d.Fd))
@@ -293,7 +301,7 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
             // noise rather than a fault. A failed *grab* is worth shouting about: it usually means
             // something else holds the device.
             if (grab) log.LogWarning("EVIOCGRAB(True) failed on fd={Fd} — is another process holding the device?", fd);
-            else log.LogDebug("EVIOCGRAB(False) failed on fd={Fd} (was not grabbed)", fd);
+            else if (log.IsEnabled(LogLevel.Debug)) log.LogDebug("EVIOCGRAB(False) failed on fd={Fd} (was not grabbed)", fd);
         }
     }
 

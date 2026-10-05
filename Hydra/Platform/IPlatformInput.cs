@@ -37,6 +37,13 @@ public interface IPlatformInput : IAsyncDisposable, ICursor, ILocalEventTap
 
     bool AnyMouseButtonHeld();
 
+    // True when the handler recentres the physical cursor itself, per raw sample on its capture thread (Windows).
+    // Windows' delta is two reads of the real, monitor-clamped cursor, so it must recentre every sample, and it
+    // must be per raw sample rather than per batch: a batch-sized reset jump looks like real input to Windows'
+    // pointer acceleration. The router must then never warp as well: its extra SetCursorPos jumps would be
+    // exactly such resets.
+    bool RecentresItself { get; }
+
     // warp the cursor to its park point, first ensuring the cursor shield is actually covering that
     // point so hover/tooltips don't fire at the destination during shield-show latency.
     // default: warp immediately (platforms with no async shield handshake).

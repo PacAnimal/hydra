@@ -1,4 +1,3 @@
-using Hydra.Config;
 using Hydra.Keyboard;
 using Hydra.Relay;
 using Hydra.Screen;
@@ -12,11 +11,12 @@ public class RemoteOnlyTests
     private FakePlatform _platform = null!;
     private FakeRelay _relay = null!;
     private InputRouter _service = null!;
+    private readonly SteppableTicks _ticks = new();
 
     [SetUp]
     public async Task SetUp()
     {
-        (_platform, _relay, _service) = TransitionTestHelper.CreateRemoteOnlyService();
+        (_platform, _relay, _service) = TransitionTestHelper.CreateRemoteOnlyService(getTickCount: _ticks.Now);
         await _service.StartAsync(CancellationToken.None);
     }
 
@@ -44,7 +44,7 @@ public class RemoteOnlyTests
     [Test]
     public async Task DoesNotAutoEnter_WhenRelayDisconnected()
     {
-        _relay.IsConnected = false;
+        _relay.Connected = false;
         await TransitionTestHelper.BringHostOnline(_relay, "mac");
 
         Assert.That(_platform.IsOnVirtualScreen, Is.False, "should not enter when relay disconnected");
@@ -55,7 +55,7 @@ public class RemoteOnlyTests
     {
         await TransitionTestHelper.BringHostOnline(_relay, "mac");
 
-        var enters = _relay.Sent.Where(s => s.Kind == MessageKind.EnterScreen).ToList();
+        var enters = _relay.Snapshot().Where(s => s.Kind == MessageKind.EnterScreen).ToList();
         Assert.That(enters, Is.Not.Empty, "should send EnterScreen on auto-entry");
         Assert.That(enters[0].Targets, Contains.Item("mac"));
     }
@@ -68,11 +68,11 @@ public class RemoteOnlyTests
         await TransitionTestHelper.BringHostOnline(_relay, "mac");
         Assert.That(_platform.IsOnVirtualScreen, Is.True);
 
-        _relay.Sent.Clear();
-        Thread.Sleep(20);  // exceed throttle interval
+        _relay.ClearSent();
+        _ticks.Advance(20); // exceed throttle interval
         _platform.FireMouseDelta(10, 5);
 
-        var moves = _relay.Sent.Where(s => s.Kind is MessageKind.MouseMove or MessageKind.MouseMoveDelta).ToList();
+        var moves = _relay.Snapshot().Where(s => s.Kind is MessageKind.MouseMove or MessageKind.MouseMoveDelta).ToList();
         Assert.That(moves, Is.Not.Empty, "delta should produce a mouse send");
     }
 
@@ -86,10 +86,10 @@ public class RemoteOnlyTests
             KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Super));
         Assert.That(_platform.IsOnVirtualScreen, Is.False, "pre-condition: not on virtual screen");
 
-        _relay.Sent.Clear();
+        _relay.ClearSent();
         _platform.FireMouseDelta(100, 0);
 
-        var moves = _relay.Sent.Where(s => s.Kind is MessageKind.MouseMove or MessageKind.MouseMoveDelta).ToList();
+        var moves = _relay.Snapshot().Where(s => s.Kind is MessageKind.MouseMove or MessageKind.MouseMoveDelta).ToList();
         Assert.That(moves, Is.Empty, "delta should be ignored when not on virtual screen");
     }
 
@@ -138,12 +138,12 @@ public class RemoteOnlyTests
     public async Task LockHotkey_SendsLeaveScreen_OnUnlock()
     {
         await TransitionTestHelper.BringHostOnline(_relay, "mac");
-        _relay.Sent.Clear();
+        _relay.ClearSent();
 
         _platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyDown, 'l',
             KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Super));
 
-        var leaves = _relay.Sent.Where(s => s.Kind == MessageKind.LeaveScreen).ToList();
+        var leaves = _relay.Snapshot().Where(s => s.Kind == MessageKind.LeaveScreen).ToList();
         Assert.That(leaves, Is.Not.Empty, "should send LeaveScreen on unlock");
     }
 
@@ -203,59 +203,37 @@ public class RemoteOnlyTests
     [Test]
     public async Task MouseDelta_TransitionsToNeighborHost()
     {
-        var config = TransitionTestHelper.Profile("pi", new HydraConfig
-        {
-            Mode = Mode.Master,
-            RemoteOnly = true,
-            Hosts =
-            [
-                new HostConfig { Name = "mac", Neighbours = [new NeighbourConfig { Direction = Direction.Right, Name = "win" }] },
-                new HostConfig { Name = "win", Neighbours = [new NeighbourConfig { Direction = Direction.Left, Name = "mac" }] },
-            ],
-        });
-
         await _service.StopAsync(CancellationToken.None);
-        (_platform, _relay, _service) = TransitionTestHelper.CreateRemoteOnlyService(config);
+        (_platform, _relay, _service) = TransitionTestHelper.CreateRemoteOnlyService(TransitionTestHelper.RemoteOnlyPairConfig);
         await _service.StartAsync(CancellationToken.None);
 
         await TransitionTestHelper.BringHostsOnline(_relay, ["mac", "win"]);
         Assert.That(_platform.IsOnVirtualScreen, Is.True, "pre-condition: on mac");
 
-        _relay.Sent.Clear();
+        _relay.ClearSent();
 
         // push delta far enough right to hit the edge of mac (2560 wide) and cross to win
         for (var i = 0; i < 30; i++)
             _platform.FireMouseDelta(100, 0);
 
-        var enters = _relay.Sent.Where(s => s.Kind == MessageKind.EnterScreen).ToList();
+        var enters = _relay.Snapshot().Where(s => s.Kind == MessageKind.EnterScreen).ToList();
         Assert.That(enters.Any(e => e.Targets.Contains("win")), Is.True, "should send EnterScreen to 'win' after crossing edge");
     }
 
     [Test]
     public async Task MouseDelta_SendsLeaveScreen_WhenCrossingToNewHost()
     {
-        var config = TransitionTestHelper.Profile("pi", new HydraConfig
-        {
-            Mode = Mode.Master,
-            RemoteOnly = true,
-            Hosts =
-            [
-                new HostConfig { Name = "mac", Neighbours = [new NeighbourConfig { Direction = Direction.Right, Name = "win" }] },
-                new HostConfig { Name = "win", Neighbours = [new NeighbourConfig { Direction = Direction.Left, Name = "mac" }] },
-            ],
-        });
-
         await _service.StopAsync(CancellationToken.None);
-        (_platform, _relay, _service) = TransitionTestHelper.CreateRemoteOnlyService(config);
+        (_platform, _relay, _service) = TransitionTestHelper.CreateRemoteOnlyService(TransitionTestHelper.RemoteOnlyPairConfig);
         await _service.StartAsync(CancellationToken.None);
 
         await TransitionTestHelper.BringHostsOnline(_relay, ["mac", "win"]);
-        _relay.Sent.Clear();
+        _relay.ClearSent();
 
         for (var i = 0; i < 30; i++)
             _platform.FireMouseDelta(100, 0);
 
-        var leaves = _relay.Sent.Where(s => s.Kind == MessageKind.LeaveScreen && s.Targets.Contains("mac")).ToList();
+        var leaves = _relay.Snapshot().Where(s => s.Kind == MessageKind.LeaveScreen && s.Targets.Contains("mac")).ToList();
         Assert.That(leaves, Is.Not.Empty, "should send LeaveScreen to 'mac' when crossing to 'win'");
     }
 

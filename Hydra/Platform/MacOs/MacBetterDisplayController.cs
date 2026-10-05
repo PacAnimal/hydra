@@ -17,10 +17,10 @@ internal static class MacBetterDisplayController
         // BetterDisplay interprets percentage values as relative offsets, and with only the mini's
         // main display selected it chooses its configured combined/hardware/software route itself.
         var offset = increase ? "+5%" : "-5%";
-        var request = NativeMethods.MakeNsString(
+        var request = NativeHelpers.MakeNsString(
             "{\"commands\":[\"set\"],\"parameters\":{\"brightness\":\"" + offset
             + "\",\"offset\":null,\"displayWithMainStatus\":null}}");
-        var name = NativeMethods.MakeNsString(RequestName);
+        var name = NativeHelpers.MakeNsString(RequestName);
         try
         {
             NativeMethods.CFNotificationCenterPostNotification(Center, name, request, nint.Zero, 1);

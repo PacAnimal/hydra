@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text;
+using Cathedral.Extensions;
 using Hydra.Relay;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -35,7 +36,7 @@ internal sealed class RemoteManagementService(
     {
         var (controllerId, controllerSecret) = await store.CreateTargetCredentialAsync(cancel);
         var payload = new RemotePairPayload(pair.PairingCode, controllerSecret);
-        var response = await InvokeAsync(pair.Host, controllerId, pair.PairingCode, "pair", payload, controllerSecret, cancel);
+        var response = await InvokeAsync(pair.Host, controllerId, pair.PairingCode, RemoteOperations.Pair, payload, controllerSecret, cancel);
         var result = ManagementJson.Deserialize<RemotePairResult>(response);
         if (result.Paired)
             await store.SaveTargetAsync(pair.Host, controllerSecret, cancel);
@@ -44,26 +45,26 @@ internal sealed class RemoteManagementService(
 
     internal async Task<RemoteConfigDocument> GetConfigAsync(string host, CancellationToken cancel)
     {
-        var response = await InvokeAuthorizedAsync(host, "config.get", new { }, cancel);
+        var response = await InvokeAuthorizedAsync(host, RemoteOperations.ConfigGet, new { }, cancel);
         return ManagementJson.Deserialize<RemoteConfigDocument>(response) with { Host = host };
     }
 
     internal async Task<ConfigValidation> ValidateConfigAsync(RemoteValidateRequest request, CancellationToken cancel)
     {
-        var response = await InvokeAuthorizedAsync(request.Host, "config.validate", request.Json, cancel);
+        var response = await InvokeAuthorizedAsync(request.Host, RemoteOperations.ConfigValidate, request.Json, cancel);
         return ManagementJson.Deserialize<ConfigValidation>(response);
     }
 
     internal async Task<RemoteApplyAccepted> ApplyConfigAsync(RemoteApplyRequest request, CancellationToken cancel)
     {
-        var response = await InvokeAuthorizedAsync(request.Host, "config.apply",
+        var response = await InvokeAuthorizedAsync(request.Host, RemoteOperations.ConfigApply,
             new RemoteApplyPayload(request.ExpectedRevision, request.Json), cancel);
         return ManagementJson.Deserialize<RemoteApplyAccepted>(response);
     }
 
     internal async Task ConfirmConfigAsync(RemoteConfirmRequest request, CancellationToken cancel)
     {
-        _ = await InvokeAuthorizedAsync(request.Host, "config.confirm",
+        _ = await InvokeAuthorizedAsync(request.Host, RemoteOperations.ConfigConfirm,
             new RemoteConfirmPayload(request.TransactionId, request.ExpectedRevision), cancel);
     }
 
@@ -122,10 +123,14 @@ internal sealed class RemoteManagementService(
     {
         RemoteWireResponse response;
         try { response = ManagementJson.Deserialize<RemoteWireResponse>(Encoding.UTF8.GetString(body.Span)); }
-        catch (Exception ex) { log.LogDebug(ex, "Invalid remote-management response from {Host}", sourceHost); return Task.CompletedTask; }
+        catch (Exception ex)
+        {
+            if (log.IsEnabled(LogLevel.Debug)) log.LogDebug(ex, "Invalid remote-management response from {Host}", sourceHost);
+            return Task.CompletedTask;
+        }
 
         if (!_pending.TryGetValue(response.RequestId, out var pending)
-            || !pending.Host.Equals(sourceHost, StringComparison.OrdinalIgnoreCase)
+            || !pending.Host.EqualsIgnoreCase(sourceHost)
             || response.Version != RemoteManagementProtocol.Version
             || !Fresh(response.TimestampUnixMs)
             || !RemoteManagementCrypto.VerifyResponse(response, pending.ResponseSecret))
@@ -138,13 +143,17 @@ internal sealed class RemoteManagementService(
     {
         RemoteWireRequest request;
         try { request = ManagementJson.Deserialize<RemoteWireRequest>(Encoding.UTF8.GetString(body.Span)); }
-        catch (Exception ex) { log.LogDebug(ex, "Invalid remote-management request from {Host}", sourceHost); return; }
+        catch (Exception ex)
+        {
+            if (log.IsEnabled(LogLevel.Debug)) log.LogDebug(ex, "Invalid remote-management request from {Host}", sourceHost);
+            return;
+        }
 
         if (request.Version != RemoteManagementProtocol.Version || !Fresh(request.TimestampUnixMs))
             return;
 
         string? secret;
-        if (request.Operation == "pair")
+        if (request.Operation == RemoteOperations.Pair)
         {
             RemotePairPayload pair;
             try { pair = ManagementJson.Deserialize<RemotePairPayload>(request.Json); }
@@ -171,15 +180,15 @@ internal sealed class RemoteManagementService(
         {
             var json = request.Operation switch
             {
-                "pair" => ManagementJson.Serialize(new RemotePairResult(true, $"Paired with {sourceHost}.")),
-                "config.get" => ManagementJson.Serialize(await ReadMaskedConfig(sourceHost)),
-                "config.validate" => ManagementJson.Serialize(await ValidateMaskedConfig(request.Json)),
-                "config.apply" => ManagementJson.Serialize(await BeginApply(request.Json)),
-                "config.confirm" => await ConfirmApply(request.Json),
+                RemoteOperations.Pair => ManagementJson.Serialize(new RemotePairResult(true, $"Paired with {sourceHost}.")),
+                RemoteOperations.ConfigGet => ManagementJson.Serialize(await ReadMaskedConfig(sourceHost)),
+                RemoteOperations.ConfigValidate => ManagementJson.Serialize(await ValidateMaskedConfig(request.Json)),
+                RemoteOperations.ConfigApply => ManagementJson.Serialize(await BeginApply(request.Json)),
+                RemoteOperations.ConfigConfirm => await ConfirmApply(request.Json),
                 _ => throw new InvalidOperationException($"Unsupported remote operation '{request.Operation}'.")
             };
             await SendResponse(sourceHost, request.RequestId, secret, true, json, null);
-            if (request.Operation == "config.apply") lifetime.RestartAfterResponse();
+            if (request.Operation == RemoteOperations.ConfigApply) lifetime.RestartAfterResponse();
         }
         catch (Exception ex)
         {

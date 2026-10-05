@@ -6,7 +6,7 @@ using Microsoft.Win32.SafeHandles;
 namespace Hydra.Platform.Windows;
 
 [SupportedOSPlatform("windows")]
-internal sealed class SessionWatchdog(ILogger<SessionWatchdog> log)
+internal sealed class SessionWatchdog(ILogger<SessionWatchdog> log, string childArguments)
     : SimpleHostedService(log, TimeSpan.FromMilliseconds(500))
 {
     private uint _lastSession = Win32Session.NoSession;
@@ -21,7 +21,7 @@ internal sealed class SessionWatchdog(ILogger<SessionWatchdog> log)
     protected override async Task Execute(CancellationToken cancel)
     {
         // lazy init so event exists before the child process is launched
-        _stopEvent ??= Win32Session.CreateGlobalEvent("HydraSessionStop", manualReset: true);
+        _stopEvent ??= Win32Session.CreateGlobalEvent(SessionChildLifetime.StopEventName, manualReset: true);
 
         var session = Win32Session.GetActiveConsoleSessionId();
 
@@ -29,7 +29,7 @@ internal sealed class SessionWatchdog(ILogger<SessionWatchdog> log)
         {
             if (_lastSession != Win32Session.NoSession)
             {
-                log.LogInformation("Session changed {Old} → {New}, restarting child", _lastSession, session);
+                if (log.IsEnabled(LogLevel.Information)) log.LogInformation("Session changed {Old} → {New}, restarting child", _lastSession, session);
                 await StopChildAsync();
             }
             _lastSession = session;
@@ -76,10 +76,10 @@ internal sealed class SessionWatchdog(ILogger<SessionWatchdog> log)
         var exe = Environment.ProcessPath!;
         try
         {
-            var child = Win32Session.LaunchInSession(session, exe, "--session");
+            var child = Win32Session.LaunchInSession(session, exe, childArguments);
             lock (_child) { _child.Value = child; }
             _childStartedAt = DateTime.UtcNow;
-            log.LogInformation("Child launched in session {Session} (PID {Pid})", session, child.Pid);
+            if (log.IsEnabled(LogLevel.Information)) log.LogInformation("Child launched in session {Session} (PID {Pid})", session, child.Pid);
         }
         catch (Exception ex)
         {

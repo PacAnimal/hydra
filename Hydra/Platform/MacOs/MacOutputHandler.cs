@@ -1,4 +1,4 @@
-using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
 using Hydra.Keyboard;
 using Hydra.Mouse;
 using Hydra.Relay;
@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform.MacOs;
 
+[SupportedOSPlatform("macos")]
 public sealed class MacOutputHandler : IPlatformOutput, ICursor
 {
     private readonly ILogger<MacOutputHandler> _log;
@@ -40,8 +41,6 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
     private CFNotificationCallback? _layoutChangeCallback;  // keep-alive to prevent GC
     private readonly nint _layoutNotificationCenter;
 
-    // ReSharper disable once ConvertToPrimaryConstructor
-#pragma warning disable IDE0290
     public MacOutputHandler(ILogger<MacOutputHandler> log)
     {
         _log = log;
@@ -56,19 +55,13 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
                 _charToVk = BuildCharToVkMap();
                 _asciiCharToVk = BuildCharToVkMap(asciiCapable: true);
             };
-            var name = NativeMethods.MakeNsString("com.apple.Carbon.TISNotifySelectedKeyboardInputSourceChanged");
+            var name = NativeHelpers.MakeNsString("com.apple.Carbon.TISNotifySelectedKeyboardInputSourceChanged");
             NativeMethods.CFNotificationCenterAddObserver(_layoutNotificationCenter, 1, _layoutChangeCallback, name, nint.Zero,
                 NativeMethods.CFNotificationSuspensionBehaviorDeliverImmediately);
             NativeMethods.CFRelease(name);
         }
         GetHidConnection();
     }
-#pragma warning restore IDE0290
-
-    // mach_task_self_ is a global variable in libSystem — read it by dereferencing the export address,
-    // NOT by calling it as a function (calling a data segment address as code causes a crash).
-    private static readonly uint MachTaskSelf = (uint)Marshal.ReadInt32(
-        NativeLibrary.GetExport(NativeLibrary.Load("/usr/lib/libSystem.B.dylib"), "mach_task_self_"));
 
     // combined session state source — used only for keyboard CGEvent fallback paths.
     // mouse events use nint.Zero (null source) so system UI does not filter them as synthetic.
@@ -139,7 +132,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
         // unicode repeat routing applies only when the master opts in (UnicodeKeyRepeat). when disabled,
         // a repeat falls through to the physical-key path below — the legacy re-press behaviour.
         var isRepeat = msg.IsRepeat && msg.UnicodeKeyRepeat;
-        var flags = MapModifiersToFlags(msg.Modifiers);
+        var flags = MacKeyResolver.MapModifiersToFlags(msg.Modifiers);
 
         if (msg.Key is { } key && key.IsModifier())
         {
@@ -252,8 +245,8 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
                 HandleMediaKeyWithLegacyFallback(key2, isDown, () => _mediaRemote.TrySend(key2));
             // media keys require NX_SYSDEFINED injection via NSEvent — regular NX_KEYDOWN with the VK
             // produces wrong results (volume VKs hit wrong keys in the regular keycode space).
-            else if (GetNxMediaKeyType(key2) is >= 0 and var nxType)
-                PostNsMediaKey((uint)nxType, isDown);
+            else if (MacMediaKeyMap.TryGetNxKeyType(key2, out var nxType))
+                PostNsMediaKey(nxType, isDown);
             else if (MacSpecialKeyMap.OutputOverrides.TryGetValue(key2, out var ovr))
                 PostCgKey(ovr.Vk, isDown, flags | ovr.ExtraFlags);
             else if (MacSpecialKeyMap.Instance.Reverse.TryGetValue(key2, out var vk))
@@ -390,15 +383,15 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
     {
         if (isDown)
         {
-            if (!tryApi() && GetNxMediaKeyType(key) is >= 0 and var nxType)
+            if (!tryApi() && MacMediaKeyMap.TryGetNxKeyType(key, out var nxType))
             {
                 _legacyMediaKeysDown.Add(key);
-                PostNsMediaKey((uint)nxType, true);
+                PostNsMediaKey(nxType, true);
             }
         }
-        else if (_legacyMediaKeysDown.Remove(key) && GetNxMediaKeyType(key) is >= 0 and var nxType)
+        else if (_legacyMediaKeysDown.Remove(key) && MacMediaKeyMap.TryGetNxKeyType(key, out var nxType))
         {
-            PostNsMediaKey((uint)nxType, false);
+            PostNsMediaKey(nxType, false);
         }
     }
 
@@ -407,7 +400,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
     // volume, brightness, eject, play/next/prev — regular NX_KEYDOWN with the VK code misroutes.
     private static void PostNsMediaKey(uint keyType, bool isDown)
     {
-        NativeMethods.EnsureAppKitLoaded();
+        NativeHelpers.EnsureAppKitLoaded();
 
         // data1: high 16 bits = NX_KEYTYPE, bits 8–15 = 0x0a (down) or 0x0b (up)
         var data1 = (nint)((keyType << 16) | (isDown ? 0x0a00u : 0x0b00u));
@@ -429,21 +422,6 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
         if (cgEventRef == nint.Zero) return;
         NativeMethods.CGEventPost(NativeMethods.KCGHidEventTap, cgEventRef);
     }
-
-    // maps media SpecialKeys to NX_KEYTYPE_* constants (ev_keymap.h); returns -1 for non-media keys.
-    private static int GetNxMediaKeyType(SpecialKey key) => key switch
-    {
-        SpecialKey.AudioVolumeUp => (int)NativeMethods.NXKeytypeSoundUp,
-        SpecialKey.AudioVolumeDown => (int)NativeMethods.NXKeytypeSoundDown,
-        SpecialKey.AudioMute => (int)NativeMethods.NXKeytypeMute,
-        SpecialKey.AudioPlay => (int)NativeMethods.NXKeytypePlay,
-        SpecialKey.AudioNext => (int)NativeMethods.NXKeytypeNext,
-        SpecialKey.AudioPrev => (int)NativeMethods.NXKeytypePrevious,
-        SpecialKey.BrightnessUp => (int)NativeMethods.NXKeytypeBrightnessUp,
-        SpecialKey.BrightnessDown => (int)NativeMethods.NXKeytypeBrightnessDown,
-        SpecialKey.Eject => (int)NativeMethods.NXKeytypeEject,
-        _ => -1,
-    };
 
     // lazy-init IOKit HID driver connection. mirrors deskflow's getEventDriver().
     private uint GetHidConnection()
@@ -472,7 +450,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
             return 0;
         }
 
-        var kr = NativeMethods.IOServiceOpen(service, MachTaskSelf, NativeMethods.KIoHidParamConnectType, out var conn);
+        var kr = NativeMethods.IOServiceOpen(service, NativeMethods.MachTaskSelf, NativeMethods.KIoHidParamConnectType, out var conn);
         _ = NativeMethods.IOObjectRelease(service);
         if (kr != 0)
         {
@@ -480,7 +458,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
             return 0;
         }
 
-        _log.LogInformation("IOKit HID connection established (conn={Conn})", conn);
+        if (_log.IsEnabled(LogLevel.Information)) _log.LogInformation("IOKit HID connection established (conn={Conn})", conn);
         _hidConnection = conn;
         return _hidConnection;
     }
@@ -500,8 +478,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
     // returns the extra event flags that macOS hardware events carry for certain vk codes.
     // fn-row keys (ForwardDelete, Home/End/PageUp/PageDown, Help, F1-F20) carry kCGEventFlagMaskSecondaryFn.
     // numpad keys carry kCGEventFlagMaskNumericPad so that apps checking NSEventModifierFlagNumericPad work.
-    // ReSharper disable once RedundantCast
-    private static ulong FnFlagForVk(ushort vk) => (ulong)vk switch
+    private static ulong FnFlagForVk(ulong vk) => vk switch
     {
         MacVirtualKey.ForwardDelete or
         MacVirtualKey.Home or MacVirtualKey.End or
@@ -584,7 +561,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
 
         try
         {
-            var layoutData = NativeMethods.TISGetInputSourceProperty(layoutSource, LoadTisPropertyKey());
+            var layoutData = NativeMethods.TISGetInputSourceProperty(layoutSource, NativeMethods.KTISPropertyUnicodeKeyLayoutData);
             if (layoutData == nint.Zero) return map;
 
             var layoutPtr = NativeMethods.CFDataGetBytePtr(layoutData);
@@ -632,31 +609,6 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
         }
 
         return map;
-    }
-
-    private static nint LoadTisPropertyKey()
-    {
-        var carbon = NativeLibrary.Load(
-            "/System/Library/Frameworks/Carbon.framework/Carbon");
-        return Marshal.ReadIntPtr(
-            NativeLibrary.GetExport(carbon, "kTISPropertyUnicodeKeyLayoutData"));
-    }
-
-    // reverse of MacKeyResolver.MapModifiers(): KeyModifiers → CGEventFlags.
-    // note: KeyModifiers.NumLock is NOT mapped to kCGEventFlagMaskNumericPad here.
-    // on Linux, NumLock is a system-wide lock state present on all key events.
-    // on macOS, kCGEventFlagMaskNumericPad means "this key is a numpad key" — a per-key identity.
-    // injecting it on regular keys (e.g. 'a') causes Chromium-based apps to reject the event.
-    internal static ulong MapModifiersToFlags(KeyModifiers mods)
-    {
-        ulong flags = 0;
-        if ((mods & KeyModifiers.Shift) != 0) flags |= NativeMethods.KCGEventFlagMaskShift;
-        if ((mods & KeyModifiers.Control) != 0) flags |= NativeMethods.KCGEventFlagMaskControl;
-        if ((mods & KeyModifiers.Alt) != 0) flags |= NativeMethods.KCGEventFlagMaskAlternate;
-        if ((mods & KeyModifiers.Super) != 0) flags |= NativeMethods.KCGEventFlagMaskCommand;
-        if ((mods & KeyModifiers.CapsLock) != 0) flags |= NativeMethods.KCGEventFlagMaskAlphaShift;
-        if ((mods & KeyModifiers.AltGr) != 0) flags |= NativeMethods.KCGEventFlagMaskAlternate;
-        return flags;
     }
 
     // [NSEvent doubleClickInterval] — system double-click threshold in seconds
@@ -713,10 +665,10 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
 
     public bool IsAccessibilityTrusted()
     {
-        if (NativeMethods.PollAccessibilityTrusted()) return true;
-        return NativeMethods.ShowAccessibilityPrompt();
+        if (NativeHelpers.PollAccessibilityTrusted()) return true;
+        return NativeHelpers.ShowAccessibilityPrompt();
     }
-    public Task WaitForAccessibilityTrusted(CancellationToken cancel) => NativeMethods.WaitForAccessibilityTrusted(cancel);
+    public Task WaitForAccessibilityTrusted(CancellationToken cancel) => NativeHelpers.WaitForAccessibilityTrusted(cancel);
 
     public (int X, int Y)? GetCursorPosition()
     {
@@ -730,7 +682,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
     public ValueTask HideCursor()
     {
         if (_cursorHidden) return ValueTask.CompletedTask;
-        NativeMethods.EnableBackgroundCursorManipulation();
+        NativeHelpers.EnableBackgroundCursorManipulation();
         var err = NativeMethods.CGDisplayHideCursor(_display);
         if (err != 0) _log.LogWarning("CGDisplayHideCursor failed (error {Error})", err);
         _cursorHidden = true;
@@ -740,7 +692,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
     public ValueTask ShowCursor()
     {
         if (!_cursorHidden) return ValueTask.CompletedTask;
-        NativeMethods.EnableBackgroundCursorManipulation();
+        NativeHelpers.EnableBackgroundCursorManipulation();
         _ = NativeMethods.CGDisplayShowCursor(_display);
         _cursorHidden = false;
         return ValueTask.CompletedTask;
@@ -750,7 +702,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
     {
         if (_layoutNotificationCenter != nint.Zero)
         {
-            var name = NativeMethods.MakeNsString("com.apple.Carbon.TISNotifySelectedKeyboardInputSourceChanged");
+            var name = NativeHelpers.MakeNsString("com.apple.Carbon.TISNotifySelectedKeyboardInputSourceChanged");
             NativeMethods.CFNotificationCenterRemoveObserver(_layoutNotificationCenter, 1, name, nint.Zero);
             NativeMethods.CFRelease(name);
             _layoutChangeCallback = null;

@@ -1,6 +1,7 @@
 using Hydra.Config;
 using Hydra.Relay;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 using Tests.Setup;
 
 namespace Tests.Relay;
@@ -44,14 +45,14 @@ public class RelayWakeRetryTests
     }
 
     [Test]
-    public async Task ExpiredWakeWindow_ReturnsToNormalRetryAfterEarlierFastObservation()
+    public void ExpiredWakeWindow_ReturnsToNormalRetryAfterEarlierFastObservation()
     {
         var relay = new WakeDelayRelay(TimeSpan.Zero, TimeSpan.FromMilliseconds(20));
 
         relay.BeginSystemWake(1);
         Assert.That(relay.Delay, Is.EqualTo(TimeSpan.FromSeconds(1)));
 
-        await Task.Delay(TimeSpan.FromMilliseconds(100));
+        relay.Clock.Advance(TimeSpan.FromMilliseconds(100));
 
         Assert.That(relay.Delay, Is.EqualTo(TimeSpan.FromSeconds(15)));
     }
@@ -107,9 +108,12 @@ public class RelayWakeRetryTests
         protected override TimeSpan EarlySystemWakeReconnectWindow =>
             earlyWindow ?? TimeSpan.FromHours(1);
         protected override TimeSpan SystemWakeReconnectGracePeriod => grace;
+        protected override TimeProvider WakeClock => Clock;
+        internal FakeTimeProvider Clock { get; } = new();
         internal TimeSpan Delay => CurrentReconnectDelay();
         internal bool Suspended => ConnectionSuspended;
         internal Task WaitForDelay(TimeSpan delay) =>
             DelayBeforeReconnect(delay, WakeStateVersion, CancellationToken.None);
     }
+
 }

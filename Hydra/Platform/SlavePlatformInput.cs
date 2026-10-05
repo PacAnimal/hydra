@@ -19,6 +19,7 @@ internal sealed class SlavePlatformInput(ICursor cursor) : IPlatformInput
         => Task.CompletedTask;
     public void StopEventTap() { }
     public bool IsAccessibilityTrusted() => true;
+    public bool RecentresItself => false;
     public bool AnyMouseButtonHeld() => false;
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }

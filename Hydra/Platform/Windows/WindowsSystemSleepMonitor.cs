@@ -10,7 +10,6 @@ internal sealed class WindowsSystemSleepMonitor(
     SystemSleepCoordinator coordinator,
     ILogger<WindowsSystemSleepMonitor> log) : IHostedService, IDisposable
 {
-    private static readonly TimeSpan RelayCloseTimeout = TimeSpan.FromSeconds(5);
     private readonly Lock _callbackLock = new();
     private readonly ManualResetEventSlim _callbacksDrained = new(initialState: true);
     private bool _subscribed;
@@ -44,8 +43,7 @@ internal sealed class WindowsSystemSleepMonitor(
         {
             if (args.Mode == PowerModes.Suspend)
             {
-                using var timeout = new CancellationTokenSource(RelayCloseTimeout);
-                coordinator.PrepareForSleepAsync(timeout.Token).GetAwaiter().GetResult();
+                coordinator.PrepareForSleepBlocking();
             }
             else if (args.Mode == PowerModes.Resume)
             {
@@ -75,7 +73,7 @@ internal sealed class WindowsSystemSleepMonitor(
                 _subscribed = false;
             }
         }
-        _callbacksDrained.Wait(RelayCloseTimeout + TimeSpan.FromSeconds(1), cancellationToken);
+        _callbacksDrained.Wait(SystemSleepCoordinator.RelayCloseTimeout + TimeSpan.FromSeconds(1), cancellationToken);
         return Task.CompletedTask;
     }
 

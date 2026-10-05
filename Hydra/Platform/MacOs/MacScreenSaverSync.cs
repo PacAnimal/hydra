@@ -41,7 +41,7 @@ public sealed class MacScreenSaverSync : SimpleHostedService, IScreenSaverSync
         _callback = (_, _, name, _, _) =>
         {
             // resolve CFStringRef name to a managed string for comparison
-            var str = NativeMethods.CfStringToManaged(name) ?? "";
+            var str = NativeHelpers.CfStringToManaged(name) ?? "";
             if (str == DidStart)
             {
                 _log.LogInformation("Screensaver started (notification received)");
@@ -54,8 +54,8 @@ public sealed class MacScreenSaverSync : SimpleHostedService, IScreenSaverSync
             }
         };
 
-        var nameStart = NativeMethods.MakeNsString(DidStart);
-        var nameStop = NativeMethods.MakeNsString(DidStop);
+        var nameStart = NativeHelpers.MakeNsString(DidStart);
+        var nameStop = NativeHelpers.MakeNsString(DidStop);
 
         // use a stable observer pointer (1 / 2) to distinguish the two registrations on removal
         NativeMethods.CFNotificationCenterAddObserver(_center, 1, _callback, nameStart, nint.Zero,
@@ -72,8 +72,8 @@ public sealed class MacScreenSaverSync : SimpleHostedService, IScreenSaverSync
         if (_center == nint.Zero) return Task.CompletedTask;
         _log.LogInformation("Stopped watching for screensaver notifications");
 
-        var nameStart = NativeMethods.MakeNsString(DidStart);
-        var nameStop = NativeMethods.MakeNsString(DidStop);
+        var nameStart = NativeHelpers.MakeNsString(DidStart);
+        var nameStop = NativeHelpers.MakeNsString(DidStop);
         NativeMethods.CFNotificationCenterRemoveObserver(_center, 1, nameStart, nint.Zero);
         NativeMethods.CFNotificationCenterRemoveObserver(_center, 2, nameStop, nint.Zero);
         NativeMethods.CFRelease(nameStart);
@@ -98,7 +98,7 @@ public sealed class MacScreenSaverSync : SimpleHostedService, IScreenSaverSync
             rootEntry = NativeMethods.IORegistryGetRootEntry(0);
             if (rootEntry == 0) return false;
 
-            consoleUsersKey = NativeMethods.MakeNsString("IOConsoleUsers");
+            consoleUsersKey = NativeHelpers.MakeNsString("IOConsoleUsers");
             consoleUsersArray = NativeMethods.IORegistryEntryCreateCFProperty(rootEntry, consoleUsersKey, nint.Zero, 0);
             if (consoleUsersArray == nint.Zero) return false;
 
@@ -107,7 +107,7 @@ public sealed class MacScreenSaverSync : SimpleHostedService, IScreenSaverSync
             var userDict = NativeMethods.CFArrayGetValueAtIndex(consoleUsersArray, 0);
             if (userDict == nint.Zero) return false;
 
-            screenLockedKey = NativeMethods.MakeNsString("CGSSessionScreenIsLocked");
+            screenLockedKey = NativeHelpers.MakeNsString("CGSSessionScreenIsLocked");
             var lockedRef = NativeMethods.CFDictionaryGetValue(userDict, screenLockedKey);
             if (lockedRef == nint.Zero) return false;
 
@@ -190,7 +190,7 @@ public sealed class MacScreenSaverSync : SimpleHostedService, IScreenSaverSync
     {
         // ResetIdleTimer's synthetic HID event alone does not power a slept display back on — that needs
         // IOPMAssertionDeclareUserActivity. Do both: wake the panel, then poke the idle timer so it stays on.
-        var name = NativeMethods.MakeNsString("Hydra remote input");
+        var name = NativeHelpers.MakeNsString("Hydra remote input");
         var result = NativeMethods.IOPMAssertionDeclareUserActivity(name, NativeMethods.KIOPMUserActiveLocal, out _);
         NativeMethods.CFRelease(name);
         if (result != 0) _log.LogWarning("IOPMAssertionDeclareUserActivity failed ({Result})", result);

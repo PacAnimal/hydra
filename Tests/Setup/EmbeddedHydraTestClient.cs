@@ -1,3 +1,6 @@
+using System.Collections.Concurrent;
+using System.Net;
+using System.Net.Sockets;
 using System.Text;
 using Hydra.Config;
 using Hydra.Relay;
@@ -16,11 +19,25 @@ public sealed class EmbeddedHydraTestClient(IHydraProfile profile)
     private readonly SemaphoreSlim _receiveSignal = new(0);
     private readonly SemaphoreSlim _kickSignal = new(0);
 
+    private readonly ConcurrentQueue<Socket> _connectorSockets = new();
     private volatile string[] _lastPeers = [];
     private (string Source, MessageKind Kind, string Json)? _lastMessage;
     private string? _kickReason;
 
     protected override TimeSpan ReconnectDelay => TimeSpan.Zero;
+
+    protected override async Task<Socket> ConnectRelaySocket(DnsEndPoint target, CancellationToken cancel)
+    {
+        var socket = await base.ConnectRelaySocket(target, cancel);
+        _connectorSockets.Enqueue(socket);
+        return socket;
+    }
+
+    // closes every socket the relay's connector has opened so far
+    public void CloseConnectorSockets()
+    {
+        while (_connectorSockets.TryDequeue(out var socket)) socket.Dispose();
+    }
 
     protected override Task OnAuthenticated() { _readySignal.Release(); return Task.CompletedTask; }
 

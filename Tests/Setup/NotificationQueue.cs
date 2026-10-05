@@ -13,6 +13,9 @@ public sealed class NotificationQueue<T>
 
     public void Push(T item) => _channel.Writer.TryWrite(item);
 
+    // pushed but not yet read
+    public int Count => _channel.Reader.Count;
+
     public async Task<T> Next(int timeoutMs, string what)
     {
         using var cancel = new CancellationTokenSource(timeoutMs);
