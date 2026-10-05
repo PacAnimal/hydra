@@ -29,14 +29,29 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" == "push" ]; then
             latest=$(gh release list --limit 1 --json tagName --jq '.[0].tagName // empty')
-            patch=$(echo "$latest" | sed 's/^v\?0\.1\.//')
+            patch="${latest#v}"
+            patch="${patch#0.1.}"
             echo "version=0.1.$((patch + 1))" >> "$GITHUB_OUTPUT"
           else
             echo "version=0.1.0" >> "$GITHUB_OUTPUT"
           fi
 
-  test-linux:
-    runs-on: ubuntu-24.04
+  test:
+    name: test-${{ matrix.os }}
+    runs-on: ${{ matrix.runner }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux
+            runner: ubuntu-24.04
+            # xvfb-run provides a headless X server + DISPLAY so the real X11 selection tests execute here
+            wrapper: xvfb-run -a
+          - os: windows
+            runner: windows-latest
+          - os: macos
+            runner: macos-latest
 
     steps:
       - uses: actions/checkout@v7
@@ -47,33 +62,17 @@ jobs:
           dotnet-version: "10.0.x"
 
       - name: Install X11 headless deps
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq xvfb xclip procps libx11-6 libxi6 libxfixes3
-
-      - name: Restore
-        run: dotnet restore Hydra.sln
-
-      # xvfb-run provides a headless X server + DISPLAY so the real X11 selection tests execute here
-      - name: Test
-        run: xvfb-run -a dotnet test Hydra.sln --no-restore
-
-  test-windows:
-    runs-on: windows-latest
-
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v5
-        with:
-          dotnet-version: "10.0.x"
+        if: matrix.os == 'linux'
+        run: sudo apt-get update -qq && xargs sudo apt-get install -y -qq < .github/linux-test-packages.txt
 
       - name: Restore
         run: dotnet restore Hydra.sln
 
       - name: Test
-        run: dotnet test Hydra.sln --no-restore
+        run: ${{ matrix.wrapper }} dotnet test Hydra.sln --no-restore
 
-  test-macos:
+  # the TUI end to end, through a real pty and xterm.js; macOS because node-pty ships prebuilds for it
+  test-tui:
     runs-on: macos-latest
 
     steps:
@@ -84,11 +83,22 @@ jobs:
         with:
           dotnet-version: "10.0.x"
 
-      - name: Restore
-        run: dotnet restore Hydra.sln
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: HydraWebConfig/tools/tui-tests/package-lock.json
+
+      - name: Build Hydra
+        run: dotnet build Hydra --configuration Release
+
+      - name: Install dependencies
+        working-directory: HydraWebConfig/tools/tui-tests
+        run: npm ci && npx playwright install chromium
 
       - name: Test
-        run: dotnet test Hydra.sln --no-restore
+        working-directory: HydraWebConfig/tools/tui-tests
+        run: npm test
 
   build:
     runs-on: macos-latest
@@ -110,11 +120,13 @@ jobs:
         run: dotnet publish Hydra --runtime ${{ matrix.rid }} --self-contained -p:Version=${{ needs.version.outputs.version }}
 
       - name: Package artifact
+        env:
+          RID: ${{ matrix.rid }}
         run: |
-          cd Hydra/bin/Release/net10.0/${{ matrix.rid }}/publish
-          tar czf ${{ github.workspace }}/hydra-${{ matrix.rid }}.tar.gz --exclude='*.pdb' .
-          if [[ "${{ matrix.rid }}" == win-* ]]; then
-            zip -r ${{ github.workspace }}/hydra-${{ matrix.rid }}.zip . -x '*.pdb'
+          cd "Hydra/bin/Release/net10.0/$RID/publish"
+          tar czf "$GITHUB_WORKSPACE/hydra-$RID.tar.gz" --exclude='*.pdb' .
+          if [[ "$RID" == win-* ]]; then
+            zip -r "$GITHUB_WORKSPACE/hydra-$RID.zip" . -x '*.pdb'
           fi
 
       - name: Upload artifact
@@ -125,7 +137,7 @@ jobs:
           path: hydra-${{ matrix.rid }}.*
 
   release:
-    needs: [build, test-linux, test-windows, test-macos, version]
+    needs: [build, test, test-tui, version]
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     permissions:

@@ -8,8 +8,9 @@
 #               server, inside a Linux dotnet-sdk container with Xvfb + xclip.
 #   - windows → the Windows-only tests (WinKeyResolver ToUnicodeEx, ProcessLock file locking) and the
 #               rest of the suite, on the real Windows box. The working tree is synced over SSH to
-#               $WIN_DIR and built/tested there (the box keeps its own bin/obj between runs, so builds
-#               are incremental).
+#               $WIN_DIR and built/tested there. The box keeps its own bin/obj between runs and nothing
+#               else of the old tree, and every synced file lands with a fresh mtime, so each run
+#               compiles exactly what it was sent.
 #
 #               Needs an SSH host whose login shell is cygwin's bash, with the .NET SDK installed, named
 #               by HYDRA_WINDOWS_TEST_HOST — TEST_ in the name because this box is only ever somewhere to
@@ -28,6 +29,7 @@
 #   ./run-tests.sh mac      # only the Mac-native run
 #   ./run-tests.sh linux    # only the container X11 lane (Category=Linux, under Xvfb)
 #   ./run-tests.sh windows  # only the Windows lane (sync + test on the real box)
+#                           # HYDRA_WINDOWS_TEST_FILTER='FullyQualifiedName~X' narrows it to matching tests
 #   ./run-tests.sh all      # mac + linux + windows
 #   ./run-tests.sh selftest # the runner's OWN oracles — no lanes, ~1s
 set -euo pipefail
@@ -43,9 +45,48 @@ SLN="Hydra.sln"
 LANE_SKIPPED=97
 WIN_HOST="${HYDRA_WINDOWS_TEST_HOST:-}"
 WIN_DIR="${HYDRA_WINDOWS_TEST_PATH:-/cygdrive/c/tmp/hydra}"
+# a trailing slash would put the $WIN_DIR.sync staging dir inside the tree it replaces
+normalise_win_dir() {
+	local dir="$1"
+	while [ "$dir" != "${dir%/}" ] && [ "$dir" != / ]; do dir="${dir%/}"; done
+	printf '%s' "$dir"
+}
+WIN_DIR="$(normalise_win_dir "$WIN_DIR")"
+
+# The sync deletes $WIN_DIR outright, so it must be a dedicated directory at least two levels below a
+# drive's cygwin mount: /cygdrive/c/ would otherwise wipe C:, and /cygdrive/c/tmp everything else in tmp.
+# Anything else cygwin might map onto a drive (/c, /proc/cygdrive, //host) is refused rather than resolved.
+# A backslash is a separator to cygwin, so it would slip a .. past the component check, and a quote would
+# break out of the remote commands that name the path.
+win_dir_refusal() {
+	local dir="$1"
+	case "$dir" in
+		/) echo "is the filesystem root"; return ;;
+		//*) echo "must not start with //"; return ;;
+		/*) ;;
+		*) echo "must be an absolute path"; return ;;
+	esac
+	case "$dir" in
+		*//*) echo "must not contain an empty component"; return ;;
+		*\'*) echo "must not contain a single quote"; return ;;
+		*\\*) echo "must not contain a backslash"; return ;;
+	esac
+	case "$dir/" in
+		*/./*|*/../*) echo "must not contain . or .. components"; return ;;
+		/cygdrive/[a-zA-Z]/*) ;;
+		*) echo "must be under a drive's /cygdrive/<letter> mount"; return ;;
+	esac
+	local below="${dir#/cygdrive/?}"
+	case "${below#/}" in
+		*/*) ;;
+		*) echo "must be at least two directories below a drive" ;;
+	esac
+}
 # Kept OUTSIDE the synced tree so a re-sync never wipes the package cache or the fabricated profile.
 WIN_NUGET="${HYDRA_WINDOWS_TEST_NUGET_PACKAGES:-C:\\tmp\\nuget-packages}"
 WIN_PROFILE="${HYDRA_WINDOWS_TEST_PROFILE:-C:\\tmp\\lane-profile}"
+# narrows the Windows lane to a dotnet test filter, to chase one test on the box without the whole suite
+WIN_FILTER="${HYDRA_WINDOWS_TEST_FILTER:-}"
 
 # A lane's verdict is STATED, never left to be inferred from the output.
 #
@@ -61,7 +102,7 @@ run_lane() {
 	local name="$1"; shift
 	local log rc
 	log="$(mktemp)"
-	# shellcheck disable=SC2064 — $log must expand NOW, not when the trap fires.
+	# shellcheck disable=SC2064 # $log must expand NOW, not when the trap fires.
 	trap "rm -f '$log'" RETURN
 	# The lane's OWN exit code, not the pipeline's: tee succeeds whatever the tests did. Guarded by
 	# `set +e` because -e would abort the script before this line could read it.
@@ -115,20 +156,33 @@ run_mac() {
 
 # Container X11 lane: install Xvfb + xclip + the X client libs, then run the Category=Linux
 # tests under xvfb-run (which starts a headless X server, sets DISPLAY, and tears it down).
+# The package list is shared with CI's Linux test job.
 run_linux() {
 	echo "── Container X11 tests (Category=Linux, headless Xvfb) ────────────"
 	docker run --rm -v "$PWD":/src -w /src "$SDK_IMAGE" bash -c '
 		set -e
 		apt-get update -qq
-		DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-			xvfb xclip procps libx11-6 libxi6 libxfixes3 >/dev/null
-		xvfb-run -a dotnet test Hydra.sln --filter "Category=Linux" -- NUnit.NumberOfTestWorkers=1
+		DEBIAN_FRONTEND=noninteractive xargs apt-get install -y -qq < .github/linux-test-packages.txt >/dev/null
+		xvfb-run -a dotnet test Hydra.sln --filter "Category=Linux"
 	'
+}
+
+# ssh exits 255 for its own failures and passes the remote command's status through otherwise, so a 255
+# is the link to the box dropping, not anything the lane did there.
+win_ssh() {
+	local rc=0
+	ssh "$WIN_HOST" "$@" || rc=$?
+	if [ "$rc" -eq 255 ]; then
+		echo "   The ssh link to $WIN_HOST dropped (ssh exit 255), so this lane has no verdict on the tests." >&2
+		echo "   Likely cause: whatever carries that link restarted — a tunnel's host process being updated or" >&2
+		echo "   restarted, the box rebooting or sleeping. Check it is reachable and run the lane again." >&2
+	fi
+	return "$rc"
 }
 
 # Windows lane: sync the working tree (sans build artifacts) to the Windows box and test there.
 # COPYFILE_DISABLE stops macOS tar from emitting ._ AppleDouble sidecars; bin/obj are excluded so
-# the box builds its own (and keeps them between runs for incremental builds).
+# the box builds its own, carried across from the previous tree below.
 #
 # The remote session's preamble is not decoration. Every line of it was paid for on erebus's lane
 # against this same box, and the two should not drift:
@@ -151,6 +205,14 @@ run_windows() {
 		return $LANE_SKIPPED
 	fi
 
+	local refusal
+	refusal="$(win_dir_refusal "$WIN_DIR")"
+	if [ -n "$refusal" ]; then
+		echo "── Windows tests: FAILED ──────────────────────────────────────────"
+		echo "   HYDRA_WINDOWS_TEST_PATH '$WIN_DIR' $refusal: the sync replaces it wholesale." >&2
+		return 1
+	fi
+
 	if ! ssh -o BatchMode=yes -o ConnectTimeout=10 "$WIN_HOST" true 2>/dev/null; then
 		echo "── Windows tests: FAILED ──────────────────────────────────────────"
 		echo "   HYDRA_WINDOWS_TEST_HOST names '$WIN_HOST', which is not reachable over ssh." >&2
@@ -162,14 +224,46 @@ run_windows() {
 	# Each step checks itself. run_lane clears errexit so it can read the lane's exit code, and that
 	# clearing reaches in here — so an unchecked command would let a FAILED SYNC report a green lane
 	# against whatever tree the box happens to still be holding from the last run.
-	ssh "$WIN_HOST" "mkdir -p '$WIN_DIR'" || return 1
+	win_ssh "mkdir -p '$WIN_DIR'" || return 1
+	# The archive goes up as a FILE and is extracted from there: tar reading the pipe sshd hands the session
+	# can see it end early, so only `cat` reads that pipe, and the byte count is checked before extracting.
+	# --no-xattrs: macOS's provenance xattrs become pax headers GNU tar warns about once per file, burying
+	# the line that says what went wrong.
+	# -m on extract: files land with the time of the sync, not their original mtimes. An edit that kept an
+	# old mtime (a checkout, a stash pop, an editor preserving times) would otherwise look older than the
+	# box's last build, and MSBuild would skip compiling it and test the previous code.
 	# .git is excluded for speed, but Tests/Setup/TestLog.FindSolutionRoot needs a .sln + a .git dir
 	# to locate the test-output folder — so drop an empty .git marker after extracting.
-	COPYFILE_DISABLE=1 tar czf - \
+	local archive size remote_archive="$WIN_DIR.sync.tgz"
+	archive="$(mktemp)"
+	# Safe beside run_lane's own RETURN trap: this function runs in the left-hand subshell of run_lane's
+	# pipeline, so a trap set here never reaches the shell run_lane returns in.
+	# shellcheck disable=SC2064 # $archive must expand NOW, not when the trap fires.
+	trap "rm -f '$archive'" RETURN
+	COPYFILE_DISABLE=1 tar czf "$archive" --no-xattrs \
 		--exclude='./.git' --exclude='*/bin' --exclude='*/obj' --exclude='./test-output' \
-		-C "$PWD" . | ssh "$WIN_HOST" "cd '$WIN_DIR' && tar xzf - && mkdir -p .git" || return 1
+		-C "$PWD" . || return 1
+	size="$(wc -c < "$archive" | tr -d ' ')"
+	if ! win_ssh "cat > '$remote_archive'" < "$archive"; then
+		ssh "$WIN_HOST" "rm -f '$remote_archive'" 2>/dev/null || true
+		return 1
+	fi
+	# The archive is extracted into a FRESH directory that then replaces the tree, so a file deleted here is
+	# gone there too: extracted over the old tree it would survive, and the SDK's globbing would still
+	# compile it. Only what the box made for itself moves across — every bin and obj, and test-output — and
+	# only where its parent was synced, so a deleted project's build output does not resurrect its directory.
+	# The archive is removed on the box whether or not it arrived whole and extracted.
+	win_ssh "got=\$(wc -c < '$remote_archive') && [ \"\$got\" -eq $size ] \
+		|| { echo \"sync: $size bytes sent, \$got arrived\" >&2; rm -f '$remote_archive'; exit 1; }
+		rm -rf '$WIN_DIR.sync' && mkdir -p '$WIN_DIR.sync' && tar xzmf '$remote_archive' -C '$WIN_DIR.sync'; rc=\$?; rm -f '$remote_archive'
+		[ \$rc -eq 0 ] || exit \$rc
+		cd '$WIN_DIR' && find . -type d \\( -name bin -o -name obj -o -path ./test-output \\) -prune -print | while read -r kept; do
+			[ -d \"\$(dirname '$WIN_DIR.sync'/\"\$kept\")\" ] || continue
+			mv \"\$kept\" '$WIN_DIR.sync'/\"\$kept\" || exit 1
+		done || exit 1
+		cd / && rm -rf '$WIN_DIR' && mv '$WIN_DIR.sync' '$WIN_DIR' && mkdir -p '$WIN_DIR/.git'" || return 1
 
-	ssh "$WIN_HOST" bash <<REMOTE
+	win_ssh bash <<REMOTE
 export PATH="\$PATH:/cygdrive/c/Program Files/dotnet"
 export NUGET_PACKAGES='$WIN_NUGET'
 export USERPROFILE='$WIN_PROFILE'
@@ -186,7 +280,7 @@ echo "==> building"
 dotnet build Hydra.sln -v q --nologo
 echo "==> running tests"
 set +e
-env -u PROFILEREAD -u ORIGINAL_PATH dotnet test Hydra.sln --no-build --nologo
+env -u PROFILEREAD -u ORIGINAL_PATH dotnet test Hydra.sln --no-build --nologo ${WIN_FILTER:+--filter '$WIN_FILTER'}
 rc=\$?
 exit \$rc
 REMOTE
@@ -223,6 +317,29 @@ selftest_case() {
 		# still print a clean summary. run_lane clears errexit for the lane body, so only the step's own
 		# check can catch this.
 		syncfail) echo "==> sync"; false || return 1; echo "Passed!  - Failed: 0, Passed: 10, Total: 10" ;;
+		# a dropped link must name itself and still fail the lane
+		sshdrop)
+			ssh() { echo "Connection to localhost closed by remote host." >&2; return 255; }
+			WIN_HOST=box win_ssh true ;;
+		# a path the sync must never delete is refused before anything reaches the box
+		windrive|windriveslash|winshallow|winroot|winrelative|windotdot|winunc|winquote|winbackslash|winbare|winproc|windir)
+			local dir
+			case "$1" in
+				windrive) dir=/cygdrive/c ;;
+				windriveslash) dir=/cygdrive/c/ ;;
+				winshallow) dir=/cygdrive/c/tmp ;;
+				winroot) dir=/ ;;
+				winrelative) dir=tmp/hydra ;;
+				windotdot) dir=/cygdrive/c/tmp/../hydra ;;
+				winunc) dir=//x/y/z ;;
+				winquote) dir="/cygdrive/c/tmp/it's" ;;
+				winbackslash) dir='/cygdrive/c/tmp/x\..\..' ;;
+				winbare) dir=/c/tmp/hydra ;;
+				winproc) dir=/proc/cygdrive/c/tmp/hydra ;;
+				windir) dir=/cygdrive/c/tmp/hydra ;;
+			esac
+			ssh() { echo "ssh reached" >&2; return 255; }
+			WIN_HOST=box WIN_DIR="$(normalise_win_dir "$dir")" run_windows ;;
 		*) echo "unknown selftest case: $1" >&2; return 2 ;;
 	esac
 }
@@ -253,6 +370,19 @@ run_selftest() {
 		skipquiet 0 skipped
 		sigkill   1 FAILED
 		syncfail  1 FAILED
+		sshdrop   1 ssh link to box dropped
+		windrive      1 '/cygdrive/c' must be at least two
+		windriveslash 1 '/cygdrive/c' must be at least two
+		winshallow    1 '/cygdrive/c/tmp' must be at least two
+		winroot       1 '/' is the filesystem root
+		winrelative   1 must be an absolute path
+		windotdot     1 must not contain . or ..
+		winunc        1 '//x/y/z' must not start with //
+		winquote      1 must not contain a single quote
+		winbackslash  1 must not contain a backslash
+		winbare       1 '/c/tmp/hydra' must be under a drive's
+		winproc       1 '/proc/cygdrive/c/tmp/hydra' must be under a drive's
+		windir        1 not reachable
 	CASES
 
 	if [ "$fails" -ne 0 ]; then

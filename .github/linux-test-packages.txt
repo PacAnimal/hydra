@@ -1,0 +1,6 @@
+xvfb
+xclip
+procps
+libx11-6
+libxi6
+libxfixes3
