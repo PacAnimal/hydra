@@ -30,7 +30,7 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
     // IFileTransferDialog
     public event Action? CancelRequested;
 
-    private readonly string _binaryPath = Path.Combine(AppContext.BaseDirectory, "Resources", "MacShield", "hydra-shield.app", "Contents", "MacOS", "hydra-shield");
+    internal static readonly string BinaryPath = Path.Combine(AppContext.BaseDirectory, "Resources", "MacShield", "hydra-shield.app", "Contents", "MacOS", "hydra-shield");
     private readonly SemaphoreSlim _sendSemaphore = new(1, 1);
     private volatile TaskCompletionSource<string>? _pendingReply; // completed by ReadOutput when echo arrives
     private Process? _process;
@@ -142,7 +142,7 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
     private void StartProcess()
     {
         if (OperatingSystem.IsMacOS()) EnsureExecutable();
-        if (!File.Exists(_binaryPath)) return;
+        if (!File.Exists(BinaryPath)) return;
 
         // start under the process lock and re-check _stopping so a restart racing Stop() can't
         // resurrect the shield after shutdown (which would orphan an event-absorbing overlay window)
@@ -152,7 +152,7 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
             _process?.Dispose();
             _process = Process.Start(new ProcessStartInfo
             {
-                FileName = _binaryPath,
+                FileName = BinaryPath,
                 UseShellExecute = false,
                 RedirectStandardInput = true,
                 RedirectStandardOutput = true,
@@ -325,11 +325,11 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
     private static string Base64(string s) => Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(s));
 
     [System.Runtime.Versioning.SupportedOSPlatform("macos")]
-    private void EnsureExecutable()
+    private static void EnsureExecutable()
     {
-        if (!File.Exists(_binaryPath)) return;
-        var mode = File.GetUnixFileMode(_binaryPath);
+        if (!File.Exists(BinaryPath)) return;
+        var mode = File.GetUnixFileMode(BinaryPath);
         if ((mode & UnixFileMode.UserExecute) == 0)
-            File.SetUnixFileMode(_binaryPath, mode | UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute);
+            File.SetUnixFileMode(BinaryPath, mode | UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute);
     }
 }

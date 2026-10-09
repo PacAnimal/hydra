@@ -375,7 +375,7 @@ internal static partial class NativeMethods
 
     // [NSEvent otherEventWithType:location:modifierFlags:timestamp:windowNumber:context:subtype:data1:data2:]
     // used to inject NX_SYSDEFINED media key events (volume, brightness, eject, play/next/prev).
-    // CGPoint doubles go into fp registers per arm64 AAPCS HFA rules.
+    // CGPoint doubles go into fp registers on both arm64 (AAPCS HFA) and x86_64 (SysV SSE).
     [LibraryImport(ObjC, EntryPoint = "objc_msgSend")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial nint objc_msgSend_NSEvent_otherEvent(

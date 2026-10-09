@@ -20,7 +20,6 @@ See the [project README](../README.md) for installation and a quick-start guide.
 - [System sleep](#system-sleep)
 - [Remote-only mode](#remote-only-mode)
 - [Networking with Styx](#networking-with-styx)
-- [Building from source](#building-from-source)
 
 ---
 
@@ -685,21 +684,3 @@ Add `networkConfig` to `hydra.conf` on both machines. Use the same config string
 
 - Both machines must use the **same** network config string.
 - Traffic between Hydra instances is end-to-end encrypted — Styx only routes opaque bytes.
-
-## Building from source
-
-```bash
-dotnet build Hydra.sln
-dotnet test Hydra.sln
-```
-
-Publish a self-contained single-file executable:
-
-```bash
-dotnet publish Hydra --runtime osx-arm64  --self-contained   # macOS Apple Silicon
-dotnet publish Hydra --runtime win-x64   --self-contained   # Windows x64
-dotnet publish Hydra --runtime linux-x64 --self-contained   # Linux x64
-dotnet publish Hydra --runtime linux-arm64 --self-contained # Linux arm64 (e.g. Raspberry Pi)
-```
-
-Output lands in `Hydra/bin/Release/net10.0/<rid>/publish/`.
