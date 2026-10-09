@@ -55,6 +55,7 @@ jobs:
             runner: windows-latest
           - os: macos
             runner: macos-latest
+          # GitHub's last Intel image; when it retires, smoke-test osx-x64 under Rosetta (arch -x86_64) instead
           - os: macos-intel
             runner: macos-15-intel
 
@@ -147,7 +148,8 @@ jobs:
           "$PUBLISH/Hydra" --smoke-test 2> usage.txt || rc=$?
           test "$rc" -eq 2
           grep -q '^Usage: hydra' usage.txt
-          shield=$(find "$DOTNET_BUNDLE_EXTRACT_BASE_DIR" -path '*/hydra-shield.app/Contents/MacOS/hydra-shield')
+          shield=$(find "$DOTNET_BUNDLE_EXTRACT_BASE_DIR" -path '*/hydra-shield.app/Contents/MacOS/hydra-shield' -print -quit)
+          test -n "$shield" || { echo "no hydra-shield in the extracted bundle"; exit 1; }
           chmod +x "$shield"
           test "$(printf '1\n0\n' | "$shield")" = "$(printf '1\n0')"
 

@@ -23,7 +23,7 @@ dotnet publish Hydra --runtime linux-x64   --self-contained   # Linux x64
 dotnet publish Hydra --runtime linux-arm64 --self-contained   # Linux arm64 (e.g. Raspberry Pi)
 ```
 
-Output lands in `Hydra/bin/Release/net10.0/<rid>/publish/`. Both macOS builds run on macOS 13 or later.
+Output lands in `Hydra/bin/Release/net10.0/<rid>/publish/`. Both macOS builds need macOS 14 or later, the oldest .NET 10 supports.
 
 `dotnet test` skips the Linux X11 and Windows-only tests on other platforms. `./run-tests.sh linux` runs the X11
 tests under Xvfb in Docker.

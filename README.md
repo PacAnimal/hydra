@@ -68,7 +68,7 @@ The local socket/named pipe the TUI connects through is on by default. Set `"man
 
 Run the binary directly to try Hydra out, or use `--install` to set it up as a service / LaunchAgent that auto-starts on login and survives reboots.
 
-**macOS (13 or later):**
+**macOS (14 or later):**
 ```bash
 curl -L https://github.com/PacAnimal/hydra/releases/latest/download/hydra-osx-$(uname -m | sed s/x86_64/x64/).tar.gz | tar xz
 ./hydra             # run directly — good for testing, no install needed

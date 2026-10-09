@@ -65,12 +65,22 @@ public class MacShieldTests
         }
         catch (OperationCanceledException)
         {
-            shield.Kill();
-            await shield.WaitForExitAsync();
-            Assert.Fail($"shield did not answer within {Deadline.TotalSeconds}s: {await stderr}");
+            Assert.Fail($"shield did not answer within {Deadline.TotalSeconds}s: {await Kill(shield, stderr)}");
+        }
+        finally
+        {
+            // a shield left running after "1" keeps absorbing the mouse until the test host exits
+            await Kill(shield, stderr);
         }
 
         Assert.That(shield.ExitCode, Is.Zero, await stderr);
+    }
+
+    private static async Task<string> Kill(Process shield, Task<string> stderr)
+    {
+        if (!shield.HasExited) shield.Kill();
+        await shield.WaitForExitAsync();
+        return await stderr;
     }
 
     private static string Tool(string name, params string[] args)
