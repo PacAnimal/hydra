@@ -68,9 +68,9 @@ The local socket/named pipe the TUI connects through is on by default. Set `"man
 
 Run the binary directly to try Hydra out, or use `--install` to set it up as a service / LaunchAgent that auto-starts on login and survives reboots.
 
-**macOS (Apple Silicon):**
+**macOS (13 or later):**
 ```bash
-curl -L https://github.com/PacAnimal/hydra/releases/latest/download/hydra-osx-arm64.tar.gz | tar xz
+curl -L https://github.com/PacAnimal/hydra/releases/latest/download/hydra-osx-$(uname -m | sed s/x86_64/x64/).tar.gz | tar xz
 ./hydra             # run directly — good for testing, no install needed
 ./hydra --install   # installs as a login item, auto-starts on login
 ```
@@ -196,7 +196,8 @@ Contributions are welcome, big or small. Found a bug? [Open an issue](https://gi
 
 ## Full documentation
 
-- [Configuration reference](docs/CONFIGURATION.md) — all config fields, screen layout options, network-aware profiles, hotkeys, Styx setup, and building from source
+- [Configuration reference](docs/CONFIGURATION.md) — all config fields, screen layout options, network-aware profiles, hotkeys, and Styx setup
+- [Building from source](docs/BUILDING.md) — requirements, publishing for each platform, and running the tests
 - [TUI architecture](docs/TUI_ARCHITECTURE.md) — management boundaries, security invariants, platform lifecycle behavior, and validation expectations
 - [TUI hotkeys](docs/HOTKEYS.md) — every keyboard shortcut in the terminal control center, tab by tab
 - [Styx protocol](Styx.md) — the relay's wire protocol, for implementing your own client or server against it

@@ -67,13 +67,27 @@
         <Content Include="Resources/MacShield/hydra-shield.app/Contents/Info.plist" CopyToOutputDirectory="PreserveNewest" Condition="$([MSBuild]::IsOSPlatform('OSX')) And '$(RuntimeIdentifier)' != 'win-x64' And '$(RuntimeIdentifier)' != 'linux-x64' And '$(RuntimeIdentifier)' != 'linux-arm64'" />
     </ItemGroup>
 
+    <!-- without a Mac there is no swiftc, and a macOS build would silently ship without its shield -->
+    <Target Name="RequireMacForMacBuild" BeforeTargets="Build" Condition="$(RuntimeIdentifier.StartsWith('osx')) And !$([MSBuild]::IsOSPlatform('OSX'))">
+        <Error Text="macOS builds of Hydra must be made on a Mac: the hydra-shield helper is compiled with swiftc." />
+    </Target>
+
+    <!-- one universal shield serves both osx-arm64 and osx-x64; pinned minimum OS, or swiftc stamps the build machine's; 13.0 is the lowest the toolchain has x86_64 back-deploy libs for -->
+    <PropertyGroup>
+        <MacShieldMinOS>13.0</MacShieldMinOS>
+    </PropertyGroup>
+    <ItemGroup>
+        <ShieldArch Include="arm64;x86_64" />
+    </ItemGroup>
+
     <!-- compile the Swift shield helper into a proper .app bundle; only runs on macOS where swiftc is available -->
     <!-- uses a stamp file as Outputs — the binary path (inside hydra-shield.app/) doesn't exist on fresh checkout,
          causing MSBuild's incremental check to silently skip the target; a stamp in the existing MacShield/ dir works reliably -->
-    <Target Name="CompileMacShield" BeforeTargets="Build;_CopyOutOfDateSourceItemsToOutputDirectory" Inputs="$(MSBuildProjectDirectory)/Resources/MacShield/main.swift;$(MSBuildProjectDirectory)/Resources/MacShield/ShieldInfo.plist" Outputs="$(MSBuildProjectDirectory)/Resources/MacShield/.shield-stamp" Condition="$([MSBuild]::IsOSPlatform('OSX')) And '$(RuntimeIdentifier)' != 'win-x64' And '$(RuntimeIdentifier)' != 'linux-x64' And '$(RuntimeIdentifier)' != 'linux-arm64'">
+    <Target Name="CompileMacShield" BeforeTargets="Build;_CopyOutOfDateSourceItemsToOutputDirectory" Inputs="$(MSBuildProjectFullPath);$(MSBuildProjectDirectory)/Resources/MacShield/main.swift;$(MSBuildProjectDirectory)/Resources/MacShield/ShieldInfo.plist" Outputs="$(MSBuildProjectDirectory)/Resources/MacShield/.shield-stamp" Condition="$([MSBuild]::IsOSPlatform('OSX')) And '$(RuntimeIdentifier)' != 'win-x64' And '$(RuntimeIdentifier)' != 'linux-x64' And '$(RuntimeIdentifier)' != 'linux-arm64'">
         <MakeDir Directories="$(MSBuildProjectDirectory)/Resources/MacShield/hydra-shield.app/Contents/MacOS" />
         <Copy SourceFiles="$(MSBuildProjectDirectory)/Resources/MacShield/ShieldInfo.plist" DestinationFiles="$(MSBuildProjectDirectory)/Resources/MacShield/hydra-shield.app/Contents/Info.plist" />
-        <Exec Command="xcrun swiftc -O -framework Network -framework CoreWLAN -framework CoreLocation -o &quot;$(MSBuildProjectDirectory)/Resources/MacShield/hydra-shield.app/Contents/MacOS/hydra-shield&quot; &quot;$(MSBuildProjectDirectory)/Resources/MacShield/main.swift&quot;" />
+        <Exec Command="xcrun swiftc -O -target %(ShieldArch.Identity)-apple-macos$(MacShieldMinOS) -framework Network -framework CoreWLAN -framework CoreLocation -o &quot;$(IntermediateOutputPath)hydra-shield-%(ShieldArch.Identity)&quot; &quot;$(MSBuildProjectDirectory)/Resources/MacShield/main.swift&quot;" />
+        <Exec Command="xcrun lipo -create -output &quot;$(MSBuildProjectDirectory)/Resources/MacShield/hydra-shield.app/Contents/MacOS/hydra-shield&quot; @(ShieldArch->'&quot;$(IntermediateOutputPath)hydra-shield-%(Identity)&quot;', ' ')" />
         <Exec Command="codesign --force --sign - -i com.cathedral.hydra.shield --requirements &quot;=designated =&gt; identifier com.cathedral.hydra.shield&quot; &quot;$(MSBuildProjectDirectory)/Resources/MacShield/hydra-shield.app&quot;" />
         <Touch Files="$(MSBuildProjectDirectory)/Resources/MacShield/.shield-stamp" AlwaysCreate="true" />
     </Target>
