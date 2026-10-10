@@ -1,6 +1,8 @@
 root = true
 
 [*.cs]
+# The repo is LF. Without this, the formatter's code fixes insert their new lines as CRLF.
+end_of_line = lf
 # Allow .Add() calls instead of collection initializers (Rider CA2000 conflicts with initializer form)
 dotnet_style_collection_initializer = false
 
