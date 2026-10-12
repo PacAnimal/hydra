@@ -539,6 +539,9 @@ public class InputRouter(
                 break;
             case MessageKind.ScreensaverSync:
                 break; // master never acts on screensaver sync messages
+            case MessageKind.LatencyProbe or MessageKind.LatencyProbeResponse:
+            case MessageKind.RemoteManagementRequest or MessageKind.RemoteManagementResponse:
+                break; // RelayLatencyService and RemoteManagementService subscribe to these themselves
             case MessageKind.ActivityPing:
                 _ = _commands.Writer.TryWrite(_ => activityTracker.RemoteActivity(sourceHost));
                 break;
