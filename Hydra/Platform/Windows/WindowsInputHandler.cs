@@ -107,6 +107,21 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
         lock (_warpLock) { _lastWarpX = _warpTargetX; _lastWarpY = _warpTargetY; return (_warpTargetX, _warpTargetY); }
     }
 
+    // Warps to the target until it holds still across the warp. A router exit that retargets while
+    // our SetCursorPos is in flight can land before it, and our stale park point would then leave
+    // the cursor mid-screen; re-reading after each warp means ours is never the last stale one.
+    internal void RecentreCursor(Action<int, int> setCursorPos)
+    {
+        var target = RecentreToTarget();
+        while (true)
+        {
+            setCursorPos(target.X, target.Y);
+            var now = RecentreToTarget();
+            if (now == target) return;
+            target = now;
+        }
+    }
+
     // Stale-reference resync (screen entry, or first sample after a fast bounce): sets only the
     // delta reference to a freshly measured position — never the warp target, which is whatever
     // WarpCursor already set it to for this visit.
@@ -338,8 +353,7 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
                         _onMouseDelta?.Invoke(dx, dy);
 
                         // recentre per raw sample, see RecentresItself
-                        var (targetX, targetY) = RecentreToTarget();
-                        NativeMethods.SetCursorPos(targetX, targetY);
+                        RecentreCursor(static (x, y) => NativeMethods.SetCursorPos(x, y));
                     }
                 }
                 else
