@@ -302,6 +302,12 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
 
     private nint MouseHookCallback(int nCode, nint wParam, nint lParam)
     {
+        // One read decides both how this sample is handled and whether it is swallowed. Handling a
+        // sample as virtual hands its delta to the router, which can cross back to the local screen
+        // and warp to the edge before this callback returns; re-reading the flag at the end would
+        // then pass the sample through, and Windows applies it at its own position, park point plus
+        // delta, leaving the cursor mid-screen over the router's warp.
+        var onVirtualScreen = IsOnVirtualScreen;
         if (nCode >= 0)
         {
             var info = Marshal.PtrToStructure<MSLLHOOKSTRUCT>(lParam);
@@ -319,7 +325,6 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
                 // last happened to see, which a fast enough bounce (enter, immediately kicked back
                 // out, re-enter) could complete without this thread ever observing the "local" step in
                 // between.
-                var onVirtualScreen = IsOnVirtualScreen;
                 // One atomic read serves both the echo-check below and, when not stale, the delta
                 // calculation further down — _warpLock guarantees this pair was written together
                 // by whichever of SetWarpState/RecentreToTarget/ResyncLastWarp wrote it last, never
@@ -386,7 +391,7 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
         }
 
         // swallow all mouse events while on virtual screen — cursor stays frozen at center
-        if (IsOnVirtualScreen) return 1;
+        if (onVirtualScreen) return 1;
         return NativeMethods.CallNextHookEx(nint.Zero, nCode, wParam, lParam);
     }
 
