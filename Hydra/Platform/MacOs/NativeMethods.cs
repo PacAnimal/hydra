@@ -180,6 +180,11 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial ulong CGEventSourceFlagsState(int stateId);
 
+    [LibraryImport(CoreGraphics)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    [return: MarshalAs(UnmanagedType.U1)]
+    internal static partial bool CGEventSourceButtonState(int stateId, uint button);
+
     // -- CoreGraphics: event creation and injection --
 
     [LibraryImport(CoreGraphics)]

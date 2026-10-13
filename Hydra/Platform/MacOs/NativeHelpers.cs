@@ -10,6 +10,22 @@ internal static class NativeHelpers
     internal static void EnsureAppKitLoaded() => NativeLibrary.Load(NativeMethods.AppKit);
     internal static void EnsureApplicationServicesLoaded() => NativeLibrary.Load(NativeMethods.ApplicationServices);
 
+    // AppKit's NSEvent class, loading AppKit on first use
+    internal static nint NsEventClass
+    {
+        get
+        {
+            if (_nsEventClass != nint.Zero) return _nsEventClass;
+            EnsureAppKitLoaded();
+            return _nsEventClass = NativeMethods.objc_getClass("NSEvent");
+        }
+    }
+    private static nint _nsEventClass;
+
+    // the OS marks the key-downs it generates by auto-repeat
+    internal static bool IsAutorepeat(nint eventRef) =>
+        NativeMethods.CGEventGetIntegerValueField(eventRef, NativeMethods.KCGKeyboardEventAutorepeat) == 1;
+
     // creates a CFString/NSString from a managed string (toll-free bridged)
     internal static nint MakeNsString(string s) => NativeMethods.CFStringCreateWithCString(nint.Zero, s, NativeMethods.KCFStringEncodingUtf8);
 

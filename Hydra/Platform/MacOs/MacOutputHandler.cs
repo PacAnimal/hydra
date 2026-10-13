@@ -149,7 +149,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
                 return;
             }
 
-            var (generic, device) = VkToModifierMasks((ushort)modVk);
+            var (generic, device, _) = MacModifierMasks.Of(modVk);
             if (generic == 0 && device == 0)
             {
                 // NumLock (KeypadClear) has no modifier mask — inject as a regular toggle key, not a flags change
@@ -167,7 +167,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
             if (generic == NativeMethods.KCGEventFlagMaskAlphaShift && isDown)
                 _modifierFlags ^= NativeMethods.KCGEventFlagMaskAlphaShift;
             // derive generic flags from device bits so L+R held simultaneously keeps the generic flag set
-            _modifierFlags = ComputeGenericFlags(_deviceModifierFlags) | (_modifierFlags & NativeMethods.KCGEventFlagMaskAlphaShift);
+            _modifierFlags = MacModifierMasks.GenericFlags(_deviceModifierFlags) | (_modifierFlags & NativeMethods.KCGEventFlagMaskAlphaShift);
 
             if (!PostHidModifier((ushort)modVk))
                 PostFlagsChanged((ushort)modVk, isDown);
@@ -374,7 +374,6 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
         return kr == 0;
     }
 
-    private static readonly nint NsEventClass = NativeMethods.objc_getClass("NSEvent");
     private static readonly nint SelOtherEvent = NativeMethods.sel_registerName("otherEventWithType:location:modifierFlags:timestamp:windowNumber:context:subtype:data1:data2:");
     private static readonly nint SelCgEvent = NativeMethods.sel_registerName("CGEvent");
 
@@ -401,13 +400,14 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
     // volume, brightness, eject, play/next/prev — regular NX_KEYDOWN with the VK code misroutes.
     private static void PostNsMediaKey(uint keyType, bool isDown)
     {
-        NativeHelpers.EnsureAppKitLoaded();
+        // the autoreleased NSEvent lives until its CGEvent is posted
+        using var pool = new ObjcAutoreleasePool();
 
         // data1: high 16 bits = NX_KEYTYPE, bits 8–15 = 0x0a (down) or 0x0b (up)
         var data1 = (nint)((keyType << 16) | (isDown ? 0x0a00u : 0x0b00u));
 
         var nsEvent = NativeMethods.objc_msgSend_NSEvent_otherEvent(
-            NsEventClass, SelOtherEvent,
+            NativeHelpers.NsEventClass, SelOtherEvent,
             14,       // NSSystemDefined
             default,  // NSPoint(0, 0)
             0xa00,    // modifierFlags (empirical — matches barrier/deskflow)
@@ -507,33 +507,6 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
         _ => 0,
     };
 
-    // derives generic CGEventFlag bits from device-dependent NX masks.
-    // used so releasing one of two held L/R modifiers keeps the generic flag set.
-    private static ulong ComputeGenericFlags(uint deviceFlags)
-    {
-        ulong flags = 0;
-        if ((deviceFlags & (NativeMethods.NxDeviceLShiftKeyMask | NativeMethods.NxDeviceRShiftKeyMask)) != 0) flags |= NativeMethods.KCGEventFlagMaskShift;
-        if ((deviceFlags & (NativeMethods.NxDeviceLCtlKeyMask | NativeMethods.NxDeviceRCtlKeyMask)) != 0) flags |= NativeMethods.KCGEventFlagMaskControl;
-        if ((deviceFlags & (NativeMethods.NxDeviceLAltKeyMask | NativeMethods.NxDeviceRAltKeyMask)) != 0) flags |= NativeMethods.KCGEventFlagMaskAlternate;
-        if ((deviceFlags & (NativeMethods.NxDeviceLCmdKeyMask | NativeMethods.NxDeviceRCmdKeyMask)) != 0) flags |= NativeMethods.KCGEventFlagMaskCommand;
-        return flags;
-    }
-
-    // maps a macOS virtual key code to (generic CGEventFlag mask, device-dependent NX mask).
-    private static (ulong generic, uint device) VkToModifierMasks(ushort vk) => (ulong)vk switch
-    {
-        MacVirtualKey.Command => (NativeMethods.KCGEventFlagMaskCommand, NativeMethods.NxDeviceLCmdKeyMask),
-        MacVirtualKey.RightCommand => (NativeMethods.KCGEventFlagMaskCommand, NativeMethods.NxDeviceRCmdKeyMask),
-        MacVirtualKey.Shift => (NativeMethods.KCGEventFlagMaskShift, NativeMethods.NxDeviceLShiftKeyMask),
-        MacVirtualKey.RightShift => (NativeMethods.KCGEventFlagMaskShift, NativeMethods.NxDeviceRShiftKeyMask),
-        MacVirtualKey.Control => (NativeMethods.KCGEventFlagMaskControl, NativeMethods.NxDeviceLCtlKeyMask),
-        MacVirtualKey.RightControl => (NativeMethods.KCGEventFlagMaskControl, NativeMethods.NxDeviceRCtlKeyMask),
-        MacVirtualKey.Option => (NativeMethods.KCGEventFlagMaskAlternate, NativeMethods.NxDeviceLAltKeyMask),
-        MacVirtualKey.RightOption => (NativeMethods.KCGEventFlagMaskAlternate, NativeMethods.NxDeviceRAltKeyMask),
-        MacVirtualKey.CapsLock => (NativeMethods.KCGEventFlagMaskAlphaShift, 0),
-        _ => (0, 0)
-    };
-
     // fallback character injection for chars with no VK mapping (foreign/composed chars).
     // vk=0 with explicit unicode string — only reached when _charToVk has no entry for the char.
     private static unsafe void InjectCharacter(char ch, bool isDown, ulong flags)
@@ -615,9 +588,8 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
     // [NSEvent doubleClickInterval] — system double-click threshold in seconds
     private static double GetDoubleClickIntervalMs()
     {
-        var cls = NativeMethods.objc_getClass("NSEvent");
         var sel = NativeMethods.sel_registerName("doubleClickInterval");
-        var seconds = NativeMethods.objc_msgSend_double(cls, sel);
+        var seconds = NativeMethods.objc_msgSend_double(NativeHelpers.NsEventClass, sel);
         return seconds > 0 ? seconds * 1000.0 : 500.0;
     }
 

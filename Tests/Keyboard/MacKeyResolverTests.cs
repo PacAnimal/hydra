@@ -217,4 +217,136 @@ public class MacKeyResolverTests
             NativeMethods.CFRelease(up);
         }
     }
+
+    // -- PhysicalKey: the keycode each event is tracked under, pairing a repeat or up with its down --
+
+    [TestCase(MacVirtualKey.Return, TestName = "SpecialKey_DownRepeatAndUp_CarryItsKeycode")]
+    [TestCase(0x01ul, TestName = "CharacterKey_DownRepeatAndUp_CarryItsKeycode")] // kVK_ANSI_S
+    public void Key_DownRepeatAndUp_CarryItsKeycode(ulong vk)
+    {
+        var resolver = new MacKeyResolver();
+        var down = KeyDownEvent(vk);
+        var repeat = AutoRepeatKeyDownEvent(vk);
+        try
+        {
+            KeyEvent?[] events =
+            [
+                .. resolver.Resolve(NativeMethods.KCGEventKeyDown, down)!,
+                .. resolver.Resolve(NativeMethods.KCGEventKeyDown, repeat)!,
+                .. resolver.Resolve(NativeMethods.KCGEventKeyUp, down)!,
+            ];
+            Assert.That(events.Select(e => e!.PhysicalKey), Is.EqualTo([(int)vk, (int)vk, (int)vk]));
+        }
+        finally
+        {
+            NativeMethods.CFRelease(down);
+            NativeMethods.CFRelease(repeat);
+        }
+    }
+
+    [Test]
+    public void ModifierChange_CarriesItsKeycode()
+    {
+        var resolver = new MacKeyResolver();
+        var press = ModifierEvent(MacVirtualKey.Shift, NativeMethods.KCGEventFlagMaskShift);
+        var release = ModifierEvent(MacVirtualKey.Shift, 0);
+        try
+        {
+            KeyEvent?[] events =
+            [
+                .. resolver.Resolve(NativeMethods.KCGEventFlagsChanged, press)!,
+                .. resolver.Resolve(NativeMethods.KCGEventFlagsChanged, release)!,
+            ];
+            Assert.That(events.Select(e => (e!.Type, e.PhysicalKey)),
+                Is.EqualTo([(KeyEventType.KeyDown, (int)MacVirtualKey.Shift), (KeyEventType.KeyUp, (int)MacVirtualKey.Shift)]));
+        }
+        finally
+        {
+            NativeMethods.CFRelease(press);
+            NativeMethods.CFRelease(release);
+        }
+    }
+
+    // -- modifier press/release read from the event's flags --
+
+    private const ulong ShiftL = NativeMethods.KCGEventFlagMaskShift | NativeMethods.NxDeviceLShiftKeyMask;
+    private const ulong ShiftR = NativeMethods.KCGEventFlagMaskShift | NativeMethods.NxDeviceRShiftKeyMask;
+    private const ulong BothShifts = ShiftL | NativeMethods.NxDeviceRShiftKeyMask;
+
+    // resolves one FlagsChanged for vk with the given flags and returns its type
+    private static KeyEventType ModifierChange(MacKeyResolver resolver, ulong vk, ulong flags)
+    {
+        var ev = ModifierEvent(vk, flags);
+        try { return resolver.Resolve(NativeMethods.KCGEventFlagsChanged, ev)!.Single()!.Type; }
+        finally { NativeMethods.CFRelease(ev); }
+    }
+
+    [Test]
+    public void ShiftL_DeviceBitSet_IsPress_GenericClear_IsRelease()
+    {
+        var resolver = new MacKeyResolver();
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(ModifierChange(resolver, MacVirtualKey.Shift, ShiftL), Is.EqualTo(KeyEventType.KeyDown));
+            Assert.That(ModifierChange(resolver, MacVirtualKey.Shift, 0), Is.EqualTo(KeyEventType.KeyUp));
+        }
+    }
+
+    [Test]
+    public void ShiftL_HeldAcrossReset_ReleaseIsKeyUp()
+    {
+        var resolver = new MacKeyResolver();
+        ModifierChange(resolver, MacVirtualKey.Shift, ShiftL);
+        resolver.Reset();
+        Assert.That(ModifierChange(resolver, MacVirtualKey.Shift, 0), Is.EqualTo(KeyEventType.KeyUp));
+    }
+
+    [Test]
+    public void ShiftL_ReleasedWhileShiftRHeld_IsKeyUp()
+    {
+        var resolver = new MacKeyResolver();
+        ModifierChange(resolver, MacVirtualKey.RightShift, ShiftR);
+        ModifierChange(resolver, MacVirtualKey.Shift, BothShifts);
+        Assert.That(ModifierChange(resolver, MacVirtualKey.Shift, ShiftR), Is.EqualTo(KeyEventType.KeyUp));
+    }
+
+    [Test]
+    public void ShiftR_PressedWhileShiftLHeld_IsKeyDown()
+    {
+        var resolver = new MacKeyResolver();
+        ModifierChange(resolver, MacVirtualKey.Shift, ShiftL);
+        Assert.That(ModifierChange(resolver, MacVirtualKey.RightShift, BothShifts), Is.EqualTo(KeyEventType.KeyDown));
+    }
+
+    [Test]
+    public void BothShiftsHeldAcrossReset_ShiftLReleasedWhileShiftRHeld_IsKeyUp()
+    {
+        var resolver = new MacKeyResolver();
+        ModifierChange(resolver, MacVirtualKey.Shift, ShiftL);
+        ModifierChange(resolver, MacVirtualKey.RightShift, BothShifts);
+        resolver.Reset();
+        Assert.That(ModifierChange(resolver, MacVirtualKey.Shift, ShiftR), Is.EqualTo(KeyEventType.KeyUp));
+    }
+
+    [Test]
+    public void Shift_GenericWithoutDeviceBits_TogglesPressThenRelease()
+    {
+        // a synthetic event (e.g. a remapper) carries no device bits: fall back to tracking
+        var resolver = new MacKeyResolver();
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(ModifierChange(resolver, MacVirtualKey.Shift, NativeMethods.KCGEventFlagMaskShift), Is.EqualTo(KeyEventType.KeyDown));
+            Assert.That(ModifierChange(resolver, MacVirtualKey.Shift, NativeMethods.KCGEventFlagMaskShift), Is.EqualTo(KeyEventType.KeyUp));
+        }
+    }
+
+    [Test]
+    public void CapsLock_AlternatesPressAndRelease_WhateverItsFlags()
+    {
+        // the flag tracks the lock, not the key, so it cannot tell press from release: the toggle decides
+        var resolver = new MacKeyResolver();
+        var types = new[] { NativeMethods.KCGEventFlagMaskAlphaShift, NativeMethods.KCGEventFlagMaskAlphaShift, 0ul, 0ul }
+            .Select(f => ModifierChange(resolver, MacVirtualKey.CapsLock, f));
+        Assert.That(types, Is.EqualTo([KeyEventType.KeyDown, KeyEventType.KeyUp, KeyEventType.KeyDown, KeyEventType.KeyUp]));
+    }
 }

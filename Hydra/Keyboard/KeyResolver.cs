@@ -61,6 +61,14 @@ internal static class KeyResolver
         if (downVal?.Key.HasValue == true) return KeyEvent.Special(KeyEventType.KeyUp, downVal.Key.Value, mods);
         return null;
     }
+
+    // stamps the key a Resolve call was for onto every event it returns that does not already carry one
+    internal static void StampPhysicalKey(KeyEvent?[]? events, int physicalKey)
+    {
+        if (events is null) return;
+        for (var i = 0; i < events.Length; i++)
+            if (events[i] is { PhysicalKey: 0 } e) events[i] = e with { PhysicalKey = physicalKey };
+    }
 }
 
 internal record CharClassification(char? Ch, SpecialKey? Key);

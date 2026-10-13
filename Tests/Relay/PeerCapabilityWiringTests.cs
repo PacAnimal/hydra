@@ -48,7 +48,7 @@ public class PeerCapabilityWiringTests
     /// <summary>Screens are required for the handler to act, so every case here carries one.</summary>
     private async Task Advertise(string[]? capabilities) =>
         await _relay.FireMessageReceived("remote", MessageKind.ScreenInfo,
-            JsonSerializer.Serialize(new ScreenInfoMessage([new ScreenInfoEntry("screen:0", 0, 0, 2560, 1440, 1.0m)], Capabilities: capabilities), SaneJson.Options));
+            JsonSerializer.Serialize(new ScreenInfoMessage([new ScreenInfoEntry("remote", 0, 0, 2560, 1440, 1.0m)], Capabilities: capabilities), SaneJson.Options));
 
     [Test]
     public async Task WhatAPeerAdvertisesIsWhatTheMasterRecords()

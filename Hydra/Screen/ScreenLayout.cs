@@ -115,7 +115,7 @@ public class ScreenLayout(List<ScreenRect> screens, List<HostConfig> configs, in
 
     // checks if the cursor is in the jump zone of any edge that has a neighbour.
     // coords are 0-based within the current screen.
-    // returns the neighbour and mapped entry coords, or null.
+    // returns the neighbour, the mapped entry coords and the edge left by, or null.
     public EdgeHit? DetectEdgeExit(ScreenRect current, int x, int y)
     {
         Direction? dir = null;
@@ -165,7 +165,7 @@ public class ScreenLayout(List<ScreenRect> screens, List<HostConfig> configs, in
         if (dest.Width == 0 || dest.Height == 0) return null;
 
         var entry = MapEntry(dest, dir.Value, perpPos, edgeLen, match);
-        return new EdgeHit(dest, dir.Value, entry.X, entry.Y);
+        return new EdgeHit(dest, dir.Value, entry, new ScreenEdge(current.Name, dir.Value, perpPos));
     }
 
     // maps cursor position from source edge range to dest entry coords with nudge
@@ -181,16 +181,30 @@ public class ScreenLayout(List<ScreenRect> screens, List<HostConfig> configs, in
             : 0f;
 
         var destPos = Math.Clamp((int)(link.DestStart * destEdgeLen + normalized * (link.DestEnd - link.DestStart) * destEdgeLen), 0, destEdgeLen - 1);
-
-        return dir switch
-        {
-            Direction.Right => new(NudgeDistance, destPos),
-            Direction.Left => new(to.Width - 1 - NudgeDistance, destPos),
-            Direction.Down => new(destPos, NudgeDistance),
-            Direction.Up => new(destPos, to.Height - 1 - NudgeDistance),
-            _ => throw new ArgumentOutOfRangeException(nameof(dir), dir, null),
-        };
+        return InsetFromEdge(to, dir, destPos);
     }
+
+    // Where a return with no edge of its own comes back through the edge a visit left by: just inside it on that screen
+    // as it is now, so a resized screen's new edge, or null when the screen is gone or empty.
+    public static ScreenPoint? LandingBack(ScreenEdge exit, IEnumerable<ScreenRect> screens)
+    {
+        var screen = screens.FirstOrDefault(s => s.Name.EqualsIgnoreCase(exit.Screen));
+        if (screen is null) return null;
+        var edgeLen = exit.Edge is Direction.Left or Direction.Right ? screen.Height : screen.Width;
+        if (edgeLen <= 0) return null;
+        return screen.ToGlobal(InsetFromEdge(screen, exit.Edge.Opposite(), Math.Clamp(exit.Position, 0, edgeLen - 1)));
+    }
+
+    // a point just inside the edge a cursor moving in arrivingDir enters `screen` by, edgePos along it (screen-local);
+    // the nudge clears the jump zone so the landing never re-crosses
+    private static ScreenPoint InsetFromEdge(ScreenRect screen, Direction arrivingDir, int edgePos) => arrivingDir switch
+    {
+        Direction.Right => new(NudgeDistance, edgePos),
+        Direction.Left => new(screen.Width - 1 - NudgeDistance, edgePos),
+        Direction.Down => new(edgePos, NudgeDistance),
+        Direction.Up => new(edgePos, screen.Height - 1 - NudgeDistance),
+        _ => throw new ArgumentOutOfRangeException(nameof(arrivingDir), arrivingDir, null),
+    };
 
     // returns the active edge ranges for all local screens, with dead corners trimmed.
     // each entry describes a pixel range along one edge of one local screen where a transition exists.

@@ -689,6 +689,47 @@ public class HydraConfigTests
     }
 
     [Test]
+    public void Validate_Throws_OnColonInHostName()
+    {
+        var json = AsFile($$"""
+            [{ "mode": "Master", "hosts": [{ "name": "a" }, { "name": "a:1" }]{{Relay}} }]
+            """);
+        Assert.That(() => HydraConfig.ParseAndValidate(json),
+            Throws.InvalidOperationException.With.Message.Contains("host name 'a:1'").And.Message.Contains("':' is reserved for monitor numbers"));
+    }
+
+    [Test]
+    public void Validate_Throws_OnColonInMirroredHostName()
+    {
+        // the mirror creates host "a:1", which the config never lists itself
+        var json = AsFile($$"""
+            [{ "mode": "Master", "hosts": [{ "name": "a", "neighbours": [{ "direction": "right", "name": "a:1" }] }]{{Relay}} }]
+            """);
+        Assert.That(() => HydraConfig.ParseAndValidate(json),
+            Throws.InvalidOperationException.With.Message.Contains("host name 'a:1'"));
+    }
+
+    [Test]
+    public void Validate_Throws_OnColonInOwnName()
+    {
+        var json = $$"""{"name":"a:1","profiles":[{ "mode": "Master"{{Relay}} }]}""";
+        Assert.That(() => HydraConfig.ParseAndValidate(json),
+            Throws.InvalidOperationException.With.Message.Contains("host name 'a:1'"));
+    }
+
+    [Test]
+    public void Validate_Accepts_MonitorNamesInSourceAndDestScreen()
+    {
+        var json = AsFile($$"""
+            [{ "mode": "Master", "hosts": [
+              { "name": "laptop", "neighbours": [{ "direction": "up", "name": "desk", "sourceScreen": "laptop:1", "destScreen": "desk:0" }] },
+              { "name": "desk" }
+            ]{{Relay}} }]
+            """);
+        Assert.That(() => HydraConfig.ParseAndValidate(json), Throws.Nothing);
+    }
+
+    [Test]
     public void Validate_Accepts_UniqueBidirectionalHosts()
     {
         var json = AsFile($$"""

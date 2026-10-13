@@ -4,3 +4,6 @@ procps
 libx11-6
 libxi6
 libxfixes3
+libxkbcommon0
+xkb-data
+libxtst6

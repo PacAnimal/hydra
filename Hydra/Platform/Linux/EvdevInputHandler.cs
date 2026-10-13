@@ -48,6 +48,7 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
 
     // evdev is headless/remote-only — no local screen, no OS window snapping to worry about
     public bool AnyMouseButtonHeld() => false;
+    public bool SeesSwallowed(MouseButton button) => false;
 
     public Task StartEventTap(
         Action<double, double> onMouseMove,

@@ -127,4 +127,27 @@ describe('validate', () => {
   it('passes when remoteOnly with a remote host', () => {
     expect(validate([p({ remoteOnly: true, hosts: [{ name: 'pc' }] })])).toHaveLength(0)
   })
+
+  it('errors when a host name contains a colon', () => {
+    const errors = validate([p({ hosts: [{ name: 'a' }, { name: 'a:1' }] })])
+    expect(errors).toEqual([{ path: 'profiles[0].hosts[1].name', message: "host name 'a:1' cannot contain ':' (reserved for monitor numbers)" }])
+  })
+
+  it('errors when a mirrored neighbour would create a host whose name contains a colon', () => {
+    const errors = validate([p({ hosts: [{ name: 'a', neighbours: [{ direction: 'Right', name: 'a:1' }] }] })])
+    expect(errors).toEqual([{ path: 'profiles[0].hosts[0].neighbours[0].name', message: "host name 'a:1' cannot contain ':' (reserved for monitor numbers)" }])
+  })
+
+  it('errors when the root name contains a colon', () => {
+    expect(validate([p({})], 'a:1')).toEqual([{ path: 'name', message: "host name 'a:1' cannot contain ':' (reserved for monitor numbers)" }])
+  })
+
+  it('passes a root name without a colon', () => {
+    expect(validate([p({})], 'laptop')).toHaveLength(0)
+  })
+
+  it('passes monitor names in sourceScreen and destScreen', () => {
+    const hosts = [{ name: 'laptop', neighbours: [{ direction: 'Up' as const, name: 'desk', sourceScreen: 'laptop:1', destScreen: 'desk:0' }] }, { name: 'desk' }]
+    expect(validate([p({ hosts })])).toHaveLength(0)
+  })
 })

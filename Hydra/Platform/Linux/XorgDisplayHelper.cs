@@ -12,6 +12,22 @@ internal static class XorgDisplayHelper
         return new ScreenPoint(rootX, rootY);
     }
 
+    // the keycodes held down on the server right now
+    internal static List<uint> HeldKeycodes(nint display)
+    {
+        var keymap = new byte[32];
+        _ = NativeMethods.XQueryKeymap(display, keymap);
+        var held = new List<uint>();
+        for (var keycode = 0; keycode < keymap.Length * 8; keycode++)
+            if ((keymap[keycode >> 3] & (1 << (keycode & 7))) != 0) held.Add((uint)keycode);
+        return held;
+    }
+
+    // auto-repeat then arrives as repeated KeyPress with no KeyRelease between, on this connection only.
+    // false if the server does not support it.
+    internal static bool EnableDetectableAutoRepeat(nint display) =>
+        NativeMethods.XkbSetDetectableAutoRepeat(display, true, out var supported) && supported;
+
     internal static List<DetectedScreen> GetAllScreens(nint display, nint rootWindow)
     {
         var result = new List<DetectedScreen>();

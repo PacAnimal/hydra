@@ -29,7 +29,7 @@ export default function App() {
 
   const { profiles, activeIndex } = state
   const isMaster = current.mode === 'Master'
-  const errors = validate(profiles)
+  const errors = validate(profiles, state.name)
   const isValid = errors.length === 0
 
   // undo/redo keyboard shortcuts

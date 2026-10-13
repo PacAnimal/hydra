@@ -487,6 +487,11 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     internal static partial short GetKeyState(int nVirtKey);
 
+    // high bit: the key is down right now, as the OS sees it
+    [LibraryImport(User32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial short GetAsyncKeyState(int vKey);
+
     // -- session lock detection --
 
     internal static readonly nint HWND_MESSAGE = new(-3);

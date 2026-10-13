@@ -78,7 +78,10 @@ internal sealed class EvdevKeyResolver : IDisposable
     // value=1 → KeyDown, value=0 → KeyUp, value=2 → repeat (ignored — auto-repeat handled by slave)
     internal KeyEvent?[]? Resolve(uint evdevCode, int value)
     {
-        lock (_stateLock) return ResolveLocked(evdevCode, value);
+        KeyEvent?[]? events;
+        lock (_stateLock) events = ResolveLocked(evdevCode, value);
+        KeyResolver.StampPhysicalKey(events, (int)evdevCode);
+        return events;
     }
 
     private KeyEvent?[]? ResolveLocked(uint evdevCode, int value)

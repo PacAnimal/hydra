@@ -16,8 +16,23 @@ internal sealed class XorgKeyResolver
     private readonly Dictionary<uint, int> _heldModifierCounts = [];
     // ScrollLock modifier mask — detected at startup via XGetModifierMapping; defaults to Mod3 (standard)
     private uint _scrollLockMask = NativeMethods.Mod3Mask;
+    // keys Reset seeded that have not been released since
+    private readonly HashSet<uint> _seeded = [];
+    // Resolve runs on the event-tap thread, Reset on whichever thread starts a grab
+    private readonly Lock _lock = new();
 
     internal KeyEvent?[]? Resolve(int evType, uint keycode, uint state, nint display)
+    {
+        lock (_lock)
+        {
+            if (evType == NativeMethods.KeyRelease) _seeded.Remove(keycode);
+            var events = ResolveEvents(evType, keycode, state, display);
+            KeyResolver.StampPhysicalKey(events, (int)keycode);
+            return events;
+        }
+    }
+
+    private KeyEvent?[]? ResolveEvents(int evType, uint keycode, uint state, nint display)
     {
         // resolve using the active layout: group from Xkb state bits, level from Shift/AltGr
         var isShortcut = (state & (NativeMethods.Mod4Mask | NativeMethods.ControlMask)) != 0;
@@ -1299,14 +1314,38 @@ internal sealed class XorgKeyResolver
         return mods;
     }
 
-    // resets resolver state when the keyboard grab is lost and re-established.
-    // missed key-up events while ungrabbed leave stale entries in _keyDownId;
-    // clearing prevents phantom stuck-key suppression on the next session.
-    internal void Reset()
+    // resets resolver state as the keyboard grab starts: nothing was seen while ungrabbed, so the keys
+    // physically held are seeded with no identity — their repeats resolve as repeats and their release to
+    // nothing. makes no X calls, since Resolve takes Xlib's display lock under _lock.
+    internal void Reset(IEnumerable<uint> heldKeycodes)
     {
-        _pendingDeadKey = '\0';
-        _pendingDeadSpacing = '\0';
-        _keyDownId.Clear();
-        _heldModifierCounts.Clear();
+        lock (_lock)
+        {
+            _pendingDeadKey = '\0';
+            _pendingDeadSpacing = '\0';
+            _keyDownId.Clear();
+            _heldModifierCounts.Clear();
+            _seeded.Clear();
+            foreach (var keycode in heldKeycodes)
+            {
+                _keyDownId[keycode] = new CharClassification(null, null);
+                _seeded.Add(keycode);
+            }
+        }
+    }
+
+    // drops the seeds no longer held, so a key released before the grab took is a real down when pressed again.
+    // never adds one: a key now held but not seeded went down after the grab and was seen.
+    internal void ForgetReleasedSeeds(IEnumerable<uint> heldKeycodes)
+    {
+        var held = heldKeycodes.ToHashSet();
+        lock (_lock)
+        {
+            foreach (var keycode in _seeded.Where(k => !held.Contains(k)).ToList())
+            {
+                _keyDownId.Remove(keycode);
+                _seeded.Remove(keycode);
+            }
+        }
     }
 }

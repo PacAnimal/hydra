@@ -1,4 +1,6 @@
+using Hydra.Config;
 using Hydra.Keyboard;
+using Hydra.Mouse;
 using Hydra.Relay;
 using Hydra.Screen;
 using Tests.Setup;
@@ -91,6 +93,25 @@ public class ScreenLockTests
     }
 
     [Test]
+    public async Task LockHotkeyOnAMediaKey_ItsRepeatDoesNotToggleAgain()
+    {
+        // volume and brightness auto-repeat; the macOS tap marks those downs IsRepeat
+        var bundle = TransitionTestHelper.CreateService(profile: TransitionTestHelper.ProfileWith(
+            hotkeys: new() { [nameof(HotkeyAction.ToggleCursorLock)] = [nameof(SpecialKey.AudioVolumeUp)] }));
+        await bundle.Service.StartAsync(CancellationToken.None);
+        await BringRemoteOnline(bundle.Relay);
+
+        var down = KeyEvent.Special(KeyEventType.KeyDown, SpecialKey.AudioVolumeUp, KeyModifiers.None);
+        bundle.Platform.FireKeyEvent(down);
+        bundle.Platform.FireKeyEvent(down with { IsRepeat = true });
+
+        bundle.Platform.FireMouseMove(2559, 720);
+        Assert.That(bundle.Platform.HideCursorCalled, Is.False, "a repeat must not unlock");
+
+        await StopService(bundle.Platform, bundle.Service);
+    }
+
+    [Test]
     public void Locked_PreventsReturnToRealScreen()
     {
         // enter virtual screen
@@ -155,6 +176,9 @@ public class ScreenLockTests
         var (platform, _, service) = await StartChain();
         platform.FireMouseMove(2559, 720);
         PressLockHotkey(platform);
+        // a held button on a platform that sees it would be asked about, unless the lock refuses first
+        platform.SeesSwallowedButtons = true;
+        platform.FireMouseButton(new MouseButtonEvent(MouseButton.Left, true));
         var queries = platform.ButtonQueries;
 
         for (var i = 0; i < 30; i++)
@@ -188,7 +212,7 @@ public class ScreenLockTests
     {
         var (platform, relay, service) = await StartChain();
         platform.FireMouseMove(2559, 720);
-        platform.AnyMouseButtonHeld = true;
+        platform.FireMouseButton(new MouseButtonEvent(MouseButton.Left, true));
         relay.ClearSent();
 
         for (var i = 0; i < 30; i++)
@@ -207,8 +231,8 @@ public class ScreenLockTests
         var (platform, relay, service) = TransitionTestHelper.CreateRemoteOnlyService(TransitionTestHelper.RemoteOnlyPairConfig, headless: true);
         await service.StartAsync(CancellationToken.None);
         await relay.FirePeersChanged("mac", "win");
-        await TransitionTestHelper.AdvertiseScreens(relay, "mac", "screen:0", "screen:1");
-        await TransitionTestHelper.AdvertiseScreens(relay, "win", "screen:0");
+        await TransitionTestHelper.AdvertiseScreens(relay, "mac", 2);
+        await TransitionTestHelper.AdvertiseScreens(relay, "win", 1);
         Assert.That(platform.IsOnVirtualScreen, Is.True, "pre-condition: on mac");
 
         if (confined)
@@ -222,7 +246,7 @@ public class ScreenLockTests
         var enters = relay.Snapshot().Where(s => s.Kind == MessageKind.EnterScreen).ToList();
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(enters.Any(e => e.Targets.Contains("mac") && e.Json.Contains("screen:1")), Is.True, "should move onto mac's second monitor");
+            Assert.That(enters.Any(e => e.Targets.Contains("mac") && e.Json.Contains("mac:1")), Is.True, "should move onto mac's second monitor");
             Assert.That(enters.Any(e => e.Targets.Contains("win")), Is.EqualTo(!confined), confined ? "confinement should keep the cursor on mac" : "should cross to win");
         }
 

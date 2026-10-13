@@ -1,4 +1,3 @@
-using System.Runtime.InteropServices;
 using Cathedral.Extensions;
 using Cathedral.Utils;
 using Hydra.Config;
@@ -19,6 +18,7 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
     private Thread? _hookThread;
     private uint _hookThreadId;
     private readonly WinKeyResolver _keyResolver = new();
+    private readonly KeyFates _keyFates = new(strayUpsPass: false);
     private Action<double, double>? _onMouseMove;
     private Action<double, double>? _onMouseDelta;
     private Action<KeyEvent>? _onKeyEvent;
@@ -41,6 +41,10 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
 
     // the hook's input timestamps (MSLLHOOKSTRUCT.time) are on this clock
     internal Func<int> TickCount { get; init; } = static () => Environment.TickCount;
+
+    // whether the OS holds a virtual key down. read in a hook callback it is the state BEFORE that key's own event,
+    // and a swallowed key never changes it, so while virtual a key it holds was pressed while local
+    internal Func<int, bool> IsKeyDown { get; init; } = static vk => (NativeMethods.GetAsyncKeyState(vk) & 0x8000) != 0;
 
     public bool IsOnVirtualScreen
     {
@@ -70,9 +74,9 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
     private Timer? _healthTimer;
     // Windows 7+ silently removes a low-level hook whose callback overruns LowLevelHooksTimeout (a GC pause, a loaded
     // box) and says nothing. A live hook sees its input all the time, so a hook quiet for HookIdleMs is reinstalled,
-    // and again every HookIdleMs it stays quiet: microseconds if it was fine, its input back if it was gone. Key state
-    // is left alone: a key-up a dead hook lost cannot be told from a key held without repeating, and pressing the key
-    // again releases it.
+    // and again every HookIdleMs it stays quiet: microseconds if it was fine, its input back if it was gone. The
+    // resolver's key state is left alone: a key-up a dead hook lost cannot be told from a key held without repeating,
+    // and pressing the key again releases it. Only where keys went is forgotten, so a lost up swallows no later one.
     private const int HookIdleMs = 5000;
     private int _lastMouseCallbackTick; // hook thread only
     private int _lastKeyboardCallbackTick; // hook thread only
@@ -140,7 +144,7 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
     // (a warp, or entering a visit) may have been computed from where it was. It is re-based onto the target, once:
     // in a visit its delta is dropped, on the local screen its position. Up to two events at exactly a point it left
     // are late echoes of our own warps, swallowed without using up the re-base. With no retarget (an unlock or a
-    // stop never warps; a snap-back to the park point is no change) samples are genuine.
+    // stop never warps; a warp to where the cursor already is changes nothing) samples are genuine.
     internal Straddle TakeStraddle(int x, int y)
     {
         lock (_warpLock)
@@ -295,15 +299,14 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
 
     public bool RecentresItself => true;
 
+    // the async key state never sees a button our hook swallowed
+    public bool SeesSwallowed(MouseButton button) => false;
+
     public bool AnyMouseButtonHeld()
     {
-        // VK_LBUTTON=0x01, VK_RBUTTON=0x02, VK_MBUTTON=0x04, VK_XBUTTON1=0x05, VK_XBUTTON2=0x06
-        // high bit (0x8000) set means the key is currently down
-        return (NativeMethods.GetKeyState(0x01) & 0x8000) != 0
-            || (NativeMethods.GetKeyState(0x02) & 0x8000) != 0
-            || (NativeMethods.GetKeyState(0x04) & 0x8000) != 0
-            || (NativeMethods.GetKeyState(0x05) & 0x8000) != 0
-            || (NativeMethods.GetKeyState(0x06) & 0x8000) != 0;
+        // VK_LBUTTON=0x01, VK_RBUTTON=0x02, VK_MBUTTON=0x04, VK_XBUTTON1=0x05, VK_XBUTTON2=0x06; the async state, since the
+        // router asks from a thread that reads no input of its own (GetKeyState would always say up there)
+        return IsKeyDown(0x01) || IsKeyDown(0x02) || IsKeyDown(0x04) || IsKeyDown(0x05) || IsKeyDown(0x06);
     }
 
     public ValueTask DisposeAsync() { StopEventTap(); return ValueTask.CompletedTask; }
@@ -372,6 +375,7 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
         {
             _lastKeyboardCallbackTick = now;
             quiet |= Hooks.Keyboard;
+            _keyFates.Clear();
         }
         return quiet;
     }
@@ -383,13 +387,16 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
     // processes them, which the final read is closest to.
     private bool SwallowsMove(bool handledAsVirtual) => handledAsVirtual || IsOnVirtualScreen;
 
-    private nint MouseHookCallback(int nCode, nint wParam, nint lParam)
-    {
-        var swallow = nCode >= 0
-            ? HandleMouse((int)wParam, Marshal.PtrToStructure<MSLLHOOKSTRUCT>(lParam), static (x, y) => NativeMethods.SetCursorPos(x, y))
-            : IsOnVirtualScreen;
-        return swallow ? 1 : NativeMethods.CallNextHookEx(nint.Zero, nCode, wParam, lParam);
-    }
+    // nCode < 0 must go straight down the chain; the struct is read directly rather than boxed by PtrToStructure
+    private unsafe nint MouseHookCallback(int nCode, nint wParam, nint lParam) =>
+        SwallowOrChain(nCode >= 0 && HandleMouse((int)wParam, *(MSLLHOOKSTRUCT*)lParam, static (x, y) => NativeMethods.SetCursorPos(x, y)),
+            nCode, wParam, lParam);
+
+    private unsafe nint KeyboardHookCallback(int nCode, nint wParam, nint lParam) =>
+        SwallowOrChain(nCode >= 0 && HandleKey((int)wParam, *(KBDLLHOOKSTRUCT*)lParam), nCode, wParam, lParam);
+
+    private static nint SwallowOrChain(bool swallow, int nCode, nint wParam, nint lParam) =>
+        swallow ? 1 : NativeMethods.CallNextHookEx(nint.Zero, nCode, wParam, lParam);
 
     // returns whether to swallow the sample
     internal bool HandleMouse(int msg, MSLLHOOKSTRUCT info, Action<int, int> setCursorPos)
@@ -432,10 +439,16 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
             return SwallowsMove(onVirtualScreen);
         }
 
-        if (msg is NativeMethods.WM_LBUTTONDOWN or NativeMethods.WM_LBUTTONUP
+        var isButton = msg is NativeMethods.WM_LBUTTONDOWN or NativeMethods.WM_LBUTTONUP
             or NativeMethods.WM_RBUTTONDOWN or NativeMethods.WM_RBUTTONUP
             or NativeMethods.WM_MBUTTONDOWN or NativeMethods.WM_MBUTTONUP
-            or NativeMethods.WM_XBUTTONDOWN or NativeMethods.WM_XBUTTONUP)
+            or NativeMethods.WM_XBUTTONDOWN or NativeMethods.WM_XBUTTONUP;
+        var isWheel = msg is NativeMethods.WM_MOUSEWHEEL or NativeMethods.WM_MOUSEHWHEEL;
+
+        // a click or scroll proves a deferred left Ctrl was no AltGr, so Ctrl+click and Ctrl+wheel keep their Ctrl
+        if (isButton || isWheel) HandOver(_keyResolver.FlushDeferredLCtrl());
+
+        if (isButton)
         {
             var isDown = msg is NativeMethods.WM_LBUTTONDOWN or NativeMethods.WM_RBUTTONDOWN
                 or NativeMethods.WM_MBUTTONDOWN or NativeMethods.WM_XBUTTONDOWN;
@@ -446,7 +459,7 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
                 : MouseButton.Left;
             _onMouseButton?.Invoke(new MouseButtonEvent(button, isDown));
         }
-        else if (msg is NativeMethods.WM_MOUSEWHEEL or NativeMethods.WM_MOUSEHWHEEL)
+        else if (isWheel)
         {
             var delta = (short)(info.mouseData >> 16);
             var scroll = msg == NativeMethods.WM_MOUSEWHEEL
@@ -459,12 +472,7 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
         return IsOnVirtualScreen;
     }
 
-    private nint KeyboardHookCallback(int nCode, nint wParam, nint lParam) =>
-        nCode >= 0 && HandleKey((int)wParam, Marshal.PtrToStructure<KBDLLHOOKSTRUCT>(lParam))
-            ? 1
-            : NativeMethods.CallNextHookEx(nint.Zero, nCode, wParam, lParam);
-
-    // returns whether to swallow the key
+    // returns whether to swallow the key, which goes where its press went (KeyFates)
     internal bool HandleKey(int msg, KBDLLHOOKSTRUCT info)
     {
         _lastKeyboardCallbackTick = TickCount();
@@ -472,8 +480,19 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
         var keyEvents = _keyResolver.Resolve(msg, info);
         if (keyEvents is not null)
             foreach (var keyEvent in keyEvents)
-                _onKeyEvent?.Invoke(keyEvent);
-        return IsOnVirtualScreen;
+                HandOver(keyEvent);
+        return _keyFates.Swallow(WinKeyResolver.TrackingVk(info), WinKeyResolver.IsKeyUp(msg), repeat: null,
+            osHolds: IsKeyDown((int)info.vkCode), IsOnVirtualScreen);
+    }
+
+    // Every event goes to the router, whose AdmitKey decides, except the deferred left Ctrl of a key the OS holds:
+    // flushed during a visit by whatever follows it, the router would take it for the visit's own press.
+    private void HandOver(KeyEvent? keyEvent)
+    {
+        if (keyEvent is null) return;
+        if (keyEvent is { Type: KeyEventType.KeyDown, PhysicalKey: WinVirtualKey.LControl } && IsOnVirtualScreen && IsKeyDown(WinVirtualKey.LControl))
+            return;
+        _onKeyEvent?.Invoke(keyEvent);
     }
 
     internal enum Straddle { None, Echo, Rebase }

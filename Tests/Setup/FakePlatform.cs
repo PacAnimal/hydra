@@ -81,6 +81,11 @@ public sealed class FakePlatform : IPlatformInput, ICursorHider
     public bool AnyMouseButtonHeld { get; set; }
     public bool CursorIsVisible { get; set; }
     public bool RecentresItself { get; set; }
+    // the default for SeesSwallowed, less UnseenButtons
+    public bool SeesSwallowedButtons { get; set; }
+    // buttons hidden from AnyMouseButtonHeld even where it sees swallowed ones (Xorg's side buttons)
+    public MouseButton[] UnseenButtons { get; set; } = [];
+    public bool SeesSwallowed(MouseButton button) => SeesSwallowedButtons && !UnseenButtons.Contains(button);
     // how often the router asked, which on Xorg is a server round-trip
     public int ButtonQueries { get; private set; }
 

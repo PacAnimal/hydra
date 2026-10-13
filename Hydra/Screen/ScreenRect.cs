@@ -51,6 +51,8 @@ public record ScreenRect(
     public bool Contains(double x, double y) =>
         x >= X && x < X + Width && y >= Y && y < Y + Height;
 
+    public ScreenPoint ToGlobal(ScreenPoint local) => new(X + local.X, Y + local.Y);
+
     public static bool ScreenListChanged(IReadOnlyList<IBounded> a, IReadOnlyList<IBounded> b)
     {
         if (a.Count != b.Count) return true;
@@ -60,7 +62,12 @@ public record ScreenRect(
     }
 }
 
-public record EdgeHit(ScreenRect Destination, Direction Direction, int EntryX, int EntryY);
+// Entry: where the cursor lands on the destination (screen-local). Exit: the edge it left by, for a return that has no
+// edge of its own (a disconnect, the screensaver) to come back through, see ScreenLayout.LandingBack.
+public record EdgeHit(ScreenRect Destination, Direction Direction, ScreenPoint Entry, ScreenEdge Exit);
+
+// a position along one edge of a named screen
+public readonly record struct ScreenEdge(string Screen, Direction Edge, int Position);
 
 // a pixel position, global or screen-local as its owner says
 public readonly record struct ScreenPoint(int X, int Y);

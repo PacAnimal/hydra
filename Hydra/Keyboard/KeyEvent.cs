@@ -12,6 +12,10 @@ public sealed record KeyEvent(KeyEventType Type, KeyModifiers Modifiers)
     // repeats are not initial presses: the slave injects them without tracking a new held key.
     public bool IsRepeat { get; init; }
 
+    // the key the resolver tracks this event under (vk, keycode or evdev code); never on the wire.
+    // pairs a repeat or key-up with its down, see InputRouter's forwarded-keys gate.
+    internal int PhysicalKey { get; init; }
+
     public static KeyEvent Char(KeyEventType type, char ch, KeyModifiers mods) =>
         new(type, mods) { Character = ch };
 

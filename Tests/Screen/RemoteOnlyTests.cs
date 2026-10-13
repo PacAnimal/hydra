@@ -1,4 +1,5 @@
 using Hydra.Keyboard;
+using Hydra.Mouse;
 using Hydra.Relay;
 using Hydra.Screen;
 using Tests.Setup;
@@ -127,6 +128,53 @@ public class RemoteOnlyTests
         await screens.FireChange();
 
         Assert.That(_platform.Calls, Has.No.Member("warp"));
+    }
+
+    [Test]
+    public async Task AutoEntry_WhileAButtonIsHeld_WaitsForItsRelease()
+    {
+        // the button went down here; entering now would swallow its up and leave it stuck down
+        _platform.AnyMouseButtonHeld = true;
+        await TransitionTestHelper.BringHostOnline(_relay, "mac");
+        Assert.That(_platform.IsOnVirtualScreen, Is.False, "not while the button is held");
+
+        _platform.AnyMouseButtonHeld = false;
+        _platform.FireMouseButton(new MouseButtonEvent(MouseButton.Left, false));
+
+        Assert.That(_platform.IsOnVirtualScreen, Is.True);
+    }
+
+    [Test]
+    public async Task AutoEntryRefusedForAHeldButton_IsRetriedOnTheNextLocalMove()
+    {
+        // the release itself can be handled before the OS has the button up, so a move retries too
+        _platform.AnyMouseButtonHeld = true;
+        await TransitionTestHelper.BringHostOnline(_relay, "mac");
+        _platform.AnyMouseButtonHeld = false;
+
+        _platform.FireMouseMove(100, 100);
+
+        Assert.That(_platform.IsOnVirtualScreen, Is.True);
+    }
+
+    [Test]
+    public async Task LockHotkey_RelockWhileAButtonIsHeld_StaysLocalUntilItsRelease()
+    {
+        await TransitionTestHelper.BringHostOnline(_relay, "mac");
+        _platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyDown, 'l', KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Super));
+        Assert.That(_platform.IsOnVirtualScreen, Is.False, "pre-condition: unlocked");
+        _platform.AnyMouseButtonHeld = true;
+
+        _platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyDown, 'l', KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Super));
+        var whileHeld = _platform.IsOnVirtualScreen;
+        _platform.AnyMouseButtonHeld = false;
+        _platform.FireMouseButton(new MouseButtonEvent(MouseButton.Left, false));
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(whileHeld, Is.False, "refused while the button is held");
+            Assert.That(_platform.IsOnVirtualScreen, Is.True, "entered on its release");
+        }
     }
 
     [Test]

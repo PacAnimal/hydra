@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using Hydra.Platform;
 using Hydra.Platform.Linux;
+using Tests.Setup;
 
 namespace Tests.Clipboard;
 
@@ -21,11 +22,7 @@ public class XorgClipboardSyncTests
     // discovered everywhere but only runnable on Linux with a live X server. Skip (don't fail) elsewhere,
     // and skip BEFORE touching XorgClipboardSync so libX11 is never loaded on macOS/Windows.
     [OneTimeSetUp]
-    public void RequireX11()
-    {
-        if (!OperatingSystem.IsLinux() || string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DISPLAY")))
-            Assert.Ignore("Requires Linux with an X server (run ./run-tests.sh linux)");
-    }
+    public void RequireX11() => X11Required.OrIgnore();
 
     [TearDown]
     public void KillStrayXclip()

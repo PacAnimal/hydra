@@ -37,6 +37,10 @@ public interface IPlatformInput : IAsyncDisposable, ICursor, ILocalEventTap
 
     bool AnyMouseButtonHeld();
 
+    // True when AnyMouseButtonHeld sees this button though the event tap swallowed it (macOS; Xorg's Left/Middle/Right). A
+    // Windows hook hides it from GetAsyncKeyState, and evdev cannot ask at all.
+    bool SeesSwallowed(MouseButton button);
+
     // True when the handler recentres the physical cursor itself, per raw sample on its capture thread (Windows).
     // Windows' delta is two reads of the real, monitor-clamped cursor, so it must recentre every sample, and it
     // must be per raw sample rather than per batch: a batch-sized reset jump looks like real input to Windows'

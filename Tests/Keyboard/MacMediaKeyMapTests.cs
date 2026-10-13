@@ -58,4 +58,24 @@ public class MacMediaKeyMapTests
             Assert.That(MacMediaKeyMap.TryGetKey(4u, out _), Is.False);
         }
     }
+
+    [Test]
+    public void PhysicalKey_IsClearOfEveryKeycode()
+    {
+        // keycode 0 is 'a': a media key stamped 0 would pair with it in the router's held-key set and in KeyFates.
+        // every type Decode can yield, against every CGKeyCode (a uint16)
+        Assert.That(Enumerable.Range(0, 0x10000).Select(t => MacMediaKeyMap.PhysicalKey((uint)t)), Has.All.GreaterThan((int)ushort.MaxValue));
+    }
+
+    // data1: NX_KEYTYPE in bits 16-31, state 0xA (down) or 0xB (up) in bits 8-15, the repeat flag in bit 0
+    [TestCase(0x00000A00L, 0u, true, false)]
+    [TestCase(0x00000A01L, 0u, true, true)]
+    [TestCase(0x00000B00L, 0u, false, false)]
+    [TestCase(0x00000B01L, 0u, false, true)]
+    [TestCase(0x00100A00L, 16u, true, false)]
+    [TestCase(0x00010B00L, 1u, false, false)]
+    [TestCase(unchecked((long)0xFFFFFFFF00030A01UL), 3u, true, true)]
+    [TestCase(unchecked((long)0x80000000FFFF0B00UL), 0xFFFFu, false, false)]
+    public void Decode_ReadsTypeStateAndRepeat(long data1, uint keyType, bool isDown, bool isRepeat) =>
+        Assert.That(MacMediaKeyMap.Decode(data1), Is.EqualTo(new MacMediaKeyMap.NxKey(keyType, isDown, isRepeat)));
 }

@@ -83,7 +83,7 @@ Use `Esc` to close the TUI. It does not change Hydra's running state.
 
 **Root-level** (global, apply to all profiles):
 
-- `name` — this machine's name on the network. Optional — defaults to the machine's hostname without domain. Must match one of the host names for the master to identify its own screen.
+- `name` — this machine's name on the network. Optional — defaults to the machine's hostname without domain. Must match one of the host names for the master to identify its own screen. Cannot contain `:`, which is reserved for monitor numbers (`laptop:1`).
 - `logLevel` — `trce`, `dbug`, `info`, `warn`, `fail`, or `crit`
 - `logFile` — path to a file where log output is also written (in addition to the console); relative paths are resolved from the config file's directory (default: none)
 - `sessionLogFile` — Windows service mode only: path to a file where the session child's log output is written. The service spawns a child process in the interactive session to run the input hooks and the relay, so this is the log that records what actually happened. Defaults to `logFile` with a `.session.log` extension, so it is only worth setting to move it elsewhere.
@@ -144,7 +144,7 @@ Supported directions: `left`, `right`, `up`, `down`.
 | Field | Default | Description |
 |-------|---------|-------------|
 | `direction` | required | Which edge of this host triggers the transition |
-| `name` | required | Target host name |
+| `name` | required | Target host name. Like every host name it cannot contain `:`, which is reserved for monitor numbers |
 | `mirror` | `true` | Auto-create the reverse mapping on the target host (skipped if the reverse already exists) |
 | `sourceStart` | `0` | Start of the source edge range (0–100%), inclusive |
 | `sourceEnd` | `100` | End of the source edge range (0–100%), inclusive |

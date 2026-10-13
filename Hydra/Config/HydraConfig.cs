@@ -193,6 +193,8 @@ public class HydraConfig
                 throw new InvalidOperationException($"hydra.conf 'profile' override '{profileOverride}' does not match any profile's profileName.");
         }
 
+        RejectColon(resolvedName);
+
         // no duplicate profile names
         var names = profiles.Where(c => !string.IsNullOrWhiteSpace(c.ProfileName))
             .GroupBy(c => c.ProfileName!.Trim(), StringComparer.OrdinalIgnoreCase)
@@ -240,6 +242,7 @@ public class HydraConfig
                 .FirstOrDefault(g => g.Count() > 1);
             if (dupHost != null)
                 throw new InvalidOperationException($"hydra.conf has duplicate host name '{dupHost.Key}' in profile '{cfg.ProfileName ?? "(default)"}'.");
+            cfg.Hosts.ForEach(h => RejectColon(h.Name));
 
             if (cfg.Mode == Mode.Slave && cfg.HideCursor)
                 throw new InvalidOperationException("hideCursor is master-only. Remove it from slave profiles.");
@@ -262,5 +265,12 @@ public class HydraConfig
                     throw new InvalidOperationException("A screenDefinition entry has no matching criteria (displayName, outputName, platformId are all null) — it can never match any screen.");
             }
         }
+    }
+
+    // screens are named <host>:<n> (ScreenNaming), so a host named "a:1" could collide with host a's second monitor
+    private static void RejectColon(string hostName)
+    {
+        if (hostName.Contains(':'))
+            throw new InvalidOperationException($"hydra.conf host name '{hostName}' cannot contain ':' — ':' is reserved for monitor numbers.");
     }
 }

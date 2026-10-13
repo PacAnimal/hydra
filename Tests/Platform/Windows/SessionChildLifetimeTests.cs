@@ -4,6 +4,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Win32.SafeHandles;
+using Tests.Setup;
 
 namespace Tests.Platform.Windows;
 
@@ -157,7 +158,7 @@ public class SessionChildLifetimeTests
     {
         var lookups = 0;
         var thirdLookup = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var log = new LevelLog();
+        var log = new CapturingLog<SessionChildLifetime>();
         using var lifetime = new SessionChildLifetime(_lifetime, _stopEventName, () =>
         {
             if (Interlocked.Increment(ref lookups) == 3) thirdLookup.TrySetResult();
@@ -172,7 +173,7 @@ public class SessionChildLifetimeTests
         }
         finally { await lifetime.StopAsync(CancellationToken.None); }
 
-        Assert.That(log.Levels()[..2], Is.EqualTo([LogLevel.Warning, LogLevel.Debug]));
+        Assert.That(log.Entries.Select(e => e.Level).Take(2), Is.EqualTo([LogLevel.Warning, LogLevel.Debug]));
     }
 
     // a good lookup ends the streak, so the next failure is a new one and warns again
@@ -181,7 +182,7 @@ public class SessionChildLifetimeTests
     {
         var lookups = 0;
         var fourthLookup = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var log = new LevelLog();
+        var log = new CapturingLog<SessionChildLifetime>();
         using var lifetime = new SessionChildLifetime(_lifetime, _stopEventName, () =>
         {
             var lookup = Interlocked.Increment(ref lookups);
@@ -197,29 +198,11 @@ public class SessionChildLifetimeTests
         }
         finally { await lifetime.StopAsync(CancellationToken.None); }
 
-        Assert.That(log.Levels()[..2], Is.EqualTo([LogLevel.Warning, LogLevel.Warning]));
+        Assert.That(log.Entries.Select(e => e.Level).Take(2), Is.EqualTo([LogLevel.Warning, LogLevel.Warning]));
     }
 
     private SessionChildLifetime Lifetime(Func<CancellationToken, Task> restamp) =>
         new(_lifetime, _stopEventName, () => _user, restamp, NullLogger<SessionChildLifetime>.Instance);
-
-    private sealed class LevelLog : ILogger<SessionChildLifetime>
-    {
-        private readonly List<LogLevel> _levels = [];
-
-        public LogLevel[] Levels()
-        {
-            lock (_levels) return [.. _levels];
-        }
-
-        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-        public bool IsEnabled(LogLevel logLevel) => true;
-
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
-        {
-            lock (_levels) _levels.Add(logLevel);
-        }
-    }
 
     private sealed class StopRecorder : IHostApplicationLifetime
     {

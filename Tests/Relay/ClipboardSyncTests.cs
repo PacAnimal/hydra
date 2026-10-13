@@ -741,7 +741,7 @@ public class ClipboardSyncTests
     {
         await relay.FirePeersChanged("remote");
         var info = JsonSerializer.Serialize(
-            new ScreenInfoMessage([new ScreenInfoEntry("screen:0", 0, 0, 2560, 1440, 1.0m)], platform),
+            new ScreenInfoMessage([new ScreenInfoEntry("remote", 0, 0, 2560, 1440, 1.0m)], platform),
             SaneJson.Options);
         await relay.FireMessageReceived("remote", MessageKind.ScreenInfo, info);
     }

@@ -82,7 +82,28 @@ public class ScreenLayoutTests
     {
         // entering remote screen from right edge: entryX should be nudged past left edge
         var hit = Layout.DetectEdgeExit(Home, 2559, 720);
-        Assert.That(hit!.EntryX, Is.GreaterThan(0));
+        Assert.That(hit!.Entry.X, Is.GreaterThan(0));
+    }
+
+    // a second monitor at (2560, 0) with a remote on every side: coming back lands just inside the edge left by
+    [TestCase(Direction.Right, 1919, 500, 2560 + 1917, 500)]
+    [TestCase(Direction.Left, 0, 500, 2560 + 2, 500)]
+    [TestCase(Direction.Up, 800, 0, 2560 + 800, 2)]
+    [TestCase(Direction.Down, 800, 1079, 2560 + 800, 1077)]
+    public void LandingBack_IsJustInsideTheEdgeLeft(Direction dir, int x, int y, int landX, int landY)
+    {
+        var second = new ScreenRect("home:1", "home", 2560, 0, 1920, 1080, IsLocal: true);
+        var remote = new ScreenRect("remote", "remote", 0, 0, 2560, 1440, IsLocal: false);
+        var layout = new ScreenLayout(
+            [second, remote],
+            [new HostConfig { Name = "home", Neighbours = [new NeighbourConfig { Direction = dir, Name = "remote", Mirror = false }] }],
+            null,
+            [],
+            NullLogger.Instance);
+
+        var hit = layout.DetectEdgeExit(second, x, y);
+
+        Assert.That(ScreenLayout.LandingBack(hit!.Exit, [second]), Is.EqualTo(new ScreenPoint(landX, landY)));
     }
 
     [Test]
@@ -90,7 +111,7 @@ public class ScreenLayoutTests
     {
         // cursor at middle of right edge → lands at middle of destination
         var hit = Layout.DetectEdgeExit(Home, 2559, 720);
-        Assert.That(hit!.EntryY, Is.EqualTo(720).Within(2));
+        Assert.That(hit!.Entry.Y, Is.EqualTo(720).Within(2));
     }
 
     [Test]
@@ -98,7 +119,7 @@ public class ScreenLayoutTests
     {
         // cursor at 25% down → lands at 25% down on destination
         var hit = Layout.DetectEdgeExit(Home, 2559, 360);
-        Assert.That(hit!.EntryY, Is.EqualTo(360).Within(2));
+        Assert.That(hit!.Entry.Y, Is.EqualTo(360).Within(2));
     }
 
     [Test]
@@ -106,7 +127,7 @@ public class ScreenLayoutTests
     {
         // returning home: entryX should be nudged away from right edge
         var hit = Layout.DetectEdgeExit(Remote, 0, 720);
-        Assert.That(hit!.EntryX, Is.LessThan(Home.Width - 1));
+        Assert.That(hit!.Entry.X, Is.LessThan(Home.Width - 1));
     }
 
     // -- skip-through offline screens --
@@ -186,7 +207,7 @@ public class ScreenLayoutTests
         // cursor at 25% down (360px of 1440) → should map to 75% down on dest (75% of 1440 = 1080)
         var hit = layout.DetectEdgeExit(home, 2559, 360);
         Assert.That(hit, Is.Not.Null);
-        Assert.That(hit!.EntryY, Is.EqualTo(1080).Within(5));
+        Assert.That(hit!.Entry.Y, Is.EqualTo(1080).Within(5));
     }
 
     [Test]
@@ -258,7 +279,7 @@ public class ScreenLayoutTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(hit!.Destination.Name, Is.EqualTo("remote"));
-            Assert.That(hit.EntryY, Is.EqualTo(720).Within(2));
+            Assert.That(hit.Entry.Y, Is.EqualTo(720).Within(2));
         }
     }
 
@@ -323,7 +344,7 @@ public class ScreenLayoutTests
         // cursor at x=400 (left 20%, within 0-50% range) → maps to right half of dest
         var hit = layout.DetectEdgeExit(bottom, 400, 0);
         Assert.That(hit, Is.Not.Null);
-        Assert.That(hit!.EntryX, Is.GreaterThanOrEqualTo(960)); // dest right half starts at 960
+        Assert.That(hit!.Entry.X, Is.GreaterThanOrEqualTo(960)); // dest right half starts at 960
 
         // cursor at x=1600 (right 83%, outside 0-50% range) → null
         var miss = layout.DetectEdgeExit(bottom, 1600, 0);

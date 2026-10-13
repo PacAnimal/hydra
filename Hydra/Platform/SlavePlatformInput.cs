@@ -22,5 +22,6 @@ internal sealed class SlavePlatformInput(ICursor cursor) : IPlatformInput
     public bool IsAccessibilityTrusted() => true;
     public bool RecentresItself => false;
     public bool AnyMouseButtonHeld() => false;
+    public bool SeesSwallowed(MouseButton button) => false;
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }

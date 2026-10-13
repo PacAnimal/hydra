@@ -156,14 +156,15 @@ run_mac() {
 
 # Container X11 lane: install Xvfb + xclip + the X client libs, then run the Category=Linux
 # tests under xvfb-run (which starts a headless X server, sets DISPLAY, and tears it down).
-# The package list is shared with CI's Linux test job.
+# The package list is shared with CI's Linux test job, and so are the server arguments: without -noreset
+# Xvfb resets each time its last client leaves, and a test connecting during that reset gets no display.
 run_linux() {
 	echo "── Container X11 tests (Category=Linux, headless Xvfb) ────────────"
 	docker run --rm -v "$PWD":/src -w /src "$SDK_IMAGE" bash -c '
 		set -e
 		apt-get update -qq
 		DEBIAN_FRONTEND=noninteractive xargs apt-get install -y -qq < .github/linux-test-packages.txt >/dev/null
-		xvfb-run -a dotnet test Hydra.sln --filter "Category=Linux"
+		xvfb-run -a -s "-screen 0 1280x1024x24 -noreset" dotnet test Hydra.sln --filter "Category=Linux"
 	'
 }
 

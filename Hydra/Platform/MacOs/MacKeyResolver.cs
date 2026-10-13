@@ -16,39 +16,48 @@ internal sealed class MacKeyResolver
 
     internal KeyEvent?[]? Resolve(int eventType, nint eventRef)
     {
-        if (eventType == NativeMethods.KCGEventFlagsChanged)
-        {
-            var ev = ResolveModifierChange(eventRef);
-            return ev is not null ? [ev] : null;
-        }
+        if (eventType is not (NativeMethods.KCGEventFlagsChanged or NativeMethods.KCGEventKeyDown or NativeMethods.KCGEventKeyUp)) return null;
 
-        if (eventType is NativeMethods.KCGEventKeyDown or NativeMethods.KCGEventKeyUp)
-            return ResolveKeyEvent(eventType, eventRef);
-
-        return null;
+        var vkCode = (int)NativeMethods.CGEventGetIntegerValueField(eventRef, NativeMethods.KCGKeyboardEventKeycode);
+        KeyEvent?[]? events;
+        if (eventType != NativeMethods.KCGEventFlagsChanged)
+            events = ResolveKeyEvent(eventType, vkCode, eventRef);
+        else
+            events = ResolveModifierChange(vkCode, eventRef) is { } ev ? [ev] : null;
+        KeyResolver.StampPhysicalKey(events, vkCode);
+        return events;
     }
 
-    private KeyEvent? ResolveModifierChange(nint eventRef)
+    private KeyEvent? ResolveModifierChange(int vkCode, nint eventRef)
     {
-        var vkCode = (int)NativeMethods.CGEventGetIntegerValueField(eventRef, NativeMethods.KCGKeyboardEventKeycode);
         var cgFlags = NativeMethods.CGEventGetFlags(eventRef);
         var newMods = MapModifiers(cgFlags);
         if (_scrollLockOn) newMods |= KeyModifiers.ScrollLock;
         if (!MacSpecialKeyMap.Instance.TryGet((ulong)vkCode, out var specialKey)) return null;
 
-        // determine press/release by tracking per-vkCode state, not just generic modifier flags.
-        // generic flags can't distinguish L vs R (e.g. Shift_R pressed while Shift_L held keeps Shift set,
-        // so changed=0, making the old isPress=(newMods&changed)!=0 logic always wrong in that case).
-        var isPress = _pressedModifierVks.Add(vkCode);
-        if (!isPress) _pressedModifierVks.Remove(vkCode);
+        var isPress = IsModifierPress(vkCode, cgFlags);
+        if (isPress) _pressedModifierVks.Add(vkCode);
+        else _pressedModifierVks.Remove(vkCode);
 
         var type = isPress ? KeyEventType.KeyDown : KeyEventType.KeyUp;
         return KeyEvent.Special(type, specialKey, newMods);
     }
 
-    private KeyEvent?[]? ResolveKeyEvent(int eventType, nint eventRef)
+    // press or release, read from the event's flags: HID state, correct even after events the tap missed.
+    // generic flags alone can't tell L from R, so the device bits decide; with neither side's device bit set
+    // (a synthetic event) or no device bit at all (CapsLock), fall back to toggling the vk's tracked state.
+    private bool IsModifierPress(int vkCode, ulong cgFlags)
     {
-        var vkCode = (int)NativeMethods.CGEventGetIntegerValueField(eventRef, NativeMethods.KCGKeyboardEventKeycode);
+        var masks = MacModifierMasks.Of((ulong)vkCode);
+        if (masks.Device == 0) return !_pressedModifierVks.Contains(vkCode);
+        if ((cgFlags & masks.Generic) == 0) return false;
+        if ((cgFlags & masks.Device) != 0) return true;
+        if ((cgFlags & masks.OtherDevice) != 0) return false;
+        return !_pressedModifierVks.Contains(vkCode);
+    }
+
+    private KeyEvent?[]? ResolveKeyEvent(int eventType, int vkCode, nint eventRef)
+    {
         var cgFlags = NativeMethods.CGEventGetFlags(eventRef);
         var mods = MapModifiers(cgFlags);
         if (_scrollLockOn) mods |= KeyModifiers.ScrollLock;
@@ -62,7 +71,7 @@ internal sealed class MacKeyResolver
         // modifier change mid-hold (Shift) re-resolves the case live (e → E). char resolution stays on the master.
         // detect via the OS autorepeat flag OR our held-key tracking (mirrors input-leap's testAutoRepeat:
         // the flag is authoritative ground truth, tracking is the fallback for repeats the flag doesn't mark).
-        var isAutoRepeat = NativeMethods.CGEventGetIntegerValueField(eventRef, NativeMethods.KCGKeyboardEventAutorepeat) == 1;
+        var isAutoRepeat = NativeHelpers.IsAutorepeat(eventRef);
         if (isAutoRepeat || _keyDownId.ContainsKey(vkCode)) return ResolveRepeat(vkCode, cgFlags, mods);
 
         // keypad decimal/separator: use UCKeyTranslate for locale-correct char ('.' or ',')
@@ -255,8 +264,8 @@ internal sealed class MacKeyResolver
     }
 
     // resets composition and press-tracking state after the event tap is re-enabled.
-    // missed key-up events while the tap was disabled leave stale entries in _pressedModifierVks
-    // and _keyDownId; clearing them prevents phantom held-key state.
+    // missed key-up events while the tap was disabled leave stale entries in _keyDownId and in
+    // _pressedModifierVks (only consulted for events without device bits); clearing them prevents phantom held-key state.
     // _scrollLockOn is intentionally NOT reset — it is a persistent lock state (like CapsLock),
     // not per-grab transient state. missed events during the tap gap cannot corrupt it.
     internal void Reset()

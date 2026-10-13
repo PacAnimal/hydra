@@ -20,8 +20,18 @@ function effectiveHosts(p: HydraProfile): HostConfig[] {
   return p.hosts ?? []
 }
 
-export function validate(profiles: HydraProfile[]): ValidationError[] {
+// screens are named <host>:<n>, so a ':' in a host name could collide with another host's monitor
+function checkHostName(name: string, path: string, errors: ValidationError[]) {
+  if (name.includes(':')) {
+    errors.push({ path, message: `host name '${name}' cannot contain ':' (reserved for monitor numbers)` })
+  }
+}
+
+// name is the root name, which names this machine's screens
+export function validate(profiles: HydraProfile[], name?: string): ValidationError[] {
   const errors: ValidationError[] = []
+
+  if (name) checkHostName(name, 'name', errors)
 
   const defaults = profiles.filter(isUnconditional)
   if (defaults.length > 1) {
@@ -71,6 +81,14 @@ export function validate(profiles: HydraProfile[]): ValidationError[] {
     if (p.remoteOnly && hosts.filter(h => h.name.trim()).length === 0) {
       errors.push({ path: `profiles[${i}].remoteOnly`, message: 'remoteOnly requires at least one remote host' })
     }
+
+    // a mirrored neighbour becomes a host too
+    hosts.forEach((h, hi) => {
+      checkHostName(h.name, `profiles[${i}].hosts[${hi}].name`, errors)
+      ;(h.neighbours ?? []).forEach((n, ni) => {
+        if (n.mirror !== false) checkHostName(n.name, `profiles[${i}].hosts[${hi}].neighbours[${ni}].name`, errors)
+      })
+    })
 
     if (p.conditions?.screenCount !== undefined && p.conditions.screenCount < 1) {
       errors.push({ path: `profiles[${i}].conditions.screenCount`, message: 'screenCount must be at least 1' })

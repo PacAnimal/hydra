@@ -5,6 +5,7 @@ using Hydra.FileTransfer;
 using Hydra.Platform;
 using Hydra.Relay;
 using Hydra.Screen;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Tests.Setup;
@@ -19,25 +20,27 @@ public static class TransitionTestHelper
     public static readonly IHydraProfile TestConfig = ProfileWith();
 
     // the standard two-host master, with room for the one setting a test wants to vary
-    public static IHydraProfile ProfileWith(int? maxMouseHz = null, bool hideCursor = false) => Profile("home", new HydraConfig
-    {
-        Mode = Mode.Master,
-        MaxMouseHz = maxMouseHz,
-        HideCursor = hideCursor,
-        Hosts =
-        [
-            new HostConfig
-            {
-                Name = "home",
-                Neighbours = [new NeighbourConfig { Direction = Direction.Right, Name = "remote" }],
-            },
-            new HostConfig
-            {
-                Name = "remote",
-                Neighbours = [new NeighbourConfig { Direction = Direction.Left, Name = "home" }],
-            },
-        ],
-    });
+    public static IHydraProfile ProfileWith(int? maxMouseHz = null, bool hideCursor = false, Dictionary<string, List<string>>? hotkeys = null) =>
+        Profile("home", new HydraConfig
+        {
+            Mode = Mode.Master,
+            MaxMouseHz = maxMouseHz,
+            HideCursor = hideCursor,
+            Hotkeys = hotkeys,
+            Hosts =
+            [
+                new HostConfig
+                {
+                    Name = "home",
+                    Neighbours = [new NeighbourConfig { Direction = Direction.Right, Name = "remote" }],
+                },
+                new HostConfig
+                {
+                    Name = "remote",
+                    Neighbours = [new NeighbourConfig { Direction = Direction.Left, Name = "home" }],
+                },
+            ],
+        });
 
     /// <param name="getTickCount">The router's clock, for a test that needs to drive time rather than wait for it.</param>
     /// <param name="activityTracker">Substituted where a test asserts on what the router reported as activity.</param>
@@ -54,16 +57,18 @@ public static class TransitionTestHelper
     /// <param name="osd">Where on-screen messages go, for a test that reads them.</param>
     /// <param name="fileTransfer">The copy buffer's owner, for a test that reads what a copy left in it.</param>
     /// <param name="screenSaverSync">The screensaver monitor, for a test that fires its activation.</param>
+    /// <param name="screens">The local screen detector, for a test that changes the screens while running.</param>
+    /// <param name="log">The router's log, for a test that reads what it logged.</param>
     public static TestServiceBundle CreateService(Func<long>? getTickCount = null, IActivityTracker? activityTracker = null, IWorldState? world = null,
         TimeProvider? timeProvider = null, IHydraProfile? profile = null, IFileSelectionDetector? selectionDetector = null, IOsdNotification? osd = null,
-        FileTransferService? fileTransfer = null, IScreenSaverSync? screenSaverSync = null)
+        FileTransferService? fileTransfer = null, IScreenSaverSync? screenSaverSync = null, FakeScreenDetector? screens = null, ILogger<InputRouter>? log = null)
     {
         var platform = new FakePlatform();
         var relay = new FakeRelay();
-        var screens = new FakeScreenDetector();
+        screens ??= new FakeScreenDetector();
         var config = profile ?? TestConfig;
         var tracker = activityTracker ?? new ActivityTracker(config, new Lazy<IRelaySender>(() => relay), new WorldState(), new NullScreenSaverSync(), NullLogger<ActivityTracker>.Instance);
-        var service = new InputRouter(platform, platform, config, relay, screens, NullLoggerFactory.Instance, NullLogger<InputRouter>.Instance, screenSaverSync ?? new NullScreenSaverSync(), new NullClipboardSync(),
+        var service = new InputRouter(platform, platform, config, relay, screens, NullLoggerFactory.Instance, log ?? NullLogger<InputRouter>.Instance, screenSaverSync ?? new NullScreenSaverSync(), new NullClipboardSync(),
             fileTransfer ?? FileTransferService.Null(), selectionDetector ?? new NullFileSelectionDetector(), osd ?? new NullOsdNotification(), tracker, peerState: world,
             getTickCount: getTickCount, timeProvider: timeProvider);
         platform.AfterFireCallback = service.FlushAsync;
@@ -90,12 +95,7 @@ public static class TransitionTestHelper
         ],
     });
 
-    public static async Task BringRemoteOnline(FakeRelay relay)
-    {
-        await relay.FirePeersChanged("remote");
-        var info = JsonSerializer.Serialize(new ScreenInfoMessage([new ScreenInfoEntry("screen:0", 0, 0, 2560, 1440, 1.0m)]), SaneJson.Options);
-        await relay.FireMessageReceived("remote", MessageKind.ScreenInfo, info);
-    }
+    public static async Task BringRemoteOnline(FakeRelay relay) => await BringHostOnline(relay, "remote");
 
     // remote-only: single remote host "mac", no local screens
     public static readonly IHydraProfile RemoteOnlyConfig = Profile("pi", new HydraConfig
@@ -121,8 +121,9 @@ public static class TransitionTestHelper
     /// <param name="headless">No local screen at all, which is what turns the lock hotkey into confinement.</param>
     /// <param name="getTickCount">The router's clock, for a test that needs to drive time rather than wait for it.</param>
     /// <param name="screens">The local screen detector, for a test that changes the screens while running.</param>
+    /// <param name="screenSaverSync">The screensaver monitor, for a test that fires its activation.</param>
     public static TestServiceBundle CreateRemoteOnlyService(IHydraProfile? config = null, bool headless = false, Func<long>? getTickCount = null,
-        FakeScreenDetector? screens = null)
+        FakeScreenDetector? screens = null, IScreenSaverSync? screenSaverSync = null)
     {
         var platform = new FakePlatform();
         var relay = new FakeRelay();
@@ -131,33 +132,28 @@ public static class TransitionTestHelper
             screens.Snapshot = new LocalScreenSnapshot([], []);
         var profile = config ?? RemoteOnlyConfig;
         var tracker = new ActivityTracker(profile, new Lazy<IRelaySender>(() => relay), new WorldState(), new NullScreenSaverSync(), NullLogger<ActivityTracker>.Instance);
-        var service = new InputRouter(platform, platform, profile, relay, screens, NullLoggerFactory.Instance, NullLogger<InputRouter>.Instance, new NullScreenSaverSync(), new NullClipboardSync(),
+        var service = new InputRouter(platform, platform, profile, relay, screens, NullLoggerFactory.Instance, NullLogger<InputRouter>.Instance, screenSaverSync ?? new NullScreenSaverSync(), new NullClipboardSync(),
             FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification(), tracker, getTickCount: getTickCount);
         platform.AfterFireCallback = service.FlushAsync;
         return new TestServiceBundle(platform, relay, service);
     }
 
-    // advertises one host's monitors, laid out left to right
-    public static async Task AdvertiseScreens(FakeRelay relay, string host, params string[] screenNames)
+    // advertises one host's monitors, laid out left to right and named as the host itself names them
+    public static async Task AdvertiseScreens(FakeRelay relay, string host, int count)
     {
-        var entries = screenNames.Select((name, i) => new ScreenInfoEntry(name, i * 2560, 0, 2560, 1440, 1.0m)).ToList();
+        var entries = Enumerable.Range(0, count).Select(i => new ScreenInfoEntry(ScreenNaming.BuildScreenName(host, i, count), i * 2560, 0, 2560, 1440, 1.0m)).ToList();
         var info = JsonSerializer.Serialize(new ScreenInfoMessage(entries), SaneJson.Options);
         await relay.FireMessageReceived(host, MessageKind.ScreenInfo, info);
     }
 
-    public static async Task BringHostOnline(FakeRelay relay, string host, string screenName = "screen:0") =>
-        await BringHostsOnline(relay, [host], [(host, screenName)]);
+    public static async Task BringHostOnline(FakeRelay relay, string host) => await BringHostsOnline(relay, [host]);
 
-    // brings multiple hosts online at once — fires a single PeersChanged with all hosts, then ScreenInfo for each
-    public static async Task BringHostsOnline(FakeRelay relay, string[] hosts, (string Host, string Screen)[]? screens = null)
+    // brings multiple hosts online at once — fires a single PeersChanged with all hosts, then one monitor's ScreenInfo for each
+    public static async Task BringHostsOnline(FakeRelay relay, string[] hosts)
     {
         await relay.FirePeersChanged(hosts);
         foreach (var host in hosts)
-        {
-            var screenName = screens?.FirstOrDefault(s => s.Host == host).Screen ?? "screen:0";
-            var info = JsonSerializer.Serialize(new ScreenInfoMessage([new ScreenInfoEntry(screenName, 0, 0, 2560, 1440, 1.0m)]), SaneJson.Options);
-            await relay.FireMessageReceived(host, MessageKind.ScreenInfo, info);
-        }
+            await AdvertiseScreens(relay, host, 1);
     }
 
     public static ActivityTracker TestActivityTracker(IHydraProfile? profile = null) => new(

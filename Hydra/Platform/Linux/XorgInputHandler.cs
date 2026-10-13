@@ -14,6 +14,7 @@ public sealed class XorgInputHandler : IPlatformInput
     private readonly nint _inputSink;
     private readonly int _xiOpcode;
     private readonly int _lockKeycode;
+    private readonly bool _detectableAutoRepeat;
     private readonly XorgKeyResolver _keyResolver = new();
 
     private readonly ILogger<XorgInputHandler> _log;
@@ -54,10 +55,14 @@ public sealed class XorgInputHandler : IPlatformInput
         _xiOpcode = DetectXi2();
         _lockKeycode = (int)NativeMethods.XKeysymToKeycode(_display, 0x006C); // XK_l
         _keyResolver.Init(_display);
+        _detectableAutoRepeat = XorgDisplayHelper.EnableDetectableAutoRepeat(_display);
+        if (!_detectableAutoRepeat)
+            log.LogWarning("X server lacks detectable auto-repeat; telling a repeat from a quick re-press relies on peeking the event queue");
 
         _keyboard = new XGrabSession("Keyboard", _grabLock, log,
             preGrab: () =>
             {
+                ResetHeldKeys();
                 _ = NativeMethods.XMapWindow(_display, _inputSink);
                 _ = NativeMethods.XRaiseWindow(_display, _inputSink);
                 _ = NativeMethods.XFlush(_display);
@@ -67,16 +72,13 @@ public sealed class XorgInputHandler : IPlatformInput
                 var r = NativeMethods.XGrabKeyboard(_display, _inputSink, true,
                     NativeMethods.GrabModeAsync, NativeMethods.GrabModeAsync, NativeMethods.CurrentTime);
                 _ = NativeMethods.XFlush(_display);
+                if (r == NativeMethods.GrabSuccess) _keyResolver.ForgetReleasedSeeds(XorgDisplayHelper.HeldKeycodes(_display));
                 return r;
             },
             preRetry: () =>
             {
-                // reset resolver state before each re-grab attempt: if the grab succeeds, any key
-                // events arriving immediately will have clean state. called before every attempt so
-                // modifier bits dirtied between retries (e.g. user typed while grab was unowned)
-                // don't bleed into the new session. safe to call with no grab active — no events
-                // can arrive from X11 until the grab succeeds.
-                _keyResolver.Reset();
+                // keys may have gone down or up while the grab was unowned
+                ResetHeldKeys();
                 // dismiss transient grabs (xsecurelock technique: redirect focus to pointer root)
                 _ = NativeMethods.XSetInputFocus(_display, NativeMethods.PointerRoot,
                     NativeMethods.RevertToPointerRoot, NativeMethods.CurrentTime);
@@ -154,7 +156,6 @@ public sealed class XorgInputHandler : IPlatformInput
             _isOnVirtualScreen.TrySet(value);
             if (value)
             {
-                _keyResolver.Reset();  // clear stale key state from previous session
                 _pointer.Grab();
                 _keyboard.Grab();
             }
@@ -221,6 +222,9 @@ public sealed class XorgInputHandler : IPlatformInput
 
     public bool RecentresItself => false;
 
+    // the pointer mask sees through our XGrabPointer, but has no bits past Button5 for the side buttons
+    public bool SeesSwallowed(MouseButton button) => button is MouseButton.Left or MouseButton.Middle or MouseButton.Right;
+
     public bool AnyMouseButtonHeld()
     {
         // XQueryPointer mask_return bits 8-12 = Button1Mask through Button5Mask
@@ -251,9 +255,9 @@ public sealed class XorgInputHandler : IPlatformInput
         // standard keyboard events from XGrabKeyboard or XGrabKey
         if (ev.Type is NativeMethods.KeyPress or NativeMethods.KeyRelease)
         {
-            // X11 auto-repeat emits KeyRelease immediately followed by KeyPress for the same keycode.
-            // detect this by peeking: if the next queued event is a KeyPress with the same keycode, skip this KeyRelease.
-            if (ev.Type == NativeMethods.KeyRelease && NativeMethods.XPending(_display) > 0)
+            // without detectable auto-repeat a repeat is a KeyRelease immediately followed by a KeyPress of the same
+            // keycode: peek, and skip a KeyRelease whose KeyPress is already queued
+            if (!_detectableAutoRepeat && ev.Type == NativeMethods.KeyRelease && NativeMethods.XPending(_display) > 0)
             {
                 NativeMethods.XPeekEvent(_display, out var next);
                 if (next.Type == NativeMethods.KeyPress && next.XKeyKeycode == ev.XKeyKeycode)
@@ -337,6 +341,15 @@ public sealed class XorgInputHandler : IPlatformInput
         {
             NativeMethods.XFreeEventData(_display, ref ev);
         }
+    }
+
+    // runs before each XGrabKeyboard; the grab then drops the seeds released in between. a key going down in between
+    // has its first repeat forwarded as a down, never a real down swallowed. both query outside the resolver's lock,
+    // since Resolve takes Xlib's display lock under it.
+    private void ResetHeldKeys()
+    {
+        var held = XorgDisplayHelper.HeldKeycodes(_display);
+        _keyResolver.Reset(held);
     }
 
     // passive grab for Ctrl+Alt+Super+L — 4 variants for NumLock/CapsLock combinations

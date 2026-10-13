@@ -13,6 +13,8 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
     private readonly MacShieldProcess _shield = shield;
     private readonly uint _display = NativeMethods.CGMainDisplayID();
     private readonly MacKeyResolver _keyResolver = new();
+    // no Clear on a tap timeout: the repeat bit heals a stale record, and clearing would swallow a home press's up
+    private readonly KeyFates _keyFates = new(strayUpsPass: true);
 
     // stored as fields to prevent GC collection while the tap is active
     private CGEventTapCallBack? _tapCallback;
@@ -30,8 +32,6 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
     public bool IsOnVirtualScreen { get => _isOnVirtualScreen; set => _isOnVirtualScreen.TrySet(value); }
 
     // cached ObjC selectors for NX_SYSDEFINED media key decoding
-    private static readonly nint NsEventClass = NativeMethods.objc_getClass("NSEvent");
-    private static readonly nint SelPressedMouseButtons = NativeMethods.sel_registerName("pressedMouseButtons");
     private static readonly nint SelEventWithCgEvent = NativeMethods.sel_registerName("eventWithCGEvent:");
     private static readonly nint SelSubtype = NativeMethods.sel_registerName("subtype");
     private static readonly nint SelData1 = NativeMethods.sel_registerName("data1");
@@ -179,10 +179,15 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
 
     public bool RecentresItself => false;
 
+    public bool SeesSwallowed(MouseButton button) => true;
+
+    // The session's button scoreboard, which our swallowing tap does not hide: what Carbon's GetCurrentButtonState
+    // reads, and what Deskflow's OSXScreen::isAnyMouseButtonDown relies on under the same kCGHIDEventTap.
     public bool AnyMouseButtonHeld()
     {
-        if (NsEventClass == nint.Zero) return false;
-        return NativeMethods.objc_msgSend_long(NsEventClass, SelPressedMouseButtons) != 0;
+        for (uint button = 0; button < 32; button++)
+            if (NativeMethods.CGEventSourceButtonState(NativeMethods.KCGEventSourceStateCombinedSessionState, button)) return true;
+        return false;
     }
 
     public void StopEventTap()
@@ -293,19 +298,32 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
             if (keyEvents is not null)
                 foreach (var keyEvent in keyEvents)
                     if (keyEvent is not null) _onKeyEvent?.Invoke(keyEvent);
-            return IsOnVirtualScreen ? nint.Zero : eventRef;
+            return SwallowsKey(type, eventRef) ? nint.Zero : eventRef;
         }
 
         // NX_SYSDEFINED (type 14): media keys — play/pause/next/prev/brightness/eject
         if (type == NativeMethods.KNXSysDefined)
         {
-            HandleMediaKeyEvent(eventRef);
-            return IsOnVirtualScreen ? nint.Zero : eventRef;
+            var swallow = HandleMediaKeyEvent(eventRef) is { } key
+                ? SwallowsPress(MacMediaKeyMap.PhysicalKey(key.KeyType), !key.IsDown, key.IsRepeat)
+                : IsOnVirtualScreen;
+            return swallow ? nint.Zero : eventRef;
         }
 
         // swallow all other events while on virtual screen (synergy: return nullptr when off-screen)
         return IsOnVirtualScreen ? nint.Zero : eventRef;
     }
+
+    // A key goes where its press went (KeyFates). A modifier follows the screen alone: its flags come from HID state a
+    // swallowed event cannot roll back, so one pressed during a visit rides on local events as a flag until released.
+    private bool SwallowsKey(int type, nint eventRef) => type == NativeMethods.KCGEventFlagsChanged
+        ? IsOnVirtualScreen
+        : SwallowsPress((int)NativeMethods.CGEventGetIntegerValueField(eventRef, NativeMethods.KCGKeyboardEventKeycode),
+            isUp: type == NativeMethods.KCGEventKeyUp, repeat: NativeHelpers.IsAutorepeat(eventRef));
+
+    // keycodes and media keys share one KeyFates, apart by MacMediaKeyMap.PhysicalKey's offset
+    private bool SwallowsPress(int physicalKey, bool isUp, bool repeat) =>
+        _keyFates.Swallow(physicalKey, isUp, repeat, osHolds: false, IsOnVirtualScreen);
 
     // CG button numbers: 0=left, 1=right, 2=middle, 3+=extra
     private static MouseButton CgButtonToMouseButton(int cgButton) => cgButton switch
@@ -317,24 +335,30 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
         _ => MouseButton.Extra2,
     };
 
-    private void HandleMediaKeyEvent(nint eventRef)
+    // the media key an NX_SYSDEFINED event carries, emitted when mapped; null for any other subtype
+    private MacMediaKeyMap.NxKey? HandleMediaKeyEvent(nint eventRef)
     {
+        // the tap thread has no pool of its own; this one outlives every read of the autoreleased NSEvent
+        using var pool = new ObjcAutoreleasePool();
+
         // create NSEvent from CGEvent to read subtype and data1
-        if (NsEventClass == nint.Zero) return;
-        var nsEvent = NativeMethods.objc_msgSend(NsEventClass, SelEventWithCgEvent, eventRef);
-        if (nsEvent == nint.Zero) return;
+        var nsEventClass = NativeHelpers.NsEventClass;
+        if (nsEventClass == nint.Zero) return null;
+        var nsEvent = NativeMethods.objc_msgSend(nsEventClass, SelEventWithCgEvent, eventRef);
+        if (nsEvent == nint.Zero) return null;
 
         // subtype 8 = NSSystemDefinedEvent (NSEventSubtypeApplicationActivated is different)
         var subtype = NativeMethods.objc_msgSend_long(nsEvent, SelSubtype);
-        if (subtype != 8) return;
+        if (subtype != 8) return null;
 
-        var data1 = NativeMethods.objc_msgSend_long(nsEvent, SelData1);
-        var nxKeyType = (uint)((data1 & 0xFFFF0000L) >> 16);
-        var isDown = (data1 & 0x100) == 0;
-
-        if (!MacMediaKeyMap.TryGetKey(nxKeyType, out var specialKey)) return;
-
-        var keyEvent = KeyEvent.Special(isDown ? KeyEventType.KeyDown : KeyEventType.KeyUp, specialKey, KeyModifiers.None);
-        _onKeyEvent?.Invoke(keyEvent);
+        var key = MacMediaKeyMap.Decode(NativeMethods.objc_msgSend_long(nsEvent, SelData1));
+        if (MacMediaKeyMap.TryGetKey(key.KeyType, out var specialKey))
+        {
+            var keyEvent = KeyEvent.Special(key.IsDown ? KeyEventType.KeyDown : KeyEventType.KeyUp, specialKey, KeyModifiers.None)
+                with
+            { PhysicalKey = MacMediaKeyMap.PhysicalKey(key.KeyType), IsRepeat = key.IsRepeat };
+            _onKeyEvent?.Invoke(keyEvent);
+        }
+        return key;
     }
 }

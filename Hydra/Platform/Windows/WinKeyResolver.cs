@@ -32,8 +32,24 @@ internal sealed class WinKeyResolver
 
     internal KeyEvent[]? Resolve(int wParam, KBDLLHOOKSTRUCT info)
     {
+        var events = ResolveEvents(wParam, info);
+        KeyResolver.StampPhysicalKey(events, TrackingVk(info));
+        return events;
+    }
+
+    internal static bool IsKeyUp(int wParam) => wParam is NativeMethods.WM_KEYUP or NativeMethods.WM_SYSKEYUP;
+
+    // the key _keyDownId tracks this hook event under
+    internal static int TrackingVk(KBDLLHOOKSTRUCT info) => IsKpEnter(info) ? KpEnterTrackingVk : (int)info.vkCode;
+
+    // numpad Enter: VK_RETURN with the extended-key flag, distinct from regular Enter
+    private static bool IsKpEnter(KBDLLHOOKSTRUCT info) =>
+        info.vkCode == WinVirtualKey.Return && (info.flags & NativeMethods.LLKHF_EXTENDED) != 0;
+
+    private KeyEvent[]? ResolveEvents(int wParam, KBDLLHOOKSTRUCT info)
+    {
         var vk = (int)info.vkCode;
-        var isKeyUp = wParam is NativeMethods.WM_KEYUP or NativeMethods.WM_SYSKEYUP;
+        var isKeyUp = IsKeyUp(wParam);
 
         // update tracked key state before resolving
         UpdateKeyState(vk, info.flags, isKeyUp);
@@ -48,10 +64,7 @@ internal sealed class WinKeyResolver
         {
             _injectedLCtrlPending = false;
             var prefix = FlushDeferredLCtrl();
-            // KP_Enter key-up: use synthetic tracking key so it doesn't collide with Return
-            var trackingVk = (vk == WinVirtualKey.Return && (info.flags & NativeMethods.LLKHF_EXTENDED) != 0)
-                ? KpEnterTrackingVk : vk;
-            var up = KeyResolver.ReplayKeyUp(_keyDownId, trackingVk, mods);
+            var up = KeyResolver.ReplayKeyUp(_keyDownId, TrackingVk(info), mods);
             return Events(prefix, up);
         }
 
@@ -110,8 +123,7 @@ internal sealed class WinKeyResolver
             return Combine(flushed, FlushPendingDeadKey(), decEvent);
         }
 
-        // numpad Enter: VK_RETURN with extended-key flag — distinct from regular Enter
-        if (vk == WinVirtualKey.Return && (info.flags & NativeMethods.LLKHF_EXTENDED) != 0)
+        if (IsKpEnter(info))
         {
             if (_keyDownId.ContainsKey(KpEnterTrackingVk))
                 return Combine(flushed, null, KeyEvent.Special(KeyEventType.KeyDown, SpecialKey.KP_Enter, mods) with { IsRepeat = true });
@@ -371,13 +383,13 @@ internal sealed class WinKeyResolver
     private static char ShortcutChar(int vk, char rawChar, KeyModifiers mods) =>
         (mods & (KeyModifiers.Control | KeyModifiers.Super)) != 0 && rawChar > 0x7F ? MapShortcutAscii(vk, rawChar) : rawChar;
 
-    // flush the deferred LCtrl as a real Ctrl key-down event
-    private KeyEvent? FlushDeferredLCtrl()
+    // flush the deferred LCtrl as a real Ctrl key-down event, ahead of whatever input proves it was not AltGr's
+    internal KeyEvent? FlushDeferredLCtrl()
     {
         if (_deferredLCtrl is not { } def) return null;
         _deferredLCtrl = null;
         _keyDownId[def.Vk] = new CharClassification(null, SpecialKey.Control_L);
-        return KeyEvent.Special(KeyEventType.KeyDown, SpecialKey.Control_L, def.Mods);
+        return KeyEvent.Special(KeyEventType.KeyDown, SpecialKey.Control_L, def.Mods) with { PhysicalKey = def.Vk };
     }
 
     // emit a pending dead key as its spacing form before a non-composing key.

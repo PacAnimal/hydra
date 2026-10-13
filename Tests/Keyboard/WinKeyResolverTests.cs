@@ -152,6 +152,86 @@ public class WinKeyResolverTests
         Assert.That(up!.Any(e => e is { Key: SpecialKey.Return, Type: KeyEventType.KeyUp }), Is.True,
             "Return key-up must still fire after KP_Enter was separately released");
     }
+
+    // -- PhysicalKey: the key each event is tracked under, pairing a repeat or up with its down --
+
+    [Test]
+    public void SpecialKey_DownRepeatAndUp_CarryItsVk()
+    {
+        var r = new WinKeyResolver();
+        KeyEvent[] events = [.. Down(r, WinVirtualKey.F5)!, .. Down(r, WinVirtualKey.F5)!, .. Up(r, WinVirtualKey.F5)!];
+        Assert.That(events.Select(e => e.PhysicalKey), Is.EqualTo([WinVirtualKey.F5, WinVirtualKey.F5, WinVirtualKey.F5]));
+    }
+
+    [Test]
+    public void KpEnterAndReturn_CarryDistinctKeys_EachTheSameDownToUp()
+    {
+        var r = new WinKeyResolver();
+        var kpDown = r.Resolve(NativeMethods.WM_KEYDOWN, ExtendedHook(WinVirtualKey.Return))!.Single();
+        var kpRepeat = r.Resolve(NativeMethods.WM_KEYDOWN, ExtendedHook(WinVirtualKey.Return))!.Single();
+        var returnDown = Down(r, WinVirtualKey.Return)!.Single();
+        var kpUp = r.Resolve(NativeMethods.WM_KEYUP, ExtendedHook(WinVirtualKey.Return))!.Single();
+        var returnUp = Up(r, WinVirtualKey.Return)!.Single();
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(returnDown.PhysicalKey, Is.EqualTo(WinVirtualKey.Return));
+            Assert.That(returnUp.PhysicalKey, Is.EqualTo(WinVirtualKey.Return));
+            Assert.That(kpDown.PhysicalKey, Is.Not.EqualTo(WinVirtualKey.Return).And.Not.Zero);
+            Assert.That(kpRepeat.PhysicalKey, Is.EqualTo(kpDown.PhysicalKey));
+            Assert.That(kpUp.PhysicalKey, Is.EqualTo(kpDown.PhysicalKey));
+        }
+    }
+
+    [Test]
+    public void DeferredLeftCtrl_FlushedAheadOfADown_CarriesLeftCtrl()
+    {
+        var r = new WinKeyResolver();
+        Assert.That(Down(r, WinVirtualKey.LControl), Is.Null, "pre-condition: deferred");
+
+        var events = Down(r, WinVirtualKey.F5)!;
+
+        Assert.That(events.Select(e => (e.Key, e.PhysicalKey)),
+            Is.EqualTo([(SpecialKey.Control_L, WinVirtualKey.LControl), (SpecialKey.F5, WinVirtualKey.F5)]));
+    }
+
+    [Test]
+    public void DeferredLeftCtrl_FlushedAheadOfAnUp_CarriesLeftCtrl()
+    {
+        var r = new WinKeyResolver();
+        Down(r, WinVirtualKey.F5);
+        Assert.That(Down(r, WinVirtualKey.LControl), Is.Null, "pre-condition: deferred");
+
+        var events = Up(r, WinVirtualKey.F5)!;
+
+        Assert.That(events.Select(e => (e.Key, e.Type, e.PhysicalKey)), Is.EqualTo([
+            (SpecialKey.Control_L, KeyEventType.KeyDown, WinVirtualKey.LControl), (SpecialKey.F5, KeyEventType.KeyUp, WinVirtualKey.F5)]));
+    }
+
+    [Test]
+    public void DeferredLeftCtrl_FlushedOnItsOwn_CarriesLeftCtrl()
+    {
+        var r = new WinKeyResolver();
+        Down(r, WinVirtualKey.LControl);
+
+        var flushed = r.FlushDeferredLCtrl();
+
+        Assert.That(flushed, Is.EqualTo(KeyEvent.Special(KeyEventType.KeyDown, SpecialKey.Control_L, KeyModifiers.Control) with
+        {
+            PhysicalKey = WinVirtualKey.LControl,
+        }));
+    }
+
+    [Test]
+    public void AltGr_CarriesRightAlt()
+    {
+        var r = new WinKeyResolver();
+        r.Resolve(NativeMethods.WM_KEYDOWN, Hook(WinVirtualKey.LControl, time: 42));
+
+        var events = r.Resolve(NativeMethods.WM_KEYDOWN, Hook(WinVirtualKey.RMenu, time: 42))!;
+
+        Assert.That(events.Select(e => (e.Key, e.PhysicalKey)), Is.EqualTo([(SpecialKey.AltGr, WinVirtualKey.RMenu)]));
+    }
 }
 
 // character-resolution tests require ToUnicodeEx (Windows only)

@@ -49,8 +49,9 @@ jobs:
         include:
           - os: linux
             runner: ubuntu-24.04
-            # xvfb-run provides a headless X server + DISPLAY so the real X11 selection tests execute here
-            wrapper: xvfb-run -a
+            # xvfb-run provides a headless X server + DISPLAY so the real X11 selection tests execute here.
+            # -noreset: otherwise the server resets whenever its last client leaves, and a test connecting then gets no display
+            wrapper: xvfb-run -a -s "-screen 0 1280x1024x24 -noreset"
           - os: windows
             runner: windows-latest
           - os: macos

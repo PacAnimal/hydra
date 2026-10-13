@@ -331,12 +331,13 @@ public class MouseThrottleTests
         _relay.ClearSent();
 
         // an OS auto-repeat is re-resolved on the master and surfaces as a KeyEvent flagged IsRepeat
+        _platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyDown, 'w', KeyModifiers.None));
         _platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyDown, 'w', KeyModifiers.None) with { IsRepeat = true });
 
         var keySends = _relay.Snapshot().Where(s => s.Kind == MessageKind.KeyEvent).ToList();
-        Assert.That(keySends, Has.Count.GreaterThanOrEqualTo(1));
+        Assert.That(keySends, Has.Count.EqualTo(2));
 
-        var msg = JsonSerializer.Deserialize<KeyEventMessage>(keySends[0].Json, Cathedral.Config.SaneJson.Options);
+        var msg = JsonSerializer.Deserialize<KeyEventMessage>(keySends[1].Json, Cathedral.Config.SaneJson.Options);
         Assert.That(msg, Is.Not.Null);
         Assert.That(msg!.IsRepeat, Is.True, "a repeat key event is forwarded marked as a repeat");
     }

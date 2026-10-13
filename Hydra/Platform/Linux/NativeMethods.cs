@@ -344,6 +344,18 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial int XkbGetState(nint display, uint deviceSpec, out XkbStateRec stateReturn);
 
+    // returns the flag's new value; supportedReturn is whether the server can honour it
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool XkbSetDetectableAutoRepeat(nint display, [MarshalAs(UnmanagedType.Bool)] bool detectable,
+        [MarshalAs(UnmanagedType.Bool)] out bool supportedReturn);
+
+    // fills a 32-byte bitmap, bit k of byte k/8 set while keycode k is down
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int XQueryKeymap(nint display, [Out] byte[] keysReturn);
+
     // -- XRandR multi-monitor enumeration --
 
     private const string XRandR = "libXrandr.so.2";

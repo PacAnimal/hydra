@@ -25,37 +25,16 @@ public class ScreenStartupTests
             ],
         });
 
-        var logs = new ErrorCapture();
+        var logs = new CapturingLog<InputRouter>(LogLevel.Error);
         var platform = new FakePlatform();
         var service = new InputRouter(
             platform, platform, profile, new NullRelaySender(),
-            new FakeScreenDetector(), NullLoggerFactory.Instance, logs.CreateLogger(), new NullScreenSaverSync(), new NullClipboardSync(),
+            new FakeScreenDetector(), NullLoggerFactory.Instance, logs, new NullScreenSaverSync(), new NullClipboardSync(),
             FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification(), TransitionTestHelper.TestActivityTracker(profile));
 
         // must not throw
         await service.StartAsync(CancellationToken.None);
 
-        Assert.That(logs.HasError, Is.True, "should log an error when hostname is not in screens");
-    }
-
-    // -- stubs --
-
-    private sealed class ErrorCapture
-    {
-        public bool HasError { get; private set; }
-
-        public ILogger<InputRouter> CreateLogger() => new ErrorLogger(this);
-
-        private sealed class ErrorLogger(ErrorCapture capture) : ILogger<InputRouter>
-        {
-            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-            public bool IsEnabled(LogLevel logLevel) => true;
-
-            public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
-            {
-                if (logLevel >= LogLevel.Error)
-                    capture.HasError = true;
-            }
-        }
+        Assert.That(logs.Entries, Is.Not.Empty, "should log an error when hostname is not in screens");
     }
 }
