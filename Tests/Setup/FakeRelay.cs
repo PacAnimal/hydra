@@ -1,4 +1,6 @@
 using System.Text;
+using System.Text.Json;
+using Cathedral.Config;
 using Hydra.Relay;
 
 namespace Tests.Setup;
@@ -17,6 +19,12 @@ public sealed class FakeRelay : NullRelaySender
 
     public List<SentMessage> Snapshot() => _signals.Snapshot();
     public void ClearSent() => _signals.Clear();
+
+    // the messages of one kind sent so far, decoded, optionally only those sent to a host
+    public List<T> Sent<T>(MessageKind kind, string? host = null) =>
+        [.. Snapshot()
+            .Where(s => s.Kind == kind && (host is null || s.Targets.Contains(host)))
+            .Select(s => JsonSerializer.Deserialize<T>(s.Json, SaneJson.Options)!)];
 
     // completes once a message of this kind has been sent, for a sender working on its own thread
     public Task WaitForSent(MessageKind kind, TimeSpan timeout) => _signals.WaitFor(kind, timeout);

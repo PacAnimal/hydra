@@ -138,7 +138,7 @@ public class RelayDisconnectTests
         relay.ClearSent();
         pushRight(platform);
 
-        Assert.That(relay.Snapshot().Any(s => s.Kind == MessageKind.EnterScreen && s.Targets.Contains("remote2")), Is.True,
+        Assert.That(relay.Sent<EnterScreenMessage>(MessageKind.EnterScreen, "remote2"), Is.Not.Empty,
             "should only cross to remote2 once the relay is back");
 
         await service.StopAsync(CancellationToken.None);

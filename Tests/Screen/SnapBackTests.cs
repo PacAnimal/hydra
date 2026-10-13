@@ -1,3 +1,4 @@
+using Hydra.Keyboard;
 using Hydra.Mouse;
 using Hydra.Relay;
 using Hydra.Screen;
@@ -14,15 +15,8 @@ public class SnapBackTests
     private static readonly ScreenPoint ExitEdge = new(2557, 720);
     private static readonly ScreenPoint Park = new(1280, 720);
 
-    private static async Task<TestServiceBundle> Visiting(FakeScreenSaverSync? screenSaverSync = null, FakeScreenDetector? screens = null)
-    {
-        var bundle = TransitionTestHelper.CreateService(screenSaverSync: screenSaverSync, screens: screens);
-        await bundle.Service.StartAsync(CancellationToken.None);
-        await TransitionTestHelper.BringRemoteOnline(bundle.Relay);
-        bundle.Platform.FireMouseMove(2559, 720);
-        Assert.That(bundle.Platform.IsOnVirtualScreen, Is.True, "pre-condition: on the remote screen");
-        return bundle;
-    }
+    private static Task<TestServiceBundle> Visiting(FakeScreenSaverSync? screenSaverSync = null, FakeScreenDetector? screens = null) =>
+        TransitionTestHelper.Visiting(TransitionTestHelper.CreateService(screenSaverSync: screenSaverSync, screens: screens));
 
     private static async Task ChangeScreens(FakeScreenDetector screens, ScreenRect screen)
     {
@@ -157,5 +151,115 @@ public class SnapBackTests
         var virtualAfter = bundle.Platform.IsOnVirtualScreen;
         await bundle.Service.StopAsync(CancellationToken.None);
         Assert.That(virtualAfter, Is.False);
+    }
+
+    // the screensaver interrupted a visit and ended while a button was held, so its restore is pending
+    private static async Task PendingRestore(TestServiceBundle bundle, FakeScreenSaverSync screenSaverSync)
+    {
+        screenSaverSync.FireActivated();
+        await bundle.Service.FlushAsync();
+        bundle.Platform.AnyMouseButtonHeld = true;
+        screenSaverSync.FireDeactivated();
+        await bundle.Service.FlushAsync();
+        Assert.That(bundle.Platform.IsOnVirtualScreen, Is.False, "pre-condition: refused for the held button");
+        bundle.Platform.AnyMouseButtonHeld = false;
+        bundle.Relay.ClearSent();
+    }
+
+    [TestCase(true)]
+    [TestCase(false)]
+    public async Task ScreensaverRestore_RefusedForAHeldButton_IsRetriedOnItsReleaseOrAMove(bool release)
+    {
+        var screenSaverSync = new FakeScreenSaverSync();
+        var bundle = await Visiting(screenSaverSync);
+        await PendingRestore(bundle, screenSaverSync);
+
+        if (release) bundle.Platform.FireMouseButton(new MouseButtonEvent(MouseButton.Left, false));
+        else bundle.Platform.FireMouseMove(1000, 720);
+
+        var entered = bundle.Relay.Sent<EnterScreenMessage>(MessageKind.EnterScreen, "remote");
+        await bundle.Service.StopAsync(CancellationToken.None);
+        Assert.That(entered, Is.Not.Empty);
+    }
+
+    [Test]
+    public async Task PendingScreensaverRestore_IsCancelledByTheLockHotkey()
+    {
+        // an explicit lock or unlock says where the user wants the cursor; a later move must not pull it away
+        var screenSaverSync = new FakeScreenSaverSync();
+        var bundle = await Visiting(screenSaverSync);
+        await PendingRestore(bundle, screenSaverSync);
+        // locked and unlocked again, so only the cancel keeps the cursor home
+        bundle.Platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyDown, 'l', KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Super));
+        bundle.Platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyDown, 'l', KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Super));
+
+        bundle.Platform.FireMouseMove(1000, 720);
+
+        var virtualAfter = bundle.Platform.IsOnVirtualScreen;
+        await bundle.Service.StopAsync(CancellationToken.None);
+        Assert.That(virtualAfter, Is.False);
+    }
+
+    // a remote-only master on "win", right of "mac", which is the first remote it would otherwise enter
+    private static async Task<TestServiceBundle> RemoteOnlyOnWin(FakeScreenSaverSync screenSaverSync)
+    {
+        var bundle = TransitionTestHelper.CreateRemoteOnlyService(TransitionTestHelper.RemoteOnlyPairConfig, screenSaverSync: screenSaverSync);
+        await TransitionTestHelper.StartOnline(bundle, "mac", "win");
+        for (var i = 0; i < 30; i++)
+            bundle.Platform.FireMouseDelta(100, 0);
+        Assert.That(bundle.Relay.Sent<EnterScreenMessage>(MessageKind.EnterScreen, "win"), Is.Not.Empty, "pre-condition: on win");
+        return bundle;
+    }
+
+    [TestCase(true)]
+    [TestCase(false)]
+    public async Task RemoteOnly_PendingScreensaverRestore_ReturnsToTheScreenItLeft(bool release)
+    {
+        var screenSaverSync = new FakeScreenSaverSync();
+        var bundle = await RemoteOnlyOnWin(screenSaverSync);
+        await PendingRestore(bundle, screenSaverSync);
+
+        if (release) bundle.Platform.FireMouseButton(new MouseButtonEvent(MouseButton.Left, false));
+        else bundle.Platform.FireMouseMove(1000, 720);
+
+        var entered = bundle.Relay.Snapshot().Where(m => m.Kind == MessageKind.EnterScreen).SelectMany(m => m.Targets).ToList();
+        await bundle.Service.StopAsync(CancellationToken.None);
+        Assert.That(entered, Is.EqualTo(["win"]));
+    }
+
+    [Test]
+    public async Task RemoteOnly_PendingScreensaverRestore_AMoveDuringTheNextScreensaverEntersNothing()
+    {
+        var screenSaverSync = new FakeScreenSaverSync();
+        var bundle = await RemoteOnlyOnWin(screenSaverSync);
+        await PendingRestore(bundle, screenSaverSync);
+        screenSaverSync.FireActivated();
+        await bundle.Service.FlushAsync();
+
+        bundle.Platform.FireMouseMove(1000, 720);
+
+        var virtualAfter = bundle.Platform.IsOnVirtualScreen;
+        await bundle.Service.StopAsync(CancellationToken.None);
+        Assert.That(virtualAfter, Is.False);
+    }
+
+    [Test]
+    public async Task RemoteOnly_ScreensaverEnds_WithItsScreenGone_EntersTheFirstRemote()
+    {
+        // nothing local need move: the keyboard alone must reach a remote again
+        var screenSaverSync = new FakeScreenSaverSync();
+        var bundle = await RemoteOnlyOnWin(screenSaverSync);
+        screenSaverSync.FireActivated();
+        await bundle.Service.FlushAsync();
+        await bundle.Relay.FirePeersChanged("mac");
+        await bundle.Service.FlushAsync();
+        bundle.Relay.ClearSent();
+
+        screenSaverSync.FireDeactivated();
+        await bundle.Service.FlushAsync();
+
+        var entered = bundle.Relay.Snapshot().Where(m => m.Kind == MessageKind.EnterScreen).SelectMany(m => m.Targets).ToList();
+        await bundle.Service.StopAsync(CancellationToken.None);
+        Assert.That(entered, Is.EqualTo(["mac"]));
     }
 }

@@ -35,6 +35,13 @@ public interface IPlatformInput : IAsyncDisposable, ICursor, ILocalEventTap
 {
     bool IsOnVirtualScreen { get; set; }
 
+    // every return to the local screen: clears the flag, then warps to warpTo if there is one
+    void ReturnTo(ScreenPoint? warpTo)
+    {
+        IsOnVirtualScreen = false;
+        if (warpTo is { } to) WarpCursor(to.X, to.Y);
+    }
+
     bool AnyMouseButtonHeld();
 
     // True when AnyMouseButtonHeld sees this button though the event tap swallowed it (macOS; Xorg's Left/Middle/Right). A

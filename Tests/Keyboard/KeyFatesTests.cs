@@ -149,6 +149,20 @@ public class KeyFatesTests
     }
 
     [Test]
+    public void UnmarkedRepeatOfAHomePress_StaysHomeWhileVirtual_AndItsUpPasses()
+    {
+        // macOS marks only some repeats; an unmarked one must not re-record a home press as away
+        var f = new KeyFates(strayUpsPass: true);
+        Down(f, isVirtual: false, repeat: KeyFates.MarkedRepeat(false));
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(Down(f, isVirtual: true, repeat: KeyFates.MarkedRepeat(false)), Is.True);
+            Assert.That(Up(f, isVirtual: true), Is.False, "the up must reach the OS");
+        }
+    }
+
+    [Test]
     public void Clear_ForgetsEveryRecord()
     {
         var f = new KeyFates(strayUpsPass: false);

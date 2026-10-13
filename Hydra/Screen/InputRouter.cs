@@ -381,25 +381,31 @@ public class InputRouter(
         {
             if (!st.ScreensaverActive) return;
             st.ScreensaverActive = false;
-            var savedScreen = st.SavedScreenName;
-            var savedX = st.SavedCursorX;
-            var savedY = st.SavedCursorY;
-            st.SavedScreenName = null;
 
             await BroadcastScreensaverSync(false);
             log.LogInformation("Screensaver deactivated — synced to slaves");
 
-            // best-effort cursor restore: re-enter saved remote screen if still connected and accessible
-            if (savedScreen != null && relay.IsConnected)
-            {
-                var dest = st.Screens.FirstOrDefault(sc => !sc.IsLocal && sc.Name.EqualsIgnoreCase(savedScreen));
-                if (dest != null && dest.Width > 0 && !st.Mouse.IsOnVirtualScreen)
-                {
-                    if (await EnterFromLocal(st, dest, savedX, savedY, st.ExitEdge) && log.IsEnabled(LogLevel.Information))
-                        log.LogInformation("Restored cursor to '{Screen}' after screensaver", savedScreen);
-                }
-            }
+            // a remote-only master whose visit cannot be restored goes back to a remote now, keyboard-only use included
+            if (!await TryRestoreAfterScreensaver(st)) await TryEnterRemoteOnly(st);
         });
+    }
+
+    // Re-enters the visit the screensaver interrupted, once it has ended. Refused for a held button, it stays pending
+    // and is retried on local button ups and moves, ahead of a remote-only entry; any other outcome, or any entry from
+    // the local screen, ends it.
+    private async ValueTask<bool> TryRestoreAfterScreensaver(LocalMasterState st)
+    {
+        if (st.SavedScreenName is not { } saved || st.ScreensaverActive || st.Mouse.IsOnVirtualScreen) return false;
+        var dest = relay.IsConnected ? st.Screens.FirstOrDefault(sc => !sc.IsLocal && sc.Name.EqualsIgnoreCase(saved)) : null;
+        if (dest is not { Width: > 0 })
+        {
+            st.SavedScreenName = null;
+            return false;
+        }
+        if (!await EnterFromLocal(st, dest, st.SavedCursorX, st.SavedCursorY, st.ExitEdge)) return false;
+        if (log.IsEnabled(LogLevel.Information))
+            log.LogInformation("Restored cursor to '{Screen}' after screensaver", saved);
+        return true;
     }
 
     private async ValueTask BroadcastScreensaverSync(bool active)
@@ -869,6 +875,8 @@ public class InputRouter(
             {
                 if (hotkeyAction == HotkeyAction.ToggleCursorLock)
                 {
+                    // an explicit lock or unlock says where the cursor belongs, so a pending screensaver restore is off
+                    st.SavedScreenName = null;
                     // A remote-only master with no local screen has nowhere to pass input to: the
                     // old behaviour left the remote screen and OnMouseDelta then dropped every
                     // delta, so keyboard and mouse appeared dead until the hotkey was pressed
@@ -1051,8 +1059,8 @@ public class InputRouter(
                 else st.ForwardedButtons.Remove(e.Button);
                 ForwardToVirtualScreen(st, MessageKind.MouseButton, new MouseButtonMessage(e.Button, e.IsPressed));
             }
-            // a remote-only entry refused for a held button is retried as it comes up
-            else if (!e.IsPressed)
+            // a restore or remote-only entry refused for a held button is retried as it comes up
+            else if (!e.IsPressed && !await TryRestoreAfterScreensaver(st))
             {
                 await TryEnterRemoteOnly(st);
             }
@@ -1160,9 +1168,9 @@ public class InputRouter(
             UpdateWarpPoint(st, screen);
         }
 
-        // a remote-only entry refused for a held button is retried here too: its release can be handled before the
-        // OS has the button up
-        if (await TryEnterRemoteOnly(st)) return;
+        // a restore or remote-only entry refused for a held button is retried here too: its release can be handled
+        // before the OS has the button up
+        if (await TryRestoreAfterScreensaver(st) || await TryEnterRemoteOnly(st)) return;
         if (st.LockedToScreen) return;
 
         var localX = (int)x - screen.X;
@@ -1234,8 +1242,7 @@ public class InputRouter(
         st.PendingDx = 0;
         st.PendingDy = 0;
         ShowCursorOnReturn();
-        platform.IsOnVirtualScreen = false;
-        if (warpTo is { } to) platform.WarpCursor(to.X, to.Y);
+        platform.ReturnTo(warpTo);
         LeaveHost(st, host, slaveReachable);
         return host;
     }
@@ -1267,6 +1274,7 @@ public class InputRouter(
     private async ValueTask<bool> EnterFromLocal(LocalMasterState st, ScreenRect dest, int x, int y, ScreenEdge? exitEdge)
     {
         if (platform.AnyMouseButtonHeld()) return false;
+        st.SavedScreenName = null;
         st.ExitEdge = exitEdge;
         var remoteInfo = await RemoteInfoFor(st, dest);
         cursorHider.Hide();
@@ -1287,9 +1295,9 @@ public class InputRouter(
     }
 
     // enters remote-only mode targeting the first remote screen with known dimensions; must be called from consumer.
-    // returns whether it entered; it does not off remote-only, when already virtual or unlocked, during the screensaver
-    // (its end restores the visit), with no screen or relay ready, or while a mouse button is held (retried on the
-    // button's release and on local moves)
+    // returns whether it entered. It does nothing when not remote-only, already virtual or unlocked, during the
+    // screensaver (its end restores the visit, or enters here), or with no screen or relay ready; while a mouse button
+    // is held it is refused, and retried on the button's release and on local moves.
     private async ValueTask<bool> TryEnterRemoteOnly(LocalMasterState st)
     {
         if (!profile.RemoteOnly || st.Mouse.IsOnVirtualScreen || st.ScreensaverActive) return false;
@@ -1640,8 +1648,8 @@ public class InputRouter(
         // empty, since a slave releases everything at LeaveScreen; moving between one host's monitors keeps it
         public HashSet<int> ForwardedKeys = [];
 
-        // buttons whose down this visit forwarded and whose up has not, see ButtonHoldsHost. a slave does not release
-        // buttons at LeaveScreen, so LeaveHost sends their ups first
+        // buttons whose down this visit forwarded and whose up has not, see ButtonHoldsHost. LeaveHost sends their ups
+        // ahead of LeaveScreen, so the slave's own release-all finds nothing left to release
         public HashSet<MouseButton> ForwardedButtons = [];
 
         // whether the current button state has already logged a refused edge; any button event resets it
@@ -1659,7 +1667,8 @@ public class InputRouter(
         // per-screen relative mouse mode (true = relative, false/absent = absolute)
         public Dictionary<string, bool> RelativeMouseScreens = new(StringComparer.OrdinalIgnoreCase);
 
-        // screensaver sync: saved cursor location before screensaver snap-back
+        // screensaver sync: saved cursor location before screensaver snap-back, kept while its restore is pending (see
+        // TryRestoreAfterScreensaver)
         public bool ScreensaverActive;
         public string? SavedScreenName;
         public int SavedCursorX, SavedCursorY;

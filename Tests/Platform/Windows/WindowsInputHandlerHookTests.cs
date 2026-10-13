@@ -1,6 +1,5 @@
 using Hydra.Platform.Windows;
-using Microsoft.Extensions.Logging.Abstractions;
-using Tests.Setup;
+using Hydra.Screen;
 
 namespace Tests.Platform.Windows;
 
@@ -16,135 +15,118 @@ public class WindowsInputHandlerHookTests
     // the clock reads this when the flag flips; samples are stamped just after it unless a test says otherwise
     private const int FlipTick = 1_000;
     private const uint BeforeFlip = FlipTick - 1, AfterFlip = FlipTick + 1;
-    private static readonly Action<int, int> NoWarp = static (_, _) => { };
 
-    private static WindowsInputHandler NewHandler(int flipTick = FlipTick) =>
-        new(NullLogger<WindowsInputHandler>.Instance, TransitionTestHelper.Profile("home")) { TickCount = () => flipTick };
-
-    private static void Subscribe(
-        WindowsInputHandler handler,
-        Action<double, double>? onMouseMove = null,
-        Action<double, double>? onMouseDelta = null,
-        Action? onMouseButton = null) =>
-        handler.Subscribe(onMouseMove ?? ((_, _) => { }), onMouseDelta, _ => { }, _ => onMouseButton?.Invoke(), _ => { });
+    private static HookedHandler NewHandler(int flipTick = FlipTick) => new(flipTick);
 
     private static readonly KBDLLHOOKSTRUCT KeyA = new() { vkCode = WinVirtualKey.A, time = 1 };
 
     private static MSLLHOOKSTRUCT At(int x, int y, uint time = AfterFlip) => new() { pt = new WINPOINT { x = x, y = y }, time = time };
 
-    private static bool Move(WindowsInputHandler handler, int x, int y, uint time = AfterFlip, Action<int, int>? setCursorPos = null) =>
-        handler.HandleMouse(NativeMethods.WM_MOUSEMOVE, At(x, y, time), setCursorPos ?? NoWarp);
+    private static bool Move(HookedHandler h, int x, int y, uint time = AfterFlip, Action<int, int>? setCursorPos = null) =>
+        h.Move(x, y, time, setCursorPos);
 
     // back on the local screen after a visit parked at the park point; whether and where the router warps is up to the test
-    private static WindowsInputHandler Returned(List<(double X, double Y)> reported, int flipTick = FlipTick)
+    private static HookedHandler Returned(int flipTick = FlipTick)
     {
-        var handler = NewHandler(flipTick);
-        Subscribe(handler, onMouseMove: (x, y) => reported.Add((x, y)));
-        handler.SetWarpState(ParkX, ParkY);
-        handler.IsOnVirtualScreen = true;
-        Move(handler, ParkX + 5, ParkY); // the visit's first sample, re-based
-        handler.IsOnVirtualScreen = false;
-        return handler;
+        var h = NewHandler(flipTick);
+        h.Handler.SetWarpState(ParkX, ParkY);
+        h.Handler.IsOnVirtualScreen = true;
+        Move(h, ParkX + 5, ParkY); // the visit's first sample, re-based
+        h.Handler.IsOnVirtualScreen = false;
+        return h;
     }
 
     [Test]
     public void MoveThatReturnsToLocal_IsSwallowed()
     {
-        var handler = NewHandler();
-        Subscribe(handler, onMouseDelta: (_, _) =>
+        var h = NewHandler();
+        h.OnDelta = () =>
         {
-            handler.IsOnVirtualScreen = false;
-            handler.SetWarpState(EdgeX, EdgeY);
-        });
-        handler.SetWarpState(ParkX, ParkY);
-        handler.IsOnVirtualScreen = true;
-        Move(handler, ParkX + 5, ParkY); // the visit's first sample, re-based
+            h.Handler.IsOnVirtualScreen = false;
+            h.Handler.SetWarpState(EdgeX, EdgeY);
+        };
+        h.Handler.SetWarpState(ParkX, ParkY);
+        h.Handler.IsOnVirtualScreen = true;
+        Move(h, ParkX + 5, ParkY); // the visit's first sample, re-based
 
-        Assert.That(Move(handler, ParkX + 50, ParkY), Is.True);
+        Assert.That(Move(h, ParkX + 50, ParkY), Is.True);
     }
 
     [Test]
     public void MoveThatEntersARemoteScreen_IsSwallowed()
     {
-        var handler = NewHandler();
-        Subscribe(handler, onMouseMove: (_, _) =>
+        var h = NewHandler();
+        h.OnMove = () =>
         {
-            handler.IsOnVirtualScreen = true;
-            handler.SetWarpState(ParkX, ParkY);
-        });
+            h.Handler.IsOnVirtualScreen = true;
+            h.Handler.SetWarpState(ParkX, ParkY);
+        };
 
-        Assert.That(Move(handler, EdgeX, EdgeY), Is.True);
+        Assert.That(Move(h, EdgeX, EdgeY), Is.True);
     }
 
     [Test]
     public void MoveComputedAtParkButHandledAfterTheReturnWarp_IsRebasedOntoTheEdge()
     {
-        var reported = new List<(double X, double Y)>();
         var warps = new List<(int X, int Y)>();
-        var handler = Returned(reported);
-        handler.SetWarpState(EdgeX, EdgeY);
+        var h = Returned();
+        h.Handler.SetWarpState(EdgeX, EdgeY);
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(Move(handler, ParkX + 3, ParkY, BeforeFlip, (x, y) => warps.Add((x, y))), Is.True);
+            Assert.That(Move(h, ParkX + 3, ParkY, BeforeFlip, (x, y) => warps.Add((x, y))), Is.True);
             Assert.That(warps, Is.EqualTo([(EdgeX, EdgeY)]));
-            Assert.That(reported, Is.EqualTo([((double)EdgeX, (double)EdgeY)]), "the router must hear where the cursor was put");
+            Assert.That(h.Moves, Is.EqualTo([((double)EdgeX, (double)EdgeY)]), "the router must hear where the cursor was put");
         }
     }
 
     [Test]
     public void EntryPark_ASampleComputedBeforeItReportsNoDelta()
     {
-        var deltas = new List<(double X, double Y)>();
-        var handler = NewHandler();
-        Subscribe(handler, onMouseDelta: (x, y) => deltas.Add((x, y)));
-        handler.SetWarpState(EdgeX, EdgeY);
-        handler.IsOnVirtualScreen = true;
-        handler.SetWarpState(ParkX, ParkY); // the entry's park
+        var h = NewHandler();
+        h.Handler.SetWarpState(EdgeX, EdgeY);
+        h.Handler.IsOnVirtualScreen = true;
+        h.Handler.SetWarpState(ParkX, ParkY); // the entry's park
 
-        Move(handler, EdgeX - 2, EdgeY); // computed before the park landed
-        Move(handler, ParkX + 3, ParkY);
+        Move(h, EdgeX - 2, EdgeY); // computed before the park landed
+        Move(h, ParkX + 3, ParkY);
 
-        Assert.That(deltas, Is.EqualTo([(3.0, 0.0)]));
+        Assert.That(h.Deltas, Is.EqualTo([(3.0, 0.0)]));
     }
 
     [Test]
     public void MidVisitPark_ASampleComputedBeforeItReportsNoDelta()
     {
-        var deltas = new List<(double X, double Y)>();
-        var handler = NewHandler();
-        Subscribe(handler, onMouseDelta: (x, y) => deltas.Add((x, y)));
-        handler.SetWarpState(ParkX, ParkY);
-        handler.IsOnVirtualScreen = true;
-        Move(handler, ParkX + 1, ParkY); // the visit's first sample, re-based
-        Move(handler, ParkX + 3, ParkY);
-        handler.SetWarpState(PinX, PinY); // parked on a screen adopted mid-visit
+        var h = NewHandler();
+        h.Handler.SetWarpState(ParkX, ParkY);
+        h.Handler.IsOnVirtualScreen = true;
+        Move(h, ParkX + 1, ParkY); // the visit's first sample, re-based
+        Move(h, ParkX + 3, ParkY);
+        h.Handler.SetWarpState(PinX, PinY); // parked on a screen adopted mid-visit
 
-        Move(handler, ParkX + 5, ParkY); // computed before that park landed
-        Move(handler, PinX + 4, PinY);
+        Move(h, ParkX + 5, ParkY); // computed before that park landed
+        Move(h, PinX + 4, PinY);
 
-        Assert.That(deltas, Is.EqualTo([(3.0, 0.0), (4.0, 0.0)]));
+        Assert.That(h.Deltas, Is.EqualTo([(3.0, 0.0), (4.0, 0.0)]));
     }
 
     [Test]
     public void MidVisitPark_AnEchoOfTheOldParkIsSwallowedAndTheRebaseKept()
     {
-        var deltas = new List<(double X, double Y)>();
         var warps = new List<(int X, int Y)>();
-        var handler = NewHandler();
-        Subscribe(handler, onMouseDelta: (x, y) => deltas.Add((x, y)));
-        handler.SetWarpState(ParkX, ParkY);
-        handler.IsOnVirtualScreen = true;
-        Move(handler, ParkX + 1, ParkY); // the visit's first sample, re-based
-        handler.SetWarpState(PinX, PinY);
+        var h = NewHandler();
+        h.Handler.SetWarpState(ParkX, ParkY);
+        h.Handler.IsOnVirtualScreen = true;
+        Move(h, ParkX + 1, ParkY); // the visit's first sample, re-based
+        h.Handler.SetWarpState(PinX, PinY);
 
-        Move(handler, ParkX, ParkY, setCursorPos: (x, y) => warps.Add((x, y))); // a late echo of the old park
-        Move(handler, ParkX + 5, ParkY, setCursorPos: (x, y) => warps.Add((x, y))); // computed before the new park
-        Move(handler, PinX + 4, PinY);
+        Move(h, ParkX, ParkY, setCursorPos: (x, y) => warps.Add((x, y))); // a late echo of the old park
+        Move(h, ParkX + 5, ParkY, setCursorPos: (x, y) => warps.Add((x, y))); // computed before the new park
+        Move(h, PinX + 4, PinY);
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(deltas, Is.EqualTo([(4.0, 0.0)]));
+            Assert.That(h.Deltas, Is.EqualTo([(4.0, 0.0)]));
             Assert.That(warps, Is.EqualTo([(PinX, PinY)]), "only the re-base warps");
         }
     }
@@ -153,85 +135,110 @@ public class WindowsInputHandlerHookTests
     public void EntryWithoutATargetChange_ItsFirstSampleReportsNoDelta()
     {
         // returned by a snap-back to the park point, then re-entered: no warp moves the target, the flip alone marks
-        var deltas = new List<(double X, double Y)>();
-        var handler = Returned([]);
-        Subscribe(handler, onMouseDelta: (x, y) => deltas.Add((x, y)));
-        handler.IsOnVirtualScreen = true;
+        var h = Returned();
+        h.Handler.IsOnVirtualScreen = true;
 
-        Move(handler, EdgeX, EdgeY); // measured on the local screen
-        Move(handler, ParkX + 2, ParkY);
+        Move(h, EdgeX, EdgeY); // measured on the local screen
+        Move(h, ParkX + 2, ParkY);
 
-        Assert.That(deltas, Is.EqualTo([(2.0, 0.0)]));
+        Assert.That(h.Deltas, Is.EqualTo([(2.0, 0.0)]));
     }
 
     [Test]
     public void TwoParksWithNoSampleBetween_TheOldestPointIsStillAnEcho()
     {
-        var deltas = new List<(double X, double Y)>();
-        var handler = NewHandler();
-        Subscribe(handler, onMouseDelta: (x, y) => deltas.Add((x, y)));
-        handler.SetWarpState(ParkX, ParkY);
-        handler.IsOnVirtualScreen = true;
-        Move(handler, ParkX + 1, ParkY); // the visit's first sample, re-based
-        handler.SetWarpState(PinX, PinY);
-        handler.SetWarpState(EdgeX, EdgeY);
+        var h = NewHandler();
+        h.Handler.SetWarpState(ParkX, ParkY);
+        h.Handler.IsOnVirtualScreen = true;
+        Move(h, ParkX + 1, ParkY); // the visit's first sample, re-based
+        h.Handler.SetWarpState(PinX, PinY);
+        h.Handler.SetWarpState(EdgeX, EdgeY);
 
-        Move(handler, ParkX, ParkY); // a late echo of the first park
-        Move(handler, ParkX, ParkY);
-        Move(handler, EdgeX - 3, EdgeY); // the re-base
+        Move(h, ParkX, ParkY); // a late echo of the first park
+        Move(h, ParkX, ParkY);
+        Move(h, EdgeX - 3, EdgeY); // the re-base
 
-        Move(handler, EdgeX - 5, EdgeY);
-        Assert.That(deltas, Is.EqualTo([(-5.0, 0.0)]));
+        Move(h, EdgeX - 5, EdgeY);
+        Assert.That(h.Deltas, Is.EqualTo([(-5.0, 0.0)]));
     }
 
     [Test]
     public void ReturnThenReEntryBeforeAnySample_AnEchoOfTheReturnEdgeIsSwallowed()
     {
-        var deltas = new List<(double X, double Y)>();
-        var handler = Returned([]);
-        Subscribe(handler, onMouseDelta: (x, y) => deltas.Add((x, y)));
-        handler.SetWarpState(EdgeX, EdgeY); // the return
-        handler.IsOnVirtualScreen = true;
-        handler.SetWarpState(PinX, PinY); // an instant re-entry's park
+        var h = Returned();
+        h.Handler.SetWarpState(EdgeX, EdgeY); // the return
+        h.Handler.IsOnVirtualScreen = true;
+        h.Handler.SetWarpState(PinX, PinY); // an instant re-entry's park
 
-        Move(handler, EdgeX, EdgeY); // a late echo of the return warp
-        Move(handler, EdgeX - 3, EdgeY); // computed between the two warps: the re-base
-        Move(handler, PinX + 2, PinY);
+        Move(h, EdgeX, EdgeY); // a late echo of the return warp
+        Move(h, EdgeX - 3, EdgeY); // computed between the two warps: the re-base
+        Move(h, PinX + 2, PinY);
 
-        Assert.That(deltas, Is.EqualTo([(2.0, 0.0)]));
+        Assert.That(h.Deltas, Is.EqualTo([(2.0, 0.0)]));
+    }
+
+    // a visit parked at the park point, returning to the edge; SetCursorPos for the return has not landed yet
+    private static HookedHandler ReturningToTheEdge()
+    {
+        var h = NewHandler();
+        h.Handler.SetWarpState(ParkX, ParkY);
+        h.Handler.IsOnVirtualScreen = true;
+        Move(h, ParkX + 5, ParkY); // the visit's first sample, re-based
+        h.Handler.SetReturnState(new ScreenPoint(EdgeX, EdgeY));
+        return h;
+    }
+
+    [Test]
+    public void ParkEchoHandledBeforeTheReturnWarpLands_IsSwallowed()
+    {
+        var h = ReturningToTheEdge();
+
+        Assert.That(Move(h, ParkX, ParkY, BeforeFlip), Is.True);
+    }
+
+    [Test]
+    public void MoveComputedAtParkHandledBeforeTheReturnWarpLands_IsRebasedOntoTheReturnPoint()
+    {
+        var warps = new List<(int X, int Y)>();
+        var h = ReturningToTheEdge();
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(Move(h, ParkX + 3, ParkY, setCursorPos: (x, y) => warps.Add((x, y))), Is.True);
+            Assert.That(warps, Is.EqualTo([(EdgeX, EdgeY)]));
+            Assert.That(h.Moves, Is.EqualTo([((double)EdgeX, (double)EdgeY)]));
+        }
     }
 
     [Test]
     public void ReturnWithoutAWarp_EveryMovePassesThrough()
     {
-        var reported = new List<(double X, double Y)>();
-        var handler = Returned(reported);
+        var h = Returned();
 
         using (Assert.EnterMultipleScope())
         {
             // exactly the park point too: an app clipping the cursor to the centre must stay usable
-            Assert.That(Move(handler, ParkX, ParkY), Is.False);
-            Assert.That(Move(handler, ParkX, ParkY), Is.False);
-            Assert.That(Move(handler, ParkX, ParkY), Is.False);
-            Assert.That(Move(handler, ParkX + 3, ParkY), Is.False);
-            Assert.That(reported, Is.EqualTo([((double)ParkX + 3, (double)ParkY)]));
+            Assert.That(Move(h, ParkX, ParkY), Is.False);
+            Assert.That(Move(h, ParkX, ParkY), Is.False);
+            Assert.That(Move(h, ParkX, ParkY), Is.False);
+            Assert.That(Move(h, ParkX + 3, ParkY), Is.False);
+            Assert.That(h.Moves, Is.EqualTo([((double)ParkX + 3, (double)ParkY)]));
         }
     }
 
     [Test]
     public void RouterPreemptedBeforeItsWarp_NextMoveIsRebasedOntoTheEdge()
     {
-        var reported = new List<(double X, double Y)>();
         var warps = new List<(int X, int Y)>();
-        var handler = Returned(reported);
-        Move(handler, ParkX + 3, ParkY);
-        Move(handler, ParkX + 6, ParkY);
-        Move(handler, ParkX + 9, ParkY);
-        handler.SetWarpState(EdgeX, EdgeY);
+        var h = Returned();
+        Move(h, ParkX + 3, ParkY);
+        Move(h, ParkX + 6, ParkY);
+        Move(h, ParkX + 9, ParkY);
+        h.Handler.SetWarpState(EdgeX, EdgeY);
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(Move(handler, ParkX + 12, ParkY, setCursorPos: (x, y) => warps.Add((x, y))), Is.True);
+            Assert.That(Move(h, ParkX + 12, ParkY, setCursorPos: (x, y) => warps.Add((x, y))), Is.True);
             Assert.That(warps, Is.EqualTo([(EdgeX, EdgeY)]));
         }
     }
@@ -239,79 +246,77 @@ public class WindowsInputHandlerHookTests
     [Test]
     public void EchoOfTheReturnWarp_DoesNotUseUpTheRebase()
     {
-        var handler = Returned([]);
-        handler.SetWarpState(EdgeX, EdgeY);
+        var h = Returned();
+        h.Handler.SetWarpState(EdgeX, EdgeY);
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(Move(handler, EdgeX, EdgeY), Is.False);
-            Assert.That(Move(handler, ParkX + 3, ParkY, BeforeFlip), Is.True);
+            Assert.That(Move(h, EdgeX, EdgeY), Is.False);
+            Assert.That(Move(h, ParkX + 3, ParkY, BeforeFlip), Is.True);
         }
     }
 
     [Test]
     public void AfterTheRebase_MovesBackTowardTheParkPassThrough()
     {
-        var handler = Returned([]);
-        handler.SetWarpState(EdgeX, EdgeY);
-        Move(handler, ParkX + 3, ParkY, BeforeFlip);
+        var h = Returned();
+        h.Handler.SetWarpState(EdgeX, EdgeY);
+        Move(h, ParkX + 3, ParkY, BeforeFlip);
 
         using (Assert.EnterMultipleScope())
         {
             for (var x = EdgeX - 100; x > ParkX; x -= 100)
-                Assert.That(Move(handler, x, EdgeY), Is.False, $"x={x}");
-            Assert.That(Move(handler, ParkX, ParkY), Is.False);
+                Assert.That(Move(h, x, EdgeY), Is.False, $"x={x}");
+            Assert.That(Move(h, ParkX, ParkY), Is.False);
         }
     }
 
     [Test]
     public void ParkPointEventsAfterTheReturnWarp_TwoAreSwallowedThenOneRebasedThenTheyPass()
     {
-        var reported = new List<(double X, double Y)>();
         var warps = new List<(int X, int Y)>();
-        var handler = Returned(reported);
-        handler.SetWarpState(EdgeX, EdgeY);
+        var h = Returned();
+        h.Handler.SetWarpState(EdgeX, EdgeY);
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(Move(handler, ParkX, ParkY), Is.True);
-            Assert.That(Move(handler, ParkX, ParkY), Is.True);
-            Assert.That(reported, Is.Empty);
-            Assert.That(Move(handler, ParkX, ParkY, setCursorPos: (x, y) => warps.Add((x, y))), Is.True);
+            Assert.That(Move(h, ParkX, ParkY), Is.True);
+            Assert.That(Move(h, ParkX, ParkY), Is.True);
+            Assert.That(h.Moves, Is.Empty);
+            Assert.That(Move(h, ParkX, ParkY, setCursorPos: (x, y) => warps.Add((x, y))), Is.True);
             Assert.That(warps, Is.EqualTo([(EdgeX, EdgeY)]));
-            Assert.That(Move(handler, ParkX, ParkY), Is.False);
+            Assert.That(Move(h, ParkX, ParkY), Is.False);
         }
     }
 
     [Test]
     public void ParkPointEventsStampedBeforeTheFlip_AreSwallowedUntilALaterOneArrives()
     {
-        var reported = new List<(double X, double Y)>();
-        var handler = Returned(reported);
-        handler.SetWarpState(EdgeX, EdgeY);
-        Move(handler, ParkX + 3, ParkY, BeforeFlip); // the one rebase
+        var h = Returned();
+        h.Handler.SetWarpState(EdgeX, EdgeY);
+        Move(h, ParkX + 3, ParkY, BeforeFlip); // the one rebase
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(Move(handler, ParkX, ParkY, BeforeFlip), Is.True);
-            Assert.That(Move(handler, ParkX, ParkY, FlipTick), Is.True);
-            Assert.That(Move(handler, EdgeX - 10, EdgeY), Is.False, "a move stamped after the flip ends the guard");
-            Assert.That(Move(handler, ParkX, ParkY, BeforeFlip), Is.False);
-            Assert.That(reported, Is.EqualTo([((double)EdgeX, (double)EdgeY), (EdgeX - 10, EdgeY), (ParkX, ParkY)]));
+            Assert.That(Move(h, ParkX, ParkY, BeforeFlip), Is.True);
+            Assert.That(Move(h, ParkX, ParkY, FlipTick), Is.True);
+            Assert.That(Move(h, EdgeX - 10, EdgeY), Is.False, "a move stamped after the flip ends the guard");
+            Assert.That(Move(h, ParkX, ParkY, BeforeFlip), Is.False);
+            Assert.That(h.Moves, Is.EqualTo([((double)EdgeX, (double)EdgeY), (EdgeX - 10, EdgeY), (ParkX, ParkY)]));
         }
     }
 
     [Test]
     public void ParkPointEventGuard_HoldsAcrossTheTickWrap()
     {
-        var handler = Returned([], flipTick: -1);
-        handler.SetWarpState(EdgeX, EdgeY);
-        Move(handler, ParkX + 3, ParkY, uint.MaxValue - 1); // the one rebase
+        var h = Returned(flipTick: -1);
+        h.Handler.SetWarpState(EdgeX, EdgeY);
+        Move(h, ParkX + 3, ParkY, uint.MaxValue - 1); // the one rebase
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(Move(handler, ParkX, ParkY, uint.MaxValue - 1), Is.True, "stamped before the flip");
-            Assert.That(Move(handler, ParkX, ParkY, 0), Is.False, "stamped after the flip, past the wrap");
+            Assert.That(Move(h, ParkX, ParkY, uint.MaxValue - 1), Is.True, "stamped before the flip");
+            Assert.That(Move(h, ParkX, ParkY, 0), Is.False, "stamped after the flip, past the wrap");
         }
     }
 
@@ -319,38 +324,37 @@ public class WindowsInputHandlerHookTests
     public void SnapBackToThePark_MovesPassThroughUntilALaterWarpRebasesOne()
     {
         var warps = new List<(int X, int Y)>();
-        var handler = Returned([]);
-        handler.SetWarpState(ParkX, ParkY); // a disconnect snaps back to the park point itself
+        var h = Returned();
+        h.Handler.SetWarpState(ParkX, ParkY); // a disconnect snaps back to the park point itself
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(Move(handler, ParkX + 3, ParkY), Is.False);
-            Assert.That(Move(handler, ParkX + 6, ParkY), Is.False);
-            handler.SetWarpState(PinX, PinY); // a later warp
-            Assert.That(Move(handler, PinX + 2, PinY, setCursorPos: (x, y) => warps.Add((x, y))), Is.True);
+            Assert.That(Move(h, ParkX + 3, ParkY), Is.False);
+            Assert.That(Move(h, ParkX + 6, ParkY), Is.False);
+            h.Handler.SetWarpState(PinX, PinY); // a later warp
+            Assert.That(Move(h, PinX + 2, PinY, setCursorPos: (x, y) => warps.Add((x, y))), Is.True);
             Assert.That(warps, Is.EqualTo([(PinX, PinY)]));
-            Assert.That(Move(handler, PinX + 4, PinY), Is.False);
+            Assert.That(Move(h, PinX + 4, PinY), Is.False);
         }
     }
 
     [Test]
     public void RebaseThatRacesAReEntry_ReportsNothing()
     {
-        var reported = new List<(double X, double Y)>();
-        var handler = Returned(reported);
-        handler.SetWarpState(EdgeX, EdgeY);
+        var h = Returned();
+        h.Handler.SetWarpState(EdgeX, EdgeY);
 
-        var swallowed = Move(handler, ParkX + 3, ParkY, BeforeFlip, (x, _) =>
+        var swallowed = Move(h, ParkX + 3, ParkY, BeforeFlip, (x, _) =>
         {
             if (x != EdgeX) return;
-            handler.IsOnVirtualScreen = true;
-            handler.SetWarpState(ParkX, ParkY);
+            h.Handler.IsOnVirtualScreen = true;
+            h.Handler.SetWarpState(ParkX, ParkY);
         });
 
         using (Assert.EnterMultipleScope())
         {
             Assert.That(swallowed, Is.True);
-            Assert.That(reported, Is.Empty, "a position reported now would arrive while virtual");
+            Assert.That(h.Moves, Is.Empty, "a position reported now would arrive while virtual");
         }
     }
 
@@ -358,29 +362,14 @@ public class WindowsInputHandlerHookTests
     public void ReEntryBeforeAnySample_KeepsTheOldestPoint()
     {
         // no sample came between the return and the re-entry, so an in-flight one was computed from the park point
-        var handler = Returned([]);
-        handler.SetWarpState(EdgeX, EdgeY);
-        handler.IsOnVirtualScreen = true;
+        var h = Returned();
+        h.Handler.SetWarpState(EdgeX, EdgeY);
+        h.Handler.IsOnVirtualScreen = true;
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(handler.TakeStraddle(ParkX, ParkY), Is.EqualTo(WindowsInputHandler.Straddle.Echo));
-            Assert.That(handler.TakeStraddle(EdgeX - 3, EdgeY), Is.EqualTo(WindowsInputHandler.Straddle.Rebase));
-        }
-    }
-
-    // a handler on a clock the test advances
-    private sealed class Clocked
-    {
-        public int Now = FlipTick;
-        public readonly WindowsInputHandler Handler;
-        public readonly List<(double X, double Y)> Deltas = [];
-        public readonly List<(double X, double Y)> Moves = [];
-
-        public Clocked()
-        {
-            Handler = new WindowsInputHandler(NullLogger<WindowsInputHandler>.Instance, TransitionTestHelper.Profile("home")) { TickCount = () => Now };
-            Subscribe(Handler, onMouseMove: (x, y) => Moves.Add((x, y)), onMouseDelta: (x, y) => Deltas.Add((x, y)));
+            Assert.That(h.Handler.TakeStraddle(ParkX, ParkY), Is.EqualTo(WindowsInputHandler.Straddle.Echo));
+            Assert.That(h.Handler.TakeStraddle(EdgeX - 3, EdgeY), Is.EqualTo(WindowsInputHandler.Straddle.Rebase));
         }
     }
 
@@ -388,8 +377,8 @@ public class WindowsInputHandlerHookTests
     public void EachHookIsReinstalledOnlyAfterFiveSecondsWithoutACallbackOfItsOwn()
     {
         // the keyboard hook has heard nothing since the clock's zero, the mouse hook since the move at FlipTick
-        var c = new Clocked();
-        Move(c.Handler, EdgeX, EdgeY);
+        var c = NewHandler();
+        Move(c, EdgeX, EdgeY);
 
         using (Assert.EnterMultipleScope())
         {
@@ -408,15 +397,15 @@ public class WindowsInputHandlerHookTests
     public void ReinstallDuringAVisit_TheNextSampleReportsNoDelta()
     {
         // a hook that was gone let the cursor drift off the park point; measuring across that is a bogus jump
-        var c = new Clocked();
+        var c = NewHandler();
         c.Handler.SetWarpState(ParkX, ParkY);
         c.Handler.IsOnVirtualScreen = true;
-        Move(c.Handler, ParkX + 1, ParkY); // the visit's first sample, re-based
+        Move(c, ParkX + 1, ParkY); // the visit's first sample, re-based
         c.Now += 5_000;
         Assert.That(c.Handler.TakeQuietHooks().HasFlag(WindowsInputHandler.Hooks.Mouse), Is.True, "pre-condition");
 
-        Move(c.Handler, ParkX + 400, ParkY + 300, (uint)c.Now);
-        Move(c.Handler, ParkX + 2, ParkY, (uint)c.Now);
+        Move(c, ParkX + 400, ParkY + 300, (uint)c.Now);
+        Move(c, ParkX + 2, ParkY, (uint)c.Now);
 
         Assert.That(c.Deltas, Is.EqualTo([(2.0, 0.0)]));
     }
@@ -424,19 +413,19 @@ public class WindowsInputHandlerHookTests
     [Test]
     public void ReinstallOnTheLocalScreen_TheNextMoveIsUntouched()
     {
-        var c = new Clocked();
+        var c = NewHandler();
         c.Handler.SetWarpState(ParkX, ParkY);
         c.Handler.IsOnVirtualScreen = true;
         c.Handler.IsOnVirtualScreen = false;
         c.Handler.SetWarpState(EdgeX, EdgeY); // the return
-        Move(c.Handler, EdgeX - 3, EdgeY, (uint)c.Now); // its re-base
+        Move(c, EdgeX - 3, EdgeY, (uint)c.Now); // its re-base
         c.Moves.Clear();
         c.Now += 5_000;
         Assert.That(c.Handler.TakeQuietHooks().HasFlag(WindowsInputHandler.Hooks.Mouse), Is.True, "pre-condition");
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(Move(c.Handler, ParkX + 7, ParkY, (uint)c.Now), Is.False);
+            Assert.That(Move(c, ParkX + 7, ParkY, (uint)c.Now), Is.False);
             Assert.That(c.Moves, Is.EqualTo([((double)ParkX + 7, (double)ParkY)]));
         }
     }
@@ -452,11 +441,11 @@ public class WindowsInputHandlerHookTests
     [TestCase(false, true, TestName = "ButtonWhileEnteringARemoteScreen_IsSwallowed")]
     public void ButtonWhileCrossingScreens_FollowsTheFinalRead(bool startOnVirtualScreen, bool swallowed)
     {
-        var handler = NewHandler();
-        Subscribe(handler, onMouseButton: () => handler.IsOnVirtualScreen = !startOnVirtualScreen);
-        handler.IsOnVirtualScreen = startOnVirtualScreen;
+        var h = NewHandler();
+        h.OnButton = () => h.Handler.IsOnVirtualScreen = !startOnVirtualScreen;
+        h.Handler.IsOnVirtualScreen = startOnVirtualScreen;
 
-        Assert.That(handler.HandleMouse(NativeMethods.WM_LBUTTONDOWN, At(EdgeX, EdgeY), NoWarp), Is.EqualTo(swallowed));
+        Assert.That(h.Handler.HandleMouse(NativeMethods.WM_LBUTTONDOWN, At(EdgeX, EdgeY), HookedHandler.NoWarp), Is.EqualTo(swallowed));
     }
 
     [TestCase(true, false, TestName = "KeyWhileReturningToLocal_PassesThrough")]
@@ -464,18 +453,18 @@ public class WindowsInputHandlerHookTests
     [Platform("Win")] // key resolution needs ToUnicodeEx
     public void KeyWhileCrossingScreens_FollowsTheFinalRead(bool startOnVirtualScreen, bool swallowed)
     {
-        var handler = NewHandler();
+        var h = NewHandler();
         var keys = 0;
-        handler.Subscribe((_, _) => { }, null, _ =>
+        h.OnKey = () =>
         {
             keys++;
-            handler.IsOnVirtualScreen = !startOnVirtualScreen;
-        }, _ => { }, _ => { });
-        handler.IsOnVirtualScreen = startOnVirtualScreen;
+            h.Handler.IsOnVirtualScreen = !startOnVirtualScreen;
+        };
+        h.Handler.IsOnVirtualScreen = startOnVirtualScreen;
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(handler.HandleKey(NativeMethods.WM_KEYDOWN, KeyA), Is.EqualTo(swallowed));
+            Assert.That(h.Handler.HandleKey(NativeMethods.WM_KEYDOWN, KeyA), Is.EqualTo(swallowed));
             Assert.That(keys, Is.Positive, "the key must reach the router for the test to mean anything");
         }
     }

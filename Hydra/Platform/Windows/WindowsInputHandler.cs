@@ -19,6 +19,8 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
     private uint _hookThreadId;
     private readonly WinKeyResolver _keyResolver = new();
     private readonly KeyFates _keyFates = new(strayUpsPass: false);
+    // never cleared: a record a lost up left is overwritten by that button's next down
+    private readonly KeyFates _buttonFates = new(strayUpsPass: false);
     private Action<double, double>? _onMouseMove;
     private Action<double, double>? _onMouseDelta;
     private Action<KeyEvent>? _onKeyEvent;
@@ -52,25 +54,28 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
         set
         {
             // marked here, as the flag flips, so a bounce between two hook samples is never missed
-            lock (_warpLock)
-            {
-                if (!_isOnVirtualScreen.TrySet(value)) return;
-                if (value)
-                {
-                    // the first sample of a visit may still have been measured on the local screen
-                    MarkRetargetLocked(_warpTarget);
-                    _echoGuard = null;
-                }
-                else
-                {
-                    // the return's warp marks its own retarget
-                    _retargetedFrom.Clear();
-                    _echoGuard = _warpTarget;
-                    _echoGuardTick = TickCount();
-                }
-            }
+            lock (_warpLock) FlipLocked(value);
         }
     }
+
+    private void FlipLocked(bool value)
+    {
+        if (!_isOnVirtualScreen.TrySet(value)) return;
+        if (value)
+        {
+            // the first sample of a visit may still have been measured on the local screen
+            MarkRetargetLocked(_warpTarget);
+            _echoGuard = null;
+        }
+        else
+        {
+            // the return's warp marks its own retarget
+            _retargetedFrom.Clear();
+            _echoGuard = _warpTarget;
+            _echoGuardTick = TickCount();
+        }
+    }
+
     private Timer? _healthTimer;
     // Windows 7+ silently removes a low-level hook whose callback overruns LowLevelHooksTimeout (a GC pause, a loaded
     // box) and says nothing. A live hook sees its input all the time, so a hook quiet for HookIdleMs is reinstalled,
@@ -96,15 +101,33 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
         NativeMethods.SetCursorPos(x, y);
     }
 
-    // Every warp the router makes (entry park, mid-visit park, return); SetCursorPos stays outside the lock.
+    public void ReturnTo(ScreenPoint? warpTo)
+    {
+        SetReturnState(warpTo);
+        if (warpTo is { } to) NativeMethods.SetCursorPos(to.X, to.Y);
+    }
+
+    // every warp the router makes but a return's (entry park, mid-visit park); SetCursorPos stays outside the lock
     internal void SetWarpState(int x, int y)
     {
-        var to = new ScreenPoint(x, y);
+        lock (_warpLock) SetWarpStateLocked(new ScreenPoint(x, y));
+    }
+
+    // The return flips the flag and takes its warp in one step, so a sample that reads local also sees the park point
+    // marked and the return as the last warp: a park echo is swallowed, a move computed at the park re-based.
+    internal void SetReturnState(ScreenPoint? warpTo)
+    {
         lock (_warpLock)
         {
-            if (to != _warpTarget) MarkRetargetLocked(_warpTarget);
-            _warpTarget = _lastWarp = to;
+            FlipLocked(false);
+            if (warpTo is { } to) SetWarpStateLocked(to);
         }
+    }
+
+    private void SetWarpStateLocked(ScreenPoint to)
+    {
+        if (to != _warpTarget) MarkRetargetLocked(_warpTarget);
+        _warpTarget = _lastWarp = to;
     }
 
     // every point the cursor left since the last handled sample: an in-flight sample or echo may come from any of them
@@ -143,8 +166,9 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
     // Windows fixes a sample's position before the hook runs, so the first one handled after the cursor is retargeted
     // (a warp, or entering a visit) may have been computed from where it was. It is re-based onto the target, once:
     // in a visit its delta is dropped, on the local screen its position. Up to two events at exactly a point it left
-    // are late echoes of our own warps, swallowed without using up the re-base. With no retarget (an unlock or a
-    // stop never warps; a warp to where the cursor already is changes nothing) samples are genuine.
+    // are late echoes of our own warps, swallowed without using up the re-base. A return's warp is marked as the flag
+    // clears (SetReturnState). With no retarget (a return that does not warp, as an unlock or a stop; a warp to where the
+    // cursor already is) samples are genuine.
     internal Straddle TakeStraddle(int x, int y)
     {
         lock (_warpLock)
@@ -302,12 +326,21 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
     // the async key state never sees a button our hook swallowed
     public bool SeesSwallowed(MouseButton button) => false;
 
-    public bool AnyMouseButtonHeld()
+    // the async state, since the router asks from a thread that reads no input of its own (GetKeyState would always say
+    // up there)
+    public bool AnyMouseButtonHeld() =>
+        IsKeyDown(WinVirtualKey.LButton) || IsKeyDown(WinVirtualKey.RButton) || IsKeyDown(WinVirtualKey.MButton)
+        || IsKeyDown(WinVirtualKey.XButton1) || IsKeyDown(WinVirtualKey.XButton2);
+
+    // GetAsyncKeyState reads the physical button, and nothing documents whether the hook's message has had
+    // SwapMouseButton applied, so the primary and secondary each count either as held
+    private bool OsHolds(MouseButton button) => button switch
     {
-        // VK_LBUTTON=0x01, VK_RBUTTON=0x02, VK_MBUTTON=0x04, VK_XBUTTON1=0x05, VK_XBUTTON2=0x06; the async state, since the
-        // router asks from a thread that reads no input of its own (GetKeyState would always say up there)
-        return IsKeyDown(0x01) || IsKeyDown(0x02) || IsKeyDown(0x04) || IsKeyDown(0x05) || IsKeyDown(0x06);
-    }
+        MouseButton.Left or MouseButton.Right => IsKeyDown(WinVirtualKey.LButton) || IsKeyDown(WinVirtualKey.RButton),
+        MouseButton.Middle => IsKeyDown(WinVirtualKey.MButton),
+        MouseButton.Extra1 => IsKeyDown(WinVirtualKey.XButton1),
+        _ => IsKeyDown(WinVirtualKey.XButton2),
+    };
 
     public ValueTask DisposeAsync() { StopEventTap(); return ValueTask.CompletedTask; }
 
@@ -384,7 +417,7 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
     // its own position over the router's warp: mid-screen on an exit, the edge on an entry. So a move is
     // swallowed if the flag said virtual either when it was handled or now. Keys, buttons and the wheel
     // follow the final read alone, since the router decides whether to forward them by its state when it
-    // processes them, which the final read is closest to.
+    // processes them, which the final read is closest to; a key's or button's up then goes where its press went.
     private bool SwallowsMove(bool handledAsVirtual) => handledAsVirtual || IsOnVirtualScreen;
 
     // nCode < 0 must go straight down the chain; the struct is read directly rather than boxed by PtrToStructure
@@ -458,8 +491,11 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
                 : msg is NativeMethods.WM_MBUTTONDOWN or NativeMethods.WM_MBUTTONUP ? MouseButton.Middle
                 : MouseButton.Left;
             _onMouseButton?.Invoke(new MouseButtonEvent(button, isDown));
+            // a button's up goes where its down went, decided by the final read (see SwallowsMove)
+            return _buttonFates.Swallow((int)button, isUp: !isDown, repeat: false, OsHolds(button), IsOnVirtualScreen);
         }
-        else if (isWheel)
+
+        if (isWheel)
         {
             var delta = (short)(info.mouseData >> 16);
             var scroll = msg == NativeMethods.WM_MOUSEWHEEL
@@ -468,7 +504,7 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
             _onMouseScroll?.Invoke(scroll);
         }
 
-        // buttons and the wheel follow the final read, see SwallowsMove
+        // the wheel follows the final read, see SwallowsMove
         return IsOnVirtualScreen;
     }
 
@@ -482,8 +518,11 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
             foreach (var keyEvent in keyEvents)
                 HandOver(keyEvent);
         return _keyFates.Swallow(WinKeyResolver.TrackingVk(info), WinKeyResolver.IsKeyUp(msg), repeat: null,
-            osHolds: IsKeyDown((int)info.vkCode), IsOnVirtualScreen);
+            osHolds: OsHoldsKey(info.vkCode), IsOnVirtualScreen);
     }
+
+    // both Enter keys are VK_RETURN to the OS, so its state says nothing about either: each relies on its record
+    private bool OsHoldsKey(uint vk) => vk != WinVirtualKey.Return && IsKeyDown((int)vk);
 
     // Every event goes to the router, whose AdmitKey decides, except the deferred left Ctrl of a key the OS holds:
     // flushed during a visit by whatever follows it, the router would take it for the visit's own press.

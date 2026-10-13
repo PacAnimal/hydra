@@ -85,7 +85,7 @@ public class ScreenNamingTests
 
         var sent = bundle.Relay.Snapshot();
         var peerScreens = await world.GetPeerScreensSnapshot();
-        await Stop(bundle);
+        await TransitionTestHelper.Stop(bundle);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(peerScreens["remote"].Select(e => e.Name), Is.EqualTo(["remote"]), "the foreign entry never reaches the world");
@@ -109,7 +109,7 @@ public class ScreenNamingTests
 
         var peerScreens = await world.GetPeerScreensSnapshot();
         var entered = bundle.Platform.IsOnVirtualScreen;
-        await Stop(bundle);
+        await TransitionTestHelper.Stop(bundle);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(peerScreens["remote"].Select(e => e.Name), Is.EqualTo(["remote:0"]));
@@ -128,7 +128,7 @@ public class ScreenNamingTests
         await Advertise(bundle.Relay, "remote", Entry("home:0", 0));
 
         var peerScreens = await world.GetPeerScreensSnapshot();
-        await Stop(bundle);
+        await TransitionTestHelper.Stop(bundle);
         Assert.That(peerScreens["remote"].Select(e => e.Name), Is.EqualTo(["remote"]));
     }
 
@@ -136,10 +136,4 @@ public class ScreenNamingTests
 
     private static async Task Advertise(FakeRelay relay, string host, params ScreenInfoEntry[] entries) =>
         await relay.FireMessageReceived(host, MessageKind.ScreenInfo, JsonSerializer.Serialize(new ScreenInfoMessage([.. entries]), SaneJson.Options));
-
-    private static async Task Stop(TestServiceBundle bundle)
-    {
-        await bundle.Service.StopAsync(CancellationToken.None);
-        await bundle.Platform.DisposeAsync();
-    }
 }

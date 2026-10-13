@@ -97,6 +97,35 @@ public static class TransitionTestHelper
 
     public static async Task BringRemoteOnline(FakeRelay relay) => await BringHostOnline(relay, "remote");
 
+    // starts the router with hosts online, the standard remote unless named
+    public static async Task<TestServiceBundle> StartOnline(TestServiceBundle bundle, params string[] hosts)
+    {
+        await bundle.Service.StartAsync(CancellationToken.None);
+        await BringHostsOnline(bundle.Relay, hosts.Length > 0 ? hosts : ["remote"]);
+        return bundle;
+    }
+
+    // moves the cursor across the standard master's right edge onto its remote
+    public static void EnterRemote(FakePlatform platform)
+    {
+        platform.FireMouseMove(2559, 720);
+        Assert.That(platform.IsOnVirtualScreen, Is.True, "pre-condition: on the remote screen");
+    }
+
+    // started as StartOnline, with the cursor on the remote screen
+    public static async Task<TestServiceBundle> Visiting(TestServiceBundle bundle, params string[] hosts)
+    {
+        await StartOnline(bundle, hosts);
+        EnterRemote(bundle.Platform);
+        return bundle;
+    }
+
+    public static async Task Stop(TestServiceBundle bundle)
+    {
+        await bundle.Service.StopAsync(CancellationToken.None);
+        await bundle.Platform.DisposeAsync();
+    }
+
     // remote-only: single remote host "mac", no local screens
     public static readonly IHydraProfile RemoteOnlyConfig = Profile("pi", new HydraConfig
     {

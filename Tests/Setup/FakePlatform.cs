@@ -103,6 +103,13 @@ public sealed class FakePlatform : IPlatformInput, ICursorHider
         WarpCount++;
         Calls.Add("warp");
     }
+    // recorded, so a test can tell a return from a bare flag and warp
+    public void ReturnTo(ScreenPoint? warpTo)
+    {
+        Calls.Add("return");
+        IsOnVirtualScreen = false;
+        if (warpTo is { } to) WarpCursor(to.X, to.Y);
+    }
     public ScreenPoint? GetCursorPosition() => null;
     // ICursorHider — what InputRouter calls
     void ICursorHider.Hide() { HideCursorCalled = true; Calls.Add("hide"); }

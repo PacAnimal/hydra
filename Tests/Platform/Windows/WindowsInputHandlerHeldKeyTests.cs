@@ -1,7 +1,6 @@
 using Hydra.Keyboard;
+using Hydra.Mouse;
 using Hydra.Platform.Windows;
-using Microsoft.Extensions.Logging.Abstractions;
-using Tests.Setup;
 
 namespace Tests.Platform.Windows;
 
@@ -10,47 +9,10 @@ namespace Tests.Platform.Windows;
 [TestFixture]
 public class WindowsInputHandlerHeldKeyTests
 {
-    private sealed class Hooked
-    {
-        public readonly HashSet<int> OsHeld = [];
-        public readonly List<object> Handed = [];
-        public readonly WindowsInputHandler Handler;
-        public int Now;
-
-        public Hooked()
-        {
-            Handler = new WindowsInputHandler(NullLogger<WindowsInputHandler>.Instance, TransitionTestHelper.Profile("home"))
-            {
-                IsKeyDown = vk => OsHeld.Contains(vk),
-                TickCount = () => Now,
-            };
-            Handler.Subscribe((_, _) => { }, null, e => Handed.Add(e), e => Handed.Add(e), e => Handed.Add(e));
-        }
-
-        public List<KeyEvent> Keys => [.. Handed.OfType<KeyEvent>()];
-
-        public bool Down(int vk, uint flags = 0, uint time = 1) =>
-            Handler.HandleKey(NativeMethods.WM_KEYDOWN, new KBDLLHOOKSTRUCT { vkCode = (uint)vk, flags = flags, time = time });
-
-        public bool Up(int vk, uint flags = 0, uint time = 1) =>
-            Handler.HandleKey(NativeMethods.WM_KEYUP, new KBDLLHOOKSTRUCT { vkCode = (uint)vk, flags = flags, time = time });
-
-        public bool Click() => Handler.HandleMouse(NativeMethods.WM_LBUTTONDOWN, default, static (_, _) => { });
-
-        public bool Wheel() => Handler.HandleMouse(NativeMethods.WM_MOUSEWHEEL, new MSLLHOOKSTRUCT { mouseData = 120u << 16 }, static (_, _) => { });
-
-        // a key pressed while local reached the OS, so it holds it down
-        public void PressLocally(int vk, uint flags = 0)
-        {
-            Assert.That(Down(vk, flags), Is.False, "pre-condition: a local press passes through");
-            OsHeld.Add(vk);
-        }
-    }
-
     [Test]
     public void HeldAtEntry_ItsUpPassesThroughAndIsHanded_ItsRepeatsAreSwallowed()
     {
-        var h = new Hooked();
+        var h = new HookedHandler();
         h.PressLocally(WinVirtualKey.F5);
         h.Handler.IsOnVirtualScreen = true;
         h.Handed.Clear();
@@ -67,7 +29,7 @@ public class WindowsInputHandlerHeldKeyTests
     [Test]
     public void PressedDuringTheVisit_IsSwallowedAndHanded()
     {
-        var h = new Hooked();
+        var h = new HookedHandler();
         h.Handler.IsOnVirtualScreen = true;
 
         using (Assert.EnterMultipleScope())
@@ -83,18 +45,31 @@ public class WindowsInputHandlerHeldKeyTests
     public void KpEnterHeldAtEntry_ItsUpPassesThrough()
     {
         // the OS knows KP_Enter as VK_RETURN, whatever the resolver tracks it under
-        var h = new Hooked();
+        var h = new HookedHandler();
         h.PressLocally(WinVirtualKey.Return, NativeMethods.LLKHF_EXTENDED);
         h.Handler.IsOnVirtualScreen = true;
 
         Assert.That(h.Up(WinVirtualKey.Return, NativeMethods.LLKHF_EXTENDED), Is.False);
     }
 
-    [TestCase(nameof(Hooked.Click))]
-    [TestCase(nameof(Hooked.Wheel))]
+    [Test]
+    public void KpEnterPressedDuringAVisit_WhileReturnIsHeldLocally_ItsUpIsSwallowed()
+    {
+        // both Enter keys are VK_RETURN to the OS, so the held Return says nothing about KP_Enter
+        var h = new HookedHandler();
+        h.PressLocally(WinVirtualKey.Return);
+        h.Handler.IsOnVirtualScreen = true;
+        Assert.That(h.Down(WinVirtualKey.Return, NativeMethods.LLKHF_EXTENDED), Is.True, "pre-condition: swallowed during the visit");
+        h.Handler.IsOnVirtualScreen = false;
+
+        Assert.That(h.Up(WinVirtualKey.Return, NativeMethods.LLKHF_EXTENDED), Is.True);
+    }
+
+    [TestCase(nameof(HookedHandler.Click))]
+    [TestCase(nameof(HookedHandler.Wheel))]
     public void LeftCtrlHeldAtEntry_AMouseEventHandsNoControlDown_ItsUpPassesThroughAndIsHanded(string mouse)
     {
-        var h = new Hooked();
+        var h = new HookedHandler();
         h.PressLocally(WinVirtualKey.LControl);
         h.Handler.IsOnVirtualScreen = true;
 
@@ -111,11 +86,11 @@ public class WindowsInputHandlerHeldKeyTests
         }
     }
 
-    [TestCase(nameof(Hooked.Click))]
-    [TestCase(nameof(Hooked.Wheel))]
+    [TestCase(nameof(HookedHandler.Click))]
+    [TestCase(nameof(HookedHandler.Wheel))]
     public void LeftCtrlPressedDuringTheVisit_ReachesTheRouterBeforeAMouseEvent(string mouse)
     {
-        var h = new Hooked();
+        var h = new HookedHandler();
         h.Handler.IsOnVirtualScreen = true;
         Assert.That(h.Down(WinVirtualKey.LControl), Is.True);
 
@@ -136,7 +111,7 @@ public class WindowsInputHandlerHeldKeyTests
     public void LeftCtrlHeldAtEntry_ReleasedAlone_HandsNoControlDown()
     {
         // the up flushes the deferred down ahead of itself
-        var h = new Hooked();
+        var h = new HookedHandler();
         h.PressLocally(WinVirtualKey.LControl);
         h.Handler.IsOnVirtualScreen = true;
 
@@ -151,7 +126,7 @@ public class WindowsInputHandlerHeldKeyTests
     [Platform("Win")] // key resolution needs ToUnicodeEx
     public void LeftCtrlHeldAtEntry_ACharacterKeyHandsNoControlDown()
     {
-        var h = new Hooked();
+        var h = new HookedHandler();
         h.PressLocally(WinVirtualKey.LControl);
         h.Handler.IsOnVirtualScreen = true;
 
@@ -166,7 +141,7 @@ public class WindowsInputHandlerHeldKeyTests
     public void LeftCtrlFlushedByARacingKeyBeforeTheFlip_IsHanded_AndSoIsItsUp()
     {
         // the router may process both after the entry: the down then counts as the visit's, so its up must reach it
-        var h = new Hooked();
+        var h = new HookedHandler();
         h.PressLocally(WinVirtualKey.LControl);
         Assert.That(h.Down(WinVirtualKey.F5), Is.False);
         h.OsHeld.Add(WinVirtualKey.F5);
@@ -184,7 +159,7 @@ public class WindowsInputHandlerHeldKeyTests
     public void PressedDuringTheVisit_HeldAfterReturn_ItsRepeatsAndUpAreSwallowed()
     {
         // hold Backspace on the slave, cross back: the master must not start deleting
-        var h = new Hooked();
+        var h = new HookedHandler();
         h.Handler.IsOnVirtualScreen = true;
         Assert.That(h.Down(WinVirtualKey.F5), Is.True);
         h.Handler.IsOnVirtualScreen = false;
@@ -199,7 +174,7 @@ public class WindowsInputHandlerHeldKeyTests
     [Test]
     public void PressedLocallyAfterReturn_Passes()
     {
-        var h = new Hooked();
+        var h = new HookedHandler();
         h.Handler.IsOnVirtualScreen = true;
         h.Down(WinVirtualKey.F5);
         h.Up(WinVirtualKey.F5);
@@ -215,7 +190,7 @@ public class WindowsInputHandlerHeldKeyTests
     [Test]
     public void PressedLocally_HeldThroughAVisitAndTheReturn_ItsRepeatsAndUpPass()
     {
-        var h = new Hooked();
+        var h = new HookedHandler();
         h.PressLocally(WinVirtualKey.F5);
         h.Handler.IsOnVirtualScreen = true;
         Assert.That(h.Down(WinVirtualKey.F5), Is.True, "pre-condition: no repeats while away");
@@ -231,7 +206,7 @@ public class WindowsInputHandlerHeldKeyTests
     [Test]
     public void HeldBeforeTheHookSawItsPress_ItsUpPassesWhileVirtual()
     {
-        var h = new Hooked();
+        var h = new HookedHandler();
         h.OsHeld.Add(WinVirtualKey.F5);
         h.Handler.IsOnVirtualScreen = true;
 
@@ -245,7 +220,7 @@ public class WindowsInputHandlerHeldKeyTests
     [Test]
     public void PressedDuringTheVisit_HeldIntoASecondVisit_StaysAway()
     {
-        var h = new Hooked();
+        var h = new HookedHandler();
         h.Handler.IsOnVirtualScreen = true;
         h.Down(WinVirtualKey.F5);
         h.Handler.IsOnVirtualScreen = false;
@@ -263,7 +238,7 @@ public class WindowsInputHandlerHeldKeyTests
     public void LeftCtrlPressedDuringTheVisit_ReleasedAfterReturn_IsSwallowed()
     {
         // deferred as a possible AltGr, so the resolver hands nothing for its press
-        var h = new Hooked();
+        var h = new HookedHandler();
         h.Handler.IsOnVirtualScreen = true;
         Assert.That(h.Down(WinVirtualKey.LControl), Is.True);
         h.Handler.IsOnVirtualScreen = false;
@@ -278,7 +253,7 @@ public class WindowsInputHandlerHeldKeyTests
     [Test]
     public void AltGrPressedDuringTheVisit_HeldAfterReturn_ItsRepeatsAndUpAreSwallowed()
     {
-        var h = new Hooked();
+        var h = new HookedHandler();
         h.Handler.IsOnVirtualScreen = true;
         using (Assert.EnterMultipleScope())
         {
@@ -302,7 +277,7 @@ public class WindowsInputHandlerHeldKeyTests
     {
         // VK_OEM_3 is dead_grave on US-International; the hook decides by the key, whatever the resolver made of it
         const int vkOem3 = 0xC0;
-        var h = new Hooked();
+        var h = new HookedHandler();
         h.Handler.IsOnVirtualScreen = true;
         Assert.That(h.Down(vkOem3), Is.True);
         h.Handler.IsOnVirtualScreen = false;
@@ -318,7 +293,7 @@ public class WindowsInputHandlerHeldKeyTests
     public void AQuietKeyboardReinstall_ForgetsWhereKeysWent()
     {
         // an up a dead hook lost can no longer swallow a later one
-        var h = new Hooked();
+        var h = new HookedHandler();
         h.Handler.IsOnVirtualScreen = true;
         h.Down(WinVirtualKey.F5);
         h.Handler.IsOnVirtualScreen = false;
@@ -332,5 +307,32 @@ public class WindowsInputHandlerHeldKeyTests
         }
     }
 
-    private static bool Fire(Hooked h, string mouse) => mouse == nameof(Hooked.Click) ? h.Click() : h.Wheel();
+    [Test]
+    public void ButtonPressedLocally_ReleasedDuringAVisit_ItsUpPasses()
+    {
+        // pressed as the cursor entered: the master's OS has its down, so it must have its up
+        var h = new HookedHandler();
+        Assert.That(h.Mouse(NativeMethods.WM_LBUTTONDOWN), Is.False, "pre-condition: a local press passes through");
+        h.OsHeld.Add(WinVirtualKey.LButton);
+        h.Handler.IsOnVirtualScreen = true;
+
+        Assert.That(h.Mouse(NativeMethods.WM_LBUTTONUP), Is.False);
+    }
+
+    [Test]
+    public void ButtonPressedDuringAVisit_ReleasedAfterTheReturn_ItsUpIsSwallowed()
+    {
+        var h = new HookedHandler();
+        h.Handler.IsOnVirtualScreen = true;
+        Assert.That(h.Mouse(NativeMethods.WM_RBUTTONDOWN), Is.True, "pre-condition: swallowed during the visit");
+        h.Handler.IsOnVirtualScreen = false;
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(h.Mouse(NativeMethods.WM_RBUTTONUP), Is.True);
+            Assert.That(h.Handed.OfType<MouseButtonEvent>(), Has.Exactly(2).Items, "every button still reaches the router");
+        }
+    }
+
+    private static bool Fire(HookedHandler h, string mouse) => mouse == nameof(HookedHandler.Click) ? h.Click() : h.Wheel();
 }

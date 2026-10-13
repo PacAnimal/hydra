@@ -3,6 +3,7 @@ using Cathedral.Utils;
 using Hydra.Config;
 using Hydra.FileTransfer;
 using Hydra.Keyboard;
+using Hydra.Mouse;
 using Hydra.Platform;
 using Hydra.Screen;
 using Microsoft.Extensions.Logging;
@@ -24,10 +25,11 @@ public class SlaveRelayConnection : RelayConnection
     private readonly IOsdNotification _osd;
     private readonly IDormancyState _dormancy;
 
-    // keys currently held down on the slave (for release-all on screen leave). access under _keyEventLock,
-    // which serialises key handling against the release-all paths run by disconnect/screen-leave handlers.
+    // keys and buttons currently held down on the slave (for release-all on screen leave). access under _heldLock,
+    // which serialises their injection against the release-all paths run by disconnect/screen-leave handlers.
     private readonly HashSet<(char?, SpecialKey?)> _heldKeys = [];
-    private readonly SemaphoreSlim _keyEventLock = new(1, 1);
+    private readonly HashSet<MouseButton> _heldButtons = [];
+    private readonly SemaphoreSlim _heldLock = new(1, 1);
 
     // one selection query at a time: two would race their answers to the master, which keeps whichever lands last
     private readonly SemaphoreSlim _selectionQuery = new(1, 1);
@@ -95,9 +97,9 @@ public class SlaveRelayConnection : RelayConnection
             }
         };
 
-        // the master keeps its cursor parked on us while we sleep, so we never see the KeyUp for whatever
-        // is held right now — release it here rather than waking with a stuck modifier.
-        _dormancy.Entered += ReleaseAllKeys;
+        // the master keeps its cursor parked on us while we sleep, so we never see the up for whatever
+        // is held right now — release it here rather than waking with a stuck modifier or button.
+        _dormancy.Entered += ReleaseAll;
 
         _dormancy.Exited += async () =>
         {
@@ -188,8 +190,12 @@ public class SlaveRelayConnection : RelayConnection
                 });
                 break;
             case MessageKind.MouseButton:
-                HandleInputMessage<MouseButtonMessage>(body, kind, sourceHost, _output.InjectMouseButton);
-                break;
+                {
+                    var button = body.ParseMessage<MouseButtonMessage>(_log, kind.ToString());
+                    if (button != null)
+                        await HandleMouseButton(sourceHost, button);
+                    break;
+                }
             case MessageKind.MouseScroll:
                 HandleInputMessage<MouseScrollMessage>(body, kind, sourceHost, _output.InjectMouseScroll);
                 break;
@@ -205,7 +211,7 @@ public class SlaveRelayConnection : RelayConnection
                     break;
                 }
             case MessageKind.LeaveScreen:
-                await ReleaseAllKeys();
+                await ReleaseAll();
                 RemoveOnScreenMaster(sourceHost);
                 if (OnScreenMasterCount == 0 && _isReady)
                     _cursorHider.Hide();
@@ -338,7 +344,7 @@ public class SlaveRelayConnection : RelayConnection
         _fileTransfer.Abort(this, "relay disconnected");
         var masters = await _peerState.GetMasters();
         ClearOnScreenMasters();
-        await ReleaseAllKeys();
+        await ReleaseAll();
         if (masters.Length > 0)
             _cursorHider.Show();
         await _peerState.PruneMasters([]);
@@ -361,7 +367,7 @@ public class SlaveRelayConnection : RelayConnection
             anyMasterLeft = true;
         }
         if (anyOnScreenMasterLeft)
-            await ReleaseAllKeys();
+            await ReleaseAll();
         if (anyMasterLeft)
         {
             if (after.Length == 0)
@@ -446,18 +452,36 @@ public class SlaveRelayConnection : RelayConnection
     {
         var msg = body.ParseMessage<T>(_log, kind.ToString());
         if (msg == null) return;
+        ShowCursorFor(sourceHost);
+        handler(msg);
+    }
+
+    private void ShowCursorFor(string sourceHost)
+    {
         if (IsOnScreenMaster(sourceHost))
             _cursorHider.Show();
-        handler(msg);
     }
 
     // applies key events in order; shows cursor if the master is actively on screen
     private async Task ApplyKeyEvents(string sourceHost, KeyEventMessage[] events)
     {
-        if (IsOnScreenMaster(sourceHost))
-            _cursorHider.Show();
+        ShowCursorFor(sourceHost);
         foreach (var keyEvent in events)
             await HandleKeyEvent(keyEvent);
+    }
+
+    // tracked like a key, so a release-all lets go of it
+    private async Task HandleMouseButton(string sourceHost, MouseButtonMessage msg)
+    {
+        ShowCursorFor(sourceHost);
+        using (await _heldLock.WaitForDisposable())
+        {
+            if (msg.IsPressed)
+                _heldButtons.Add(msg.Button);
+            else
+                _heldButtons.Remove(msg.Button);
+            _output.InjectMouseButton(msg);
+        }
     }
 
     private async Task HandleKeyEvent(KeyEventMessage msg)
@@ -472,7 +496,7 @@ public class SlaveRelayConnection : RelayConnection
         // the initial press and the legacy physical re-press path would otherwise leave the key untracked and
         // stuck on screen leave. injection runs under the lock so it serialises with release-all.
         var heldKey = (msg.Character, msg.Key);
-        using (await _keyEventLock.WaitForDisposable())
+        using (await _heldLock.WaitForDisposable())
         {
             if (msg.Type == KeyEventType.KeyUp)
                 _heldKeys.Remove(heldKey);
@@ -563,14 +587,17 @@ public class SlaveRelayConnection : RelayConnection
         return Task.CompletedTask;
     }
 
-    // releases every key currently held on the slave — called when a master leaves the screen or disconnects
-    // so a key held at that moment does not stay stuck down.
-    private async Task ReleaseAllKeys()
+    // releases every key and button currently held on the slave — called when a master leaves the screen or
+    // disconnects, or we go dormant, so one held at that moment does not stay stuck down.
+    private async Task ReleaseAll()
     {
-        using var _ = await _keyEventLock.WaitForDisposable();
+        using var _ = await _heldLock.WaitForDisposable();
         foreach (var (ch, key) in _heldKeys)
             _output.InjectKey(new KeyEventMessage(KeyEventType.KeyUp, KeyModifiers.None, ch, key));
         _heldKeys.Clear();
+        foreach (var button in _heldButtons)
+            _output.InjectMouseButton(new MouseButtonMessage(button, false));
+        _heldButtons.Clear();
     }
 
     private async Task HandleMasterConfig(string masterHost, ReadOnlyMemory<byte> body)

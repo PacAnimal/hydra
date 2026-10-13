@@ -13,8 +13,10 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
     private readonly MacShieldProcess _shield = shield;
     private readonly uint _display = NativeMethods.CGMainDisplayID();
     private readonly MacKeyResolver _keyResolver = new();
-    // no Clear on a tap timeout: the repeat bit heals a stale record, and clearing would swallow a home press's up
+    // no Clear on a tap timeout: a stale record costs one keystroke (KeyFates.MarkedRepeat)
     private readonly KeyFates _keyFates = new(strayUpsPass: true);
+    // never cleared: a record a lost up left is overwritten by that button's next down
+    private readonly KeyFates _buttonFates = new(strayUpsPass: true);
 
     // stored as fields to prevent GC collection while the tap is active
     private CGEventTapCallBack? _tapCallback;
@@ -251,7 +253,8 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
             var cgButton = (int)NativeMethods.CGEventGetIntegerValueField(eventRef, NativeMethods.KCGMouseEventButtonNumber);
             var button = CgButtonToMouseButton(cgButton);
             _onMouseButton?.Invoke(new MouseButtonEvent(button, isDown));
-            return IsOnVirtualScreen ? nint.Zero : eventRef;
+            // a button's up goes where its down went
+            return _buttonFates.Swallow(cgButton, isUp: !isDown, repeat: false, osHolds: false, IsOnVirtualScreen) ? nint.Zero : eventRef;
         }
 
         if (type == NativeMethods.KCGEventScrollWheel)
@@ -319,10 +322,10 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
     private bool SwallowsKey(int type, nint eventRef) => type == NativeMethods.KCGEventFlagsChanged
         ? IsOnVirtualScreen
         : SwallowsPress((int)NativeMethods.CGEventGetIntegerValueField(eventRef, NativeMethods.KCGKeyboardEventKeycode),
-            isUp: type == NativeMethods.KCGEventKeyUp, repeat: NativeHelpers.IsAutorepeat(eventRef));
+            isUp: type == NativeMethods.KCGEventKeyUp, repeat: KeyFates.MarkedRepeat(NativeHelpers.IsAutorepeat(eventRef)));
 
     // keycodes and media keys share one KeyFates, apart by MacMediaKeyMap.PhysicalKey's offset
-    private bool SwallowsPress(int physicalKey, bool isUp, bool repeat) =>
+    private bool SwallowsPress(int physicalKey, bool isUp, bool? repeat) =>
         _keyFates.Swallow(physicalKey, isUp, repeat, osHolds: false, IsOnVirtualScreen);
 
     // CG button numbers: 0=left, 1=right, 2=middle, 3+=extra

@@ -67,7 +67,7 @@ internal static class KeyResolver
     {
         if (events is null) return;
         for (var i = 0; i < events.Length; i++)
-            if (events[i] is { PhysicalKey: 0 } e) events[i] = e with { PhysicalKey = physicalKey };
+            if (events[i] is { PhysicalKey: KeyEvent.Unstamped } e) events[i] = e with { PhysicalKey = physicalKey };
     }
 }
 

@@ -14,7 +14,10 @@ public sealed record KeyEvent(KeyEventType Type, KeyModifiers Modifiers)
 
     // the key the resolver tracks this event under (vk, keycode or evdev code); never on the wire.
     // pairs a repeat or key-up with its down, see InputRouter's forwarded-keys gate.
-    internal int PhysicalKey { get; init; }
+    internal int PhysicalKey { get; init; } = Unstamped;
+
+    // no key yet, see KeyResolver.StampPhysicalKey; every real key is >= 0, macOS's 'a' being 0
+    internal const int Unstamped = -1;
 
     public static KeyEvent Char(KeyEventType type, char ch, KeyModifiers mods) =>
         new(type, mods) { Character = ch };

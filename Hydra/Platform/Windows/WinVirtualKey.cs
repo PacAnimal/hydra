@@ -3,6 +3,13 @@ namespace Hydra.Platform.Windows;
 // Windows virtual key codes (VK_* from WinUser.h)
 internal static class WinVirtualKey
 {
+    // mouse buttons
+    internal const int LButton = 0x01;
+    internal const int RButton = 0x02;
+    internal const int MButton = 0x04;
+    internal const int XButton1 = 0x05;
+    internal const int XButton2 = 0x06;
+
     // editing / control
     internal const int Back = 0x08;        // backspace
     internal const int Tab = 0x09;

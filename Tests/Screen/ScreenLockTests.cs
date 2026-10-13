@@ -200,7 +200,7 @@ public class ScreenLockTests
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(relay.Snapshot().Any(s => s.Kind == MessageKind.EnterScreen && s.Targets.Contains("remote2")), Is.True, "should enter remote2");
+            Assert.That(relay.Sent<EnterScreenMessage>(MessageKind.EnterScreen, "remote2"), Is.Not.Empty, "should enter remote2");
             Assert.That(relay.Snapshot().Any(s => s.Kind == MessageKind.LeaveScreen && s.Targets.Contains("remote")), Is.True, "should leave remote");
         }
 
@@ -243,11 +243,11 @@ public class ScreenLockTests
         for (var i = 0; i < 60; i++)
             platform.FireMouseDelta(100, 0);
 
-        var enters = relay.Snapshot().Where(s => s.Kind == MessageKind.EnterScreen).ToList();
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(enters.Any(e => e.Targets.Contains("mac") && e.Json.Contains("mac:1")), Is.True, "should move onto mac's second monitor");
-            Assert.That(enters.Any(e => e.Targets.Contains("win")), Is.EqualTo(!confined), confined ? "confinement should keep the cursor on mac" : "should cross to win");
+            Assert.That(relay.Sent<EnterScreenMessage>(MessageKind.EnterScreen, "mac").Select(e => e.Screen), Does.Contain("mac:1"), "should move onto mac's second monitor");
+            Assert.That(relay.Sent<EnterScreenMessage>(MessageKind.EnterScreen, "win"), confined ? Is.Empty : Is.Not.Empty,
+                confined ? "confinement should keep the cursor on mac" : "should cross to win");
         }
 
         await StopService(platform, service);
@@ -276,7 +276,7 @@ public class ScreenLockTests
     {
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(relay.Snapshot().Any(s => s.Kind == MessageKind.EnterScreen && s.Targets.Contains("remote2")), Is.False, "should not enter remote2");
+            Assert.That(relay.Sent<EnterScreenMessage>(MessageKind.EnterScreen, "remote2"), Is.Empty, "should not enter remote2");
             Assert.That(relay.Snapshot().Any(s => s.Kind == MessageKind.LeaveScreen && s.Targets.Contains("remote")), Is.False, "should not leave remote");
         }
     }

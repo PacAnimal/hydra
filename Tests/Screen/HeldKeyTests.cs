@@ -1,5 +1,3 @@
-using System.Text.Json;
-using Cathedral.Config;
 using Hydra.Config;
 using Hydra.Keyboard;
 using Hydra.Relay;
@@ -24,38 +22,17 @@ public class HeldKeyTests
     private static KeyEvent Repeat(char ch, int key, KeyModifiers mods = KeyModifiers.None) =>
         Char(KeyEventType.KeyDown, ch, key, mods) with { IsRepeat = true };
 
-    private static async Task<TestServiceBundle> Started(IHydraProfile? profile = null)
-    {
-        var bundle = TransitionTestHelper.CreateService(profile: profile);
-        await bundle.Service.StartAsync(CancellationToken.None);
-        if (profile is null) await TransitionTestHelper.BringRemoteOnline(bundle.Relay);
-        else await TransitionTestHelper.BringHostsOnline(bundle.Relay, ["remote", "remote2"]);
-        return bundle;
-    }
+    private static Task<TestServiceBundle> Started(IHydraProfile? profile = null) =>
+        TransitionTestHelper.StartOnline(TransitionTestHelper.CreateService(profile: profile), profile is null ? [] : ["remote", "remote2"]);
 
-    private static void Enter(FakePlatform platform)
-    {
-        platform.FireMouseMove(2559, 720);
-        Assert.That(platform.IsOnVirtualScreen, Is.True, "pre-condition: on the remote screen");
-    }
-
-    private static List<KeyEventMessage> ForwardedKeys(FakeRelay relay, string? host = null) =>
-        [.. relay.Snapshot()
-            .Where(s => s.Kind == MessageKind.KeyEvent && (host is null || s.Targets.Contains(host)))
-            .Select(s => JsonSerializer.Deserialize<KeyEventMessage>(s.Json, SaneJson.Options)!)];
-
-    private static async Task Stop(TestServiceBundle bundle)
-    {
-        await bundle.Service.StopAsync(CancellationToken.None);
-        await bundle.Platform.DisposeAsync();
-    }
+    private static List<KeyEventMessage> ForwardedKeys(FakeRelay relay, string? host = null) => relay.Sent<KeyEventMessage>(MessageKind.KeyEvent, host);
 
     [Test]
     public async Task KeyHeldBeforeAHotkeyChord_ItsUpThatMatchesTheChordIsStillForwarded()
     {
         // m is down on the slave before the chord forms; its up then matches Ctrl+Alt+Super+M and must still release it
         var bundle = await Started();
-        Enter(bundle.Platform);
+        TransitionTestHelper.EnterRemote(bundle.Platform);
         bundle.Platform.FireKeyEvent(Char(KeyEventType.KeyDown, 'm', KeyM));
         bundle.Platform.FireKeyEvent(Special(KeyEventType.KeyDown, SpecialKey.Control_L, CtrlL, KeyModifiers.Control));
         bundle.Platform.FireKeyEvent(Special(KeyEventType.KeyDown, SpecialKey.Alt_L, AltL, KeyModifiers.Control | KeyModifiers.Alt));
@@ -65,7 +42,7 @@ public class HeldKeyTests
         bundle.Platform.FireKeyEvent(Char(KeyEventType.KeyUp, 'm', KeyM, Chord));
 
         var forwarded = ForwardedKeys(bundle.Relay);
-        await Stop(bundle);
+        await TransitionTestHelper.Stop(bundle);
         Assert.That(forwarded.Select(k => (k.Type, k.Character)), Is.EqualTo([(KeyEventType.KeyUp, (char?)'m')]));
     }
 
@@ -73,7 +50,7 @@ public class HeldKeyTests
     public async Task HotkeyTriggerPressedWithTheChord_ItsUpIsNotForwarded()
     {
         var bundle = await Started();
-        Enter(bundle.Platform);
+        TransitionTestHelper.EnterRemote(bundle.Platform);
         bundle.Platform.FireKeyEvent(Special(KeyEventType.KeyDown, SpecialKey.Control_L, CtrlL, KeyModifiers.Control));
         bundle.Platform.FireKeyEvent(Special(KeyEventType.KeyDown, SpecialKey.Alt_L, AltL, KeyModifiers.Control | KeyModifiers.Alt));
         bundle.Platform.FireKeyEvent(Special(KeyEventType.KeyDown, SpecialKey.Super_L, SuperL, Chord));
@@ -83,7 +60,7 @@ public class HeldKeyTests
         bundle.Platform.FireKeyEvent(Char(KeyEventType.KeyUp, 'm', KeyM, Chord));
 
         var forwarded = ForwardedKeys(bundle.Relay);
-        await Stop(bundle);
+        await TransitionTestHelper.Stop(bundle);
         Assert.That(forwarded, Is.Empty);
     }
 
@@ -92,13 +69,13 @@ public class HeldKeyTests
     {
         var bundle = await Started();
         bundle.Platform.FireKeyEvent(Special(KeyEventType.KeyDown, SpecialKey.Control_L, CtrlL, KeyModifiers.Control));
-        Enter(bundle.Platform);
+        TransitionTestHelper.EnterRemote(bundle.Platform);
         bundle.Relay.ClearSent();
 
         bundle.Platform.FireKeyEvent(Special(KeyEventType.KeyUp, SpecialKey.Control_L, CtrlL));
 
         Assert.That(ForwardedKeys(bundle.Relay), Is.Empty);
-        await Stop(bundle);
+        await TransitionTestHelper.Stop(bundle);
     }
 
     [Test]
@@ -106,7 +83,7 @@ public class HeldKeyTests
     {
         var bundle = await Started();
         bundle.Platform.FireKeyEvent(Char(KeyEventType.KeyDown, 'a', KeyA));
-        Enter(bundle.Platform);
+        TransitionTestHelper.EnterRemote(bundle.Platform);
         bundle.Relay.ClearSent();
 
         bundle.Platform.FireKeyEvent(Repeat('a', KeyA));
@@ -114,7 +91,7 @@ public class HeldKeyTests
         bundle.Platform.FireKeyEvent(Char(KeyEventType.KeyUp, 'a', KeyA));
 
         Assert.That(ForwardedKeys(bundle.Relay), Is.Empty);
-        await Stop(bundle);
+        await TransitionTestHelper.Stop(bundle);
     }
 
     // also a down hooked before the flip that the router only processes after the entry: it is the visit's
@@ -122,7 +99,7 @@ public class HeldKeyTests
     public async Task PressedAndReleasedDuringTheVisit_BothAreForwarded()
     {
         var bundle = await Started();
-        Enter(bundle.Platform);
+        TransitionTestHelper.EnterRemote(bundle.Platform);
         bundle.Relay.ClearSent();
 
         bundle.Platform.FireKeyEvent(Char(KeyEventType.KeyDown, 'a', KeyA));
@@ -132,14 +109,14 @@ public class HeldKeyTests
         var sent = ForwardedKeys(bundle.Relay);
         Assert.That(sent.Select(k => (k.Type, k.Character, k.IsRepeat)),
             Is.EqualTo([(KeyEventType.KeyDown, 'a', false), (KeyEventType.KeyDown, 'a', true), (KeyEventType.KeyUp, 'a', false)]));
-        await Stop(bundle);
+        await TransitionTestHelper.Stop(bundle);
     }
 
     [Test]
     public async Task PressedDuringTheVisit_RepeatsReResolvedUnderShiftAreForwarded()
     {
         var bundle = await Started();
-        Enter(bundle.Platform);
+        TransitionTestHelper.EnterRemote(bundle.Platform);
         bundle.Relay.ClearSent();
 
         bundle.Platform.FireKeyEvent(Char(KeyEventType.KeyDown, 'e', KeyE));
@@ -150,18 +127,18 @@ public class HeldKeyTests
         Assert.That(ForwardedKeys(bundle.Relay).Select(k => (k.Type, k.Character, k.IsRepeat)), Is.EqualTo([
             (KeyEventType.KeyDown, (char?)'e', false), (KeyEventType.KeyDown, null, false),
             (KeyEventType.KeyDown, 'E', true), (KeyEventType.KeyUp, 'e', false)]));
-        await Stop(bundle);
+        await TransitionTestHelper.Stop(bundle);
     }
 
     [Test]
     public async Task PressedOnOneHost_ItsRepeatsAndUpAreNotForwardedToTheNext()
     {
         var bundle = await Started(TransitionTestHelper.ChainConfig);
-        Enter(bundle.Platform);
+        TransitionTestHelper.EnterRemote(bundle.Platform);
         bundle.Platform.FireKeyEvent(Char(KeyEventType.KeyDown, 'a', KeyA));
         for (var i = 0; i < 30; i++)
             bundle.Platform.FireMouseDelta(100, 0);
-        Assert.That(bundle.Relay.Snapshot().Any(s => s.Kind == MessageKind.EnterScreen && s.Targets.Contains("remote2")), Is.True,
+        Assert.That(bundle.Relay.Sent<EnterScreenMessage>(MessageKind.EnterScreen, "remote2"), Is.Not.Empty,
             "pre-condition: on remote2");
         bundle.Relay.ClearSent();
 
@@ -169,7 +146,7 @@ public class HeldKeyTests
         bundle.Platform.FireKeyEvent(Char(KeyEventType.KeyUp, 'a', KeyA));
 
         Assert.That(ForwardedKeys(bundle.Relay), Is.Empty);
-        await Stop(bundle);
+        await TransitionTestHelper.Stop(bundle);
     }
 
     [Test]
@@ -184,39 +161,39 @@ public class HeldKeyTests
         platform.FireKeyEvent(Char(KeyEventType.KeyDown, 'a', KeyA));
         for (var i = 0; i < 20; i++)
             platform.FireMouseDelta(100, 0);
-        Assert.That(relay.Snapshot().Any(s => s.Kind == MessageKind.EnterScreen && s.Targets.Contains("mac") && s.Json.Contains("mac:1")), Is.True,
+        Assert.That(relay.Sent<EnterScreenMessage>(MessageKind.EnterScreen, "mac").Select(e => e.Screen), Does.Contain("mac:1"),
             "pre-condition: on mac's second monitor");
         relay.ClearSent();
 
         platform.FireKeyEvent(Char(KeyEventType.KeyUp, 'a', KeyA));
 
         Assert.That(ForwardedKeys(relay, "mac").Select(k => (k.Type, k.Character)), Is.EqualTo([(KeyEventType.KeyUp, 'a')]));
-        await Stop(new TestServiceBundle(platform, relay, service));
+        await TransitionTestHelper.Stop(new TestServiceBundle(platform, relay, service));
     }
 
     [Test]
     public async Task HeldThroughAReturnAndReEntryToTheSameHost_ItsRepeatsAndUpAreNotForwarded()
     {
         var bundle = await Started();
-        Enter(bundle.Platform);
+        TransitionTestHelper.EnterRemote(bundle.Platform);
         bundle.Platform.FireKeyEvent(Char(KeyEventType.KeyDown, 'a', KeyA));
         bundle.Platform.FireMouseMove(1276, 720);
         Assert.That(bundle.Platform.IsOnVirtualScreen, Is.False, "pre-condition: returned");
-        Enter(bundle.Platform);
+        TransitionTestHelper.EnterRemote(bundle.Platform);
         bundle.Relay.ClearSent();
 
         bundle.Platform.FireKeyEvent(Repeat('a', KeyA));
         bundle.Platform.FireKeyEvent(Char(KeyEventType.KeyUp, 'a', KeyA));
 
         Assert.That(ForwardedKeys(bundle.Relay), Is.Empty);
-        await Stop(bundle);
+        await TransitionTestHelper.Stop(bundle);
     }
 
     [Test]
     public async Task HotkeyChord_ItsUnmatchedUpIsNotForwarded()
     {
         var bundle = await Started();
-        Enter(bundle.Platform);
+        TransitionTestHelper.EnterRemote(bundle.Platform);
         bundle.Platform.FireKeyEvent(Char(KeyEventType.KeyDown, 'm', KeyM, Chord)); // relative mouse, consumed
         bundle.Relay.ClearSent();
 
@@ -224,7 +201,7 @@ public class HeldKeyTests
         bundle.Platform.FireKeyEvent(Char(KeyEventType.KeyUp, 'm', KeyM));
 
         Assert.That(ForwardedKeys(bundle.Relay), Is.Empty);
-        await Stop(bundle);
+        await TransitionTestHelper.Stop(bundle);
     }
 
     [Test]
@@ -246,6 +223,6 @@ public class HeldKeyTests
         platform.FireKeyEvent(Special(KeyEventType.KeyUp, SpecialKey.Control_L, CtrlL));
 
         Assert.That(ForwardedKeys(relay), Is.Empty);
-        await Stop(new TestServiceBundle(platform, relay, service));
+        await TransitionTestHelper.Stop(new TestServiceBundle(platform, relay, service));
     }
 }

@@ -1,5 +1,3 @@
-using System.Text.Json;
-using Cathedral.Config;
 using Hydra.Config;
 using Hydra.Keyboard;
 using Hydra.Mouse;
@@ -18,22 +16,8 @@ public class HeldButtonTests
     // 50px per move, inside the absolute path's warp-artifact filter; 120 of them cross two monitors
     private const int Steps = 120, Step = 50;
 
-    private static async Task<TestServiceBundle> Started(IHydraProfile? profile = null, ILogger<InputRouter>? log = null)
-    {
-        var bundle = TransitionTestHelper.CreateService(profile: profile, log: log);
-        await bundle.Service.StartAsync(CancellationToken.None);
-        if (profile is null) await TransitionTestHelper.BringRemoteOnline(bundle.Relay);
-        else await TransitionTestHelper.BringHostsOnline(bundle.Relay, ["remote", "remote2"]);
-        bundle.Platform.FireMouseMove(2559, 720);
-        Assert.That(bundle.Platform.IsOnVirtualScreen, Is.True, "pre-condition: on the remote screen");
-        return bundle;
-    }
-
-    private static async Task Stop(TestServiceBundle bundle)
-    {
-        await bundle.Service.StopAsync(CancellationToken.None);
-        await bundle.Platform.DisposeAsync();
-    }
+    private static Task<TestServiceBundle> Started(IHydraProfile? profile = null, ILogger<InputRouter>? log = null) =>
+        TransitionTestHelper.Visiting(TransitionTestHelper.CreateService(profile: profile, log: log), profile is null ? [] : ["remote", "remote2"]);
 
     private static void Press(FakePlatform platform, MouseButton button = MouseButton.Left) =>
         platform.FireMouseButton(new MouseButtonEvent(button, true));
@@ -51,13 +35,9 @@ public class HeldButtonTests
         }
     }
 
-    private static bool Entered(FakeRelay relay, string host) =>
-        relay.Snapshot().Any(s => s.Kind == MessageKind.EnterScreen && s.Targets.Contains(host));
+    private static bool Entered(FakeRelay relay, string host) => relay.Sent<EnterScreenMessage>(MessageKind.EnterScreen, host).Count > 0;
 
-    private static List<MouseButtonMessage> Buttons(FakeRelay relay, string host) =>
-        [.. relay.Snapshot()
-            .Where(s => s.Kind == MessageKind.MouseButton && s.Targets.Contains(host))
-            .Select(s => JsonSerializer.Deserialize<MouseButtonMessage>(s.Json, SaneJson.Options)!)];
+    private static List<MouseButtonMessage> Buttons(FakeRelay relay, string host) => relay.Sent<MouseButtonMessage>(MessageKind.MouseButton, host);
 
     // the ups sent to a host the cursor left, and whether every one of them went before its LeaveScreen
     private static void AssertReleasedBeforeLeaving(FakeRelay relay, string host, MouseButton button)
@@ -86,7 +66,7 @@ public class HeldButtonTests
         Push(bundle.Platform, delta, -1);
 
         var afterUp = bundle.Platform.IsOnVirtualScreen;
-        await Stop(bundle);
+        await TransitionTestHelper.Stop(bundle);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(whileHeld, Is.True, "refused home while the button is held");
@@ -107,7 +87,7 @@ public class HeldButtonTests
         Release(bundle.Platform);
         Push(bundle.Platform, delta, 1);
 
-        await Stop(bundle);
+        await TransitionTestHelper.Stop(bundle);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(whileHeld, Is.False, "refused onto remote2 while the button is held");
@@ -147,9 +127,9 @@ public class HeldButtonTests
         // remote:0, then remote:1, then through remote:1's right edge back onto remote:0
         Push(bundle.Platform, delta: true, 1);
 
-        var enters = bundle.Relay.Snapshot().Where(s => s.Kind == MessageKind.EnterScreen).Select(s => JsonSerializer.Deserialize<EnterScreenMessage>(s.Json, SaneJson.Options)!.Screen);
+        var enters = bundle.Relay.Sent<EnterScreenMessage>(MessageKind.EnterScreen).Select(e => e.Screen);
         var left = bundle.Relay.Snapshot().Any(s => s.Kind == MessageKind.LeaveScreen);
-        await Stop(bundle);
+        await TransitionTestHelper.Stop(bundle);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(enters, Is.EqualTo(["remote:1", "remote:0"]), "wraps onto remote:0 with the button held");
@@ -170,7 +150,7 @@ public class HeldButtonTests
         Push(bundle.Platform, delta: true, -1);
 
         var stayed = bundle.Platform.IsOnVirtualScreen;
-        await Stop(bundle);
+        await TransitionTestHelper.Stop(bundle);
         return stayed;
     }
 
@@ -186,7 +166,7 @@ public class HeldButtonTests
         Push(bundle.Platform, delta: true, -1);
 
         var stayed = bundle.Platform.IsOnVirtualScreen;
-        await Stop(bundle);
+        await TransitionTestHelper.Stop(bundle);
         Assert.That(stayed, Is.True);
     }
 
@@ -202,7 +182,7 @@ public class HeldButtonTests
         Press(bundle.Platform, MouseButton.Right);
         Push(bundle.Platform, delta: true, -1);
 
-        await Stop(bundle);
+        await TransitionTestHelper.Stop(bundle);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(once, Is.EqualTo(1), "one line however often the edge is hit");
@@ -221,7 +201,7 @@ public class HeldButtonTests
 
         Push(bundle.Platform, delta: true, 1);
 
-        await Stop(bundle);
+        await TransitionTestHelper.Stop(bundle);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(Entered(bundle.Relay, "remote2"), Is.True, "pre-condition: crossed");
@@ -244,7 +224,7 @@ public class HeldButtonTests
         bundle.Platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyDown, 'l', KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Super));
 
         var returned = !bundle.Platform.IsOnVirtualScreen;
-        await Stop(bundle);
+        await TransitionTestHelper.Stop(bundle);
         Assert.That(returned, Is.True, "pre-condition: returned home");
         AssertReleasedBeforeLeaving(bundle.Relay, "mac", MouseButton.Left);
     }
@@ -260,7 +240,7 @@ public class HeldButtonTests
         Push(bundle.Platform, delta: true, 1);
         Push(bundle.Platform, delta: true, -1);
 
-        await Stop(bundle);
+        await TransitionTestHelper.Stop(bundle);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(Entered(bundle.Relay, "remote2"), Is.True, "pre-condition: crossed");

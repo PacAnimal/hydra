@@ -6,26 +6,23 @@ namespace Tests.Screen;
 // Every return that warps must show (or, with hideCursor, hide) the cursor BEFORE it clears the flag and warps:
 // the cursor hider's pin to the park point waits for Show/Hide, not for the warp, so a later Show would let a
 // pin land after the warp and leave the cursor mid-screen.
+// The flag and warp are one ReturnTo, which on Windows marks the park point as the flag clears.
 [TestFixture]
 public class ReturnOrderTests
 {
-    private static readonly string[] Showing = ["show", "flag:False", "warp"];
-    private static readonly string[] Hiding = ["hide", "flag:False", "warp"];
+    private static readonly string[] Showing = ["show", "return", "flag:False", "warp"];
+    private static readonly string[] Hiding = ["hide", "return", "flag:False", "warp"];
 
     private static async Task<TestServiceBundle> OnTheRemoteScreen(IHydraProfile? profile = null, FakeScreenSaverSync? screenSaverSync = null)
     {
-        var bundle = TransitionTestHelper.CreateService(profile: profile, screenSaverSync: screenSaverSync);
-        await bundle.Service.StartAsync(CancellationToken.None);
-        await TransitionTestHelper.BringRemoteOnline(bundle.Relay);
-        bundle.Platform.FireMouseMove(2559, 720);
-        Assert.That(bundle.Platform.IsOnVirtualScreen, Is.True, "pre-condition: on the remote screen");
+        var bundle = await TransitionTestHelper.Visiting(TransitionTestHelper.CreateService(profile: profile, screenSaverSync: screenSaverSync));
         bundle.Platform.Calls.Clear();
         return bundle;
     }
 
     private static async Task AssertReturned(TestServiceBundle bundle, string[] expected)
     {
-        var calls = bundle.Platform.Calls.Where(c => c is "show" or "hide" or "flag:False" or "warp").ToList();
+        var calls = bundle.Platform.Calls.Where(c => c is "show" or "hide" or "return" or "flag:False" or "warp").ToList();
         await bundle.Service.StopAsync(CancellationToken.None);
         Assert.That(calls, Is.EqualTo(expected));
     }

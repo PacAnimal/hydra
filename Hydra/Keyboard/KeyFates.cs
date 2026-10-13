@@ -27,4 +27,8 @@ internal sealed class KeyFates(bool strayUpsPass)
     }
 
     internal void Clear() => _wentAway.Clear();
+
+    // a repeat bit that misses some repeats (macOS): set, it is a repeat; clear, the record decides. A stale record (an
+    // up never seen) then takes the next press for a repeat, which costs that one keystroke
+    internal static bool? MarkedRepeat(bool bit) => bit ? true : null;
 }
