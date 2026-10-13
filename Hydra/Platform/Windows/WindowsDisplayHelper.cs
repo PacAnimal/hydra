@@ -1,9 +1,13 @@
 using System.Runtime.CompilerServices;
+using Hydra.Screen;
 
 namespace Hydra.Platform.Windows;
 
 internal static class WindowsDisplayHelper
 {
+    internal static ScreenPoint? CursorPosition() =>
+        NativeMethods.GetCursorPos(out var p) ? new ScreenPoint(p.x, p.y) : null;
+
     internal static List<DetectedScreen> GetAllScreens()
     {
         var result = new List<DetectedScreen>();

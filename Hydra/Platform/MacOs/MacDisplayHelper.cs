@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using Hydra.Screen;
 
 namespace Hydra.Platform.MacOs;
 
@@ -16,6 +17,15 @@ internal static class MacDisplayHelper
     // Everything that touches NSScreen goes through this lock, inside a pool so the autoreleased screens and
     // strings are drained before the next caller gets in.
     private static readonly Lock NsScreenLock = new();
+
+    internal static ScreenPoint? CursorPosition()
+    {
+        var eventRef = NativeMethods.CGEventCreate(nint.Zero);
+        if (eventRef == nint.Zero) return null;
+        var pos = NativeMethods.CGEventGetLocation(eventRef);
+        NativeMethods.CFRelease(eventRef);
+        return new ScreenPoint((int)pos.X, (int)pos.Y);
+    }
 
     internal static unsafe List<DetectedScreen> GetAllScreens()
     {

@@ -181,8 +181,8 @@ win_ssh() {
 }
 
 # Windows lane: sync the working tree (sans build artifacts) to the Windows box and test there.
-# COPYFILE_DISABLE stops macOS tar from emitting ._ AppleDouble sidecars; bin/obj are excluded so
-# the box builds its own, carried across from the previous tree below.
+# COPYFILE_DISABLE stops macOS tar from emitting ._ AppleDouble sidecars. Only what git would carry goes
+# up, so the box keeps its own bin/obj from run to run.
 #
 # The remote session's preamble is not decoration. Every line of it was paid for on erebus's lane
 # against this same box, and the two should not drift:
@@ -209,7 +209,7 @@ run_windows() {
 	refusal="$(win_dir_refusal "$WIN_DIR")"
 	if [ -n "$refusal" ]; then
 		echo "── Windows tests: FAILED ──────────────────────────────────────────"
-		echo "   HYDRA_WINDOWS_TEST_PATH '$WIN_DIR' $refusal: the sync replaces it wholesale." >&2
+		echo "   HYDRA_WINDOWS_TEST_PATH '$WIN_DIR' $refusal: the sync deletes all but bin, obj and test-output in it." >&2
 		return 1
 	fi
 
@@ -232,36 +232,40 @@ run_windows() {
 	# -m on extract: files land with the time of the sync, not their original mtimes. An edit that kept an
 	# old mtime (a checkout, a stash pop, an editor preserving times) would otherwise look older than the
 	# box's last build, and MSBuild would skip compiling it and test the previous code.
-	# .git is excluded for speed, but Tests/Setup/TestLog.FindSolutionRoot needs a .sln + a .git dir
-	# to locate the test-output folder — so drop an empty .git marker after extracting.
+	# What goes up is what git would: tracked files that still exist plus new ones, never anything ignored
+	# (bin, obj, test-output, HydraWebConfig's node_modules). Tests/Setup/TestLog.FindSolutionRoot needs a
+	# .sln + a .git dir to locate the test-output folder, so an empty .git marker is dropped after extracting.
 	local archive size remote_archive="$WIN_DIR.sync.tgz"
 	archive="$(mktemp)"
 	# Safe beside run_lane's own RETURN trap: this function runs in the left-hand subshell of run_lane's
 	# pipeline, so a trap set here never reaches the shell run_lane returns in.
 	# shellcheck disable=SC2064 # $archive must expand NOW, not when the trap fires.
 	trap "rm -f '$archive'" RETURN
-	COPYFILE_DISABLE=1 tar czf "$archive" --no-xattrs \
-		--exclude='./.git' --exclude='*/bin' --exclude='*/obj' --exclude='./test-output' \
-		-C "$PWD" . || return 1
+	git ls-files -z --cached --others --exclude-standard \
+		| while IFS= read -r -d '' f; do [ ! -e "$f" ] || printf '%s\0' "$f"; done \
+		| COPYFILE_DISABLE=1 tar czf "$archive" --no-xattrs --null -T - || return 1
 	size="$(wc -c < "$archive" | tr -d ' ')"
 	if ! win_ssh "cat > '$remote_archive'" < "$archive"; then
 		ssh "$WIN_HOST" "rm -f '$remote_archive'" 2>/dev/null || true
 		return 1
 	fi
-	# The archive is extracted into a FRESH directory that then replaces the tree, so a file deleted here is
-	# gone there too: extracted over the old tree it would survive, and the SDK's globbing would still
-	# compile it. Only what the box made for itself moves across — every bin and obj, and test-output — and
-	# only where its parent was synced, so a deleted project's build output does not resurrect its directory.
+	# Every file but the box's own bin, obj and test-output is deleted before extracting, so a file deleted
+	# here is gone there too (the SDK's globbing would still compile it), and a deleted project's build output
+	# goes with it. Nothing is renamed: Windows refuses to rename a tree with just-built output in it while
+	# Defender or an exiting test host still has a file open.
 	# The archive is removed on the box whether or not it arrived whole and extracted.
 	win_ssh "got=\$(wc -c < '$remote_archive') && [ \"\$got\" -eq $size ] \
 		|| { echo \"sync: $size bytes sent, \$got arrived\" >&2; rm -f '$remote_archive'; exit 1; }
-		rm -rf '$WIN_DIR.sync' && mkdir -p '$WIN_DIR.sync' && tar xzmf '$remote_archive' -C '$WIN_DIR.sync'; rc=\$?; rm -f '$remote_archive'
+		mkdir -p '$WIN_DIR' && cd '$WIN_DIR' \\
+			&& find . -mindepth 1 \\( -type d \\( -name bin -o -name obj -o -path ./test-output \\) -prune \\) -o ! -type d -print0 | xargs -0 rm -f \\
+			&& find . -mindepth 1 -type d -empty -delete \\
+			&& tar xzmf '$remote_archive' -C '$WIN_DIR'; rc=\$?; rm -f '$remote_archive'
 		[ \$rc -eq 0 ] || exit \$rc
-		cd '$WIN_DIR' && find . -type d \\( -name bin -o -name obj -o -path ./test-output \\) -prune -print | while read -r kept; do
-			[ -d \"\$(dirname '$WIN_DIR.sync'/\"\$kept\")\" ] || continue
-			mv \"\$kept\" '$WIN_DIR.sync'/\"\$kept\" || exit 1
+		find . -mindepth 1 -type d \\( -name bin -o -name obj \\) -prune -print | while IFS= read -r kept; do
+			find \"\$(dirname \"\$kept\")\" -mindepth 1 \\( -name bin -o -name obj \\) -prune -o ! -type d -print -quit | grep -q . \\
+				|| rm -rf \"\$kept\" || exit 1
 		done || exit 1
-		cd / && rm -rf '$WIN_DIR' && mv '$WIN_DIR.sync' '$WIN_DIR' && mkdir -p '$WIN_DIR/.git'" || return 1
+		find . -mindepth 1 -type d -empty -delete && mkdir -p '$WIN_DIR/.git'" || return 1
 
 	win_ssh bash <<REMOTE
 export PATH="\$PATH:/cygdrive/c/Program Files/dotnet"

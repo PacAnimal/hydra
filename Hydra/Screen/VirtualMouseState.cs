@@ -1,3 +1,5 @@
+using System.Diagnostics.CodeAnalysis;
+
 namespace Hydra.Screen;
 
 public class VirtualMouseState
@@ -8,6 +10,7 @@ public class VirtualMouseState
     public double Y { get; private set; }
     public decimal MouseScale { get; private set; } = 1.0m;
     public decimal? RelativeMouseScale { get; private set; }
+    [MemberNotNullWhen(true, nameof(CurrentScreen))]
     public bool IsOnVirtualScreen => CurrentScreen is not null;
 
     // per-screen scales from ScreenDefinitions; populated from ScreenInfo at EnterScreen

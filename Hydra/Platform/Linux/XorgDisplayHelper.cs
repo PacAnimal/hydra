@@ -1,9 +1,17 @@
 using System.Runtime.InteropServices;
+using Hydra.Screen;
 
 namespace Hydra.Platform.Linux;
 
 internal static class XorgDisplayHelper
 {
+    internal static ScreenPoint? CursorPosition(nint display, nint rootWindow)
+    {
+        if (display == nint.Zero) return null;
+        NativeMethods.XQueryPointer(display, rootWindow, out _, out _, out var rootX, out var rootY, out _, out _, out _);
+        return new ScreenPoint(rootX, rootY);
+    }
+
     internal static List<DetectedScreen> GetAllScreens(nint display, nint rootWindow)
     {
         var result = new List<DetectedScreen>();

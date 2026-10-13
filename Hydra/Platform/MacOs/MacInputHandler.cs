@@ -3,6 +3,7 @@ using Cathedral.Utils;
 using Hydra.Config;
 using Hydra.Keyboard;
 using Hydra.Mouse;
+using Hydra.Screen;
 using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform.MacOs;
@@ -60,14 +61,7 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
 
     public bool CursorIsVisible => NativeMethods.CGCursorIsVisible();
 
-    public (int X, int Y)? GetCursorPosition()
-    {
-        var eventRef = NativeMethods.CGEventCreate(nint.Zero);
-        if (eventRef == nint.Zero) return null;
-        var pos = NativeMethods.CGEventGetLocation(eventRef);
-        NativeMethods.CFRelease(eventRef);
-        return ((int)pos.X, (int)pos.Y);
-    }
+    public ScreenPoint? GetCursorPosition() => MacDisplayHelper.CursorPosition();
 
     public async ValueTask HideCursor()
     {

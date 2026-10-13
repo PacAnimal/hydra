@@ -589,4 +589,54 @@ public class ScreenLayoutTests
             Assert.That(hit1?.Destination.Name, Is.EqualTo("b"));
         }
     }
+
+    // win:0 (2560x1440) and win:1 (1920x1080) side by side; mac below win:0 and right of win:1, both mirrored,
+    // no sourceScreen. Each mirrored return must land on the monitor its forward link leaves from, whichever
+    // order Windows enumerates the monitors in.
+    [TestCase(false, TestName = "MultiMonitor_NoSourceScreen_MirroredReturnsLandOnTheirEdgeScreens")]
+    [TestCase(true, TestName = "MultiMonitor_NoSourceScreen_MirroredReturnsLandOnTheirEdgeScreens_ReverseEnumeration")]
+    public void MultiMonitor_NoSourceScreen_MirroredReturnsLandOnTheirEdgeScreens(bool reverseEnumeration)
+    {
+        var win0 = new ScreenRect("win:0", "win", 0, 0, 2560, 1440, IsLocal: true);
+        var win1 = new ScreenRect("win:1", "win", 2560, 0, 1920, 1080, IsLocal: true);
+        var mac = new ScreenRect("mac", "mac", 0, 0, 1512, 982, IsLocal: false);
+        List<HostConfig> hosts =
+        [
+            new()
+            {
+                Name = "win",
+                Neighbours = [new NeighbourConfig { Direction = Direction.Down, Name = "mac" }, new NeighbourConfig { Direction = Direction.Right, Name = "mac" }],
+            },
+            new() { Name = "mac" },
+        ];
+        HydraConfig.ExpandMirrors(hosts);
+        var layout = new ScreenLayout(reverseEnumeration ? [win1, win0, mac] : [win0, win1, mac], hosts, null, [], NullLogger.Instance);
+
+        var up = layout.DetectEdgeExit(mac, 700, 0);
+        var left = layout.DetectEdgeExit(mac, 0, 400);
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(up?.Destination.Name, Is.EqualTo("win:0"));
+            Assert.That(left?.Destination.Name, Is.EqualTo("win:1"));
+        }
+    }
+
+    // a forward link into a multi-monitor slave with no destScreen enters through the slave's facing edge
+    [TestCase(false, TestName = "MultiMonitor_NoDestScreen_ForwardLinkLandsOnTheFacingScreen")]
+    [TestCase(true, TestName = "MultiMonitor_NoDestScreen_ForwardLinkLandsOnTheFacingScreen_ReverseEnumeration")]
+    public void MultiMonitor_NoDestScreen_ForwardLinkLandsOnTheFacingScreen(bool reverseEnumeration)
+    {
+        var home = new ScreenRect("home", "home", 0, 0, 2560, 1440, IsLocal: true);
+        var b0 = new ScreenRect("b:0", "b", 0, 0, 1920, 1080, IsLocal: false);
+        var b1 = new ScreenRect("b:1", "b", 1920, 0, 1920, 1080, IsLocal: false);
+        var layout = new ScreenLayout(
+            reverseEnumeration ? [home, b1, b0] : [home, b0, b1],
+            [new HostConfig { Name = "home", Neighbours = [new NeighbourConfig { Direction = Direction.Right, Name = "b", Mirror = false }] }],
+            null,
+            [],
+            NullLogger.Instance);
+
+        Assert.That(layout.DetectEdgeExit(home, 2559, 720)?.Destination.Name, Is.EqualTo("b:0"));
+    }
 }

@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using Cathedral.Utils;
 using Hydra.Keyboard;
 using Hydra.Mouse;
+using Hydra.Screen;
 using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform.Linux;
@@ -122,12 +123,7 @@ public sealed class XorgInputHandler : IPlatformInput
         _ = NativeMethods.XFlush(_display);
     }
 
-    public (int X, int Y)? GetCursorPosition()
-    {
-        if (_display == nint.Zero) return null;
-        NativeMethods.XQueryPointer(_display, _rootWindow, out _, out _, out var rootX, out var rootY, out _, out _, out _);
-        return (rootX, rootY);
-    }
+    public ScreenPoint? GetCursorPosition() => XorgDisplayHelper.CursorPosition(_display, _rootWindow);
 
     public ValueTask HideCursor()
     {

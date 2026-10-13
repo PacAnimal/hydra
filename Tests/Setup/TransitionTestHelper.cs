@@ -19,10 +19,11 @@ public static class TransitionTestHelper
     public static readonly IHydraProfile TestConfig = ProfileWith();
 
     // the standard two-host master, with room for the one setting a test wants to vary
-    public static IHydraProfile ProfileWith(int? maxMouseHz = null) => Profile("home", new HydraConfig
+    public static IHydraProfile ProfileWith(int? maxMouseHz = null, bool hideCursor = false) => Profile("home", new HydraConfig
     {
         Mode = Mode.Master,
         MaxMouseHz = maxMouseHz,
+        HideCursor = hideCursor,
         Hosts =
         [
             new HostConfig
@@ -52,16 +53,17 @@ public static class TransitionTestHelper
     /// <param name="selectionDetector">The local file manager, for a test of the copy hotkey.</param>
     /// <param name="osd">Where on-screen messages go, for a test that reads them.</param>
     /// <param name="fileTransfer">The copy buffer's owner, for a test that reads what a copy left in it.</param>
+    /// <param name="screenSaverSync">The screensaver monitor, for a test that fires its activation.</param>
     public static TestServiceBundle CreateService(Func<long>? getTickCount = null, IActivityTracker? activityTracker = null, IWorldState? world = null,
         TimeProvider? timeProvider = null, IHydraProfile? profile = null, IFileSelectionDetector? selectionDetector = null, IOsdNotification? osd = null,
-        FileTransferService? fileTransfer = null)
+        FileTransferService? fileTransfer = null, IScreenSaverSync? screenSaverSync = null)
     {
         var platform = new FakePlatform();
         var relay = new FakeRelay();
         var screens = new FakeScreenDetector();
         var config = profile ?? TestConfig;
         var tracker = activityTracker ?? new ActivityTracker(config, new Lazy<IRelaySender>(() => relay), new WorldState(), new NullScreenSaverSync(), NullLogger<ActivityTracker>.Instance);
-        var service = new InputRouter(platform, platform, config, relay, screens, NullLoggerFactory.Instance, NullLogger<InputRouter>.Instance, new NullScreenSaverSync(), new NullClipboardSync(),
+        var service = new InputRouter(platform, platform, config, relay, screens, NullLoggerFactory.Instance, NullLogger<InputRouter>.Instance, screenSaverSync ?? new NullScreenSaverSync(), new NullClipboardSync(),
             fileTransfer ?? FileTransferService.Null(), selectionDetector ?? new NullFileSelectionDetector(), osd ?? new NullOsdNotification(), tracker, peerState: world,
             getTickCount: getTickCount, timeProvider: timeProvider);
         platform.AfterFireCallback = service.FlushAsync;
@@ -118,11 +120,13 @@ public static class TransitionTestHelper
     /// <param name="config">The master profile to run.</param>
     /// <param name="headless">No local screen at all, which is what turns the lock hotkey into confinement.</param>
     /// <param name="getTickCount">The router's clock, for a test that needs to drive time rather than wait for it.</param>
-    public static TestServiceBundle CreateRemoteOnlyService(IHydraProfile? config = null, bool headless = false, Func<long>? getTickCount = null)
+    /// <param name="screens">The local screen detector, for a test that changes the screens while running.</param>
+    public static TestServiceBundle CreateRemoteOnlyService(IHydraProfile? config = null, bool headless = false, Func<long>? getTickCount = null,
+        FakeScreenDetector? screens = null)
     {
         var platform = new FakePlatform();
         var relay = new FakeRelay();
-        var screens = new FakeScreenDetector();
+        screens ??= new FakeScreenDetector();
         if (headless)
             screens.Snapshot = new LocalScreenSnapshot([], []);
         var profile = config ?? RemoteOnlyConfig;

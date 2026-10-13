@@ -1,4 +1,5 @@
 using Hydra.Platform.Windows;
+using Hydra.Screen;
 using Microsoft.Extensions.Logging.Abstractions;
 using Tests.Setup;
 
@@ -7,7 +8,7 @@ namespace Tests.Platform.Windows;
 [TestFixture]
 public class WindowsInputHandlerWarpStateTests
 {
-    // SetWarpState/GetLastWarp/RecentreToTarget/ResyncLastWarp are written from two real threads in
+    // SetWarpState/GetLastWarp/RecentreToTarget are written from two real threads in
     // production — the dedicated Win32 hook thread (~900/s) and the router's consumer thread
     // (rarely, at a screen entry/exit) — with no synchronisation other than the internal _warpLock.
     // Every write here uses X == Y, so any read observing X != Y is a torn pair: proof the lock let
@@ -31,15 +32,13 @@ public class WindowsInputHandlerWarpStateTests
 
         var reader = Task.Run(() =>
         {
-            var j = 0;
             while (!token.IsCancellationRequested)
             {
                 Check(handler.GetLastWarp(), nameof(handler.GetLastWarp));
                 Check(handler.RecentreToTarget(), nameof(handler.RecentreToTarget));
-                handler.ResyncLastWarp(++j, j);
             }
 
-            void Check((int X, int Y) pair, string source)
+            void Check(ScreenPoint pair, string source)
             {
                 if (pair.X != pair.Y)
                     failure ??= $"{source} returned a torn pair: ({pair.X}, {pair.Y})";
@@ -64,7 +63,7 @@ public class WindowsInputHandlerWarpStateTests
         handler.SetWarpState(parkX, parkY);
         handler.IsOnVirtualScreen = true;
 
-        // InputRouter.ReturnToLocalScreen, one step at a time
+        // InputRouter.ReturnHome, one step at a time
         var routerSteps = new Queue<Action>([
             () => handler.IsOnVirtualScreen = false,
             () => handler.SetWarpState(edge.X, edge.Y),

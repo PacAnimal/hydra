@@ -2,6 +2,7 @@ using System.Runtime.Versioning;
 using Hydra.Keyboard;
 using Hydra.Mouse;
 using Hydra.Relay;
+using Hydra.Screen;
 using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform.MacOs;
@@ -670,14 +671,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
     }
     public Task WaitForAccessibilityTrusted(CancellationToken cancel) => NativeHelpers.WaitForAccessibilityTrusted(cancel);
 
-    public (int X, int Y)? GetCursorPosition()
-    {
-        var eventRef = NativeMethods.CGEventCreate(nint.Zero);
-        if (eventRef == nint.Zero) return null;
-        var pos = NativeMethods.CGEventGetLocation(eventRef);
-        NativeMethods.CFRelease(eventRef);
-        return ((int)pos.X, (int)pos.Y);
-    }
+    public ScreenPoint? GetCursorPosition() => MacDisplayHelper.CursorPosition();
 
     public ValueTask HideCursor()
     {

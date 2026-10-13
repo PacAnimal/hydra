@@ -1,4 +1,5 @@
 using Cathedral.Utils;
+using Hydra.Screen;
 using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform;
@@ -8,7 +9,7 @@ public interface ICursor
     ValueTask HideCursor();
     ValueTask ShowCursor();
     void WarpCursor(int x, int y) { }
-    (int X, int Y)? GetCursorPosition() => null;
+    ScreenPoint? GetCursorPosition() => null;
     bool CursorIsVisible => false;
 }
 
@@ -28,17 +29,15 @@ public sealed class CursorHiderService(ILogger<CursorHiderService> log, IPlatfor
     // all mutable state below is guarded by _stateLock. Hide()/Show()/UpdateWarpPoint run on caller threads,
     // Execute on the hosted-service loop, and OnPoll/OnLocalTimeout on Timer threads — without the lock the
     // non-atomic multi-flag flips raced into stuck states (cursor stuck invisible) and the timer fields
-    // leaked. Platform calls (HideCursor/ShowCursor await) are made OUTSIDE the lock.
+    // leaked. Awaited platform calls (HideCursor/ShowCursor) are made OUTSIDE the lock.
     private readonly Lock _stateLock = new();
     private bool _hideIntent;
     private bool _localActive;
     private bool _pendingHide;
     private bool _pendingShow;
-    private bool _hasWarpPoint;
-    private int _warpX;
-    private int _warpY;
+    private ScreenPoint? _warpPoint;
 
-    private (int X, int Y)? _lastPosition;
+    private ScreenPoint? _lastPosition;
     private Timer? _pollTimer;
     private Timer? _localTimeoutTimer;
 
@@ -71,15 +70,16 @@ public sealed class CursorHiderService(ILogger<CursorHiderService> log, IPlatfor
 
     public void UpdateWarpPoint(int x, int y)
     {
-        lock (_stateLock) { _warpX = x; _warpY = y; _hasWarpPoint = true; }
+        lock (_stateLock) _warpPoint = new ScreenPoint(x, y);
     }
+
+    internal Task ExecuteOnce() => Execute(CancellationToken.None);
 
     protected override async Task Execute(CancellationToken cancel)
     {
-        // decide the action (and consume the pending flag) atomically under the lock, then run the platform
-        // call outside it — never hold the lock across an await.
-        bool doHide = false, doShow = false, doWarp = false;
-        int warpX = 0, warpY = 0;
+        // decide the action (and consume the pending flag) atomically under the lock, then run any awaited
+        // platform call outside it — never hold the lock across an await.
+        bool doHide = false, doShow = false, doRehide = false;
         lock (_stateLock)
         {
             if (_pendingHide)
@@ -92,11 +92,17 @@ public sealed class CursorHiderService(ILogger<CursorHiderService> log, IPlatfor
                 _pendingShow = false;
                 doShow = true;
             }
-            else if (_hideIntent && !_localActive && _hasWarpPoint)
+            else if (_hideIntent && !_localActive)
             {
-                doWarp = true;
-                warpX = _warpX;
-                warpY = _warpY;
+                // Pinned at the warp point only during a visit, and only where the router recentres: a hidden local
+                // cursor stays where it is, and Windows parks it per sample itself. Under the lock so a Show()/Hide(),
+                // which the router calls before its return warp, waits for this warp to land.
+                if (_warpPoint is { } warp && platform.IsOnVirtualScreen && !platform.RecentresItself)
+                {
+                    platform.WarpCursor(warp.X, warp.Y);
+                    _lastPosition = warp; // set after the physical warp (matches OnPoll's baseline)
+                }
+                doRehide = true;
             }
         }
 
@@ -108,15 +114,11 @@ public sealed class CursorHiderService(ILogger<CursorHiderService> log, IPlatfor
         {
             await platform.ShowCursor();
         }
-        else if (doWarp)
+        else if (doRehide && platform.CursorIsVisible)
         {
-            // keep cursor pinned at warp point while hidden — don't warp when temporarily shown.
-            platform.WarpCursor(warpX, warpY);
-            lock (_stateLock) _lastPosition = (warpX, warpY); // set after the physical warp (matches OnPoll's baseline)
             // re-hide if cursor became visible — on macOS CGDisplayHideCursor is reference-counted
             // and can be decremented externally; CursorIsVisible detects that so we only re-hide when needed.
-            if (platform.CursorIsVisible)
-                await platform.HideCursor();
+            await platform.HideCursor();
         }
     }
 

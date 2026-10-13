@@ -12,11 +12,25 @@ public class RemoteOnlyTests
     private FakeRelay _relay = null!;
     private InputRouter _service = null!;
     private readonly SteppableTicks _ticks = new();
+    // a lone screen is named after its host; a second one renames it to host:0
+    private static readonly ScreenRect Home = new("pi", "pi", 0, 0, 2560, 1440, IsLocal: true);
+    // small enough that the default park point (1280, 720) is off it
+    private static readonly ScreenRect Small = new("pi", "pi", 0, 0, 1024, 768, IsLocal: true);
+
+    private static LocalScreenSnapshot Screens(params ScreenRect[] screens) =>
+        new([.. screens], [.. screens.Select(s => new ScreenInfoEntry(s.Name, s.X, s.Y, s.Width, s.Height, 1.0m))]);
 
     [SetUp]
     public async Task SetUp()
     {
         (_platform, _relay, _service) = TransitionTestHelper.CreateRemoteOnlyService(getTickCount: _ticks.Now);
+        await _service.StartAsync(CancellationToken.None);
+    }
+
+    private async Task RestartWith(FakeScreenDetector screens)
+    {
+        await _service.StopAsync(CancellationToken.None);
+        (_platform, _relay, _service) = TransitionTestHelper.CreateRemoteOnlyService(getTickCount: _ticks.Now, screens: screens);
         await _service.StartAsync(CancellationToken.None);
     }
 
@@ -39,6 +53,80 @@ public class RemoteOnlyTests
             Assert.That(_platform.IsOnVirtualScreen, Is.True, "should be on virtual screen after ScreenInfo");
             Assert.That(_platform.HideCursorCalled, Is.True, "should hide cursor on entry");
         }
+    }
+
+    [Test]
+    public async Task AutoEntry_ParksTheCursor()
+    {
+        // a platform that recentres itself (Windows) recentres on the warp target, which nothing sets until the first warp
+        _platform.Calls.Clear();
+
+        await TransitionTestHelper.BringHostOnline(_relay, "mac");
+
+        Assert.That(_platform.Calls.Where(c => c is "flag:True" or "warp"), Is.EqualTo(["flag:True", "warp"]));
+    }
+
+    [Test]
+    public async Task AutoEntry_Headless_HasNothingToPark()
+    {
+        await _service.StopAsync(CancellationToken.None);
+        (_platform, _relay, _service) = TransitionTestHelper.CreateRemoteOnlyService(headless: true, getTickCount: _ticks.Now);
+        await _service.StartAsync(CancellationToken.None);
+
+        await TransitionTestHelper.BringHostOnline(_relay, "mac");
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(_platform.IsOnVirtualScreen, Is.True, "pre-condition: entered");
+            Assert.That(_platform.WarpCount, Is.Zero);
+        }
+    }
+
+    [Test]
+    public async Task ScreensAppearingDuringAHeadlessVisit_AreParkedOn()
+    {
+        // started with no screen (display off at boot), entered the remote, then a monitor appears
+        var screens = new FakeScreenDetector { Snapshot = Screens() };
+        await RestartWith(screens);
+        await TransitionTestHelper.BringHostOnline(_relay, "mac");
+        _platform.Calls.Clear();
+
+        screens.Snapshot = Screens(Small);
+        await screens.FireChange();
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(_platform.Calls.Where(c => c == "warp"), Is.EqualTo(["warp"]));
+            Assert.That((_platform.WarpX, _platform.WarpY), Is.EqualTo((512, 384)));
+        }
+    }
+
+    [Test]
+    public async Task ParkPointLeftOffEveryScreenDuringAVisit_IsMoved()
+    {
+        var screens = new FakeScreenDetector { Snapshot = Screens(Home) };
+        await RestartWith(screens);
+        await TransitionTestHelper.BringHostOnline(_relay, "mac");
+
+        screens.Snapshot = Screens(Small);
+        await screens.FireChange();
+
+        Assert.That((_platform.WarpX, _platform.WarpY), Is.EqualTo((512, 384)));
+    }
+
+    [Test]
+    public async Task ScreenAddedDuringAVisit_KeepsTheParkPoint()
+    {
+        // the new monitor renames the parked one, but the park point is still on it
+        var screens = new FakeScreenDetector { Snapshot = Screens(Home) };
+        await RestartWith(screens);
+        await TransitionTestHelper.BringHostOnline(_relay, "mac");
+        _platform.Calls.Clear();
+
+        screens.Snapshot = Screens(Home with { Name = "pi:0" }, Home with { Name = "pi:1", X = 2560 });
+        await screens.FireChange();
+
+        Assert.That(_platform.Calls, Has.No.Member("warp"));
     }
 
     [Test]
@@ -110,6 +198,18 @@ public class RemoteOnlyTests
             Assert.That(_platform.IsOnVirtualScreen, Is.False, "should leave virtual screen after unlock");
             Assert.That(_platform.ShowCursorCalled, Is.True, "should show cursor after unlock");
         }
+    }
+
+    [Test]
+    public async Task LockHotkey_Unlock_ShowsBeforeLeavingAndKeepsTheCursorWhereItIs()
+    {
+        await TransitionTestHelper.BringHostOnline(_relay, "mac");
+        _platform.Calls.Clear();
+
+        _platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyDown, 'l',
+            KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Super));
+
+        Assert.That(_platform.Calls.Where(c => c is "show" or "flag:False" or "warp"), Is.EqualTo(["show", "flag:False"]));
     }
 
     [Test]

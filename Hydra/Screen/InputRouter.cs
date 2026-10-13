@@ -262,7 +262,7 @@ public class InputRouter(
         var newScreens = BuildAllScreens(snapshot.Screens);
         var peerScreens = await _peerState.GetPeerScreensSnapshot();
 
-        await RunFence(st =>
+        await RunFence(async st =>
         {
             ApplyPeerScreenSizes(peerScreens, newScreens);
             st.LocalScreens = snapshot.Screens;
@@ -275,7 +275,14 @@ public class InputRouter(
                 st.ActiveLocalScreen = st.LocalScreens.FirstOrDefault() ?? st.ActiveLocalScreen;
                 if (st.ActiveLocalScreen != null) UpdateWarpPoint(st, st.ActiveLocalScreen);
             }
-            return ValueTask.CompletedTask;
+            else if (st.LocalScreens.Count > 0 && (st.ActiveLocalScreen == null || !st.LocalScreens.Any(s => s.Contains(st.WarpX, st.WarpY))))
+            {
+                // a visit whose park point is on no screen (display off at boot, or its screen unplugged) parks on the
+                // first one; a park point still on a screen is kept, so a parked cursor isn't dragged mid-visit
+                st.ActiveLocalScreen = st.LocalScreens[0];
+                UpdateWarpPoint(st, st.ActiveLocalScreen);
+                await ParkOnEntry(st);
+            }
         });
     }
 
@@ -290,23 +297,19 @@ public class InputRouter(
 
         var delta = await _peerState.UpdatePeers(current, configuredSlaves);
 
-        var (disconnectedHost, warpX, warpY) = await RunFence<(string?, int, int)>(st =>
+        var disconnectedHost = await RunFence(st =>
         {
             string? host = null;
-            int wx = 0, wy = 0;
-
-            if (st.Mouse.CurrentScreen != null && !current.Contains(st.Mouse.CurrentScreen.Host))
-                host = LeaveVirtualScreen(st, out wx, out wy);
+            if (st.Mouse.IsOnVirtualScreen && !current.Contains(st.Mouse.CurrentScreen.Host))
+                host = ReturnHome(st, new ScreenPoint(st.WarpX, st.WarpY), slaveReachable: false);
 
             if (delta.AnyDeparted) RebuildLayout(st, delta.PeerScreensSnapshot);
             if (st.RemoteCopyHost != null && !current.Contains(st.RemoteCopyHost)) AbandonRemoteCopy(st, "it left the relay");
-            return (host, wx, wy);
-        }, (null, 0, 0));
+            return host;
+        }, null);
 
         if (disconnectedHost != null)
         {
-            ReturnToLocalScreen(warpX, warpY);
-            ShowCursorOnReturn();
             if (log.IsEnabled(LogLevel.Information))
                 log.LogInformation("Remote peer '{Name}' disconnected — returned to local screen", disconnectedHost);
         }
@@ -332,12 +335,12 @@ public class InputRouter(
 
     private async Task OnRelayDisconnected()
     {
-        var (disconnectedHost, warpX, warpY) = await RunFence<(string?, int, int)>(st =>
+        var disconnectedHost = await RunFence(st =>
         {
-            var host = LeaveVirtualScreen(st, out var wx, out var wy);
+            var host = ReturnHome(st, new ScreenPoint(st.WarpX, st.WarpY), slaveReachable: false);
             if (st.RemoteCopyHost != null) AbandonRemoteCopy(st, "the relay disconnected");
-            return (host, wx, wy);
-        }, (null, 0, 0));
+            return host;
+        }, null);
 
         // reset known peers so all slaves get a fresh MasterConfig on reconnect
         await _peerState.ClearPeers();
@@ -346,8 +349,6 @@ public class InputRouter(
         if (disconnectedHost != null)
         {
             _fileTransfer.Abort(relay, "relay disconnected");
-            ReturnToLocalScreen(warpX, warpY);
-            ShowCursorOnReturn();
             log.LogWarning("Relay disconnected — returned to local screen from '{Host}'", disconnectedHost);
         }
     }
@@ -359,19 +360,16 @@ public class InputRouter(
             if (st.ScreensaverActive) return;
             st.ScreensaverActive = true;
 
-            if (st.Mouse.IsOnVirtualScreen && st.Mouse.CurrentScreen != null)
+            if (st.Mouse.IsOnVirtualScreen)
             {
                 st.SavedScreenName = st.Mouse.CurrentScreen.Name;
                 st.SavedCursorX = (int)st.Mouse.X;
                 st.SavedCursorY = (int)st.Mouse.Y;
-                FlushMouseDelta(st);
-                var disconnectedHost = LeaveVirtualScreen(st, out var warpX, out var warpY);
-                if (disconnectedHost != null)
+                if (ReturnHome(st, new ScreenPoint(st.WarpX, st.WarpY), slaveReachable: true) is { } leftHost)
                 {
                     _fileTransfer.Abort(relay, "screensaver activated");
-                    LeaveRemoteScreen(disconnectedHost);
-                    ReturnToLocalScreen(warpX, warpY);
-                    ShowCursorOnReturn();
+                    if (log.IsEnabled(LogLevel.Information))
+                        log.LogInformation("Screensaver activated — returned to local screen from '{Host}'", leftHost);
                 }
             }
 
@@ -400,15 +398,7 @@ public class InputRouter(
                 var dest = st.Screens.FirstOrDefault(sc => !sc.IsLocal && sc.Name.EqualsIgnoreCase(savedScreen));
                 if (dest != null && dest.Width > 0)
                 {
-                    var peerScreens = await _peerState.GetPeerScreensSnapshot();
-                    var remoteInfo = GetRemoteScreensAndScales(st.Screens, peerScreens, dest);
-                    cursorHider.Hide();
-                    platform.IsOnVirtualScreen = true;
-                    ApplyEnterScreen(st, dest, remoteInfo, savedX, savedY);
-                    // anchor immediately (bogus filter); delay physical warp until the shield is absorbing
-                    AnchorAtWarpPoint(st);
-                    await platform.WarpToPark(st.WarpX, st.WarpY);
-                    SendEnterScreen(dest, savedX, savedY);
+                    await EnterFromLocal(st, dest, savedX, savedY);
                     if (log.IsEnabled(LogLevel.Information))
                         log.LogInformation("Restored cursor to '{Screen}' after screensaver", savedScreen);
                 }
@@ -550,7 +540,7 @@ public class InputRouter(
                     if (!UseHydraClipboard(sourceHost)) break;
                     // only honour if cursor is currently on that slave's screen
                     var onThatScreen = await RunFence(
-                        st => st.Mouse.IsOnVirtualScreen && st.Mouse.CurrentScreen?.Host.EqualsIgnoreCase(sourceHost) == true,
+                        st => st.Mouse.IsOnVirtualScreen && st.Mouse.CurrentScreen.Host.EqualsIgnoreCase(sourceHost),
                         false);
                     if (onThatScreen)
                         OnClipboardPullRequest(sourceHost);
@@ -746,7 +736,7 @@ public class InputRouter(
     // routes OSD to slave when cursor is remote, otherwise shows locally on master
     private void ShowOsd(LocalMasterState st, string message)
     {
-        if (st.Mouse.IsOnVirtualScreen && st.Mouse.CurrentScreen != null)
+        if (st.Mouse.IsOnVirtualScreen)
         {
             var payload = MessageSerializer.Encode(MessageKind.Osd, new OsdMessage(message));
             relay.Send([st.Mouse.CurrentScreen.Host], payload);
@@ -799,7 +789,7 @@ public class InputRouter(
             st.RelativeMouseScreens.Remove(key);
 
         // if the cursor is on a remote screen whose dims changed, update it
-        if (st.Mouse.IsOnVirtualScreen && st.Mouse.CurrentScreen != null)
+        if (st.Mouse.IsOnVirtualScreen)
         {
             var refreshed = st.Screens.FirstOrDefault(s => s.Name.EqualsIgnoreCase(st.Mouse.CurrentScreen.Name));
             if (refreshed != null && refreshed != st.Mouse.CurrentScreen)
@@ -911,15 +901,10 @@ public class InputRouter(
                             else
                             {
                                 log.LogInformation("Remote lock: unlocked (local)");
-                                if (st.Mouse.IsOnVirtualScreen && st.Mouse.CurrentScreen != null)
+                                if (st.Mouse.IsOnVirtualScreen)
                                 {
-                                    var leavingHost = st.Mouse.CurrentScreen.Host;
                                     ShowOsd(st, "Input: local");
-                                    FlushMouseDelta(st);
-                                    st.Mouse.LeaveScreen();
-                                    platform.IsOnVirtualScreen = false;
-                                    ShowCursorOnReturn();
-                                    LeaveRemoteScreen(leavingHost);
+                                    ReturnHome(st, null, slaveReachable: true);
                                 }
                             }
                         }
@@ -942,7 +927,7 @@ public class InputRouter(
                     log.LogInformation("Lock hotkey: locking all slaves");
                     await BroadcastLockScreen(st);
                 }
-                else if (hotkeyAction == HotkeyAction.ToggleRelativeMouse && st.Mouse.IsOnVirtualScreen && st.Mouse.CurrentScreen != null)
+                else if (hotkeyAction == HotkeyAction.ToggleRelativeMouse && st.Mouse.IsOnVirtualScreen)
                 {
                     var screenName = st.Mouse.CurrentScreen.Name;
                     var isNowRelative = !st.RelativeMouseScreens.GetValueOrDefault(screenName);
@@ -969,7 +954,7 @@ public class InputRouter(
                             CopyLocalSelection(st);
                         }
                     }
-                    else if (st.Mouse.CurrentScreen != null && relay.IsConnected)
+                    else if (st.Mouse.IsOnVirtualScreen && relay.IsConnected)
                     {
                         if (log.IsEnabled(LogLevel.Information))
                             log.LogInformation("Copy hotkey: querying file selection on {Host}", st.Mouse.CurrentScreen.Host);
@@ -978,7 +963,7 @@ public class InputRouter(
                         relay.Send([st.Mouse.CurrentScreen.Host], queryPayload);
                     }
                 }
-                else if (hotkeyAction == HotkeyAction.MissionControl && st.Mouse.IsOnVirtualScreen && st.Mouse.CurrentScreen != null)
+                else if (hotkeyAction == HotkeyAction.MissionControl && st.Mouse.IsOnVirtualScreen)
                 {
                     if (log.IsEnabled(LogLevel.Information))
                         log.LogInformation("Mission Control hotkey: sending to {Host}", st.Mouse.CurrentScreen.Host);
@@ -1004,7 +989,7 @@ public class InputRouter(
                     }
                     else if (_fileTransfer.GetCopyBuffer() is { } copyBuffer)
                     {
-                        var targetHost = st.Mouse.IsOnVirtualScreen && st.Mouse.CurrentScreen != null
+                        var targetHost = st.Mouse.IsOnVirtualScreen
                             ? st.Mouse.CurrentScreen.Host
                             : profile.Name;
                         if (string.Equals(copyBuffer.SourceHost, targetHost, StringComparison.OrdinalIgnoreCase))
@@ -1073,7 +1058,7 @@ public class InputRouter(
 
     private void SendMousePosition(LocalMasterState st, long now)
     {
-        if (!relay.IsConnected || st.Mouse.CurrentScreen == null) return;
+        if (!relay.IsConnected || !st.Mouse.IsOnVirtualScreen) return;
 
         var screen = st.Mouse.CurrentScreen;
 
@@ -1107,7 +1092,7 @@ public class InputRouter(
     // absolute mode: always send current position so slave cursor doesn't lag at exit point.
     private void FlushMouseDelta(LocalMasterState st)
     {
-        if (!relay.IsConnected || st.Mouse.CurrentScreen == null) return;
+        if (!relay.IsConnected || !st.Mouse.IsOnVirtualScreen) return;
         var screen = st.Mouse.CurrentScreen;
         var isRelative = st.RelativeMouseScreens.GetValueOrDefault(screen.Name);
         if (isRelative && st.PendingDx == 0 && st.PendingDy == 0) return;
@@ -1164,22 +1149,12 @@ public class InputRouter(
         if (hit is null) return;
         if (!relay.IsConnected) return;
 
-        var peerScreens = await _peerState.GetPeerScreensSnapshot();
-        var remoteInfo = GetRemoteScreensAndScales(st.Screens, peerScreens, hit.Destination);
-
         // block edge crossing while any button is held
         if (platform.AnyMouseButtonHeld()) return;
 
-        cursorHider.Hide();
-        platform.IsOnVirtualScreen = true;
-        ApplyEnterScreen(st, hit.Destination, remoteInfo, hit.EntryX, hit.EntryY);
-        // set the warp anchor immediately so pre-queued events compute large dx → caught by bogus filter,
-        // but delay the physical warp until the shield is actually absorbing (avoids hover at the park point)
-        AnchorAtWarpPoint(st);
-        await platform.WarpToPark(st.WarpX, st.WarpY);
+        await EnterFromLocal(st, hit.Destination, hit.EntryX, hit.EntryY);
         if (log.IsEnabled(LogLevel.Information))
             log.LogInformation("Entered remote screen '{Name}' → ({X}, {Y})", hit.Destination.Name, hit.EntryX, hit.EntryY);
-        SendEnterScreen(hit.Destination, hit.EntryX, hit.EntryY);
     }
 
     private async ValueTask HandleVirtualScreenMove(LocalMasterState st, double x, double y)
@@ -1203,7 +1178,7 @@ public class InputRouter(
         if (now - st.LastVirtualLogTick >= 100)
         {
             st.LastVirtualLogTick = now;
-            if (st.Mouse.CurrentScreen != null && st.RelativeMouseScreens.GetValueOrDefault(st.Mouse.CurrentScreen.Name) && log.IsEnabled(LogLevel.Debug))
+            if (st.Mouse.IsOnVirtualScreen && st.RelativeMouseScreens.GetValueOrDefault(st.Mouse.CurrentScreen.Name) && log.IsEnabled(LogLevel.Debug))
                 log.LogDebug("Mouse: ({X}, {Y})  Offset: ({DX}, {DY})", (int)st.Mouse.X, (int)st.Mouse.Y, (int)st.PendingDx, (int)st.PendingDy);
             else if (log.IsEnabled(LogLevel.Debug))
                 log.LogDebug("Mouse: ({X}, {Y})", (int)st.Mouse.X, (int)st.Mouse.Y);
@@ -1220,17 +1195,44 @@ public class InputRouter(
     {
         st.PendingDx = 0;
         st.PendingDy = 0;
-        if (!relay.IsConnected || st.Mouse.CurrentScreen == null) return;
+        if (!relay.IsConnected || !st.Mouse.IsOnVirtualScreen) return;
         var s = st.Mouse.CurrentScreen;
         var payload = MessageSerializer.Encode(MessageKind.EnterScreen,
             new EnterScreenMessage(s.Name, (int)st.Mouse.X, (int)st.Mouse.Y, s.Width, s.Height));
         relay.Send([s.Host], payload);
     }
 
-    private void ReturnToLocalScreen(int x, int y)
+    // Every return to the local screen, on the consumer. The cursor is shown (or hidden) before the flag clears and
+    // it warps: the cursor hider's pin to the park point waits for Show/Hide, not for the warp. No warpTo leaves the
+    // cursor where it is. A slave that is gone (it left, or the relay did) is neither flushed to nor told. Returns the
+    // host left, or null when already local.
+    private string? ReturnHome(LocalMasterState st, ScreenPoint? warpTo, bool slaveReachable)
     {
+        if (!st.Mouse.IsOnVirtualScreen) return null;
+        var host = st.Mouse.CurrentScreen.Host;
+        if (slaveReachable) FlushMouseDelta(st);
+        st.Mouse.LeaveScreen();
+        st.PendingDx = 0;
+        st.PendingDy = 0;
+        ShowCursorOnReturn();
         platform.IsOnVirtualScreen = false;
-        platform.WarpCursor(x, y);
+        if (warpTo is { } to) platform.WarpCursor(to.X, to.Y);
+        if (slaveReachable && relay.IsConnected) LeaveRemoteScreen(host);
+        return host;
+    }
+
+    private async ValueTask<RemoteScreenInfo> RemoteInfoFor(LocalMasterState st, ScreenRect dest) =>
+        GetRemoteScreensAndScales(st.Screens, await _peerState.GetPeerScreensSnapshot(), dest);
+
+    // Every entry from the local screen to a remote one; callers keep their own gates and log line.
+    private async ValueTask EnterFromLocal(LocalMasterState st, ScreenRect dest, int x, int y)
+    {
+        var remoteInfo = await RemoteInfoFor(st, dest);
+        cursorHider.Hide();
+        platform.IsOnVirtualScreen = true;
+        ApplyEnterScreen(st, dest, remoteInfo, x, y);
+        await ParkOnEntry(st);
+        SendEnterScreen(dest, x, y);
     }
 
     // hides or shows the cursor when control returns to the local screen:
@@ -1239,21 +1241,6 @@ public class InputRouter(
     {
         if (profile.HideCursor) cursorHider.Hide();
         else cursorHider.Show();
-    }
-
-    // shared in-consumer cleanup for peer-disconnect / relay-disconnect / screensaver snap-back.
-    // returns the host we left (null if already on local screen).
-    private static string? LeaveVirtualScreen(LocalMasterState st, out int warpX, out int warpY)
-    {
-        warpX = warpY = 0;
-        if (!st.Mouse.IsOnVirtualScreen || st.Mouse.CurrentScreen == null) return null;
-        var host = st.Mouse.CurrentScreen.Host;
-        st.Mouse.LeaveScreen();
-        st.PendingDx = 0;
-        st.PendingDy = 0;
-        warpX = st.WarpX;
-        warpY = st.WarpY;
-        return host;
     }
 
     // enters remote-only mode targeting the first remote screen with known dimensions.
@@ -1266,18 +1253,13 @@ public class InputRouter(
         if (target == null) return;
         if (!relay.IsConnected) return;
 
-        var peerScreens = await _peerState.GetPeerScreensSnapshot();
-        var remoteInfo = GetRemoteScreensAndScales(st.Screens, peerScreens, target);
         var entryX = target.Width / 2;
         var entryY = target.Height / 2;
 
-        cursorHider.Hide();
-        platform.IsOnVirtualScreen = true;
-        ApplyEnterScreen(st, target, remoteInfo, entryX, entryY);
+        await EnterFromLocal(st, target, entryX, entryY);
         st.LockedToScreen = true;
         if (log.IsEnabled(LogLevel.Information))
             log.LogInformation("Remote-only: entered '{Name}' → ({X}, {Y})", target.Name, entryX, entryY);
-        SendEnterScreen(target, entryX, entryY);
     }
 
     // handles raw mouse deltas — used by evdev (remote-only) and Xorg (local master, virtual screen).
@@ -1400,7 +1382,7 @@ public class InputRouter(
         if (hit.Destination.IsLocal)
         {
             if (st.LockedToScreen || profile.RemoteOnly || platform.AnyMouseButtonHeld()) return false;
-            ReturnToLocal(st, leavingScreen, hit);
+            ReturnAtEdge(st, hit);
             return true;
         }
 
@@ -1416,29 +1398,22 @@ public class InputRouter(
         return true;
     }
 
-    private void ReturnToLocal(LocalMasterState st, ScreenRect leavingScreen, EdgeHit hit)
+    private void ReturnAtEdge(LocalMasterState st, EdgeHit hit)
     {
         var targetScreen = hit.Destination;
-        FlushMouseDelta(st);
         var globalX = targetScreen.X + hit.EntryX;
         var globalY = targetScreen.Y + hit.EntryY;
-        st.Mouse.LeaveScreen();
-        ReturnToLocalScreen(globalX, globalY);
-        ShowCursorOnReturn();
+        ReturnHome(st, new ScreenPoint(globalX, globalY), slaveReachable: true);
         st.ActiveLocalScreen = targetScreen;
         UpdateWarpPoint(st, targetScreen);
         if (log.IsEnabled(LogLevel.Information))
             log.LogInformation("Returned to local screen ← ({X}, {Y})", globalX, globalY);
-        if (relay.IsConnected)
-            LeaveRemoteScreen(leavingScreen.Host);
     }
 
     private async ValueTask CrossToRemote(LocalMasterState st, ScreenRect leavingScreen, EdgeHit hit)
     {
         FlushMouseDelta(st);
-        var peerScreens = await _peerState.GetPeerScreensSnapshot();
-        var remoteInfo = GetRemoteScreensAndScales(st.Screens, peerScreens, hit.Destination);
-        ApplyEnterScreen(st, hit.Destination, remoteInfo, hit.EntryX, hit.EntryY);
+        ApplyEnterScreen(st, hit.Destination, await RemoteInfoFor(st, hit.Destination), hit.EntryX, hit.EntryY);
         if (log.IsEnabled(LogLevel.Information))
             log.LogInformation("Switched to remote screen '{Name}' → ({X}, {Y})", hit.Destination.Name, hit.EntryX, hit.EntryY);
         if (leavingScreen.Host != hit.Destination.Host)
@@ -1464,6 +1439,16 @@ public class InputRouter(
         var scale = isRelative ? (double)(st.Mouse.RelativeMouseScale ?? st.Mouse.MouseScale) : (double)st.Mouse.MouseScale;
         st.PendingDx += dx * scale;
         st.PendingDy += dy * scale;
+    }
+
+    // Parks the cursor for the start of a visit. The anchor is set at once so pre-queued events compute a large
+    // delta, caught by the bogus filter; the physical warp waits until the shield is absorbing, so nothing hovers
+    // at the park point. A headless master has no local screen, so nothing to park.
+    private async ValueTask ParkOnEntry(LocalMasterState st)
+    {
+        if (st.ActiveLocalScreen == null) return;
+        AnchorAtWarpPoint(st);
+        await platform.WarpToPark(st.WarpX, st.WarpY);
     }
 
     // Re-anchors the delta reference on the warp point. Every place that physically parks the cursor

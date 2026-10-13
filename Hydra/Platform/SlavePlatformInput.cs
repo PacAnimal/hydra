@@ -1,5 +1,6 @@
 using Hydra.Keyboard;
 using Hydra.Mouse;
+using Hydra.Screen;
 
 namespace Hydra.Platform;
 
@@ -11,7 +12,7 @@ internal sealed class SlavePlatformInput(ICursor cursor) : IPlatformInput
     public ValueTask HideCursor() => cursor.HideCursor();
     public ValueTask ShowCursor() => cursor.ShowCursor();
     public void WarpCursor(int x, int y) => cursor.WarpCursor(x, y);
-    public (int X, int Y)? GetCursorPosition() => cursor.GetCursorPosition();
+    public ScreenPoint? GetCursorPosition() => cursor.GetCursorPosition();
 
     public Task StartEventTap(Action<double, double> onMouseMove, Action<double, double>? onMouseDelta,
         Action<KeyEvent> onKeyEvent, Action<MouseButtonEvent> onMouseButton, Action<MouseScrollEvent> onMouseScroll,

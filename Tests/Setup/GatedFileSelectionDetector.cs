@@ -33,8 +33,20 @@ public sealed class GatedFileSelectionDetector(bool ignoresCancellation = false)
         lock (_lock) index = _queries++;
         var gate = GateAt(index);
         gate.Queried.TrySetResult();
+        // WaitAsync's own registration runs first (most recent first) and can wake this thread, which then disposes
+        // ours before it runs; so the wait that observed the cancellation reports it too
         using (cancel.Register(static state => ((TaskCompletionSource)state!).TrySetResult(), gate.Cancelled))
-            return (ignoresCancellation ? gate.Answer.Task : gate.Answer.Task.WaitAsync(cancel)).GetAwaiter().GetResult();
+        {
+            try
+            {
+                return (ignoresCancellation ? gate.Answer.Task : gate.Answer.Task.WaitAsync(cancel)).GetAwaiter().GetResult();
+            }
+            catch (OperationCanceledException) when (cancel.IsCancellationRequested)
+            {
+                gate.Cancelled.TrySetResult();
+                throw;
+            }
+        }
     }
 
     private Gate GateAt(int index)

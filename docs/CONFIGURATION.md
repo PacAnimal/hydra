@@ -107,7 +107,7 @@ Use `Esc` to close the TUI. It does not change Hydra's running state.
 - `screenDefinitions` — per-screen scale config (slave only; reported to master via ScreenInfo)
 - `mouseScale` — fallback cursor speed multiplier for all screens on this slave (slave only)
 - `relativeMouseScale` — fallback relative-mode speed multiplier for all screens on this slave; falls back to `mouseScale` when omitted (slave only)
-- `hideCursor` — hide the master's local cursor while it is inactive or routed remotely (master only; default: `false`)
+- `hideCursor` — hide the master's local cursor while it is inactive or routed remotely; an inactive cursor is hidden where it is and reappears there (master only; default: `false`)
 - `deadCorners` — pixel dead zone at screen corners where transitions are blocked (default `0`, `50` is a reasonable starting value). Scaled by the screen's mouseScale. Can also be set per-host to override.
 - `maxMouseHz` — how many mouse updates a second the master sends to a slave (master only; default `125`, range `1`–`1000`). This also sets how long raw samples are coalesced before they are processed, so the two stay in step. **Raising it costs CPU on the master**: a mouse reports roughly 900 samples a second, and each send is a relay round trip. The ceiling is the sample rate itself — at `1000` every sample a mouse reports is already sent on its own. Rates that do not divide 1000 evenly land on the next rate up, because the interval is whole milliseconds (`300` gives a 3ms interval, so 333 Hz).
 - `hotkeys` — rebind Hydra's hotkeys, as action name to an array of chords (master only; see [Customising hotkeys](#customising-hotkeys))
@@ -150,8 +150,8 @@ Supported directions: `left`, `right`, `up`, `down`.
 | `sourceEnd` | `100` | End of the source edge range (0–100%), inclusive |
 | `destStart` | `0` | Start of the destination edge range (0–100%) |
 | `destEnd` | `100` | End of the destination edge range (0–100%) |
-| `sourceScreen` | `null` | Restrict to a specific local screen — match by `screenName`, `displayName`, `output`, or `platformId` |
-| `destScreen` | `null` | Target a specific screen on the remote host — same identifiers as `sourceScreen` |
+| `sourceScreen` | `null` | Restrict to a specific local screen — match by `screenName`, `displayName`, `output`, or `platformId`. Unset, the screen(s) on the host's outer edge in that direction |
+| `destScreen` | `null` | Target a specific screen on the remote host — same identifiers as `sourceScreen`. Unset, a screen on the destination host's edge facing the source (the edge you enter through) |
 
 **Range-based neighbours** let you split an edge to route to different hosts depending on where the cursor crosses:
 

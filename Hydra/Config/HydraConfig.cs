@@ -63,7 +63,7 @@ public class HydraConfig
     public EmbeddedStyxConfig? EmbeddedStyx { get; init; }         // connect to embedded Styx (plain-text alternative to base64 networkConfig)
     public EmbeddedStyxServerConfig? EmbeddedStyxServer { get; init; }  // run an embedded Styx server on this machine
 
-    public bool HideCursor { get; init; } = false;  // master only — hide cursor on inactivity
+    public bool HideCursor { get; init; }  // master only — hide cursor on inactivity
     public bool RemoteOnly { get; init; }
     public ClipboardSyncMode ClipboardSync { get; init; } = ClipboardSyncMode.Hydra;
     public bool SyncScreensaver { get; init; } = true;

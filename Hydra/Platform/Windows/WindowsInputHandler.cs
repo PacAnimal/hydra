@@ -4,6 +4,7 @@ using Cathedral.Utils;
 using Hydra.Config;
 using Hydra.Keyboard;
 using Hydra.Mouse;
+using Hydra.Screen;
 using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform.Windows;
@@ -20,56 +21,63 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
     private readonly WinKeyResolver _keyResolver = new();
     private Action<double, double>? _onMouseMove;
     private Action<double, double>? _onMouseDelta;
-    // Written from both threads: the hook thread clears it after resyncing, the router thread (via
-    // the IsOnVirtualScreen setter below) sets it on entry. volatile is the right tool for a flag
-    // read on every hook callback and written from two places with no other ordering between them.
-    private volatile bool _deltaReferenceIsStale = true;
     private Action<KeyEvent>? _onKeyEvent;
     private Action<MouseButtonEvent>? _onMouseButton;
     private Action<MouseScrollEvent>? _onMouseScroll;
     private readonly WindowsShieldWindow _shield = new();
-    private int _lastWarpX = -1;
-    private int _lastWarpY = -1;
-    // The fixed point WarpCursor last targeted — kept clear of the local screen edges is the whole
-    // reason a virtual-screen visit re-centres at all. Every real sample re-warps back to exactly
-    // this, on this thread, synchronously (see MouseHookCallback) rather than waiting for the
-    // router to ask for it.
-    private int _warpTargetX = -1;
-    private int _warpTargetY = -1;
-    // _warpTargetX/Y and _lastWarpX/Y are two (X,Y) pairs written from two threads: the hook
-    // thread on every real sample (~900/s), the router's consumer thread rarely, via WarpCursor
-    // (once at screen entry, once at exit). Four independent int writes are not atomic as a pair,
-    // so a reader on the other thread could observe a torn mix — new X paired with a stale Y — at
-    // exactly those transition instants. _warpLock makes each pair's read/write atomic as a unit;
-    // every access to these four fields goes through the helpers below, never the fields directly.
+    // The point a visit recentres onto every sample (WarpCursor's last target, kept clear of the screen edges), and
+    // the delta reference the next sample is measured from. The hook thread writes them every sample and the router
+    // at every warp, so they are only touched under _warpLock, through the helpers below.
+    private ScreenPoint _warpTarget = new(-1, -1);
+    private ScreenPoint _lastWarp = new(-1, -1);
     private readonly Lock _warpLock = new();
     private readonly Toggle _isOnVirtualScreen = new();
+    // under _warpLock, see TakeStraddle and IsPreFlipParkEcho
+    private readonly List<ScreenPoint> _retargetedFrom = [];
+    private int _echoes;
+    private ScreenPoint? _echoGuard;
+    private int _echoGuardTick;
+    private const int MaxEchoes = 2;
+
+    // the hook's input timestamps (MSLLHOOKSTRUCT.time) are on this clock
+    internal Func<int> TickCount { get; init; } = static () => Environment.TickCount;
 
     public bool IsOnVirtualScreen
     {
         get => _isOnVirtualScreen;
         set
         {
-            // Mark the delta reference stale THE MOMENT this actually flips false->true — not
-            // inferred later by having the hook thread notice the flag differs from what it last
-            // saw. That polling approach missed a bounce fast enough to flip false->true->... with
-            // zero hook messages landing in between; TrySet's CompareExchange makes "did THIS call
-            // actually change it" race-free regardless, which polling a snapshot on a different
-            // thread cannot be.
-            //
-            // This setter itself is not always called from the router's consumer thread — a
-            // disconnect path (OnPeersChanged/OnRelayDisconnected) resumes a RunFence continuation
-            // on an arbitrary thread-pool thread, unsynchronized with whatever the consumer thread
-            // does next — but that is a pre-existing race in the router's own disconnect handling,
-            // not something this flag introduces or could fix from here.
-            if (_isOnVirtualScreen.TrySet(value) && value)
-                _deltaReferenceIsStale = true;
+            // marked here, as the flag flips, so a bounce between two hook samples is never missed
+            lock (_warpLock)
+            {
+                if (!_isOnVirtualScreen.TrySet(value)) return;
+                if (value)
+                {
+                    // the first sample of a visit may still have been measured on the local screen
+                    MarkRetargetLocked(_warpTarget);
+                    _echoGuard = null;
+                }
+                else
+                {
+                    // the return's warp marks its own retarget
+                    _retargetedFrom.Clear();
+                    _echoGuard = _warpTarget;
+                    _echoGuardTick = TickCount();
+                }
+            }
         }
     }
-    private nint _currentDesktop;
     private Timer? _healthTimer;
+    // Windows 7+ silently removes a low-level hook whose callback overruns LowLevelHooksTimeout (a GC pause, a loaded
+    // box) and says nothing. A live hook sees its input all the time, so a hook quiet for HookIdleMs is reinstalled,
+    // and again every HookIdleMs it stays quiet: microseconds if it was fine, its input back if it was gone. Key state
+    // is left alone: a key-up a dead hook lost cannot be told from a key held without repeating, and pressing the key
+    // again releases it.
+    private const int HookIdleMs = 5000;
+    private int _lastMouseCallbackTick; // hook thread only
+    private int _lastKeyboardCallbackTick; // hook thread only
 
-    // posted to the hook thread to trigger a desktop check
+    // posted to the hook thread to reinstall a hook gone quiet
     private const uint WmCheckHealth = NativeMethods.WM_USER + 1;
     private const uint WmShieldShow = NativeMethods.WM_USER + 2;
     private const uint WmShieldHide = NativeMethods.WM_USER + 3;
@@ -84,57 +92,96 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
         NativeMethods.SetCursorPos(x, y);
     }
 
-    // Sets both pairs to the same freshly-warped-to point, atomically. The router calls this via
-    // WarpCursor at a screen entry/exit; SetCursorPos is deliberately outside the lock — it is a
-    // syscall touching no managed state, no reason to hold the lock across it.
+    // Every warp the router makes (entry park, mid-visit park, return); SetCursorPos stays outside the lock.
     internal void SetWarpState(int x, int y)
     {
-        lock (_warpLock) { _warpTargetX = x; _warpTargetY = y; _lastWarpX = x; _lastWarpY = y; }
+        var to = new ScreenPoint(x, y);
+        lock (_warpLock)
+        {
+            if (to != _warpTarget) MarkRetargetLocked(_warpTarget);
+            _warpTarget = _lastWarp = to;
+        }
     }
 
-    // Reads the delta/self-echo reference as one consistent pair — used for both the synthetic-
-    // echo compare and, when not stale, the delta calculation, so one call covers both reads.
-    internal (int X, int Y) GetLastWarp()
+    // every point the cursor left since the last handled sample: an in-flight sample or echo may come from any of them
+    private void MarkRetargetLocked(ScreenPoint from)
     {
-        lock (_warpLock) return (_lastWarpX, _lastWarpY);
+        if (!_retargetedFrom.Contains(from)) _retargetedFrom.Add(from);
+        _echoes = 0;
     }
 
-    // Hook thread's per-sample recentre: advances the delta reference to the current warp target
-    // and returns that target to warp to, atomically — so a concurrent WarpCursor from the router
-    // can never be observed as a mix of the old target's X and the new target's Y (or vice versa).
-    internal (int X, int Y) RecentreToTarget()
+    internal ScreenPoint GetLastWarp()
     {
-        lock (_warpLock) { _lastWarpX = _warpTargetX; _lastWarpY = _warpTargetY; return (_warpTargetX, _warpTargetY); }
+        lock (_warpLock) return _lastWarp;
+    }
+
+    // the hook's per-sample recentre: the delta reference becomes the target it returns
+    internal ScreenPoint RecentreToTarget()
+    {
+        lock (_warpLock) return _lastWarp = _warpTarget;
     }
 
     // Warps to the target until it holds still across the warp. A router exit that retargets while
     // our SetCursorPos is in flight can land before it, and our stale park point would then leave
     // the cursor mid-screen; re-reading after each warp means ours is never the last stale one.
-    internal void RecentreCursor(Action<int, int> setCursorPos)
+    internal ScreenPoint RecentreCursor(Action<int, int> setCursorPos)
     {
         var target = RecentreToTarget();
         while (true)
         {
             setCursorPos(target.X, target.Y);
             var now = RecentreToTarget();
-            if (now == target) return;
+            if (now == target) return target;
             target = now;
         }
     }
 
-    // Stale-reference resync (screen entry, or first sample after a fast bounce): sets only the
-    // delta reference to a freshly measured position — never the warp target, which is whatever
-    // WarpCursor already set it to for this visit.
-    internal void ResyncLastWarp(int x, int y)
+    // Windows fixes a sample's position before the hook runs, so the first one handled after the cursor is retargeted
+    // (a warp, or entering a visit) may have been computed from where it was. It is re-based onto the target, once:
+    // in a visit its delta is dropped, on the local screen its position. Up to two events at exactly a point it left
+    // are late echoes of our own warps, swallowed without using up the re-base. With no retarget (an unlock or a
+    // stop never warps; a snap-back to the park point is no change) samples are genuine.
+    internal Straddle TakeStraddle(int x, int y)
     {
-        lock (_warpLock) { _lastWarpX = x; _lastWarpY = y; }
+        lock (_warpLock)
+        {
+            if (_retargetedFrom.Count == 0) return Straddle.None;
+            if (_retargetedFrom.Contains(new ScreenPoint(x, y)) && _echoes < MaxEchoes)
+            {
+                _echoes++;
+                return Straddle.Echo;
+            }
+            _retargetedFrom.Clear();
+            return Straddle.Rebase;
+        }
     }
 
-    public (int X, int Y)? GetCursorPosition()
+    // An event at the park point stamped no later than the flip is an echo of a warp made while virtual, whatever
+    // order Windows delivers echoes in. The first move stamped after the flip ends the guard.
+    private bool IsPreFlipParkEcho(int x, int y, uint time)
     {
-        if (!NativeMethods.GetCursorPos(out var p)) return null;
-        return (p.x, p.y);
+        lock (_warpLock)
+        {
+            if (_echoGuard is not { } park) return false;
+            if (unchecked((int)(time - (uint)_echoGuardTick)) > 0)
+            {
+                _echoGuard = null;
+                return false;
+            }
+            return x == park.X && y == park.Y;
+        }
     }
+
+    private void Rebase(Action<int, int> setCursorPos)
+    {
+        var settled = RecentreCursor(setCursorPos);
+        // the router wants a position only on the local screen
+        if (!IsOnVirtualScreen) _onMouseMove?.Invoke(settled.X, settled.Y);
+        if (log.IsEnabled(LogLevel.Debug))
+            log.LogDebug("Re-based a mouse move computed before the warp onto ({X}, {Y})", settled.X, settled.Y);
+    }
+
+    public ScreenPoint? GetCursorPosition() => WindowsDisplayHelper.CursorPosition();
 
     public ValueTask HideCursor()
     {
@@ -187,10 +234,9 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
         _hookThread = new Thread(() =>
         {
             _hookThreadId = NativeMethods.GetCurrentThreadId();
-            // pass null for hMod — LL hooks don't need a module handle (matches all reference KVM projects)
-            _mouseHook = NativeMethods.SetWindowsHookExW(NativeMethods.WH_MOUSE_LL, _mouseHookProc, nint.Zero, 0);
-            _keyboardHook = NativeMethods.SetWindowsHookExW(NativeMethods.WH_KEYBOARD_LL, _keyboardHookProc, nint.Zero, 0);
-
+            _lastMouseCallbackTick = _lastKeyboardCallbackTick = TickCount();
+            _mouseHook = InstallHook(NativeMethods.WH_MOUSE_LL, _mouseHookProc);
+            _keyboardHook = InstallHook(NativeMethods.WH_KEYBOARD_LL, _keyboardHookProc);
             if (_mouseHook == nint.Zero || _keyboardHook == nint.Zero)
             {
                 log.LogError("SetWindowsHookEx failed -- could not install input hooks");
@@ -198,8 +244,7 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
                 return;
             }
 
-            _currentDesktop = NativeMethods.GetThreadDesktop(_hookThreadId);
-            WarnIfNotOnInputDesktop();
+            WarnIfNotOnInputDesktop(NativeMethods.GetThreadDesktop(_hookThreadId));
             _shield.Create(profile.DebugShield);
             ready.TrySetResult(true);
 
@@ -208,7 +253,7 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
             {
                 if (msg.message == WmCheckHealth)
                 {
-                    CheckHookHealth();
+                    ReinstallHooksIfIdle();
                     continue;
                 }
                 if (msg.message == WmShieldShow)
@@ -226,15 +271,14 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
             }
 
             _shield.Destroy();
-            if (_mouseHook != nint.Zero) NativeMethods.UnhookWindowsHookEx(_mouseHook);
-            if (_keyboardHook != nint.Zero) NativeMethods.UnhookWindowsHookEx(_keyboardHook);
+            UninstallHook(ref _mouseHook);
+            UninstallHook(ref _keyboardHook);
         })
         { IsBackground = true, Name = "HydraHookPump" };
 
         _hookThread.Start();
         await ready.Task;
 
-        // periodic hook health check — detects desktop changes (UAC, lock screen) that silently invalidate hooks
         _healthTimer = new Timer(_ =>
             NativeMethods.PostThreadMessage(_hookThreadId, WmCheckHealth, nint.Zero, nint.Zero),
             null, 200, 200);
@@ -268,9 +312,9 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
     // outside the interactive session -- Task Scheduler, a service without CreateProcessAsUser, a
     // sandboxed launcher -- Hydra therefore logs screens, relay and peers exactly as usual and simply
     // receives no input, because the cursor is moving on a desktop our hooks do not cover.
-    private void WarnIfNotOnInputDesktop()
+    private void WarnIfNotOnInputDesktop(nint ourDesktop)
     {
-        var ours = WindowsDesktop.Name(_currentDesktop);
+        var ours = WindowsDesktop.Name(ourDesktop);
         var input = WindowsDesktop.InputDesktopName();
         if (ours.Length == 0 || input.Length == 0 || ours.EqualsIgnoreCase(input)) return;
 
@@ -281,33 +325,55 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
             ours, input);
     }
 
-    // called on the hook thread — checks if the desktop has changed and reinstalls hooks if needed
-    private void CheckHookHealth()
+    // hook thread; pass null for hMod — LL hooks don't need a module handle (matches all reference KVM projects)
+    private static nint InstallHook(int idHook, HookProc proc) => NativeMethods.SetWindowsHookExW(idHook, proc, nint.Zero, 0);
+
+    private static void UninstallHook(ref nint hook)
     {
-        var desk = NativeMethods.GetThreadDesktop(_hookThreadId);
-        if (desk == _currentDesktop) return;
-        _currentDesktop = desk;
+        if (hook != nint.Zero) NativeMethods.UnhookWindowsHookEx(hook);
+        hook = nint.Zero;
+    }
 
-        log.LogInformation("Desktop change detected, reinstalling hooks");
-        if (_mouseHook != nint.Zero) { NativeMethods.UnhookWindowsHookEx(_mouseHook); _mouseHook = nint.Zero; }
-        if (_keyboardHook != nint.Zero) { NativeMethods.UnhookWindowsHookEx(_keyboardHook); _keyboardHook = nint.Zero; }
-        _mouseHook = NativeMethods.SetWindowsHookExW(NativeMethods.WH_MOUSE_LL, _mouseHookProc!, nint.Zero, 0);
-        _keyboardHook = NativeMethods.SetWindowsHookExW(NativeMethods.WH_KEYBOARD_LL, _keyboardHookProc!, nint.Zero, 0);
-        if (_mouseHook == nint.Zero || _keyboardHook == nint.Zero)
-            log.LogWarning("Hook reinstall failed after desktop change");
+    // hook thread, see HookIdleMs
+    private void ReinstallHooksIfIdle()
+    {
+        var quiet = TakeQuietHooks();
+        if (quiet.HasFlag(Hooks.Mouse)) Reinstall(ref _mouseHook, NativeMethods.WH_MOUSE_LL, _mouseHookProc!);
+        if (quiet.HasFlag(Hooks.Keyboard)) Reinstall(ref _keyboardHook, NativeMethods.WH_KEYBOARD_LL, _keyboardHookProc!);
+    }
 
-        // emit key-up events for any held keys so the slave doesn't get stuck
-        foreach (var keyUp in _keyResolver.TakeHeldKeyUps())
-            _onKeyEvent?.Invoke(keyUp);
+    // the new hook goes in before the old comes out, so no input slips past both
+    private void Reinstall(ref nint hook, int idHook, HookProc proc)
+    {
+        var fresh = InstallHook(idHook, proc);
+        if (fresh == nint.Zero)
+        {
+            log.LogWarning("Reinstalling the input hook {Hook} failed", idHook);
+            return;
+        }
+        UninstallHook(ref hook);
+        hook = fresh;
+    }
 
-        // clear stale key state — modifier bits from the old desktop bleed into new events otherwise
-        _keyResolver.Reset();
-
-        // recreate shield on new desktop; re-show if we were on a virtual screen
-        _shield.Destroy();
-        _shield.Create(profile.DebugShield);
-        if (IsOnVirtualScreen)
-            _shield.Show();
+    // Which hooks have been quiet for HookIdleMs, counting the reinstall answered here as a callback. During a visit
+    // a mouse hook that was gone let the cursor drift off the park point, so its next sample is a retarget.
+    internal Hooks TakeQuietHooks()
+    {
+        var now = TickCount();
+        var quiet = Hooks.None;
+        if (unchecked(now - _lastMouseCallbackTick) >= HookIdleMs)
+        {
+            _lastMouseCallbackTick = now;
+            quiet |= Hooks.Mouse;
+            lock (_warpLock)
+                if (_isOnVirtualScreen) MarkRetargetLocked(_warpTarget);
+        }
+        if (unchecked(now - _lastKeyboardCallbackTick) >= HookIdleMs)
+        {
+            _lastKeyboardCallbackTick = now;
+            quiet |= Hooks.Keyboard;
+        }
+        return quiet;
     }
 
     // The router can cross screens while the hook is handling a move, and a move passed through lands at
@@ -328,57 +394,39 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
     // returns whether to swallow the sample
     internal bool HandleMouse(int msg, MSLLHOOKSTRUCT info, Action<int, int> setCursorPos)
     {
+        _lastMouseCallbackTick = TickCount();
         if (msg == NativeMethods.WM_MOUSEMOVE)
         {
-            // The router flips IsOnVirtualScreen true BEFORE the warp that is meant to prime the
-            // delta reference actually runs (ApplyEnterScreen/AnchorAtWarpPoint sit in between,
-            // on the OTHER thread) — a real sample landing in that gap would otherwise measure
-            // against wherever the cursor was before the transition, an arbitrary and often huge
-            // delta that lands the remote cursor in a random corner on entry. The IsOnVirtualScreen
-            // setter above marks _deltaReferenceIsStale the instant that flip actually happens, on
-            // the router's own thread — not inferred here by comparing against what this thread
-            // last happened to see, which a fast enough bounce (enter, immediately kicked back
-            // out, re-enter) could complete without this thread ever observing the "local" step in
-            // between.
             var onVirtualScreen = IsOnVirtualScreen;
-            // One atomic read serves both the echo-check below and, when not stale, the delta
-            // calculation further down — _warpLock guarantees this pair was written together
-            // by whichever of SetWarpState/RecentreToTarget/ResyncLastWarp wrote it last, never
-            // a mix of an old and a new write straddling this read.
-            var (lastWarpX, lastWarpY) = GetLastWarp();
+            var lastWarp = GetLastWarp();
 
-            // ignore synthetic events generated by our own WarpCursor call
-            if (info.pt.x == lastWarpX && info.pt.y == lastWarpY)
+            // ignore the echo of our own last warp or recentre
+            if (info.pt.x == lastWarp.X && info.pt.y == lastWarp.Y)
                 return SwallowsMove(onVirtualScreen);
 
             if (onVirtualScreen)
             {
-                // Relative delta from consecutive readings on this one thread, immune to the
-                // "keep only the latest sample" coalescing an absolute position feeds into
-                // upstream — that silently drops whatever the cursor did between the sample
-                // being handled and a warp actually landing. _lastWarpX/Y double as the delta
-                // reference: WarpCursor sets them to the warp target, so the first real sample
-                // after a warp measures from there, not from wherever the cursor was before it.
-                // _deltaReferenceIsStale skips exactly the one sample that would otherwise
-                // measure across a transition: resync without reporting movement, rather than
-                // report garbage.
-                if (_deltaReferenceIsStale)
+                // The delta is measured on this thread from where the last recentre or warp put the cursor, immune to
+                // the coalescing an absolute position goes through upstream. A sample straddling a retarget measures
+                // nothing real, so it reports nothing.
+                switch (TakeStraddle(info.pt.x, info.pt.y))
                 {
-                    ResyncLastWarp(info.pt.x, info.pt.y);
-                    _deltaReferenceIsStale = false;
-                }
-                else
-                {
-                    var dx = info.pt.x - lastWarpX;
-                    var dy = info.pt.y - lastWarpY;
-                    _onMouseDelta?.Invoke(dx, dy);
-
-                    // recentre per raw sample, see RecentresItself
-                    RecentreCursor(setCursorPos);
+                    case Straddle.None:
+                        _onMouseDelta?.Invoke(info.pt.x - lastWarp.X, info.pt.y - lastWarp.Y);
+                        // recentre per raw sample, see RecentresItself
+                        RecentreCursor(setCursorPos);
+                        break;
+                    case Straddle.Rebase:
+                        Rebase(setCursorPos);
+                        break;
                 }
             }
             else
             {
+                if (IsPreFlipParkEcho(info.pt.x, info.pt.y, info.time)) return true;
+                var straddle = TakeStraddle(info.pt.x, info.pt.y);
+                if (straddle == Straddle.Rebase) Rebase(setCursorPos);
+                if (straddle != Straddle.None) return true;
                 _onMouseMove?.Invoke(info.pt.x, info.pt.y);
             }
             return SwallowsMove(onVirtualScreen);
@@ -419,6 +467,7 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
     // returns whether to swallow the key
     internal bool HandleKey(int msg, KBDLLHOOKSTRUCT info)
     {
+        _lastKeyboardCallbackTick = TickCount();
         // always resolve to track modifier state even on the real screen
         var keyEvents = _keyResolver.Resolve(msg, info);
         if (keyEvents is not null)
@@ -426,4 +475,9 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
                 _onKeyEvent?.Invoke(keyEvent);
         return IsOnVirtualScreen;
     }
+
+    internal enum Straddle { None, Echo, Rebase }
+
+    [Flags]
+    internal enum Hooks { None = 0, Mouse = 1, Keyboard = 2 }
 }

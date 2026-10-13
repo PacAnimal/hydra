@@ -43,6 +43,11 @@ public class ScreenLayout(List<ScreenRect> screens, List<HostConfig> configs, in
                     ? destScreens
                     : [.. destScreens.Where(s => MatchesId(s, neighbour.DestScreen))];
 
+                // likewise land on a screen on the physical outer edge we arrive through, so a mirrored link
+                // returns to the screen its forward link leaves from, not whichever one enumerated first
+                if (neighbour.DestScreen is null && filteredDests.Count > 1)
+                    filteredDests = FilterToEdgeScreens(filteredDests, neighbour.Direction.Opposite());
+
                 if (neighbour.SourceScreen != null && filteredSources.Count > 1)
                 {
                     log.LogWarning("Neighbour sourceScreen '{Id}' matches multiple screens ({Names}) — ignoring neighbour",
@@ -164,7 +169,7 @@ public class ScreenLayout(List<ScreenRect> screens, List<HostConfig> configs, in
     }
 
     // maps cursor position from source edge range to dest entry coords with nudge
-    private static EntryPoint MapEntry(
+    private static ScreenPoint MapEntry(
         ScreenRect to, Direction dir, int perpPos, int srcEdgeLen, EdgeLink link)
     {
         int destEdgeLen = dir is Direction.Left or Direction.Right ? to.Height : to.Width;
@@ -210,8 +215,6 @@ public class ScreenLayout(List<ScreenRect> screens, List<HostConfig> configs, in
         }
         return result;
     }
-
-    private record EntryPoint(int X, int Y);
 
     // one entry per edge segment connection
     private record EdgeLink(

@@ -61,3 +61,6 @@ public record ScreenRect(
 }
 
 public record EdgeHit(ScreenRect Destination, Direction Direction, int EntryX, int EntryY);
+
+// a pixel position, global or screen-local as its owner says
+public readonly record struct ScreenPoint(int X, int Y);

@@ -371,33 +371,6 @@ internal sealed class WinKeyResolver
     private static char ShortcutChar(int vk, char rawChar, KeyModifiers mods) =>
         (mods & (KeyModifiers.Control | KeyModifiers.Super)) != 0 && rawChar > 0x7F ? MapShortcutAscii(vk, rawChar) : rawChar;
 
-    // yields key-up events for every currently held key; called before Reset() on desktop change
-    // so the slave can release keys that were physically held when the desktop switched.
-    internal IEnumerable<KeyEvent> TakeHeldKeyUps()
-    {
-        var mods = GetModifiers();
-        foreach (var (_, classification) in _keyDownId)
-        {
-            if (classification.Ch.HasValue)
-                yield return KeyEvent.Char(KeyEventType.KeyUp, classification.Ch.Value, mods);
-            else if (classification.Key.HasValue)
-                yield return KeyEvent.Special(KeyEventType.KeyUp, classification.Key.Value, mods);
-            // sentinel (null, null) = dead key placeholder → no event needed
-        }
-    }
-
-    // resets all resolver state; called on desktop change to prevent phantom modifier bleed
-    internal void Reset()
-    {
-        Array.Clear(_keyState, 0, _keyState.Length);
-        _keyDownId.Clear();
-        _pendingDeadKey = '\0';
-        _pendingDeadSpacing = '\0';
-        _pendingDeadKeyVk = 0;
-        _deferredLCtrl = null;
-        _injectedLCtrlPending = false;
-    }
-
     // flush the deferred LCtrl as a real Ctrl key-down event
     private KeyEvent? FlushDeferredLCtrl()
     {
