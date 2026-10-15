@@ -1,6 +1,7 @@
 using System.Text;
 using System.Net.Sockets;
 using Cathedral.Extensions;
+using Cathedral.Utils;
 using Hydra.Config;
 using Hydra.Management;
 using Hydra.Platform;
@@ -1447,7 +1448,7 @@ internal static class HydraTui
             output.AppendLine().AppendLine("Peers");
             foreach (var peer in s.Peers)
             {
-                output.AppendLine($"  {(peer.Connected ? "●" : "○")} {peer.Name}  [{peer.Platform}]  {peer.Screens.Count} screen(s)");
+                output.AppendLine($"  {(peer.Connected ? "●" : "○")} {peer.Name}  [{peer.Platform}]  {peer.Screens.Count} {Pluralize.Of(peer.Screens.Count, "screen")}");
                 foreach (var screen in peer.Screens)
                     output.AppendLine($"      {screen.Name,-24} {screen.Width,5}×{screen.Height,-5} scale {screen.MouseScale}");
             }

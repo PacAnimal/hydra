@@ -40,10 +40,11 @@ public sealed class TestableSlaveRelay : SlaveRelayConnection
         FakeScreenDetector? screens = null,
         IFileSelectionDetector? selectionDetector = null,
         IOsdNotification? osd = null,
-        FileTransferService? fileTransfer = null)
+        FileTransferService? fileTransfer = null,
+        ILogger<RelayConnection>? log = null)
         : this(MakeShared(worldState, screenSaverSync, trackerClock), clipboard, cursorHider, screenSaverSync,
             dormancy ?? new DormancyState(NullLogger<DormancyState>.Instance), screens ?? new FakeScreenDetector(), new NullPlatformOutput(),
-            selectionDetector ?? new NullFileSelectionDetector(), osd ?? new NullOsdNotification(), fileTransfer: fileTransfer)
+            selectionDetector ?? new NullFileSelectionDetector(), osd ?? new NullOsdNotification(), fileTransfer: fileTransfer, log: log)
     { }
 
     // ActivityTracker and SlaveRelayConnection must share the same WorldState — chaining lets us build it once

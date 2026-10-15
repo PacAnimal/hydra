@@ -5,6 +5,9 @@ namespace Hydra.Management;
 internal sealed class ManagementLogBuffer : ILoggerProvider
 {
     internal const int Capacity = 2000;
+
+    /// <summary>Marks a message naming the user's files, which this log never shows, however it is worded.</summary>
+    internal static readonly EventId FilePaths = new(7001, nameof(FilePaths));
     private readonly Lock _lock = new();
     private readonly Queue<ManagementLogEntry> _entries = new(Capacity);
     private long _cursor;
@@ -19,11 +22,13 @@ internal sealed class ManagementLogBuffer : ILoggerProvider
             return new ManagementLogPage(_cursor, _dropped, [.. _entries.Where(e => e.Cursor > afterCursor)]);
     }
 
-    private void Add(LogLevel level, string category, string message)
+    private void Add(LogLevel level, string category, EventId eventId, string message)
     {
         if (category.Contains("FileTransfer", StringComparison.OrdinalIgnoreCase)
             || category.Contains("Clipboard", StringComparison.OrdinalIgnoreCase)
-            || message.Contains("file(s) selected", StringComparison.OrdinalIgnoreCase))
+            || eventId == FilePaths
+            // a slave keeps marked messages to itself, but one from before the marker forwards them, always worded so
+            || (category.StartsWith("slave:", StringComparison.Ordinal) && message.Contains("file(s) selected", StringComparison.OrdinalIgnoreCase)))
             return;
 
         lock (_lock)
@@ -48,7 +53,7 @@ internal sealed class ManagementLogBuffer : ILoggerProvider
             if (!IsEnabled(logLevel)) return;
             var message = formatter(state, exception);
             if (exception != null) message = $"{message}: {exception.GetType().Name}: {exception.Message}";
-            owner.Add(logLevel, category, message);
+            owner.Add(logLevel, category, eventId, message);
         }
     }
 }

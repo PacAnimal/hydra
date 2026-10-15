@@ -23,8 +23,8 @@ public sealed class CapturingLog<T>(LogLevel minimum = LogLevel.Trace) : ILogger
     public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
     {
         if (!IsEnabled(logLevel)) return;
-        lock (_entries) _entries.Add(new CapturedEntry(logLevel, formatter(state, exception)));
+        lock (_entries) _entries.Add(new CapturedEntry(logLevel, formatter(state, exception), eventId));
     }
 }
 
-public sealed record CapturedEntry(LogLevel Level, string Message);
+public sealed record CapturedEntry(LogLevel Level, string Message, EventId EventId);

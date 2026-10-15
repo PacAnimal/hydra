@@ -1,9 +1,11 @@
 using Hydra.Config;
 using Hydra.FileTransfer;
 using Hydra.Keyboard;
+using Hydra.Management;
 using Hydra.Platform;
 using Hydra.Relay;
 using Hydra.Screen;
+using Microsoft.Extensions.Logging;
 using Tests.Setup;
 
 namespace Tests.Screen;
@@ -40,6 +42,27 @@ public class CopyFilesHotkeyTests
         }
 
         Assert.That(await osd.Shown.Next((int)Timeout.TotalMilliseconds, "the copy OSD"), Is.EqualTo("2 items copied"));
+    }
+
+    [Test]
+    public async Task TheLocalSelectionsPaths_AreLoggedMarkedAsFilePaths()
+    {
+        var finder = new GatedFileSelectionDetector();
+        var osd = new RecordingOsd();
+        var log = new CapturingLog<InputRouter>(LogLevel.Information);
+        var (platform, relay, _) = await _services.Start(TransitionTestHelper.CreateService(selectionDetector: finder, osd: osd, log: log));
+        await TransitionTestHelper.BringRemoteOnline(relay);
+        await Press(platform, 'c');
+        await finder.Queried.WaitAsync(Timeout);
+        finder.Release(new FileSelectionResult(true, ["/Users/me/a.txt"]));
+        await osd.Shown.Next((int)Timeout.TotalMilliseconds, "the copy OSD");
+
+        var entry = log.Entries.Single(e => e.Message.Contains("/Users/me/a.txt"));
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(entry.EventId, Is.EqualTo(ManagementLogBuffer.FilePaths), "the management log drops it by this, not by its wording");
+            Assert.That(entry.Message, Is.EqualTo("Copy hotkey: 1 file selected locally: /Users/me/a.txt"));
+        }
     }
 
     [Test]

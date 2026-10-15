@@ -1,3 +1,4 @@
+using Cathedral.Utils;
 using Hydra.Keyboard;
 using Hydra.Mouse;
 using Microsoft.Extensions.Logging;
@@ -83,8 +84,10 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
             throw new InvalidOperationException("No input devices found in /dev/input/. Check permissions (user may need to be in 'input' group).");
 
         if (log.IsEnabled(LogLevel.Information))
-            log.LogInformation("Found {K} keyboard(s), {M} mouse/pointer device(s)",
-                _devices.Count(d => d.Keyboard), _devices.Count(d => d.Pointer));
+        {
+            var (keyboards, pointers) = (_devices.Count(d => d.Keyboard), _devices.Count(d => d.Pointer));
+            log.LogInformation("Found {K} {Keyboards}, {M} mouse/pointer {Devices}", keyboards, Pluralize.Of(keyboards, "keyboard"), pointers, Pluralize.Of(pointers, "device"));
+        }
 
         _running = true;
         _thread = new Thread(EventLoop) { Name = "HydraEvdevEventLoop", IsBackground = true };
@@ -109,7 +112,7 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
         if (_grabbed) SetGrab(false);
         foreach (var device in _devices)
             _ = EvdevNativeMethods.Close(device.Fd);
-        if (log.IsEnabled(LogLevel.Debug)) log.LogDebug("Released {Count} input device(s)", _devices.Count);
+        if (log.IsEnabled(LogLevel.Debug)) log.LogDebug("Released {Count} input {Devices}", _devices.Count, Pluralize.Of(_devices.Count, "device"));
         _devices.Clear();
         _grabbed = false;
     }

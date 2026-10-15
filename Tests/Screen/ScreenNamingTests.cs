@@ -92,7 +92,7 @@ public class ScreenNamingTests
             Assert.That(sent.Where(s => s.Kind is MessageKind.MouseMove or MessageKind.MouseMoveDelta).SelectMany(s => s.Targets), Is.Not.Empty.And.All.EqualTo("remote2"),
                 "the cursor stays on remote2");
             Assert.That(sent.Any(s => s.Kind is MessageKind.EnterScreen or MessageKind.LeaveScreen), Is.False, "no host change");
-            Assert.That(log.Messages, Is.EqualTo(["remote sent screen(s) remote2, which are not its own or repeat one it already sent; ignored"]));
+            Assert.That(log.Messages, Is.EqualTo(["remote sent screen remote2, which are not its own or repeat one it already sent; ignored"]));
         }
     }
 

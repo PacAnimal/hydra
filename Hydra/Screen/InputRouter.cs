@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Threading.Channels;
 using Cathedral.Extensions;
+using Cathedral.Utils;
 using Hydra.Config;
 using Hydra.FileTransfer;
 using Hydra.Keyboard;
@@ -502,8 +503,8 @@ public class InputRouter(
                 var info = body.ParseMessage<ScreenInfoMessage>(log, $"ScreenInfo from {sourceHost}");
                 var owned = ScreenNaming.OwnedBy(sourceHost, info?.Screens ?? []);
                 if (owned.Refused.Count > 0 && log.IsEnabled(LogLevel.Warning))
-                    log.LogWarning("{Host} sent screen(s) {Names}, which are not its own or repeat one it already sent; ignored",
-                        sourceHost, string.Join(", ", owned.Refused));
+                    log.LogWarning("{Host} sent {Screens} {Names}, which are not its own or repeat one it already sent; ignored",
+                        sourceHost, Pluralize.Of(owned.Refused.Count, "screen"), string.Join(", ", owned.Refused));
                 if (info != null && owned.Kept.Count > 0)
                 {
                     await _peerState.SetPeerScreens(sourceHost, owned.Kept);
@@ -526,7 +527,7 @@ public class InputRouter(
                         await TryEnterRemoteOnly(st);
                     });
                     if (log.IsEnabled(LogLevel.Information))
-                        log.LogInformation("Screen info from {Host}: {Count} screen(s)", sourceHost, owned.Kept.Count);
+                        log.LogInformation("Screen info from {Host}: {Count} {Screens}", sourceHost, owned.Kept.Count, Pluralize.Of(owned.Kept.Count, "screen"));
                 }
                 break;
             case MessageKind.SlaveLog:
@@ -726,10 +727,10 @@ public class InputRouter(
         else if (result.Paths != null)
         {
             if (log.IsEnabled(LogLevel.Information))
-                log.LogInformation("Copy hotkey: {Count} file(s) selected locally: {Paths}", result.Paths.Count, string.Join(", ", result.Paths));
+                log.LogInformation(ManagementLogBuffer.FilePaths, "Copy hotkey: {Count} {Files} selected locally: {Paths}",
+                    result.Paths.Count, Pluralize.Of(result.Paths.Count, "file"), string.Join(", ", result.Paths));
             _fileTransfer.SetCopyBuffer(profile.Name, result.Paths);
-            var n = result.Paths.Count;
-            ShowOsd(st, $"{n} {(n == 1 ? "item" : "items")} copied");
+            ShowOsd(st, FileTransferService.CopiedMessage(result.Paths.Count));
         }
         else
         {
@@ -1008,8 +1009,8 @@ public class InputRouter(
                         else
                         {
                             if (log.IsEnabled(LogLevel.Information))
-                                log.LogInformation("Paste hotkey: {Count} file(s) from {Source} → {Target}",
-                                    copyBuffer.Paths.Length, copyBuffer.SourceHost, targetHost);
+                                log.LogInformation("Paste hotkey: {Count} {Files} from {Source} → {Target}",
+                                    copyBuffer.Paths.Length, Pluralize.Of(copyBuffer.Paths.Length, "file"), copyBuffer.SourceHost, targetHost);
                             if (!_fileTransfer.InitiatePaste(copyBuffer, targetHost, profile.Name, relay))
                                 SendOsd(targetHost, "Invalid paste target");
                         }
@@ -1611,7 +1612,7 @@ public class InputRouter(
     private void LogDetectedScreens(List<ScreenRect> detected)
     {
         if (!log.IsEnabled(LogLevel.Information)) return;
-        log.LogInformation("Detected {Count} local screen(s):", detected.Count);
+        log.LogInformation("Detected {Count} local {Screens}:", detected.Count, Pluralize.Of(detected.Count, "screen"));
         for (var i = 0; i < detected.Count; i++)
             if (detected[i].Identity != null)
                 log.LogInformation("  Screen {I}: {Json}", i, JsonSerializer.Serialize(detected[i].Identity, ScreenDetector.JsonOptions));

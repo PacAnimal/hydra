@@ -3,6 +3,7 @@ using Cathedral.Utils;
 using Hydra.Config;
 using Hydra.FileTransfer;
 using Hydra.Keyboard;
+using Hydra.Management;
 using Hydra.Mouse;
 using Hydra.Platform;
 using Hydra.Screen;
@@ -84,7 +85,7 @@ public class SlaveRelayConnection : RelayConnection
             if (_dormancy.IsDormant)
             {
                 if (_log.IsEnabled(LogLevel.Debug))
-                    _log.LogDebug("Dormant: ignoring screen change to {Count} screen(s)", snapshot.Screens.Count);
+                    _log.LogDebug("Dormant: ignoring screen change to {Count} {Screens}", snapshot.Screens.Count, Pluralize.Of(snapshot.Screens.Count, "screen"));
                 return;
             }
             _cachedScreens = snapshot;
@@ -560,8 +561,8 @@ public class SlaveRelayConnection : RelayConnection
             else if (!result.FileManagerFocused)
                 _log.LogInformation("File selection query from {Host}: {Name} is not focused", sourceHost, _selectionDetector.FileManagerName);
             else if (result.Paths != null)
-                _log.LogInformation("File selection query from {Host}: {Count} file(s) selected: {Paths}",
-                    sourceHost, result.Paths.Count, string.Join(", ", result.Paths));
+                _log.LogInformation(ManagementLogBuffer.FilePaths, "File selection query from {Host}: {Count} {Files} selected: {Paths}",
+                    sourceHost, result.Paths.Count, Pluralize.Of(result.Paths.Count, "file"), string.Join(", ", result.Paths));
             else
                 _log.LogInformation("File selection query from {Host}: no files selected", sourceHost);
         }
@@ -625,7 +626,7 @@ public class SlaveRelayConnection : RelayConnection
     private void SendScreenInfo(string masterHost, List<ScreenInfoEntry> entries)
     {
         if (_log.IsEnabled(LogLevel.Information))
-            _log.LogInformation("Sending screen info to {Master}: {Count} screen(s)", masterHost, entries.Count);
+            _log.LogInformation("Sending screen info to {Master}: {Count} {Screens}", masterHost, entries.Count, Pluralize.Of(entries.Count, "screen"));
         var platform = DetectLocalPlatform();
         // What this build can do. A master that hears nothing assumes nothing, which is what makes a
         // capability safe to add to one end first — see PeerCapabilities.

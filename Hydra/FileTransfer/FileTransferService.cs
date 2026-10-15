@@ -1,5 +1,6 @@
 using ByteSizeLib;
 using Cathedral.Extensions;
+using Cathedral.Utils;
 using Hydra.Relay;
 using Microsoft.Extensions.Logging;
 
@@ -65,8 +66,11 @@ public sealed class FileTransferService : IDisposable
     {
         lock (_lock) _copyBuffer = new FileCopyState(sourceHost, [.. paths]);
         if (_log.IsEnabled(LogLevel.Information))
-            _log.LogInformation("Copy buffer set: {Count} item(s) from {Host}", paths.Count, sourceHost);
+            _log.LogInformation("Copy buffer set: {Count} {Items} from {Host}", paths.Count, Pluralize.Of(paths.Count, "item"), sourceHost);
     }
+
+    // the OSD text for a copy of count items
+    internal static string CopiedMessage(int count) => $"{count} {Pluralize.Of(count, "item")} copied";
 
     // called when a FileSelectionResponse arrives for a remote copy; returns the OSD text to display
     public string HandleSelectionResponse(string sourceHost, FileSelectionResponseMessage msg)
@@ -77,9 +81,8 @@ public sealed class FileTransferService : IDisposable
         {
             lock (_lock) _copyBuffer = new FileCopyState(sourceHost, msg.Paths);
             if (_log.IsEnabled(LogLevel.Information))
-                _log.LogInformation("Copy buffer set from {Host}: {Count} item(s)", sourceHost, msg.Paths.Length);
-            var n = msg.Paths.Length;
-            return $"{n} {(n == 1 ? "item" : "items")} copied";
+                _log.LogInformation("Copy buffer set from {Host}: {Count} {Items}", sourceHost, msg.Paths.Length, Pluralize.Of(msg.Paths.Length, "item"));
+            return CopiedMessage(msg.Paths.Length);
         }
         // the latest copy wins even when empty, as a local one does
         ClearCopyBuffer();
@@ -424,7 +427,7 @@ public sealed class FileTransferService : IDisposable
         receiver.TotalBytes = msg.TotalBytes;
         _dialog.ShowTransferring(receiver.ToTransferInfo());
         if (_log.IsEnabled(LogLevel.Information))
-            _log.LogInformation("Transfer start from {Host}: {Count} file(s), {Total} bytes", sourceHost, msg.FileNames.Length, msg.TotalBytes);
+            _log.LogInformation("Transfer start from {Host}: {Count} {Files}, {Total} bytes", sourceHost, msg.FileNames.Length, Pluralize.Of(msg.FileNames.Length, "file"), msg.TotalBytes);
     }
 
     private async Task HandleFileTransferChunkAsync(string sourceHost, ReadOnlyMemory<byte> body)

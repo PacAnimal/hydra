@@ -1,4 +1,5 @@
 using Hydra.FileTransfer;
+using Hydra.Management;
 using Hydra.Relay;
 using Tests.Setup;
 
@@ -40,6 +41,27 @@ public class SlaveFileSelectionTests
         {
             Assert.That(targets, Is.EqualTo(["master-pc"]));
             Assert.That(json, Does.Contain("report.pdf"));
+        }
+    }
+
+    [Test]
+    public async Task TheSelectionsPaths_AreLoggedMarkedAsFilePaths()
+    {
+        var finder = new GatedFileSelectionDetector();
+        var log = new CapturingLog<RelayConnection>();
+        var relay = new TestableSlaveRelay(selectionDetector: finder, log: log);
+        await relay.SimulateConnected();
+        await relay.SimulateMasterConfig("master-pc");
+
+        await relay.SimulateReceive("master-pc", MessageKind.FileSelectionQuery, "{}").WaitAsync(Timeout);
+        finder.Release(new FileSelectionResult(true, ["/Users/me/a.pdf", "/Users/me/b.pdf"]));
+        await relay.WaitForSent(MessageKind.FileSelectionResponse, Timeout);
+
+        var entry = log.Entries.Single(e => e.Message.Contains("/Users/me/a.pdf"));
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(entry.EventId, Is.EqualTo(ManagementLogBuffer.FilePaths), "the management log drops it by this, not by its wording");
+            Assert.That(entry.Message, Is.EqualTo("File selection query from master-pc: 2 files selected: /Users/me/a.pdf, /Users/me/b.pdf"));
         }
     }
 
