@@ -1,8 +1,9 @@
 name: Build Hydra
 
+# main publishes releases; edge publishes prereleases, which only machines set to "updateChannel": "edge" install
 on:
   push:
-    branches: [main]
+    branches: [main, edge]
     paths-ignore:
       - '**.md'
   pull_request:
@@ -34,7 +35,7 @@ jobs:
             latest=$(gh release list --limit 20 --json tagName --jq "[.[].tagName | select(startswith(\"v$SERIES.\"))][0] // empty")
           fi
           if [ -n "$latest" ]; then
-            echo "version=$SERIES.$(( ${latest#v$SERIES.} + 1 ))" >> "$GITHUB_OUTPUT"
+            echo "version=$SERIES.$(( ${latest#"v$SERIES."} + 1 ))" >> "$GITHUB_OUTPUT"
           else
             echo "version=$SERIES.0" >> "$GITHUB_OUTPUT"
           fi
@@ -190,12 +191,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           VERSION: ${{ needs.version.outputs.version }}
+          EDGE: ${{ github.ref_name == 'edge' }}
         run: |
           # a version with written notes in docs/releases gets them, ahead of the generated changelog link
           notes=()
           if [ -f "docs/releases/$VERSION.md" ]; then notes=(--notes-file "docs/releases/$VERSION.md"); fi
+          # a prerelease is never "latest", so the stable channel never sees it
+          channel=(--latest)
+          title="Hydra $VERSION"
+          if [ "$EDGE" == "true" ]; then channel=(--prerelease --latest=false); title="$title (edge)"; fi
           gh release create "v$VERSION" \
-            --title "Hydra $VERSION" \
+            --title "$title" \
+            "${channel[@]}" \
             "${notes[@]}" \
             --generate-notes \
             hydra-osx-arm64/hydra-osx-arm64.tar.gz \
@@ -205,11 +212,13 @@ jobs:
             hydra-linux-x64/hydra-linux-x64.tar.gz \
             hydra-linux-arm64/hydra-linux-arm64.tar.gz
 
-      - name: Prune old releases (keep last 5)
+      # each channel separately, so a run of edge builds never prunes the stable release
+      - name: Prune old releases (keep last 5 of each channel)
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          gh release list --json tagName --jq '.[5:][].tagName' | while read -r tag; do
+          gh release list --limit 100 --json tagName,isPrerelease \
+            --jq '(map(select(.isPrerelease | not))[5:] + map(select(.isPrerelease))[5:])[].tagName' | while read -r tag; do
             gh release delete "$tag" --yes --cleanup-tag
           done

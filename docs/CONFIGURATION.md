@@ -89,6 +89,7 @@ Use `Esc` to close the TUI. It does not change Hydra's running state.
 - `sessionLogFile` — Windows service mode only: path to a file where the session child's log output is written. The service spawns a child process in the interactive session to run the input hooks and the relay, so this is the log that records what actually happened. Defaults to `logFile` with a `.session.log` extension, so it is only worth setting to move it elsewhere.
 - `logTruncate` — if `true`, truncate `logFile` and `sessionLogFile` to 0 bytes on each startup so they don't grow unbounded (default: `false`)
 - `autoUpdate` — `false` to disable automatic updates
+- `updateChannel` — `stable` (default) follows full releases; `edge` follows the newest release of any kind, including prereleases built from the `edge` branch, and moves back onto a stable release once one overtakes them. Testing ground only: switching back to `stable` does not downgrade, it waits for the next stable release
 - `lockFile` — path to a lock file to prevent multiple instances (default: none)
 - `profile` — force the named `profileName` regardless of conditions; intended for diagnosis and controlled overrides
 - `debugShield` — enable verbose cursor-shield diagnostics (default: `false`)
@@ -627,6 +628,8 @@ docker run -e RELAY_KEY=<key> -e RELAY_ADMIN_PASSWORD=<secret> -p 5000:5000 ghcr
 
 An existing relay keeps accepting the configs it already issued for as long as `RELAY_PASSWORD` stays set; new
 networks are always issued in the newer format. See [Styx.md](../Styx.md) §13 for every setting.
+
+`styx:latest` is built from `main`; `styx:edge` from the `edge` branch, for trying changes before they ship.
 
 Styx listens on port `5000` by default. Override with `LOCAL_PORT`:
 

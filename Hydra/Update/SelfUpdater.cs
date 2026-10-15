@@ -60,15 +60,19 @@ internal sealed class SelfUpdater(IHydraProfile profile, ILogger<SelfUpdater> lo
     private async Task CheckAndUpdate(CancellationToken cancel)
     {
         var current = CurrentVersion();
+        var channel = profile.UpdateChannel;
         if (log.IsEnabled(LogLevel.Information))
-            log.LogInformation("Checking for updates (current: {Version})", current);
+            log.LogInformation("Checking for updates (current: {Version}, channel: {Channel})", current, channel);
 
-        var json = await Http.GetStringAsync($"https://api.github.com/repos/{Repo}/releases/latest", cancel);
-        using var doc = JsonDocument.Parse(json);
-        var root = doc.RootElement;
-
-        var tag = root.GetProperty("tag_name").GetString() ?? "0.0.0";
-        var latest = Version.Parse(tag.TrimStart('v'));
+        // edge takes the highest version among recent releases, prereleases included, so it moves on to a
+        // stable release once one overtakes the edge builds
+        var url = channel == UpdateChannel.Edge ? $"https://api.github.com/repos/{Repo}/releases?per_page=30" : $"https://api.github.com/repos/{Repo}/releases/latest";
+        using var doc = JsonDocument.Parse(await Http.GetStringAsync(url, cancel));
+        if ((channel == UpdateChannel.Edge ? Newest(doc.RootElement) : doc.RootElement) is not { } root || TagVersion(root) is not { } latest)
+        {
+            log.LogWarning("No release found on the {Channel} channel", channel);
+            return;
+        }
 
         if (latest <= current)
         {
@@ -223,6 +227,24 @@ internal sealed class SelfUpdater(IHydraProfile profile, ILogger<SelfUpdater> lo
     }
 
     private static Version CurrentVersion() => Version.Parse(HydraVersion.Current);
+
+    // the highest-versioned release that is not a draft
+    internal static JsonElement? Newest(JsonElement releases)
+    {
+        JsonElement? newest = null;
+        Version? best = null;
+        foreach (var release in releases.EnumerateArray())
+        {
+            if (release.TryGetProperty("draft", out var draft) && draft.GetBoolean()) continue;
+            if (TagVersion(release) is not { } version || version <= best) continue;
+            newest = release;
+            best = version;
+        }
+        return newest;
+    }
+
+    internal static Version? TagVersion(JsonElement release) =>
+        release.TryGetProperty("tag_name", out var tag) && Version.TryParse(tag.GetString()?.TrimStart('v'), out var version) ? version : null;
 
     private static string? Rid()
     {

@@ -9,6 +9,9 @@ public class HydraConfigFile
 {
     public bool AutoUpdate { get; init; } = true;
 
+    // which releases auto-update follows
+    public UpdateChannel UpdateChannel { get; init; } = UpdateChannel.Stable;
+
     [JsonConverter(typeof(LogLevelConverter))]
     public LogLevel LogLevel { get; init; } = LogLevel.Information;
 

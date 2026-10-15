@@ -11,9 +11,14 @@ on:
         required: true
         type: string
       image:
-        description: Image name under ghcr.io/<owner>/, tagged latest
+        description: Image name under ghcr.io/<owner>/
         required: true
         type: string
+      tag:
+        description: Image tag
+        required: false
+        type: string
+        default: latest
 
 jobs:
   build:
@@ -52,4 +57,4 @@ jobs:
           file: ${{ inputs.file }}
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name == 'push' }}
-          tags: ghcr.io/${{ steps.vars.outputs.owner }}/${{ inputs.image }}:latest
+          tags: ghcr.io/${{ steps.vars.outputs.owner }}/${{ inputs.image }}:${{ inputs.tag }}

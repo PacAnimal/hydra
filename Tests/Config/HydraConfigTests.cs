@@ -36,6 +36,30 @@ public class HydraConfigTests
     }
 
     [Test]
+    public void UpdateChannel_DefaultsToStable_AndParsesEdgeInAnyCase()
+    {
+        var profiles = $$"""[{"mode":"Master"{{Relay}}}]""";
+        var defaults = HydraConfigFile.Parse(AsFile(profiles), "test.conf");
+        var edge = HydraConfigFile.Parse($$"""{"updateChannel":"edge","profiles":{{profiles}}}""", "test.conf");
+        var upper = HydraConfigFile.Parse($$"""{"updateChannel":"Edge","profiles":{{profiles}}}""", "test.conf");
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(defaults.UpdateChannel, Is.EqualTo(UpdateChannel.Stable));
+            Assert.That(edge.UpdateChannel, Is.EqualTo(UpdateChannel.Edge));
+            Assert.That(upper.UpdateChannel, Is.EqualTo(UpdateChannel.Edge));
+        }
+    }
+
+    [Test]
+    public void UpdateChannel_RejectsUnknownChannel()
+    {
+        var json = $$"""{"updateChannel":"nightly","profiles":[{"mode":"Master"{{Relay}}}]}""";
+
+        Assert.That(() => HydraConfigFile.Parse(json, "test.conf"), Throws.Exception);
+    }
+
+    [Test]
     public void ClipboardSync_RejectsUnknownMode()
     {
         var json = AsFile($$"""[{"mode":"Master","clipboardSync":"Automatic"{{Relay}}}]""");

@@ -9,6 +9,7 @@ public interface IHydraProfile
     string Name { get; }
     LogLevel LogLevel { get; }
     bool AutoUpdate { get; }
+    UpdateChannel UpdateChannel { get; }
     bool DebugShield { get; }
     bool DebugMouse { get; }
     bool ManagementListener { get; }
@@ -52,6 +53,7 @@ public class HydraProfile(HydraConfigFile configFile, HydraConfig? activeProfile
     public string Name { get; } = configFile.Name ?? Environment.MachineName.Split('.')[0];
     public LogLevel LogLevel { get; } = configFile.LogLevel;
     public bool AutoUpdate { get; } = configFile.AutoUpdate;
+    public UpdateChannel UpdateChannel { get; } = configFile.UpdateChannel;
     public bool DebugShield { get; } = configFile.DebugShield;
     public bool DebugMouse { get; } = configFile.DebugMouse;
     public bool ManagementListener { get; } = configFile.ManagementListener;

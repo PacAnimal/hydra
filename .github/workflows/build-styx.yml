@@ -1,8 +1,9 @@
 name: Build Styx
 
+# main pushes styx:latest, edge pushes styx:edge
 on:
   push:
-    branches: [main]
+    branches: [main, edge]
     paths-ignore:
       - '**.md'
   pull_request:
@@ -20,3 +21,4 @@ jobs:
       context: .
       file: Styx/Dockerfile
       image: styx
+      tag: ${{ github.ref_name == 'edge' && 'edge' || 'latest' }}
