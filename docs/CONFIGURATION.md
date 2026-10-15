@@ -613,32 +613,43 @@ The `embeddedStyx` property is also an alternative to `networkConfig` for any ex
 
 ### Running standalone Styx
 
+Generate the relay's key once, and keep it as a secret:
+
 ```bash
-docker run -e RELAY_PASSWORD=<secret> -p 5000:5000 ghcr.io/pacanimal/styx:latest
+docker run --rm ghcr.io/pacanimal/styx:latest keygen
 ```
+
+Then run the relay with it, and with an admin secret for creating networks:
+
+```bash
+docker run -e RELAY_KEY=<key> -e RELAY_ADMIN_PASSWORD=<secret> -p 5000:5000 ghcr.io/pacanimal/styx:latest
+```
+
+An existing relay keeps accepting the configs it already issued for as long as `RELAY_PASSWORD` stays set; new
+networks are always issued in the newer format. See [Styx.md](../Styx.md) §13 for every setting.
 
 Styx listens on port `5000` by default. Override with `LOCAL_PORT`:
 
 ```bash
-docker run -e RELAY_PASSWORD=<secret> -e LOCAL_PORT=8080 -p 8080:8080 ghcr.io/pacanimal/styx:latest
+docker run -e RELAY_KEY=<key> -e RELAY_ADMIN_PASSWORD=<secret> -e LOCAL_PORT=8080 -p 8080:8080 ghcr.io/pacanimal/styx:latest
 ```
 
 Set `LOCAL_ONLY=true` to bind only to `127.0.0.1` and `::1` — useful when running behind a reverse proxy (HAProxy, nginx, Caddy, etc.) that terminates TLS and forwards to localhost:
 
 ```bash
-docker run -e RELAY_PASSWORD=<secret> -e LOCAL_ONLY=true -p 127.0.0.1:5000:5000 ghcr.io/pacanimal/styx:latest
+docker run -e RELAY_KEY=<key> -e RELAY_ADMIN_PASSWORD=<secret> -e LOCAL_ONLY=true -p 127.0.0.1:5000:5000 ghcr.io/pacanimal/styx:latest
 ```
 
 Or build from source:
 
 ```bash
 docker build -f Styx/Dockerfile -t styx:local .
-docker run -e RELAY_PASSWORD=<secret> -p 5000:5000 styx:local
+docker run -e RELAY_KEY=<key> -e RELAY_ADMIN_PASSWORD=<secret> -p 5000:5000 styx:local
 ```
 
 ### Generating a network config
 
-Open `http://<your-styx-host>:5000` in a browser, enter the relay password, and click **Generate**. Copy the config string.
+Open `http://<your-styx-host>:5000` in a browser, enter the admin secret, and click **Generate**. Copy the config string.
 
 ### Connecting Hydra to a standalone Styx server
 

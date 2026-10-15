@@ -113,9 +113,9 @@
 <body>
     <div class="card">
         <h1>Styx</h1>
-        <p class="subtitle">Enter the relay password to generate a network config string.</p>
+        <p class="subtitle">Enter the relay's admin secret to create a new network and its config string.</p>
 
-        <label for="password">Relay Password</label>
+        <label for="password">Admin Secret</label>
         <input type="password" id="password" placeholder="••••••••" autocomplete="current-password">
 
         <button id="generate-btn" onclick="generate()">Generate Network Config</button>
@@ -146,7 +146,7 @@
             outputEl.classList.remove('visible');
 
             if (!password) {
-                errorEl.textContent = 'Password is required.';
+                errorEl.textContent = 'The admin secret is required.';
                 return;
             }
 
@@ -162,7 +162,7 @@
 
                 if (!resp.ok) {
                     const text = await resp.text();
-                    errorEl.textContent = resp.status === 401 ? 'Wrong password.' : `Error: ${text}`;
+                    errorEl.textContent = resp.status === 401 ? 'Wrong admin secret.' : resp.status === 404 ? 'This relay does not create networks.' : `Error: ${text}`;
                     return;
                 }
 

@@ -25,12 +25,18 @@
     </PropertyGroup>
 
     <ItemGroup>
-        <PackageReference Include="Cathedral" Version="0.0.484" />
-        <PackageReference Include="Microsoft.AspNetCore.SignalR.Protocols.MessagePack" Version="10.0.12" />
+        <PackageReference Include="Cathedral" Version="0.0.489" />
+        <PackageReference Include="Microsoft.AspNetCore.SignalR.Protocols.MessagePack" Version="10.0.13" />
     </ItemGroup>
 
     <ItemGroup>
         <ProjectReference Include="../Common/Common.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
+            <_Parameter1>Tests</_Parameter1>
+        </AssemblyAttribute>
     </ItemGroup>
 
 </Project>

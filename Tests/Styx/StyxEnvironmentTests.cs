@@ -1,0 +1,116 @@
+using System.Security.Cryptography;
+using Cathedral.Styx;
+using Styx;
+
+namespace Tests.Styx;
+
+/// <summary>What a relay reads from its environment, and what it refuses to start with.</summary>
+[TestFixture]
+public class StyxEnvironmentTests
+{
+    private static readonly byte[] KeyA = SHA256.HashData("key a"u8);
+
+    [Test]
+    public void OneKey_AndThePasswordAsTheAdminSecretByDefault()
+    {
+        var auth = StyxEnvironment.Read(Env(("RELAY_KEY", Convert.ToBase64String(KeyA)), ("RELAY_PASSWORD", "pw")));
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(auth.Keys, Has.Count.EqualTo(1));
+            Assert.That(auth.Keys[0], Is.EqualTo(KeyA));
+            Assert.That(auth.V1Password, Is.EqualTo("pw"));
+            Assert.That(auth.AdminPassword, Is.EqualTo("pw"));
+            Assert.That(auth.AcceptsV1, Is.True);
+            Assert.That(auth.CanMint, Is.True);
+        }
+    }
+
+    [Test]
+    public void AnExplicitAdminSecret_AndRevocations_AreRead()
+    {
+        var revoked = Guid.NewGuid();
+        var auth = StyxEnvironment.Read(Env(
+            ("RELAY_KEY", Convert.ToBase64String(KeyA)),
+            ("RELAY_ADMIN_PASSWORD", "admin"),
+            ("RELAY_REVOKED_NETWORKS", $" {revoked} ,"),
+            ("RELAY_REVOKED_IDS", "a, b")));
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(auth.AdminPassword, Is.EqualTo("admin"));
+            Assert.That(auth.AcceptsV1, Is.False);
+            Assert.That(auth.RevokedNetworks, Has.Count.EqualTo(1).And.Contains(revoked));
+            Assert.That(auth.RevokedIds, Has.Count.EqualTo(2).And.Contains("a").And.Contains("b"));
+        }
+    }
+
+    [Test]
+    public void DuringARotation_SeveralKeys_TheFirstMinting()
+    {
+        var keyB = DistinctKidFrom(KeyA);
+        var auth = StyxEnvironment.Read(Env(("RELAY_KEY", $"{Convert.ToBase64String(keyB)},{Convert.ToBase64String(KeyA)}")));
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(auth.Keys[0], Is.EqualTo(keyB));
+            Assert.That(auth.KeyFor(StyxToken.KeyIdOf(KeyA)), Is.EqualTo(KeyA));
+        }
+    }
+
+    [Test]
+    public void NothingToVerifyWith_RefusesToStart()
+    {
+        Assert.Throws<StyxConfigurationException>(() => StyxEnvironment.Read(Env()));
+    }
+
+    [Test]
+    public void TheKeyPublishedInStyxMd_RefusesToStart()
+    {
+        var published = Convert.ToBase64String([.. Enumerable.Range(0, 32).Select(i => (byte)i)]);
+        Assert.Throws<StyxConfigurationException>(() => StyxEnvironment.Read(Env(("RELAY_KEY", published))));
+    }
+
+    [TestCase("not base64!")]
+    [TestCase("AAAA")]
+    public void AMalformedKey_RefusesToStart(string key)
+    {
+        Assert.Throws<StyxConfigurationException>(() => StyxEnvironment.Read(Env(("RELAY_KEY", key))));
+    }
+
+    [Test]
+    public void TheSameKeyTwice_RefusesToStart()
+    {
+        var key = Convert.ToBase64String(KeyA);
+        Assert.Throws<StyxConfigurationException>(() => StyxEnvironment.Read(Env(("RELAY_KEY", $"{key},{key}"))));
+    }
+
+    [Test]
+    public void TwoKeysSharingAKeyId_RefuseToStart()
+    {
+        var clash = SameKidAs(KeyA);
+        Assert.Throws<StyxConfigurationException>(() =>
+            StyxEnvironment.Read(Env(("RELAY_KEY", $"{Convert.ToBase64String(KeyA)},{Convert.ToBase64String(clash)}"))));
+    }
+
+    [Test]
+    public void ARevokedNetworkThatIsNotAUuid_RefusesToStart()
+    {
+        Assert.Throws<StyxConfigurationException>(() =>
+            StyxEnvironment.Read(Env(("RELAY_PASSWORD", "pw"), ("RELAY_REVOKED_NETWORKS", "nope"))));
+    }
+
+    private static Func<string, string?> Env(params (string Name, string Value)[] values) =>
+        name => values.FirstOrDefault(v => v.Name == name).Value;
+
+    // deterministic: hash a counter until a key's id does or does not collide
+    private static byte[] SameKidAs(byte[] key) => Search(candidate => StyxToken.KeyIdOf(candidate) == StyxToken.KeyIdOf(key) && !candidate.SequenceEqual(key));
+
+    private static byte[] DistinctKidFrom(byte[] key) => Search(candidate => StyxToken.KeyIdOf(candidate) != StyxToken.KeyIdOf(key));
+
+    private static byte[] Search(Func<byte[], bool> wanted)
+    {
+        for (var i = 0; ; i++)
+        {
+            var candidate = SHA256.HashData(BitConverter.GetBytes(i));
+            if (wanted(candidate)) return candidate;
+        }
+    }
+}

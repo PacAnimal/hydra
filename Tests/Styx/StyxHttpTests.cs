@@ -3,7 +3,7 @@ using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using Cathedral.Config;
-using Cathedral.Utils;
+using Cathedral.Styx;
 using Common;
 using Tests.Setup;
 
@@ -63,17 +63,19 @@ public class StyxHttpTests : StyxFixtureBase
     }
 
     [Test]
-    public async Task NetworkConfig_AuthorizationDecryptsToGuid()
+    public async Task NetworkConfig_IssuesAV2RootForAFreshVersion8Network()
     {
         var response = await _http!.PostAsJsonAsync("/api/network-config", new { Password = StyxTestServer.TestPassword });
         Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
 
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
-        var authorization = body.GetProperty("authorization").GetString()!;
-
-        // the authorization blob must decrypt back to a valid Guid with the same password
-        var networkId = await new SimpleAes(StyxTestServer.TestPassword).DecryptBase64<Guid>(authorization, true, CancellationToken.None);
-        Assert.That(networkId, Is.Not.EqualTo(Guid.Empty));
+        var token = StyxToken.Parse(body.GetProperty("authorization").GetString()!);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(token.Verify(StyxTestServer.TestKey), Is.True);
+            Assert.That(token.Network.Version, Is.EqualTo(8));
+            Assert.That(token.Caveats, Is.Empty);
+        }
     }
 
     [Test]
@@ -88,7 +90,7 @@ public class StyxHttpTests : StyxFixtureBase
         var auth1 = body1.GetProperty("authorization").GetString();
         var auth2 = body2.GetProperty("authorization").GetString();
 
-        // each call generates a fresh Guid, so the encrypted blobs must differ
+        // each call mints a fresh network, so the tokens must differ
         Assert.That(auth1, Is.Not.EqualTo(auth2));
     }
 

@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using Cathedral.Config;
+using Cathedral.Styx;
 using Cathedral.Utils;
 using Common;
 using Hydra.Relay;
@@ -14,11 +15,19 @@ public static class StyxTestServer
 {
     public const string TestPassword = "test-relay-password-hydra";
 
+    /// <summary>The test servers' v2 key. Not Styx.md's published one, which a relay refuses to start with.</summary>
+    public static readonly byte[] TestKey = [.. Enumerable.Range(0, 32).Select(i => (byte)(0xA0 + i))];
+
     public static WebApplicationFactory<global::Styx.Program> Create(string password = TestPassword, Action<IServiceCollection>? configure = null)
     {
         // must be set before the factory initializes the host. process-wide, so safe only while fixtures run
-        // one at a time — every caller uses the default today
-        Environment.SetEnvironmentVariable("RELAY_PASSWORD", password);
+        // one at a time — every caller uses the default today. Anything else a test wants differs in code,
+        // by replacing StyxAuth through `configure`.
+        Environment.SetEnvironmentVariable(global::Styx.Constants.RelayPasswordEnvVar, password);
+        Environment.SetEnvironmentVariable(global::Styx.Constants.RelayKeyEnvVar, Convert.ToBase64String(TestKey));
+        Environment.SetEnvironmentVariable(global::Styx.Constants.RelayAdminPasswordEnvVar, null);
+        Environment.SetEnvironmentVariable(global::Styx.Constants.RevokedNetworksEnvVar, null);
+        Environment.SetEnvironmentVariable(global::Styx.Constants.RevokedIdsEnvVar, null);
 
         return new WebApplicationFactory<global::Styx.Program>()
             .WithWebHostBuilder(builder =>
@@ -49,6 +58,10 @@ public static class StyxTestServer
 
         return await ClientPair.Start(senderClient, HydraTestClient.Master(factory, receiver, cfg));
     }
+
+    /// <summary>A v2 token from the test key, for a fresh network unless one is given.</summary>
+    public static StyxToken MintToken(Guid? network = null, params IEnumerable<StyxCaveat> caveats) =>
+        StyxToken.Mint(TestKey, network ?? StyxToken.NewNetworkId(), caveats);
 
     // generates a valid authorization blob for the given networkId, signed with the given password
     public static async Task<string> GenerateAuthorization(Guid networkId, string password = TestPassword)

@@ -97,7 +97,7 @@ public class EmbeddedStyxServer(EmbeddedStyxServerConfig config, ILogger<Embedde
     {
         var builder = WebApplication.CreateBuilder();
 
-        builder.AddStyxRelay(new InlineStyxPasswordProvider(config.Password), new StyxOptions(false), ThrottleClock);
+        builder.AddStyxRelay(StyxAuth.V1Only(config.Password), new StyxOptions(false), ThrottleClock);
         builder.Services.AddSereneConsoleLogging();
         builder.WebHost.ConfigureKestrel(options => options.Listen(IPAddress.IPv6Any, config.Port, listenOptions => listenOptions.UseTcpNoDelay()));
 

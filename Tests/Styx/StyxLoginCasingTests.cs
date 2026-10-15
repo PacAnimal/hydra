@@ -33,14 +33,17 @@ public class StyxLoginCasingTests : StyxFixtureBase
     [TestCase(Protocol.MessagePack, "AUTHORIZATION", "hostname", TestName = "Mixed case over MessagePack")]
     public async Task Authenticate_AcceptsAnyMemberCasing(Protocol protocol, string authKey, string hostKey)
     {
-        var authorization = await StyxTestServer.GenerateAuthorization(Guid.NewGuid());
-        var response = await Authenticate(protocol, new Dictionary<string, string>
+        var v1 = await StyxTestServer.GenerateAuthorization(Guid.NewGuid());
+        var v2 = StyxTestServer.MintToken(null, Cathedral.Styx.StyxCaveat.HostPrefix("casing-")).ToString();
+        foreach (var authorization in new[] { v1, v2 })
         {
-            [authKey] = authorization,
-            [hostKey] = $"casing-{protocol}-{authKey}",
-        });
-
-        Assert.That(response.Authenticated, Is.True);
+            var response = await Authenticate(protocol, new Dictionary<string, string>
+            {
+                [authKey] = authorization,
+                [hostKey] = $"casing-{protocol}-{authKey}",
+            });
+            Assert.That(response.Authenticated, Is.True);
+        }
     }
 
     [TestCase(Protocol.Json)]

@@ -8,15 +8,15 @@ namespace Styx.Services;
 
 public interface IPeerBroadcaster
 {
-    void QueueBroadcast(Guid networkId);
+    void QueueBroadcast(NetworkKey network);
     // queues a membership taken from a caller-supplied snapshot instead of the live registry. Peers key off
     // the hostname, so displacing a duplicate and registering its replacement yields an identical list and
     // reads as no change at all — the snapshot is how a reconnecting host is shown leaving before it arrives.
-    void QueueBroadcast(Guid networkId, IReadOnlyList<NetworkClient> clients);
+    void QueueBroadcast(NetworkKey network, IReadOnlyList<NetworkClient> clients);
     // queues a snapshot and completes when it has actually been delivered. The displacement half has to be
     // awaited before the displacing client is told it is authenticated, or it can send its first payload
     // ahead of the notice that the name changed hands — and the recipient still trusts the old holder.
-    Task BroadcastAndWait(Guid networkId, IReadOnlyList<NetworkClient> clients, CancellationToken cancel);
+    Task BroadcastAndWait(NetworkKey network, IReadOnlyList<NetworkClient> clients, CancellationToken cancel);
 }
 
 public class PeerBroadcastService(IClientRegistry registry, IHubContext<StyxHub, IStyxClient> hubContext, ILogger<PeerBroadcastService> log)
@@ -28,20 +28,20 @@ public class PeerBroadcastService(IClientRegistry registry, IHubContext<StyxHub,
         SingleReader = true,
     });
 
-    public void QueueBroadcast(Guid networkId) => _channel.Writer.TryWrite(new PeerBroadcast(networkId, null, null));
+    public void QueueBroadcast(NetworkKey network) => _channel.Writer.TryWrite(new PeerBroadcast(network, null, null));
 
-    public void QueueBroadcast(Guid networkId, IReadOnlyList<NetworkClient> clients) => _channel.Writer.TryWrite(new PeerBroadcast(networkId, clients, null));
+    public void QueueBroadcast(NetworkKey network, IReadOnlyList<NetworkClient> clients) => _channel.Writer.TryWrite(new PeerBroadcast(network, clients, null));
 
-    public async Task BroadcastAndWait(Guid networkId, IReadOnlyList<NetworkClient> clients, CancellationToken cancel)
+    public async Task BroadcastAndWait(NetworkKey network, IReadOnlyList<NetworkClient> clients, CancellationToken cancel)
     {
         var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        if (!_channel.Writer.TryWrite(new PeerBroadcast(networkId, clients, done))) return;
+        if (!_channel.Writer.TryWrite(new PeerBroadcast(network, clients, done))) return;
 
         // A stuck broadcaster must not wedge authentication. Losing the ordering guarantee is bad; refusing
         // to answer a login at all is worse, so this degrades rather than hangs — loudly.
         var timeout = Task.Delay(BroadcastWait, cancel);
         if (await Task.WhenAny(done.Task, timeout) == timeout)
-            log.LogWarning("Timed out waiting for a displacement broadcast on network {NetworkId}", networkId);
+            log.LogWarning("Timed out waiting for a displacement broadcast on network {Network}", network);
     }
 
     private static readonly TimeSpan BroadcastWait = TimeSpan.FromSeconds(5);
@@ -87,17 +87,17 @@ public class PeerBroadcastService(IClientRegistry registry, IHubContext<StyxHub,
     // now never happens.
     private static bool CanCollapse(PeerBroadcast current, PeerBroadcast next) =>
         current.Snapshot is null && next.Snapshot is null && current.Done is null && next.Done is null &&
-        current.NetworkId == next.NetworkId;
+        current.Network == next.Network;
 
     private async Task BroadcastPeers(PeerBroadcast broadcast)
     {
-        var networkId = broadcast.NetworkId;
+        var network = broadcast.Network;
         try
         {
-            var clients = broadcast.Snapshot ?? await registry.GetNetworkClients(networkId);
+            var clients = broadcast.Snapshot ?? await registry.GetNetworkClients(network);
             var allHostNames = clients.Select(c => c.HostName).OrderBy(h => h, StringComparer.Ordinal).ToArray();
             if (log.IsEnabled(LogLevel.Information))
-                log.LogInformation("Network {NetworkId} peers: {Peers}", networkId, allHostNames.Length > 0 ? string.Join(", ", allHostNames) : "<none>");
+                log.LogInformation("Network {Network} peers: {Peers}", network, allHostNames.Length > 0 ? string.Join(", ", allHostNames) : "<none>");
             var sends = clients.Select(async client =>
             {
                 var peers = allHostNames.Where(h => !h.EqualsOrdinal(client.HostName)).ToArray();
@@ -109,17 +109,17 @@ public class PeerBroadcastService(IClientRegistry registry, IHubContext<StyxHub,
                 {
                     // One unwritable connection must not cost everybody after it their notification. A peer
                     // that never learns a name changed hands goes on trusting whoever used to hold it.
-                    log.LogWarning(ex, "Could not deliver a peer snapshot to {ConnectionId} on network {NetworkId}",
-                        client.ConnectionId, networkId);
+                    log.LogWarning(ex, "Could not deliver a peer snapshot to {ConnectionId} on network {Network}",
+                        client.ConnectionId, network);
                 }
             });
             await Task.WhenAll(sends);
         }
         catch (Exception ex)
         {
-            log.LogError(ex, "Failed to broadcast peers for network {NetworkId}", networkId);
+            log.LogError(ex, "Failed to broadcast peers for network {Network}", network);
         }
     }
 
-    private record PeerBroadcast(Guid NetworkId, IReadOnlyList<NetworkClient>? Snapshot, TaskCompletionSource? Done);
+    private record PeerBroadcast(NetworkKey Network, IReadOnlyList<NetworkClient>? Snapshot, TaskCompletionSource? Done);
 }

@@ -27,8 +27,11 @@ public class StyxWireFormatTests
             $"{what} no longer encodes the way Styx.md documents");
 
     [Test]
-    public void RelayLogin_EncodesAsDocumented() =>
+    public void RelayLogin_EncodesAsDocumented()
+    {
         AssertEncodesAsDocumented(new RelayLogin { Authorization = new string('t', 176), HostName = "alpha-box" }, "RelayLogin");
+        AssertEncodesAsDocumented(new RelayLogin { Authorization = "styx2." + new string('t', 68), HostName = "alpha-box" }, "RelayLogin with a v2 token");
+    }
 
     [Test]
     public void RelayLoginResponse_EncodesAsDocumented()
@@ -60,6 +63,7 @@ public class StyxWireFormatTests
         AssertEncodesAsDocumented(true, "Ping result");
         AssertEncodesAsDocumented("127.0.0.1", "GetMyIp result");
         AssertEncodesAsDocumented("duplicate hostname", "Kicked reason");
+        AssertEncodesAsDocumented("authorization expired", "Kicked reason on expiry");
     }
 
     // Styx.md §3.3: a messagepack client reads PascalCase response members

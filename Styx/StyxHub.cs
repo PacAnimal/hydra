@@ -1,4 +1,3 @@
-using Cathedral.Utils;
 using Common.DTO;
 using Common.Interfaces;
 using Microsoft.AspNetCore.SignalR;
@@ -7,27 +6,17 @@ using Styx.Services;
 
 namespace Styx;
 
-public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, IStyxPasswordProvider passwordProvider, ILogger<StyxHub> log, StyxOptions options,
-    ResponseThrottle throttler) : Hub<IStyxClient>, IStyxServer
+public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, ITokenVerifier verifier, IExpiryScheduler expiry, ILogger<StyxHub> log,
+    StyxOptions options, ResponseThrottle throttler) : Hub<IStyxClient>, IStyxServer
 {
+    public const string HostNameNotAllowed = "Authorization does not allow this hostname";
+
     [AllowAnonymousHub]
     public async Task<RelayLoginResponse> Authenticate(RelayLogin? login)
     {
-        // throttle — minimum response time regardless of outcome
+        // throttle — minimum response time regardless of outcome; it also caps a connection at one login a second,
+        // and with it the displacement churn a token holder could cause by re-authenticating in a loop
         var throttle = throttler.Start(Constants.AuthThrottleSeconds, Context.ConnectionAborted);
-
-        string password;
-        try
-        {
-            password = passwordProvider.Password;
-        }
-        catch (InvalidOperationException ex)
-        {
-            log.LogError("Relay password unavailable: {Message}", ex.Message);
-            await throttle;
-            return new RelayLoginResponse { Authenticated = false, Message = "Server misconfigured" };
-        }
-
         var remoteIp = RemoteIp;
 
         // a third-party client can send any shape of login it likes — refuse an incomplete one with an
@@ -39,40 +28,53 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, IStyxPass
             return new RelayLoginResponse { Authenticated = false, Message = "Authorization and hostName are both required" };
         }
 
-        Guid networkId;
-        try
+        var hostName = login.HostName.ToLowerInvariant();
+        var verdict = await verifier.Verify(login.Authorization, remoteIp, Context.ConnectionAborted);
+        if (verdict.Network is not { } network)
         {
-            networkId = await new SimpleAes(password).DecryptBase64<Guid>(login.Authorization, true, Context.ConnectionAborted);
-        }
-        catch (Exception ex)
-        {
-            log.LogWarning(ex, "Authentication failed for \"{HostName}\" from {RemoteIp}", login.HostName.ToLowerInvariant(), remoteIp);
+            log.LogWarning("Authentication failed for \"{HostName}\" from {RemoteIp}: {Reason}", hostName, remoteIp, verdict.Failure);
             await throttle;
-            return new RelayLoginResponse { Authenticated = false, Message = "Invalid authorization" };
+            return new RelayLoginResponse { Authenticated = false, Message = verdict.Failure };
         }
 
-        var hostName = login.HostName.ToLowerInvariant();
+        // the relay never renames a peer: clients use their own configured name in payloads and HMACs
+        if (verdict.Rules is { } rules && !rules.Allows(login.HostName))
+        {
+            log.LogWarning("Authentication refused for \"{HostName}\" from {RemoteIp} on network {Network}: the token does not allow the name",
+                hostName, remoteIp, network);
+            await throttle;
+            return new RelayLoginResponse { Authenticated = false, Message = HostNameNotAllowed };
+        }
 
         // kick same network+hostname duplicates and register atomically (one lock) so two concurrent
         // authenticates for the same host can't both register (stale phantom peer)
-        var registration = await registry.RegisterKickingDuplicates(Context.ConnectionId, networkId, hostName, remoteIp, LocalIp);
+        var registration = await registry.RegisterKickingDuplicates(Context.ConnectionId, network, hostName, remoteIp, LocalIp);
         foreach (var connectionId in registration.Kicked)
+        {
+            expiry.Cancel(connectionId);
             await Clients.Client(connectionId).Kicked("duplicate hostname");
+        }
+
+        // armed before the abort check below, whose cleanup then cancels it too
+        if (verdict.Rules?.Expires is { } expires) expiry.Schedule(Context.ConnectionId, registration.Generation, expires);
+        else expiry.Cancel(Context.ConnectionId);
 
         // if the connection aborted during auth, OnDisconnectedAsync may have already run its Unregister
         // (before we registered above) — clean up so we don't leave a stale entry for a dead connection
         if (Context.ConnectionAborted.IsCancellationRequested)
         {
             await registry.Unregister(Context.ConnectionId);
+            expiry.Cancel(Context.ConnectionId);
             // we displaced someone and then died before announcing either half, so nothing has told the
             // other peers the host is gone — converge them on what the registry actually holds now
-            if (registration.Kicked.Count > 0) peers.QueueBroadcast(networkId);
+            if (registration.Kicked.Count > 0) peers.QueueBroadcast(network);
+            if (registration.Left is { } abandoned) peers.QueueBroadcast(abandoned);
             return new RelayLoginResponse { Authenticated = false, Message = "Connection aborted" };
         }
 
         if (log.IsEnabled(LogLevel.Information))
-            log.LogInformation("Authentication accepted for \"{HostName}\" (connectionId:{ConnectionId}) from {RemoteIp} on network {NetworkId}",
-                hostName, Context.ConnectionId, remoteIp, networkId);
+            log.LogInformation("Authentication accepted for \"{HostName}\" (connectionId:{ConnectionId}) from {RemoteIp} on network {Network}",
+                hostName, Context.ConnectionId, remoteIp, network);
         await throttle;
 
         // a reconnecting host has to be seen leaving before it is seen arriving, or the pair is an identical
@@ -86,10 +88,13 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, IStyxPass
         // moment ago. Waiting for the delivery is what makes Styx.md 6.2's ordering cover the displacing
         // peer's own traffic, which is what every client already assumes it does.
         if (registration.Kicked.Count > 0)
-            await peers.BroadcastAndWait(networkId, registration.OtherClients, Context.ConnectionAborted);
+            await peers.BroadcastAndWait(network, registration.OtherClients, Context.ConnectionAborted);
+
+        // a connection that moved here from another network or path is gone from there
+        if (registration.Left is { } left) peers.QueueBroadcast(left);
 
         // queue after throttle so Authenticated=true is sent to the caller before Peers arrives
-        peers.QueueBroadcast(networkId);
+        peers.QueueBroadcast(network);
         return new RelayLoginResponse { Authenticated = true };
     }
 
@@ -110,21 +115,21 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, IStyxPass
         if (identity == null) return;
 
         if (options.DebugMessages && log.IsEnabled(LogLevel.Information))
-            log.LogInformation("MSG net={NetworkId} {Sender} → [{Targets}] {Size}B",
-                identity.NetworkId, identity.HostName, string.Join(", ", targetHosts), payload.Length);
+            log.LogInformation("MSG net={Network} {Sender} → [{Targets}] {Size}B",
+                identity.Network, identity.HostName, string.Join(", ", targetHosts), payload.Length);
 
         foreach (var targetHost in targetHosts)
         {
             if (string.IsNullOrEmpty(targetHost))
             {
-                log.LogError("Send from \"{HostName}\" on network {NetworkId} had empty hostname in targetHosts", identity.HostName, identity.NetworkId);
+                log.LogError("Send from \"{HostName}\" on network {Network} had empty hostname in targetHosts", identity.HostName, identity.Network);
                 continue;
             }
 
-            var targetConnectionId = await registry.GetConnectionId(identity.NetworkId, targetHost);
+            var targetConnectionId = await registry.GetConnectionId(identity.Network, targetHost);
             if (targetConnectionId == null)
             {
-                if (log.IsEnabled(LogLevel.Debug)) log.LogDebug("Target {TargetHost} not found on network {NetworkId}", targetHost, identity.NetworkId);
+                if (log.IsEnabled(LogLevel.Debug)) log.LogDebug("Target {TargetHost} not found on network {Network}", targetHost, identity.Network);
                 continue;
             }
 
@@ -137,10 +142,11 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, IStyxPass
 
     public override async Task OnDisconnectedAsync(Exception? exception)
     {
+        expiry.Cancel(Context.ConnectionId);
         var identity = await registry.GetIdentity(Context.ConnectionId);
         await registry.Unregister(Context.ConnectionId);
         if (identity != null)
-            peers.QueueBroadcast(identity.NetworkId);
+            peers.QueueBroadcast(identity.Network);
         await base.OnDisconnectedAsync(exception);
     }
 }

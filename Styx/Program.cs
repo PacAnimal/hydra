@@ -1,16 +1,27 @@
 using Cathedral.Config;
 using Cathedral.Extensions;
 using Cathedral.Logging;
+using Cathedral.Styx;
 using Cathedral.Utils;
 using Styx;
 using Styx.Services;
 using System.Net;
+using System.Security.Cryptography;
+using System.Text;
+
+if (args.Length > 0 && StyxTools.IsCommand(args[0]))
+    return StyxTools.Run(args, Environment.GetEnvironmentVariable, Console.Out, Console.Error);
 
 var config = Env.Config;
 
-if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable(Constants.RelayPasswordEnvVar)))
+StyxAuth auth;
+try
 {
-    Console.Error.WriteLine("RELAY_PASSWORD environment variable is not set — refusing to start");
+    auth = StyxEnvironment.Read(Environment.GetEnvironmentVariable);
+}
+catch (StyxConfigurationException ex)
+{
+    Console.Error.WriteLine($"{ex.Message} — refusing to start");
     return 1;
 }
 
@@ -26,7 +37,7 @@ services.AddSereneConsoleLogging(logging =>
 services.ConfigureHttpJsonOptions(options => SaneJson.Configure(options.SerializerOptions));
 
 var debugMessages = Environment.GetEnvironmentVariable(Constants.DebugMessagesEnvVar)?.EqualsIgnoreCase("true") ?? false;
-builder.AddStyxRelay(new EnvironmentStyxPasswordProvider(), new StyxOptions(debugMessages));
+builder.AddStyxRelay(auth, new StyxOptions(debugMessages));
 
 var port = int.Parse(config.GetString("LOCAL_PORT", "5000"));
 var localOnly = Environment.GetEnvironmentVariable(Constants.LocalOnlyEnvVar)?.EqualsIgnoreCase("true") ?? false;
@@ -52,61 +63,75 @@ app.UseStaticFiles();
 
 app.MapHub<StyxHub>("/relay");
 
-app.MapGet("/api/status", async (HttpContext http, IStyxPasswordProvider passwordProvider, IClientRegistry registry, ResponseThrottle throttler,
-    CancellationToken ct) =>
+app.MapGet("/api/status", async (HttpContext http, ITokenVerifier verifier, IClientRegistry registry, ResponseThrottle throttler, CancellationToken ct) =>
 {
     var throttle = throttler.Start(Constants.StatusThrottleSeconds, ct);
 
     var bearer = http.Request.Headers.Authorization.ToString();
-    var token = bearer.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) ? bearer["Bearer ".Length..] : null;
-
-    Guid networkId;
-    try
-    {
-        var password = passwordProvider.Password;
-        networkId = await new SimpleAes(password).DecryptBase64<Guid>(token!, true, ct);
-    }
-    catch
+    var token = bearer.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) ? bearer["Bearer ".Length..] : "";
+    var verdict = await verifier.Verify(token, RemoteIpOf(http), ct);
+    if (verdict.Network is not { } network)
     {
         await throttle;
         return Results.Unauthorized();
     }
 
-    var clients = await registry.GetNetworkClients(networkId);
+    var clients = await registry.GetNetworkClients(network);
+    await throttle;
     return Results.Ok(new StatusResponse([.. clients.Select(c => c.HostName)]));
 });
 
-app.MapPost("/api/network-config", async (NetworkConfigRequest request, IStyxPasswordProvider passwordProvider, ResponseThrottle throttler,
-    CancellationToken ct) =>
+app.MapPost("/api/network-config", async (HttpContext http, NetworkConfigRequest request, StyxAuth relayAuth, FailureLimiter limiter,
+    ResponseThrottle throttler, CancellationToken ct) =>
 {
     var throttle = throttler.Start(Constants.NetworkConfigThrottleSeconds, ct);
 
-    string password;
-    try { password = passwordProvider.Password; }
-    catch { await throttle; return Results.Unauthorized(); }
+    // nothing ever issues a v1 token, so without a key, or without a secret to guard it, there is nothing here
+    if (!relayAuth.CanMint || relayAuth.AdminPassword is not { } adminPassword)
+    {
+        await throttle;
+        return Results.NotFound();
+    }
 
-    if (request.Password != password)
+    var remoteIp = RemoteIpOf(http);
+    if (limiter.IsBlocked(remoteIp))
     {
         await throttle;
         return Results.Unauthorized();
     }
+    if (!SecretMatches(request.Password, adminPassword))
+    {
+        limiter.RecordFailure(remoteIp);
+        await throttle;
+        return Results.Unauthorized();
+    }
 
-    var networkId = Guid.NewGuid();
-    var authorization = await new SimpleAes(password).EncryptBase64(networkId, CancellationToken.None);
+    var authorization = StyxToken.Mint(relayAuth.Keys[0], StyxToken.NewNetworkId()).ToString();
     await throttle;
     return Results.Ok(new NetworkConfigResponse(authorization));
 });
 
 
 if (app.Logger.IsEnabled(LogLevel.Information))
+{
     app.Logger.LogInformation("Styx listening on port {Port}{LocalOnly}", port, localOnly ? " (localhost only)" : "");
+    app.Logger.LogInformation("v2 tokens {V2}; v1 tokens {V1}; network creation {Creation}",
+        auth.CanMint ? "accepted" : "refused (no RELAY_KEY)", auth.AcceptsV1 ? "accepted" : "refused (no RELAY_PASSWORD)",
+        auth.CanMint && auth.AdminPassword is not null ? "enabled" : "disabled");
+}
 if (debugMessages) app.Logger.LogInformation("Message debug logging enabled");
 app.Run();
 return 0;
 
+static string RemoteIpOf(HttpContext http) => http.Connection.RemoteIpAddress?.ToString() ?? ClientRegistry.Unknown;
+
+// digests, so the comparison takes the same time whatever either length is
+static bool SecretMatches(string? given, string expected) =>
+    given is not null && CryptographicOperations.FixedTimeEquals(SHA256.HashData(Encoding.UTF8.GetBytes(given)), SHA256.HashData(Encoding.UTF8.GetBytes(expected)));
+
 internal record StatusResponse(string[] Peers);
 
-internal record NetworkConfigRequest(string Password);
+internal record NetworkConfigRequest(string? Password);
 internal record NetworkConfigResponse(string Authorization);
 
 // exposes Program for WebApplicationFactory in tests

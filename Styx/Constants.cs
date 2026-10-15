@@ -2,7 +2,11 @@ namespace Styx;
 
 public static class Constants
 {
+    public const string RelayKeyEnvVar = "RELAY_KEY";
     public const string RelayPasswordEnvVar = "RELAY_PASSWORD";
+    public const string RelayAdminPasswordEnvVar = "RELAY_ADMIN_PASSWORD";
+    public const string RevokedNetworksEnvVar = "RELAY_REVOKED_NETWORKS";
+    public const string RevokedIdsEnvVar = "RELAY_REVOKED_IDS";
     public const string DebugMessagesEnvVar = "DEBUG_MESSAGES";
     public const string LocalOnlyEnvVar = "LOCAL_ONLY";
 

@@ -91,4 +91,66 @@ public class ClientRegistryTests
             Assert.That((await registry.GetIdentity(clients[0].ConnectionId))?.HostName, Is.EqualTo("shared-host"));
         }
     }
+
+    [Test]
+    public async Task EveryRegistration_GetsItsOwnGeneration()
+    {
+        var registry = new ClientRegistry(NullLogger<ClientRegistry>.Instance);
+        var network = Guid.NewGuid();
+        var first = await registry.RegisterKickingDuplicates("connection", network, "host", "10.0.0.1");
+        var second = await registry.RegisterKickingDuplicates("connection", network, "host", "10.0.0.1");
+        Assert.That(second.Generation, Is.GreaterThan(first.Generation));
+    }
+
+    [Test]
+    public async Task UnregisterIfCurrent_LeavesALaterRegistrationAlone()
+    {
+        var registry = new ClientRegistry(NullLogger<ClientRegistry>.Instance);
+        var network = Guid.NewGuid();
+        var stale = await registry.RegisterKickingDuplicates("connection", network, "host", "10.0.0.1");
+        var current = await registry.RegisterKickingDuplicates("connection", network, "host", "10.0.0.1");
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(await registry.UnregisterIfCurrent("connection", stale.Generation), Is.Null);
+            Assert.That(await registry.GetIdentity("connection"), Is.Not.Null);
+            Assert.That(await registry.UnregisterIfCurrent("connection", current.Generation), Is.Not.Null);
+            Assert.That(await registry.GetIdentity("connection"), Is.Null);
+        }
+    }
+
+    [Test]
+    public async Task ReRegisteringOnAnotherPath_ReportsWhereItLeft()
+    {
+        var registry = new ClientRegistry(NullLogger<ClientRegistry>.Instance);
+        var network = Guid.NewGuid();
+        var lobby = new NetworkKey(network, "");
+        var room = new NetworkKey(network, "room");
+        var first = await registry.RegisterKickingDuplicates("connection", lobby, "host", "10.0.0.1");
+        var moved = await registry.RegisterKickingDuplicates("connection", room, "host", "10.0.0.1");
+        var stayed = await registry.RegisterKickingDuplicates("connection", room, "renamed", "10.0.0.1");
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(first.Left, Is.Null);
+            Assert.That(moved.Left, Is.EqualTo(lobby));
+            Assert.That(stayed.Left, Is.Null);
+            Assert.That(await registry.GetNetworkClients(lobby), Is.Empty);
+        }
+    }
+
+    [Test]
+    public async Task PathsAreSeparateNamespaces()
+    {
+        var registry = new ClientRegistry(NullLogger<ClientRegistry>.Instance);
+        var network = Guid.NewGuid();
+        await registry.Register("a", new NetworkKey(network, "x"), "host", "10.0.0.1");
+        await registry.Register("b", new NetworkKey(network, "y"), "host", "10.0.0.2");
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(await registry.GetConnectionId(new NetworkKey(network, "x"), "host"), Is.EqualTo("a"));
+            Assert.That(await registry.GetConnectionId(new NetworkKey(network, "y"), "HOST"), Is.EqualTo("b"));
+            Assert.That(await registry.GetConnectionId(network, "host"), Is.Null);
+        }
+    }
 }
