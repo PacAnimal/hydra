@@ -18,7 +18,7 @@ public class StyxToolsTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(code, Is.Zero);
-            Assert.That(StyxEnvironment.ReadKeys(name => name == Constants.RelayKeyEnvVar ? key : null), Has.Count.EqualTo(1));
+            Assert.That(StyxEnvironment.ReadKeys(name => name == Constants.RelaySigningKeyEnvVar ? key : null), Has.Count.EqualTo(1));
         }
     }
 
@@ -161,7 +161,7 @@ public class StyxToolsTests
     {
         var output = new StringWriter();
         var error = new StringWriter();
-        string? Environment(string name) => name == Constants.RelayKeyEnvVar ? key : name == Constants.RelayKeyPassphraseEnvVar ? passphrase : null;
+        string? Environment(string name) => name == Constants.RelaySigningKeyEnvVar ? key : name == Constants.RelaySigningPassphraseEnvVar ? passphrase : null;
         var code = StyxTools.Run(args, Environment, new StringReader(input), output, error);
         return (code, output.ToString(), error.ToString());
     }

@@ -76,8 +76,8 @@ app.MapGet("/api/status", async (HttpContext http, ITokenVerifier verifier, ICli
         return Results.Unauthorized();
     }
 
+    // a valid token's holder is answered at once; the throttle only slows guessing
     var clients = await registry.GetNetworkClients(network);
-    await throttle;
     return Results.Ok(new StatusResponse([.. clients.Select(c => c.HostName)]));
 });
 
@@ -86,8 +86,8 @@ app.MapPost("/api/network-config", async (HttpContext http, NetworkConfigRequest
 {
     var throttle = throttler.Start(Constants.NetworkConfigThrottleSeconds, ct);
 
-    // nothing ever issues a v1 token, so without a key, or without a secret to guard it, there is nothing here
-    if (!relayAuth.CanMint || relayAuth.AdminPassword is not { } adminPassword)
+    // nothing ever issues a v1 token, so without a key, or without the password to guard it, there is nothing here
+    if (!relayAuth.CreatesNetworks || relayAuth.V1Password is not { } password)
     {
         await throttle;
         return Results.NotFound();
@@ -99,7 +99,7 @@ app.MapPost("/api/network-config", async (HttpContext http, NetworkConfigRequest
         await throttle;
         return Results.Unauthorized();
     }
-    if (!SecretMatches(request.Password, adminPassword))
+    if (!SecretMatches(request.Password, password))
     {
         limiter.RecordFailure(remoteIp);
         await throttle;
@@ -116,8 +116,8 @@ if (app.Logger.IsEnabled(LogLevel.Information))
 {
     app.Logger.LogInformation("Styx listening on port {Port}{LocalOnly}", port, localOnly ? " (localhost only)" : "");
     app.Logger.LogInformation("v2 tokens {V2}; v1 tokens {V1}; network creation {Creation}",
-        auth.CanMint ? "accepted" : "refused (no RELAY_KEY)", auth.AcceptsV1 ? "accepted" : "refused (no RELAY_PASSWORD)",
-        auth.CanMint && auth.AdminPassword is not null ? "enabled" : "disabled");
+        auth.CanMint ? "accepted" : "refused (no RELAY_SIGNING_KEY or RELAY_SIGNING_PASSPHRASE)", auth.AcceptsV1 ? "accepted" : "refused (no RELAY_PASSWORD)",
+        auth.CreatesNetworks ? "enabled" : "disabled (needs a v2 key and RELAY_PASSWORD)");
 }
 if (debugMessages) app.Logger.LogInformation("Message debug logging enabled");
 app.Run();

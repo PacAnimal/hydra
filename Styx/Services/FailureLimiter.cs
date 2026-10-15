@@ -5,7 +5,7 @@ namespace Styx.Services;
 
 /// <summary>
 /// Counts failed attempts on the paths where a failure is expensive or guessable: v1 tokens that do not decrypt
-/// (each one a PBKDF2) and wrong admin secrets. Past <see cref="MaxFailures"/> in a minute an address is refused on
+/// (each one a PBKDF2) and wrong relay passwords. Past <see cref="MaxFailures"/> in a minute an address is refused on
 /// those paths, without any crypto, until the minute passes. v2 logins and v1 cache hits never consult it, so a
 /// misconfigured device behind a shared NAT cannot lock its neighbours out.
 /// </summary>

@@ -11,33 +11,32 @@ public class StyxEnvironmentTests
     private static readonly byte[] KeyA = SHA512.HashData("key a"u8);
 
     [Test]
-    public void OneKey_AndThePasswordAsTheAdminSecretByDefault()
+    public void OneKey_AndThePassword_CreatingNetworks()
     {
-        var auth = StyxEnvironment.Read(Env(("RELAY_KEY", Convert.ToBase64String(KeyA)), ("RELAY_PASSWORD", "pw")));
+        var auth = StyxEnvironment.Read(Env(("RELAY_SIGNING_KEY", Convert.ToBase64String(KeyA)), ("RELAY_PASSWORD", "pw")));
         using (Assert.EnterMultipleScope())
         {
             Assert.That(auth.Keys, Has.Count.EqualTo(1));
             Assert.That(auth.Keys[0], Is.EqualTo(KeyA));
             Assert.That(auth.V1Password, Is.EqualTo("pw"));
-            Assert.That(auth.AdminPassword, Is.EqualTo("pw"));
             Assert.That(auth.AcceptsV1, Is.True);
             Assert.That(auth.CanMint, Is.True);
+            Assert.That(auth.CreatesNetworks, Is.True);
         }
     }
 
     [Test]
-    public void AnExplicitAdminSecret_AndRevocations_AreRead()
+    public void Revocations_AreRead_AndNoPasswordCreatesNoNetworks()
     {
         var revoked = Guid.NewGuid();
         var auth = StyxEnvironment.Read(Env(
-            ("RELAY_KEY", Convert.ToBase64String(KeyA)),
-            ("RELAY_ADMIN_PASSWORD", "admin"),
+            ("RELAY_SIGNING_KEY", Convert.ToBase64String(KeyA)),
             ("RELAY_REVOKED_NETWORKS", $" {revoked} ,"),
             ("RELAY_REVOKED_IDS", "a, b")));
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(auth.AdminPassword, Is.EqualTo("admin"));
             Assert.That(auth.AcceptsV1, Is.False);
+            Assert.That(auth.CreatesNetworks, Is.False);
             Assert.That(auth.RevokedNetworks, Has.Count.EqualTo(1).And.Contains(revoked));
             Assert.That(auth.RevokedIds, Has.Count.EqualTo(2).And.Contains("a").And.Contains("b"));
         }
@@ -47,12 +46,22 @@ public class StyxEnvironmentTests
     public void DuringARotation_SeveralKeys_TheFirstMinting()
     {
         var keyB = DistinctKidFrom(KeyA);
-        var auth = StyxEnvironment.Read(Env(("RELAY_KEY", $"{Convert.ToBase64String(keyB)},{Convert.ToBase64String(KeyA)}")));
+        var auth = StyxEnvironment.Read(Env(("RELAY_SIGNING_KEY", $"{Convert.ToBase64String(keyB)},{Convert.ToBase64String(KeyA)}")));
         using (Assert.EnterMultipleScope())
         {
             Assert.That(auth.Keys[0], Is.EqualTo(keyB));
             Assert.That(auth.KeyFor(StyxToken.KeyIdOf(KeyA)), Is.EqualTo(KeyA));
         }
+    }
+
+    [TestCase("RELAY_KEY", "RELAY_SIGNING_KEY")]
+    [TestCase("RELAY_KEY_PASSPHRASE", "RELAY_SIGNING_PASSPHRASE")]
+    [TestCase("RELAY_ADMIN_PASSWORD", "RELAY_PASSWORD")]
+    public void ARetiredSetting_RefusesToStart_NamingWhatReplacedIt(string retired, string replacement)
+    {
+        var refused = Assert.Throws<StyxConfigurationException>(() =>
+            StyxEnvironment.Read(Env(("RELAY_SIGNING_KEY", Convert.ToBase64String(KeyA)), ("RELAY_PASSWORD", "pw"), (retired, "anything"))));
+        Assert.That(refused!.Message, Does.StartWith($"{retired} is no longer read").And.Contain(replacement));
     }
 
     [Test]
@@ -65,21 +74,21 @@ public class StyxEnvironmentTests
     public void TheKeyPublishedInStyxMd_RefusesToStart()
     {
         var published = Convert.ToBase64String([.. Enumerable.Range(0, 64).Select(i => (byte)i)]);
-        Assert.Throws<StyxConfigurationException>(() => StyxEnvironment.Read(Env(("RELAY_KEY", published))));
+        Assert.Throws<StyxConfigurationException>(() => StyxEnvironment.Read(Env(("RELAY_SIGNING_KEY", published))));
     }
 
     [TestCase("not base64!")]
     [TestCase("AAAA")]
     public void AMalformedKey_RefusesToStart(string key)
     {
-        Assert.Throws<StyxConfigurationException>(() => StyxEnvironment.Read(Env(("RELAY_KEY", key))));
+        Assert.Throws<StyxConfigurationException>(() => StyxEnvironment.Read(Env(("RELAY_SIGNING_KEY", key))));
     }
 
     [Test]
     public void TheSameKeyTwice_RefusesToStart()
     {
         var key = Convert.ToBase64String(KeyA);
-        Assert.Throws<StyxConfigurationException>(() => StyxEnvironment.Read(Env(("RELAY_KEY", $"{key},{key}"))));
+        Assert.Throws<StyxConfigurationException>(() => StyxEnvironment.Read(Env(("RELAY_SIGNING_KEY", $"{key},{key}"))));
     }
 
     [Test]
@@ -87,7 +96,7 @@ public class StyxEnvironmentTests
     {
         var clash = SameKidAs(KeyA);
         Assert.Throws<StyxConfigurationException>(() =>
-            StyxEnvironment.Read(Env(("RELAY_KEY", $"{Convert.ToBase64String(KeyA)},{Convert.ToBase64String(clash)}"))));
+            StyxEnvironment.Read(Env(("RELAY_SIGNING_KEY", $"{Convert.ToBase64String(KeyA)},{Convert.ToBase64String(clash)}"))));
     }
 
     private const string Passphrase = "a long sentence that nobody has ever written down before, about relays";
@@ -96,14 +105,14 @@ public class StyxEnvironmentTests
     public void ARefusal_NamesTheSettingThatCausedIt()
     {
         var derived = Convert.ToBase64String(StyxToken.KeyFromPassphrase(Passphrase));
-        var duplicate = Assert.Throws<StyxConfigurationException>(() => StyxEnvironment.Read(Env(("RELAY_KEY_PASSPHRASE", Passphrase), ("RELAY_KEY", derived))));
-        Assert.That(duplicate!.Message, Does.StartWith("RELAY_KEY "));
+        var duplicate = Assert.Throws<StyxConfigurationException>(() => StyxEnvironment.Read(Env(("RELAY_SIGNING_PASSPHRASE", Passphrase), ("RELAY_SIGNING_KEY", derived))));
+        Assert.That(duplicate!.Message, Does.StartWith("RELAY_SIGNING_KEY "));
     }
 
     [Test]
-    public void APassphrase_DerivesTheFirstKey_AndRelayKeysOnlyVerifyBehindIt()
+    public void APassphrase_DerivesTheFirstKey_AndSigningKeysOnlyVerifyBehindIt()
     {
-        var auth = StyxEnvironment.Read(Env(("RELAY_KEY_PASSPHRASE", Passphrase), ("RELAY_KEY", Convert.ToBase64String(KeyA))));
+        var auth = StyxEnvironment.Read(Env(("RELAY_SIGNING_PASSPHRASE", Passphrase), ("RELAY_SIGNING_KEY", Convert.ToBase64String(KeyA))));
         using (Assert.EnterMultipleScope())
         {
             Assert.That(auth.Keys, Has.Count.EqualTo(2));
@@ -118,21 +127,21 @@ public class StyxEnvironmentTests
     [TestCase("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")]
     public void APassphraseOutsideTheRules_RefusesToStart_NamingTheSetting(string passphrase)
     {
-        var refused = Assert.Throws<StyxConfigurationException>(() => StyxEnvironment.Read(Env(("RELAY_KEY_PASSPHRASE", passphrase))));
-        Assert.That(refused!.Message, Does.StartWith("RELAY_KEY_PASSPHRASE: "));
+        var refused = Assert.Throws<StyxConfigurationException>(() => StyxEnvironment.Read(Env(("RELAY_SIGNING_PASSPHRASE", passphrase))));
+        Assert.That(refused!.Message, Does.StartWith("RELAY_SIGNING_PASSPHRASE: "));
     }
 
     [Test]
     public void APassphraseAndItsOwnKey_AreTheSameKeyTwice()
     {
         var derived = Convert.ToBase64String(StyxToken.KeyFromPassphrase(Passphrase));
-        Assert.Throws<StyxConfigurationException>(() => StyxEnvironment.Read(Env(("RELAY_KEY_PASSPHRASE", Passphrase), ("RELAY_KEY", derived))));
+        Assert.Throws<StyxConfigurationException>(() => StyxEnvironment.Read(Env(("RELAY_SIGNING_PASSPHRASE", Passphrase), ("RELAY_SIGNING_KEY", derived))));
     }
 
     [Test]
     public void AKeyOfTheOldLength_RefusesToStart()
     {
-        Assert.Throws<StyxConfigurationException>(() => StyxEnvironment.Read(Env(("RELAY_KEY", Convert.ToBase64String(SHA256.HashData("key a"u8))))));
+        Assert.Throws<StyxConfigurationException>(() => StyxEnvironment.Read(Env(("RELAY_SIGNING_KEY", Convert.ToBase64String(SHA256.HashData("key a"u8))))));
     }
 
     [Test]

@@ -22,38 +22,38 @@ public static class StyxEnvironment
         var password = NullIfEmpty(environment(Constants.RelayPasswordEnvVar));
         if (keys.Count == 0 && password is null)
             throw new StyxConfigurationException(
-                $"None of {Constants.RelayKeyEnvVar}, {Constants.RelayKeyPassphraseEnvVar} or {Constants.RelayPasswordEnvVar} is set, so no token could ever be verified");
+                $"None of {Constants.RelaySigningKeyEnvVar}, {Constants.RelaySigningPassphraseEnvVar} or {Constants.RelayPasswordEnvVar} is set, so no token could ever be verified");
 
         return new StyxAuth(
             keys,
             password,
-            NullIfEmpty(environment(Constants.RelayAdminPasswordEnvVar)) ?? password,
             ReadNetworks(environment(Constants.RevokedNetworksEnvVar)),
             ReadList(environment(Constants.RevokedIdsEnvVar)).ToHashSet(StringComparer.Ordinal));
     }
 
     /// <summary>
-    /// The relay's v2 keys: the passphrase's first when one is set, then <c>RELAY_KEY</c>'s, one base64 key or during a
+    /// The relay's v2 keys: the passphrase's first when one is set, then <c>RELAY_SIGNING_KEY</c>'s, one base64 key or during a
     /// rotation a comma-separated list. The first key mints; the rest only verify.
     /// </summary>
     public static IReadOnlyList<byte[]> ReadKeys(Func<string, string?> environment)
     {
+        RefuseRetiredNames(environment);
         var keys = new List<byte[]>();
         var sources = new List<string>();
-        if (NullIfEmpty(environment(Constants.RelayKeyPassphraseEnvVar)) is { } passphrase)
+        if (NullIfEmpty(environment(Constants.RelaySigningPassphraseEnvVar)) is { } passphrase)
         {
             keys.Add(KeyFromPassphrase(passphrase));
-            sources.Add(Constants.RelayKeyPassphraseEnvVar);
+            sources.Add(Constants.RelaySigningPassphraseEnvVar);
         }
-        foreach (var entry in ReadList(environment(Constants.RelayKeyEnvVar)))
+        foreach (var entry in ReadList(environment(Constants.RelaySigningKeyEnvVar)))
         {
             byte[] key;
             try { key = Convert.FromBase64String(entry); }
-            catch (FormatException) { throw new StyxConfigurationException($"A {Constants.RelayKeyEnvVar} entry is not base64"); }
+            catch (FormatException) { throw new StyxConfigurationException($"A {Constants.RelaySigningKeyEnvVar} entry is not base64"); }
             if (key.Length != StyxToken.KeyBytes)
-                throw new StyxConfigurationException($"A {Constants.RelayKeyEnvVar} entry is {key.Length} bytes, not {StyxToken.KeyBytes}");
+                throw new StyxConfigurationException($"A {Constants.RelaySigningKeyEnvVar} entry is {key.Length} bytes, not {StyxToken.KeyBytes}");
             keys.Add(key);
-            sources.Add(Constants.RelayKeyEnvVar);
+            sources.Add(Constants.RelaySigningKeyEnvVar);
         }
 
         for (var i = 0; i < keys.Count; i++)
@@ -69,11 +69,26 @@ public static class StyxEnvironment
         return keys;
     }
 
+    // settings an earlier build read: one still set would otherwise be ignored, and the relay start without it
+    internal static readonly (string Name, string Instead)[] RetiredNames =
+    [
+        ("RELAY_KEY", $"set {Constants.RelaySigningKeyEnvVar} instead"),
+        ("RELAY_KEY_PASSPHRASE", $"set {Constants.RelaySigningPassphraseEnvVar} instead"),
+        ("RELAY_ADMIN_PASSWORD", $"network creation checks {Constants.RelayPasswordEnvVar}"),
+    ];
+
+    private static void RefuseRetiredNames(Func<string, string?> environment)
+    {
+        foreach (var (name, instead) in RetiredNames)
+            if (environment(name) is not null)
+                throw new StyxConfigurationException($"{name} is no longer read; {instead}");
+    }
+
     /// <summary>The key a passphrase derives (Styx.md §13.1).</summary>
     public static byte[] KeyFromPassphrase(string passphrase)
     {
         try { return StyxToken.KeyFromPassphrase(passphrase); }
-        catch (StyxTokenException ex) { throw new StyxConfigurationException($"{Constants.RelayKeyPassphraseEnvVar}: {ex.Message}"); }
+        catch (StyxTokenException ex) { throw new StyxConfigurationException($"{Constants.RelaySigningPassphraseEnvVar}: {ex.Message}"); }
     }
 
     private static HashSet<Guid> ReadNetworks(string? value)

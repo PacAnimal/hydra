@@ -77,36 +77,36 @@ public class StyxRevocationTests
     }
 
     [Test]
-    public async Task NetworkCreation_IsNotFound_WithoutAnAdminSecret()
+    public async Task NetworkCreation_IsNotFound_WithoutAPassword()
     {
-        await using var factory = Relay(Auth() with { AdminPassword = null });
+        await using var factory = Relay(Auth() with { V1Password = null });
         using var http = factory.CreateClient();
         var response = await http.PostAsJsonAsync("/api/network-config", new { Password = "" });
         Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
     }
 
     [Test]
-    public async Task NetworkCreation_ChecksTheAdminSecret_NotTheV1Password()
+    public async Task NetworkCreation_ChecksTheRelayPassword()
     {
-        await using var factory = Relay(Auth() with { AdminPassword = "admin-secret" });
+        await using var factory = Relay(Auth());
         using var http = factory.CreateClient();
-        var withPassword = await http.PostAsJsonAsync("/api/network-config", new { Password = StyxTestServer.TestPassword });
-        var withSecret = await http.PostAsJsonAsync("/api/network-config", new { Password = "admin-secret" });
+        var wrong = await http.PostAsJsonAsync("/api/network-config", new { Password = "not-the-password" });
+        var right = await http.PostAsJsonAsync("/api/network-config", new { Password = StyxTestServer.TestPassword });
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(withPassword.StatusCode, Is.EqualTo(HttpStatusCode.Unauthorized));
-            Assert.That(withSecret.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(wrong.StatusCode, Is.EqualTo(HttpStatusCode.Unauthorized));
+            Assert.That(right.StatusCode, Is.EqualTo(HttpStatusCode.OK));
         }
     }
 
     [Test]
-    public async Task WrongAdminSecrets_CountTowardTheAddressLimit()
+    public async Task WrongPasswords_CountTowardTheAddressLimit()
     {
-        await using var factory = Relay(Auth() with { AdminPassword = "admin-secret" });
+        await using var factory = Relay(Auth());
         using var http = factory.CreateClient();
         for (var i = 0; i < FailureLimiter.MaxFailures; i++)
             await http.PostAsJsonAsync("/api/network-config", new { Password = "guess" });
-        var right = await http.PostAsJsonAsync("/api/network-config", new { Password = "admin-secret" });
+        var right = await http.PostAsJsonAsync("/api/network-config", new { Password = StyxTestServer.TestPassword });
         Assert.That(right.StatusCode, Is.EqualTo(HttpStatusCode.Unauthorized), "refused without checking, until the minute passes");
     }
 
@@ -139,17 +139,16 @@ public class StyxRevocationTests
     [Test]
     public void StyxAuth_LeavesItsSecretsOutOfToString()
     {
-        var text = (Auth() with { AdminPassword = "admin-secret" }).ToString();
+        var text = Auth().ToString();
         using (Assert.EnterMultipleScope())
         {
             Assert.That(text, Does.Not.Contain(StyxTestServer.TestPassword));
-            Assert.That(text, Does.Not.Contain("admin-secret"));
             Assert.That(text, Does.Not.Contain(Convert.ToBase64String(StyxTestServer.TestKey)));
         }
     }
 
     private static StyxAuth Auth() =>
-        new([StyxTestServer.TestKey], StyxTestServer.TestPassword, StyxTestServer.TestPassword, new HashSet<Guid>(), new HashSet<string>());
+        new([StyxTestServer.TestKey], StyxTestServer.TestPassword, new HashSet<Guid>(), new HashSet<string>());
 
     private static WebApplicationFactory<global::Styx.Program> Relay(StyxAuth auth) =>
         StyxTestServer.Create(configure: services => services.AddSingleton(auth));

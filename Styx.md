@@ -407,10 +407,12 @@ that delay — a relay restart otherwise brings every peer back in lockstep, rep
 
 ## 8. HTTP interface
 
-Alongside the hub, the relay serves static files from its root and two JSON endpoints. Both respond no
-faster than a fixed floor, for the same reason as §5.1. JSON member names are camelCase.
+Alongside the hub, the relay serves static files from its root and two JSON endpoints. JSON member names are
+camelCase. `/api/network-config` holds every answer to a fixed floor, for the same reason as §5.1.
+`/api/status` holds only its refusals, and a client can give up on one sooner, so what limits guessing there
+is the per-address count below and the strength of v2 keys.
 
-Wrong v1 tokens that fail to decrypt, and wrong admin secrets, are counted per client address (an IPv6
+Wrong v1 tokens that fail to decrypt, and wrong relay passwords, are counted per client address (an IPv6
 address by its /64). Past 20 in a minute, that address's further attempts **on those two paths only** are
 refused without being checked until the minute passes. v2 tokens are never refused by address.
 
@@ -422,20 +424,20 @@ Authorization: Bearer <authorization token>
 → 401 (invalid or absent token)
 ```
 
-Membership of the token's network and path without joining it. Either token format. Minimum response
-time 2 s.
+Membership of the token's network and path without joining it. Either token format. A valid token is
+answered at once; a refusal takes at least 2 s.
 
 ### 8.2 `POST /api/network-config`
 
 ```
-{"password":"<admin secret>"}
+{"password":"<relay password>"}
 → 200 {"authorization":"<styx2. token>"}
-→ 401 (wrong secret)
-→ 404 (the relay has no v2 key or no admin secret, so creates no networks)
+→ 401 (wrong password)
+→ 404 (the relay has no v2 key or no password, so creates no networks)
 ```
 
 Mints a v2 root token for a **freshly generated version-8 network** — a self-service way to create an
-isolated network on a relay whose admin secret you know. It cannot produce a token for an existing network.
+isolated network on a relay whose password (`RELAY_PASSWORD`) you know. It cannot produce a token for an existing network.
 It never issues a v1 token. Minimum response time 5 s.
 
 ## 9. Client provisioning
@@ -485,9 +487,9 @@ demands (§14.4). Allowlists are the stronger: a `hostNot` excludes only what it
 
 **Key and password compromise.** A v2 relay key mints tokens for every v2 network signed under it; recover
 by adding a new key, reissuing, and retiring the old one (§13). The v1 password mints v1 tokens for any
-legacy network whose UUID is known, never for a v2 network; recover by rotating it, which invalidates every
-v1 token at once. Every v1 token is an offline verifier of the password (§4.1), so a relay that keeps v1
-needs a long random password.
+legacy network whose UUID is known, never for a v2 network, and creates new v2 networks through §8.2;
+recover by rotating it, which invalidates every v1 token at once. Every v1 token is an offline verifier of
+the password (§4.1), so a relay that keeps v1 needs a long random password.
 
 **Availability of v1.** A v1 login that is not already cached costs a PBKDF2, and only a few run at once
 with a bounded wait. Junk from many addresses can therefore starve v1 logins (after a restart especially,
@@ -555,26 +557,26 @@ message structure — is the application's to build. The relay carries bytes bet
 
 | Variable | Effect |
 |---|---|
-| `RELAY_KEY` | The v2 key: base64 of 64 random bytes. During a rotation, a comma-separated list whose first entry mints and whose others only verify. |
-| `RELAY_KEY_PASSPHRASE` | A v2 key as a passphrase instead (§13.1). Set, its key comes first, so it mints, and `RELAY_KEY`'s keys only verify. |
-| `RELAY_PASSWORD` | The v1 password. Set, v1 tokens are accepted; unset, they are not. |
-| `RELAY_ADMIN_PASSWORD` | The secret `POST /api/network-config` checks. Defaults to `RELAY_PASSWORD`. |
+| `RELAY_SIGNING_KEY` | The v2 key, which signs tokens: base64 of 64 random bytes. Not a blob's `EncryptionKey` (§9), which the relay never sees. During a rotation, a comma-separated list whose first entry mints and whose others only verify. |
+| `RELAY_SIGNING_PASSPHRASE` | A v2 key as a passphrase instead (§13.1). Set, its key comes first, so it mints, and `RELAY_SIGNING_KEY`'s keys only verify. |
+| `RELAY_PASSWORD` | The relay password. Set, v1 tokens are accepted, and `POST /api/network-config` creates networks for whoever knows it (given a v2 key); unset, neither. |
 | `RELAY_REVOKED_NETWORKS` | Comma-separated network UUIDs whose tokens are refused, v1 and v2. |
 | `RELAY_REVOKED_IDS` | Comma-separated v2 `id` caveat values whose tokens are refused (compared ordinally). |
 | `LOCAL_PORT` | Listening port. Default `5000`. |
 | `LOCAL_ONLY` | `true` binds loopback only. |
 | `DEBUG_MESSAGES` | `true` logs per-payload routing metadata (network, sender, targets, size — not contents). |
 
-The relay refuses to start unless it can verify something (`RELAY_KEY`, `RELAY_KEY_PASSPHRASE` or
+The relay refuses to start unless it can verify something (`RELAY_SIGNING_KEY`, `RELAY_SIGNING_PASSPHRASE` or
 `RELAY_PASSWORD`), and refuses a malformed key, a passphrase outside the rules of §13.1, the same key twice,
-two keys sharing a `kid`, or the published test key or passphrase of §14.6. Every
+two keys sharing a `kid`, the published test key or passphrase of §14.6, or a retired setting (`RELAY_KEY`,
+`RELAY_KEY_PASSPHRASE`, `RELAY_ADMIN_PASSWORD`), naming what replaced it. Every
 change to these is a restart, which drops every peer; that is also what makes a revocation complete.
 
 **Rotating the v2 key:** the first key mints and the rest only verify, and a passphrase's key comes first.
-Put the new key first (as `RELAY_KEY_PASSPHRASE`, or first in `RELAY_KEY` with no passphrase set) and the old
-one after it in `RELAY_KEY`; reissue tokens; then remove the old key, which ends every token it signed. To
-keep an old passphrase's key verifying, put the key it derives in `RELAY_KEY` and unset or replace
-`RELAY_KEY_PASSPHRASE`; `Styx derive` prints that key, reading the passphrase from standard input (`docker run
+Put the new key first (as `RELAY_SIGNING_PASSPHRASE`, or first in `RELAY_SIGNING_KEY` with no passphrase set) and the old
+one after it in `RELAY_SIGNING_KEY`; reissue tokens; then remove the old key, which ends every token it signed. To
+keep an old passphrase's key verifying, put the key it derives in `RELAY_SIGNING_KEY` and unset or replace
+`RELAY_SIGNING_PASSPHRASE`; `Styx derive` prints that key, reading the passphrase from standard input (`docker run
 --rm -i`).
 
 The relay honours forwarded headers for client-address determination behind a reverse proxy, and disables

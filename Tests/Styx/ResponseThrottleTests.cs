@@ -67,6 +67,20 @@ public class ResponseThrottleTests
         Assert.That((await ReleaseThrottle(answer, Constants.StatusThrottleSeconds)).StatusCode, Is.EqualTo(HttpStatusCode.Unauthorized));
     }
 
+    // the holder of a valid token is no stranger: the clock never moves, so waiting on the throttle would hang here
+    [TestCase(true)]
+    [TestCase(false)]
+    public async Task Status_WithAValidToken_IsAnsweredAtOnce(bool v1)
+    {
+        using var http = _factory.CreateClient();
+        var token = v1 ? await StyxTestServer.GenerateAuthorization(Guid.NewGuid()) : StyxTestServer.MintToken().ToString();
+        http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+        var answer = await http.GetAsync("/api/status").WaitAsync(Bound);
+
+        Assert.That(answer.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+    }
+
     // holds the answer one tick short of the throttle, then lets it through
     private async Task<T> ReleaseThrottle<T>(Task<T> answer, int seconds)
     {

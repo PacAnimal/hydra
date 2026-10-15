@@ -629,18 +629,21 @@ openssl rand -base64 64 | tr -d '\n'
 $key = New-Object byte[] 64; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($key); [Convert]::ToBase64String($key)
 ```
 
-Or set `RELAY_KEY_PASSPHRASE` instead of `RELAY_KEY`, and the relay derives its key from that. It must be one line
+Or set `RELAY_SIGNING_PASSPHRASE` instead of `RELAY_SIGNING_KEY`, and the relay derives its key from that. It must be one line
 of at least 64 characters, 16 of them different, and it is only as strong as it is unpredictable: anyone holding a
 token can test guesses at it offline, and the same guesses work against every relay. Use a long sentence nobody
 has ever written down, a long stretch of random hammering on the keyboard, or best of all a password manager's
 generator; never a quotation, a lyric or a name. `docker run --rm -i ghcr.io/pacanimal/styx:latest derive` prints
 the key a passphrase gives, reading the passphrase from standard input. [Styx.md](../Styx.md) §13.1 has the rules.
 
-Then run the relay with it, and with an admin secret for creating networks:
+Then run the relay with it, and with a password for creating networks:
 
 ```bash
-docker run -e RELAY_KEY=<key> -e RELAY_ADMIN_PASSWORD=<secret> -p 5000:5000 ghcr.io/pacanimal/styx:latest
+docker run -e RELAY_SIGNING_KEY=<key> -e RELAY_PASSWORD=<password> -p 5000:5000 ghcr.io/pacanimal/styx:latest
 ```
+
+`RELAY_PASSWORD` also makes the relay accept older configs, and each of those lets whoever holds it guess at the
+password offline, so make it long and random.
 
 An existing relay keeps accepting the configs it already issued for as long as `RELAY_PASSWORD` stays set; new
 networks are always issued in the newer format. See [Styx.md](../Styx.md) §13 for every setting.
@@ -650,25 +653,25 @@ networks are always issued in the newer format. See [Styx.md](../Styx.md) §13 f
 Styx listens on port `5000` by default. Override with `LOCAL_PORT`:
 
 ```bash
-docker run -e RELAY_KEY=<key> -e RELAY_ADMIN_PASSWORD=<secret> -e LOCAL_PORT=8080 -p 8080:8080 ghcr.io/pacanimal/styx:latest
+docker run -e RELAY_SIGNING_KEY=<key> -e RELAY_PASSWORD=<password> -e LOCAL_PORT=8080 -p 8080:8080 ghcr.io/pacanimal/styx:latest
 ```
 
 Set `LOCAL_ONLY=true` to bind only to `127.0.0.1` and `::1` — useful when running behind a reverse proxy (HAProxy, nginx, Caddy, etc.) that terminates TLS and forwards to localhost:
 
 ```bash
-docker run -e RELAY_KEY=<key> -e RELAY_ADMIN_PASSWORD=<secret> -e LOCAL_ONLY=true -p 127.0.0.1:5000:5000 ghcr.io/pacanimal/styx:latest
+docker run -e RELAY_SIGNING_KEY=<key> -e RELAY_PASSWORD=<password> -e LOCAL_ONLY=true -p 127.0.0.1:5000:5000 ghcr.io/pacanimal/styx:latest
 ```
 
 Or build from source:
 
 ```bash
 docker build -f Styx/Dockerfile -t styx:local .
-docker run -e RELAY_KEY=<key> -e RELAY_ADMIN_PASSWORD=<secret> -p 5000:5000 styx:local
+docker run -e RELAY_SIGNING_KEY=<key> -e RELAY_PASSWORD=<password> -p 5000:5000 styx:local
 ```
 
 ### Generating a network config
 
-Open `http://<your-styx-host>:5000` in a browser, enter the admin secret, and click **Generate**. Copy the config string.
+Open `http://<your-styx-host>:5000` in a browser, enter the relay password, and click **Generate**. Copy the config string.
 
 ### Connecting Hydra to a standalone Styx server
 

@@ -24,8 +24,10 @@ public static class StyxTestServer
         // one at a time — every caller uses the default today. Anything else a test wants differs in code,
         // by replacing StyxAuth through `configure`.
         Environment.SetEnvironmentVariable(global::Styx.Constants.RelayPasswordEnvVar, password);
-        Environment.SetEnvironmentVariable(global::Styx.Constants.RelayKeyEnvVar, Convert.ToBase64String(TestKey));
-        Environment.SetEnvironmentVariable(global::Styx.Constants.RelayAdminPasswordEnvVar, null);
+        Environment.SetEnvironmentVariable(global::Styx.Constants.RelaySigningKeyEnvVar, Convert.ToBase64String(TestKey));
+        Environment.SetEnvironmentVariable(global::Styx.Constants.RelaySigningPassphraseEnvVar, null);
+        // a retired name left in the shell would make every relay here refuse to start
+        foreach (var (name, _) in StyxEnvironment.RetiredNames) Environment.SetEnvironmentVariable(name, null);
         Environment.SetEnvironmentVariable(global::Styx.Constants.RevokedNetworksEnvVar, null);
         Environment.SetEnvironmentVariable(global::Styx.Constants.RevokedIdsEnvVar, null);
 

@@ -119,7 +119,7 @@ public class V1TokenVerifierTests
     {
         var network = Guid.NewGuid();
         var token = await StyxTestServer.GenerateAuthorization(network);
-        var auth = new StyxAuth([], StyxTestServer.TestPassword, null, new HashSet<Guid> { network }, new HashSet<string>());
+        var auth = new StyxAuth([], StyxTestServer.TestPassword, new HashSet<Guid> { network }, new HashSet<string>());
         var clock = new FakeTimeProvider();
         var v1 = new V1TokenVerifier(auth, new FailureLimiter(clock), clock, NullLogger<V1TokenVerifier>.Instance);
         var verifier = new TokenVerifier(auth, v1, clock);
@@ -182,7 +182,7 @@ public class V1TokenVerifierTests
     {
         var clock = new FakeTimeProvider();
         var limiter = new FailureLimiter(clock);
-        var auth = new StyxAuth([], password, null, new HashSet<Guid>(), new HashSet<string>());
+        var auth = new StyxAuth([], password, new HashSet<Guid>(), new HashSet<string>());
         return (new V1TokenVerifier(auth, limiter, clock, NullLogger<V1TokenVerifier>.Instance), limiter);
     }
 }

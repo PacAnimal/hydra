@@ -29,7 +29,7 @@ public class StyxDocumentationTests
     {
         _vectors = JsonSerializer.Deserialize<Vectors>(Block("vectors"), Json)!;
         _relay = StyxTestServer.Create(configure: services =>
-            services.AddSingleton(new StyxAuth([Key], null, null, new HashSet<Guid>(), new HashSet<string>())));
+            services.AddSingleton(new StyxAuth([Key], null, new HashSet<Guid>(), new HashSet<string>())));
         _ = _relay.Server;
     }
 
@@ -49,8 +49,8 @@ public class StyxDocumentationTests
     {
         using (Assert.EnterMultipleScope())
         {
-            Assert.Throws<StyxConfigurationException>(() => StyxEnvironment.ReadKeys(name => name == Constants.RelayKeyEnvVar ? Convert.ToBase64String(Key) : null));
-            Assert.Throws<StyxConfigurationException>(() => StyxEnvironment.ReadKeys(name => name == Constants.RelayKeyPassphraseEnvVar ? _vectors.Passphrase : null));
+            Assert.Throws<StyxConfigurationException>(() => StyxEnvironment.ReadKeys(name => name == Constants.RelaySigningKeyEnvVar ? Convert.ToBase64String(Key) : null));
+            Assert.Throws<StyxConfigurationException>(() => StyxEnvironment.ReadKeys(name => name == Constants.RelaySigningPassphraseEnvVar ? _vectors.Passphrase : null));
         }
     }
 

@@ -5,7 +5,7 @@ using Cathedral.Styx;
 namespace Styx;
 
 /// <summary>
-/// The relay binary's key-holding subcommands. Run them where <c>RELAY_KEY</c> or <c>RELAY_KEY_PASSPHRASE</c> already
+/// The relay binary's key-holding subcommands. Run them where <c>RELAY_SIGNING_KEY</c> or <c>RELAY_SIGNING_PASSPHRASE</c> already
 /// lives (inside the relay's pod), so it never lands on an operator's machine; what they print is a secret too.
 /// </summary>
 public static class StyxTools
@@ -61,7 +61,7 @@ public static class StyxTools
     private static string Mint(string[] args, Func<string, string?> environment)
     {
         var keys = StyxEnvironment.ReadKeys(environment);
-        if (keys.Count == 0) throw new StyxConfigurationException($"Neither {Constants.RelayKeyEnvVar} nor {Constants.RelayKeyPassphraseEnvVar} is set");
+        if (keys.Count == 0) throw new StyxConfigurationException($"Neither {Constants.RelaySigningKeyEnvVar} nor {Constants.RelaySigningPassphraseEnvVar} is set");
 
         Guid? network = null;
         var caveats = new List<StyxCaveat>();
