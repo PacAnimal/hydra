@@ -17,6 +17,7 @@ public sealed class TestStyxClient : IStyxClient, IAsyncDisposable
     private IDisposable? _registration;
 
     private readonly NotificationQueue<string[]> _peers = new();
+    private readonly NotificationQueue<byte[]> _received = new();
     private readonly SemaphoreSlim _receiveSignal = new(0);
     private readonly SemaphoreSlim _kickSignal = new(0);
 
@@ -28,15 +29,16 @@ public sealed class TestStyxClient : IStyxClient, IAsyncDisposable
     public async Task<RelayLoginResponse> Connect(
         WebApplicationFactory<global::Styx.Program> factory,
         string authorization,
-        string hostName)
+        string hostName,
+        string path = global::Styx.Constants.RelayPath)
     {
-        await ConnectRaw(factory);
+        await ConnectRaw(factory, path);
         return await Server!.Authenticate(new RelayLogin { Authorization = authorization, HostName = hostName });
     }
 
     // connect without authenticating — for testing unauthenticated behaviour
-    public Task ConnectRaw(WebApplicationFactory<global::Styx.Program> factory) =>
-        ConnectRaw(new HubConnectionBuilder().WithUrl($"{factory.Server.BaseAddress}relay",
+    public Task ConnectRaw(WebApplicationFactory<global::Styx.Program> factory, string path = global::Styx.Constants.RelayPath) =>
+        ConnectRaw(new HubConnectionBuilder().WithUrl($"{factory.Server.BaseAddress.ToString().TrimEnd('/')}{path}",
             options => options.UseTestServer(factory.Server)));
 
     // the same, against the embedded relay on a real socket, trusting its self-signed cert without the binding
@@ -64,6 +66,12 @@ public sealed class TestStyxClient : IStyxClient, IAsyncDisposable
         return LastReceived!.Value;
     }
 
+    // every payload received, in arrival order
+    public Task<byte[]> NextReceived(int timeoutMs = 5000) => _received.Next(timeoutMs, "a received payload");
+
+    // a non-blocking invocation, as Hydra's input lane sends: nothing comes back, and the next may go at once
+    public Task SendWithoutWaiting(string[] targetHosts, byte[] payload) => _hub!.SendAsync(nameof(IStyxServer.Send), targetHosts, payload);
+
     public async Task<string> WaitForKick(int timeoutMs = 5000)
     {
         if (!await _kickSignal.WaitAsync(timeoutMs))
@@ -75,6 +83,7 @@ public sealed class TestStyxClient : IStyxClient, IAsyncDisposable
     public Task Receive(string sourceHost, string sourceIp, byte[] payload)
     {
         LastReceived = (sourceHost, sourceIp, payload);
+        _received.Push(payload);
         _receiveSignal.Release();
         return Task.CompletedTask;
     }

@@ -22,7 +22,7 @@ public static class StyxRelayExtensions
 
         builder.DisableEventLog();
         services.AddDataProtection().PersistKeysToNowhere();
-        services.AddStyxSignalR();
+        services.AddStyxSignalR(options.ParallelInvocations);
 
         services.AddSingleton(options);
         services.AddSingleton(new ResponseThrottle(throttleClock ?? TimeProvider.System));
@@ -39,6 +39,14 @@ public static class StyxRelayExtensions
 
         if (behindProxy) services.AddCathedralForwardedHeaders();
         return builder;
+    }
+
+    // both relay paths, on every host, so one cannot exist without the other
+    public static IEndpointRouteBuilder MapStyxRelay(this IEndpointRouteBuilder endpoints)
+    {
+        endpoints.MapHub<StyxHub>(Constants.RelayPath);
+        endpoints.MapHub<ParallelStyxHub>(Constants.ParallelRelayPath);
+        return endpoints;
     }
 
     // relay traffic is small input frames that must leave at once, not wait for Nagle to coalesce them

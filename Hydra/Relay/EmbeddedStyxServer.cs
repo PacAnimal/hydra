@@ -110,7 +110,7 @@ public class EmbeddedStyxServer(EmbeddedStyxServerConfig config, ILogger<Embedde
         var app = builder.Build();
         var proofs = EmbeddedRelayTls.ProofsFor(config.Password, EmbeddedRelayTls.FingerprintOf(app.Services.GetRequiredService<X509Certificate2>()));
         _registry = app.Services.GetRequiredService<IClientRegistry>();
-        app.MapHub<StyxHub>("/relay");
+        app.MapStyxRelay();
         var gate = new BindingGate(app.Services.GetRequiredService<ResponseThrottle>(), app.Services.GetRequiredService<FailureLimiter>());
         app.MapPost(EmbeddedRelayTls.BindingPath, (HttpContext http, CancellationToken cancel) => AnswerBinding(proofs, gate, http, cancel));
         return app;

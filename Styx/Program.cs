@@ -15,9 +15,11 @@ if (args.Length > 0 && StyxTools.IsCommand(args[0]))
 var config = Env.Config;
 
 StyxAuth auth;
+int parallelInvocations;
 try
 {
     auth = StyxEnvironment.Read(Environment.GetEnvironmentVariable);
+    parallelInvocations = StyxEnvironment.ReadParallelInvocations(Environment.GetEnvironmentVariable);
 }
 catch (StyxConfigurationException ex)
 {
@@ -37,7 +39,7 @@ services.AddSereneConsoleLogging(logging =>
 services.ConfigureHttpJsonOptions(options => SaneJson.Configure(options.SerializerOptions));
 
 var debugMessages = Environment.GetEnvironmentVariable(Constants.DebugMessagesEnvVar)?.EqualsIgnoreCase("true") ?? false;
-builder.AddStyxRelay(auth, new StyxOptions(debugMessages), behindProxy: true);
+builder.AddStyxRelay(auth, new StyxOptions(debugMessages, parallelInvocations), behindProxy: true);
 
 var port = int.Parse(config.GetString("LOCAL_PORT", "5000"));
 var localOnly = Environment.GetEnvironmentVariable(Constants.LocalOnlyEnvVar)?.EqualsIgnoreCase("true") ?? false;
@@ -61,7 +63,7 @@ var app = builder.Build();
 app.UseDefaultFiles();
 app.UseStaticFiles();
 
-app.MapHub<StyxHub>("/relay");
+app.MapStyxRelay();
 
 app.MapGet("/api/status", async (HttpContext http, ITokenVerifier verifier, IClientRegistry registry, ResponseThrottle throttler, CancellationToken ct) =>
 {
@@ -118,7 +120,9 @@ if (app.Logger.IsEnabled(LogLevel.Information))
     app.Logger.LogInformation("v2 tokens {V2}; v1 tokens {V1}; network creation {Creation}",
         auth.CanMint ? "accepted" : "refused (no RELAY_SIGNING_KEY or RELAY_SIGNING_PASSPHRASE)", auth.AcceptsV1 ? "accepted" : "refused (no RELAY_PASSWORD)",
         auth.CreatesNetworks ? "enabled" : "disabled (needs a v2 key and RELAY_PASSWORD)");
+    app.Logger.LogInformation("{ParallelPath} runs up to {Width} invocations per client at once", Constants.ParallelRelayPath, parallelInvocations);
 }
+if (StyxEnvironment.ParallelInvocationsWarning(parallelInvocations) is { } parallelWarning) app.Logger.LogWarning("{Warning}", parallelWarning);
 if (debugMessages) app.Logger.LogInformation("Message debug logging enabled");
 app.Run();
 return 0;

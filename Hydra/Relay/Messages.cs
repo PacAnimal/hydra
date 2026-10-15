@@ -246,10 +246,9 @@ public record KeyEventMessage(KeyEventType Type, KeyModifiers Modifiers, char? C
 /// superseded: a KeyDown and the KeyUp that follows are two facts, and losing either leaves a key held down
 /// on somebody's machine. So this carries every event it was given, in the order it was given them.</para>
 ///
-/// <para>What it buys is round trips. <c>Send</c> on the relay proxy is <c>InvokeCoreAsync</c>, which does
-/// not complete until the hub method returns — so a lane sends one message at a time and pays a full
-/// relay round trip for each. Type fast enough, or hold a key down, and a KeyDown and its KeyUp are both
-/// waiting by the time the first goes out; one frame delivers both for the price of one trip.</para>
+/// <para>What it buys is frames. The input lane sends a key event as soon as the one before it is written, so
+/// events only pile up while the connection to the relay is backed up; then one frame carries them all instead of
+/// one frame each.</para>
 ///
 /// <para><b>Only to a peer that has said it understands this.</b> An unrecognised kind reaches
 /// <c>RelayConnection.OnReceive</c>'s base, which does nothing at all — so sending one of these to a slave

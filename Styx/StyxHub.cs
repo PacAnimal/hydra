@@ -11,8 +11,31 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, ITokenVer
 {
     public const string HostNameNotAllowed = "Authorization does not allow this hostname";
 
+    // one login at a time per connection, whatever the path's width, so the throttle below caps it at one a second
+    private static readonly object LoginGateKey = new();
+
+    public override async Task OnConnectedAsync()
+    {
+        Context.Items[LoginGateKey] = new SemaphoreSlim(1, 1);
+        await base.OnConnectedAsync();
+    }
+
     [AllowAnonymousHub]
     public async Task<RelayLoginResponse> Authenticate(RelayLogin? login)
+    {
+        var gate = (SemaphoreSlim)Context.Items[LoginGateKey]!;
+        await gate.WaitAsync(Context.ConnectionAborted);
+        try
+        {
+            return await Login(login);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    private async Task<RelayLoginResponse> Login(RelayLogin? login)
     {
         // throttle — minimum response time regardless of outcome; it also caps a connection at one login a second,
         // and with it the displacement churn a token holder could cause by re-authenticating in a loop

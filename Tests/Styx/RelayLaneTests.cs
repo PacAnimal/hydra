@@ -1,7 +1,4 @@
 using Hydra.Relay;
-using Microsoft.AspNetCore.SignalR;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Options;
 using Tests.Setup;
 
 namespace Tests.Styx;
@@ -352,33 +349,22 @@ public class RelayLaneTests : StyxFixtureBase
     }
 
     /// <summary>
-    /// The relay must dispatch at least as many of one connection's invocations at once as that connection
-    /// has lanes.
-    ///
-    /// <para><b>Nothing else in this file can see this.</b> Every lane test here parks on the client's own
-    /// encrypt gate, so they all stay green with the relay dispatching one invocation at a time — and at
-    /// one, a 256 KiB chunk's invocation occupies the only slot and the keystroke behind it is not even
-    /// dispatched. That is the head-of-line blocking this whole change removed, rebuilt at the relay, with
-    /// the client-side split still looking perfectly correct.</para>
-    ///
-    /// <para>Counted from <c>RelayLane</c> rather than written as 2, so adding a third lane fails here
-    /// instead of quietly re-introducing the stall.</para>
+    /// The relay runs one invocation at a time per client on <c>/relay</c>: the input lane does not wait for each Send,
+    /// so that is what keeps its frames in order. <c>RelayDispatchTests</c> shows the behaviour; this pins the setting.
     ///
     /// <para><b>Read off the SERVER THIS FIXTURE RUNS, never off the constant and never off a hand-built
-    /// collection.</b> Two weaker forms were tried and both were defeated. Comparing the constant with the
-    /// lane count is a constant against a constant — hardcoding the hub to 1 left the suite green. Building
-    /// a fresh <c>ServiceCollection</c> and calling <c>AddStyxSignalR</c> on it pins the HELPER, not the
-    /// host: one <c>services.Configure&lt;HubOptions&gt;</c> in <c>Styx/Program.cs</c> after that call put
-    /// the real relay at one invocation per client with the suite still green. Only the options the running
-    /// host composed can answer this, because the last <c>Configure</c> wins and anything may add one —
-    /// <c>EmbeddedStyxServer</c> already does, to attach its auth filter.</para>
+    /// collection.</b> A constant against a constant passes whatever the host does, and a fresh
+    /// <c>ServiceCollection</c> pins the helper rather than the host: anything configuring <c>HubOptions</c> after the
+    /// relay's own wiring wins, and only the options the running host composed can tell.</para>
     /// </summary>
     [Test]
-    public void TheRelayDispatchesAtLeastAsManyInvocationsAsAPeerHasLanes()
+    public void TheRelayRunsOneInvocationAtATimeOnItsOrderedPath()
     {
-        var configured = Factory.Services.GetRequiredService<IOptions<HubOptions>>().Value.MaximumParallelInvocationsPerClient;
-
-        Assert.That(configured, Is.GreaterThanOrEqualTo(Enum.GetValues<RelayLane>().Length),
-            "a lane's invocation is not finished until the hub method returns, so fewer slots than lanes means a lane waits for another lane's frame to be delivered");
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(RelayWidths.OrderedPath(Factory.Services), Is.All.EqualTo(1),
+                "the input lane does not wait for each Send, so only one invocation at a time keeps its frames in order");
+            Assert.That(RelayWidths.ParallelPath(Factory.Services), Is.EqualTo(global::Styx.Constants.DefaultParallelInvocations));
+        }
     }
 }

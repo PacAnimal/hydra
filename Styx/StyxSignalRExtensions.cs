@@ -1,5 +1,6 @@
 using ByteSizeLib;
 using Cathedral.Config;
+using Microsoft.AspNetCore.SignalR;
 using System.Text.Json.Serialization.Metadata;
 
 namespace Styx;
@@ -8,8 +9,10 @@ public static class StyxSignalRExtensions
 {
     // hub and protocol wiring, shared by the standalone server and any in-process host, so the two can't
     // drift apart on limits or on which serializers a client may speak
-    public static IServiceCollection AddStyxSignalR(this IServiceCollection services)
+    public static IServiceCollection AddStyxSignalR(this IServiceCollection services, int parallelInvocations)
     {
+        services.AddSingleton<HubLifetimeManager<ParallelStyxHub>, SharedHubLifetimeManager<ParallelStyxHub>>();
+
         services.AddSignalR(options =>
         {
             options.KeepAliveInterval = TimeSpan.FromSeconds(Constants.KeepAliveSeconds);
@@ -35,7 +38,7 @@ public static class StyxSignalRExtensions
             // everything crossing this hub, so a change in what these options do to it can't pass unnoticed —
             // the protocol is documented for third parties to implement against.
             options.SerializerOptions = SaneMessagePack.InteropOptions;
-        });
+        }).AddHubOptions<ParallelStyxHub>(hub => hub.MaximumParallelInvocationsPerClient = parallelInvocations);
 
         return services;
     }

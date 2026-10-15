@@ -151,6 +151,44 @@ public class StyxEnvironmentTests
             StyxEnvironment.Read(Env(("RELAY_PASSWORD", "pw"), ("RELAY_REVOKED_NETWORKS", "nope"))));
     }
 
+    [Test]
+    public void ParallelInvocations_DefaultToFour() =>
+        Assert.That(StyxEnvironment.ReadParallelInvocations(Env()), Is.EqualTo(4));
+
+    [TestCase("1", 1)]
+    [TestCase("8", 8)]
+    [TestCase("64", 64)]
+    public void ParallelInvocations_AreReadFromOneToSixtyFour(string value, int expected) =>
+        Assert.That(StyxEnvironment.ReadParallelInvocations(Env(("RELAY_PARALLEL_INVOCATIONS", value))), Is.EqualTo(expected));
+
+    [TestCase("0")]
+    [TestCase("-1")]
+    [TestCase("65")]
+    [TestCase("four")]
+    [TestCase(" 4")]
+    [TestCase("4.0")]
+    [TestCase("99999999999")]
+    public void ParallelInvocations_OutsideOneToSixtyFour_AreRefused(string value)
+    {
+        var refused = Assert.Throws<StyxConfigurationException>(() => StyxEnvironment.ReadParallelInvocations(Env(("RELAY_PARALLEL_INVOCATIONS", value))));
+        Assert.That(refused!.Message, Does.Contain("RELAY_PARALLEL_INVOCATIONS"));
+    }
+
+    [TestCase(2)]
+    [TestCase(4)]
+    [TestCase(8)]
+    public void ParallelInvocations_FromTwoToEight_StartWithoutAWarning(int width) =>
+        Assert.That(StyxEnvironment.ParallelInvocationsWarning(width), Is.Null);
+
+    [Test]
+    public void ParallelInvocations_OfOne_WarnThePathIsNotParallel() =>
+        Assert.That(StyxEnvironment.ParallelInvocationsWarning(1), Does.Contain("not parallel"));
+
+    [TestCase(9, 288)]
+    [TestCase(64, 2048)]
+    public void ParallelInvocations_AboveEight_WarnOfTheMemoryOneClientCanHold(int width, int mebibytes) =>
+        Assert.That(StyxEnvironment.ParallelInvocationsWarning(width), Does.Contain($"{mebibytes} MiB"));
+
     private static Func<string, string?> Env(params (string Name, string Value)[] values) =>
         name => values.FirstOrDefault(v => v.Name == name).Value;
 

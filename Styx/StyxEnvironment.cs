@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Cryptography;
 using Cathedral.Styx;
 
@@ -6,7 +7,7 @@ namespace Styx;
 /// <summary>A relay configuration it refuses to start with.</summary>
 public sealed class StyxConfigurationException(string message) : Exception(message);
 
-/// <summary>Reads <see cref="StyxAuth"/> from the environment, refusing anything a relay must not run with.</summary>
+/// <summary>Reads a relay's settings from the environment, refusing anything a relay must not run with.</summary>
 public static class StyxEnvironment
 {
     // SHA-256 of the keys Styx.md's test vectors give, the key and the passphrase's, which every reader of the document holds
@@ -68,6 +69,26 @@ public static class StyxEnvironment
         }
         return keys;
     }
+
+    /// <summary>How many of a client's invocations <c>/relay/parallel</c> runs at once: <c>RELAY_PARALLEL_INVOCATIONS</c>, 4 when unset.</summary>
+    public static int ReadParallelInvocations(Func<string, string?> environment)
+    {
+        if (NullIfEmpty(environment(Constants.ParallelInvocationsEnvVar)) is not { } value) return Constants.DefaultParallelInvocations;
+        if (!int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var width) || width is < 1 or > Constants.ParallelInvocationsLimit)
+            throw new StyxConfigurationException(
+                $"{Constants.ParallelInvocationsEnvVar} is \"{value}\", not a whole number from 1 to {Constants.ParallelInvocationsLimit}");
+        return width;
+    }
+
+    /// <summary>What a relay started with this parallel width should warn of, if anything.</summary>
+    public static string? ParallelInvocationsWarning(int width) => width switch
+    {
+        1 => $"{Constants.ParallelInvocationsEnvVar} is 1, so {Constants.ParallelRelayPath} is not parallel: it runs a client's invocations one at a time, " +
+             $"as {Constants.RelayPath} does",
+        > Constants.ParallelInvocationsWarnAbove => $"{Constants.ParallelInvocationsEnvVar} is {width}, so one client on {Constants.ParallelRelayPath} " +
+             $"can hold up to {width * Constants.MaxMessageMebiBytes} MiB of messages in flight",
+        _ => null,
+    };
 
     // settings an earlier build read: one still set would otherwise be ignored, and the relay start without it
     internal static readonly (string Name, string Instead)[] RetiredNames =

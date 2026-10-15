@@ -1,11 +1,8 @@
 using Hydra.Config;
 using Hydra.Relay;
 using Microsoft.AspNetCore.Connections;
-using Microsoft.AspNetCore.SignalR;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Options;
 using Styx.Services;
 using System.Net;
 using System.Net.Sockets;
@@ -607,27 +604,23 @@ public class EmbeddedStyxTests
         return port;
     }
     /// <summary>
-    /// The embedded relay dispatches at least as many of one peer's invocations at once as that peer has
-    /// lanes — the same guarantee <c>RelayLaneTests</c> pins on the standalone host.
-    ///
-    /// <para><b>This is the SECOND relay, and it composes its own options.</b> A master running an embedded
-    /// server is the deployment with no separate Styx at all, so a limit that reaches one host and not the
-    /// other is head-of-line blocking for exactly those users and nobody else. It is the likelier of the two
-    /// to break, because it adds a <c>Configure&lt;HubOptions&gt;</c> of its own after
-    /// <c>AddStyxSignalR</c> to attach the auth filter — and the last one to write the value wins.</para>
-    ///
-    /// <para>Built rather than started: <c>Build()</c> composes the options and binds no port.</para>
+    /// The embedded relay runs one invocation at a time per client on <c>/relay</c> and the default width on
+    /// <c>/relay/parallel</c>, as <c>RelayLaneTests</c> pins on the standalone host. A master running an embedded relay
+    /// is the deployment with no separate Styx at all, so a width that reaches one host and not the other reorders
+    /// input for exactly those users. Built rather than started: <c>Build()</c> composes the options and binds no port.
     /// </summary>
     [Test]
-    public void TheEmbeddedRelayDispatchesAtLeastAsManyInvocationsAsAPeerHasLanes()
+    public void TheEmbeddedRelayRunsOneInvocationAtATimeOnItsOrderedPath()
     {
         var config = new EmbeddedStyxServerConfig { Port = 0, Password = TestPassword };
         using var server = new EmbeddedStyxServer(config, NullLogger<EmbeddedStyxServer>.Instance);
         using var app = server.BuildApp();
 
-        var configured = app.Services.GetRequiredService<IOptions<HubOptions>>().Value.MaximumParallelInvocationsPerClient;
-
-        Assert.That(configured, Is.GreaterThanOrEqualTo(Enum.GetValues<RelayLane>().Length),
-            "the embedded relay admits fewer invocations at once than a peer has lanes, so a file chunk blocks the keystroke behind it");
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(RelayWidths.OrderedPath(app.Services), Is.All.EqualTo(1),
+                "the input lane does not wait for each Send, so only one invocation at a time keeps its frames in order");
+            Assert.That(RelayWidths.ParallelPath(app.Services), Is.EqualTo(global::Styx.Constants.DefaultParallelInvocations));
+        }
     }
 }

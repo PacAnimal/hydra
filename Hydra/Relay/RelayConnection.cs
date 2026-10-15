@@ -69,12 +69,12 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     // what it always was; across lanes there is nothing to order, because a file chunk and a keypress are
     // unrelated.
     //
-    // A lane's order is absolute because it never has two invocations in flight: TypedSignalR.Client
-    // generates `Send` as InvokeCoreAsync, which completes when the HUB METHOD RETURNS, not when the frame
-    // is flushed. That matters — the relay sets MaximumParallelInvocationsPerClient to
-    // StyxConstants.MaxParallelInvocations, so a peer that pipelined WOULD have its frames dispatched
-    // concurrently and could see them reordered. Check the generated proxy before assuming otherwise after a
-    // package bump.
+    // A lane's order is absolute because the relay's /relay path runs a client's invocations one at a time, in
+    // the order they arrived. So the input lane does not wait for one Send to finish before the next: it sends
+    // non-blocking invocations (InputLaneSend), and the next frame leaves as soon as the last is written. The
+    // bulk lane DOES wait (BulkLaneSend, an invocation that completes when the hub method returns), which
+    // keeps one file chunk in flight; without the wait, chunks would pile up in the transport ahead of every
+    // keystroke the input lane writes after them.
     //
     // What the split buys is that a 256 KiB chunk no longer sits in front of every keystroke behind it,
     // which on a KVM is the product.
@@ -862,8 +862,8 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         // Either lane exiting ends the connection: whatever stopped it (a cancelled send, a dead socket) has
         // stopped the other too or is about to.
         await Task.WhenAll(
-            Drain(_inputQueue.Reader, disco),
-            Drain(_bulkQueue.Reader, disco));
+            Drain(_inputQueue.Reader, disco, InputLaneSend(con, disco)),
+            Drain(_bulkQueue.Reader, disco, BulkLaneSend(server)));
     }
 
     /// <summary>
@@ -875,7 +875,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     /// cancel deadlocks the suspend — the reconnect, the sleep handler and a clean shutdown all go through
     /// it.</para>
     /// </summary>
-    private async Task Drain(ChannelReader<OutboundMessage> reader, ConnectionCancellation disco)
+    private async Task Drain(ChannelReader<OutboundMessage> reader, ConnectionCancellation disco, Func<string[], byte[], Task> send)
     {
         try
         {
@@ -893,7 +893,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
                 try
                 {
                     var encrypted = await EncryptForSend(item.Payload, disco.Token);
-                    await _server!.Send(item.Targets, encrypted);
+                    await send(item.Targets, encrypted);
                     Interlocked.Increment(ref _messagesSent);
                     Interlocked.Add(ref _bytesSent, encrypted.LongLength);
                     item.Completion?.TrySetResult();
@@ -926,6 +926,13 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         // suspended for sleep, or shutting down — and where the only log line a master ever writes about
         // it comes from, so an idle relay drop is never a silent reconnect.
     }
+
+    // a non-blocking invocation: done once written to the transport, with nothing back from the relay
+    private static Func<string[], byte[], Task> InputLaneSend(HubConnection con, ConnectionCancellation disco) =>
+        (targets, payload) => con.SendAsync(nameof(IStyxServer.Send), targets, payload, disco.Token);
+
+    // an invocation: done once the relay's hub method has returned, so one at a time
+    private static Func<string[], byte[], Task> BulkLaneSend(IStyxServer server) => server.Send;
 
     /// <summary>
     /// Encrypts one queued payload, on its own lane's drain loop.

@@ -41,9 +41,9 @@ public interface IHydraProfile
 
 public class HydraProfile(HydraConfigFile configFile, HydraConfig? activeProfile, string? networkConfigOverride = null) : IHydraProfile
 {
-    // A mouse reports around 900 samples a second and a slave cannot show more than its own refresh
+    // A mouse commonly reports up to 1000 samples a second and a slave cannot show more than its own refresh
     // rate, so the master coalesces them to this and sends the result. Raising it costs CPU on the
-    // MASTER — every send is a relay round trip and every interval is one actor command — which is
+    // MASTER — every send is a relay frame and every interval is one actor command — which is
     // why it is a number rather than an ambition.
     public const int DefaultMaxMouseHz = 125;
     public const int MaxConfigurableMouseHz = 1000;

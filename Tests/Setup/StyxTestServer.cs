@@ -30,6 +30,7 @@ public static class StyxTestServer
         foreach (var (name, _) in StyxEnvironment.RetiredNames) Environment.SetEnvironmentVariable(name, null);
         Environment.SetEnvironmentVariable(global::Styx.Constants.RevokedNetworksEnvVar, null);
         Environment.SetEnvironmentVariable(global::Styx.Constants.RevokedIdsEnvVar, null);
+        Environment.SetEnvironmentVariable(global::Styx.Constants.ParallelInvocationsEnvVar, null);
 
         return new WebApplicationFactory<global::Styx.Program>()
             .WithWebHostBuilder(builder =>

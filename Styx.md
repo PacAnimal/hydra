@@ -44,7 +44,11 @@ A payload addressed to a peer that is not connected at that instant is discarded
 
 ## 3. Transport
 
-Styx is a SignalR hub. The hub is mounted at **`/relay`** relative to the server root.
+Styx is a SignalR hub. The hub is mounted at **`/relay`** relative to the server root, and the same hub again
+at **`/relay/parallel`**. The two differ only in how many of one client's invocations run at once (§3.4), and
+so in whether its `Send`s keep their order (§5.2). Peers on either path are one set of peers: they see each
+other in `Peers`, `Send` to each other, and displace each other by hostname. Everything below that names
+`/relay` applies to `/relay/parallel` as well, its negotiate endpoint being `/relay/parallel/negotiate`.
 
 ### 3.1 Establishing the connection
 
@@ -106,9 +110,17 @@ Message framing, invocation records (`type: 1`), completion records (`type: 3`),
 | Property | Value |
 |---|---|
 | Maximum invocation size | 32 MiB (33 554 432 bytes) |
-| Concurrent invocations per client | 4 |
+| Concurrent invocations per client | 1 on `/relay`; on `/relay/parallel`, `RELAY_PARALLEL_INVOCATIONS` (§13), default 4 |
 | Relay keep-alive ping interval | 5 s |
 | Configured client timeout | 15 s |
+
+On `/relay` the relay runs a client's invocations **one at a time, in the order it received them**: the next
+starts only once the last has finished. So a slow invocation holds up everything behind it from that client,
+whether that is a `Send` waiting on a target that is not reading or a login waiting out its second (§5.1). On
+`/relay/parallel` up to the configured number run at once, so a slow one holds up nothing until that many are
+running, and in exchange nothing orders them. While a client's invocation waits its turn the relay is not reading
+from that client, and does not count the silence against its client timeout; at any other time it does, so a
+client MUST keep sending its own ping records while an invocation of its own is running.
 
 Exceeding the size limit is fatal to the connection, not to the invocation: the relay sends a close
 record naming the limit and drops the connection. Clients MUST fragment large transfers at the
@@ -281,8 +293,9 @@ member, under either hub protocol, returns `authenticated: false` with the reaso
 has to distinguish a malformed request from a rejected credential by inspecting transport errors.
 
 Every response, successful or not and for either token format, is delayed to a **minimum of one second**.
-It blunts password guessing against v1 tokens, and it caps each connection at one login a second, which
-bounds the membership churn a token holder can cause by re-authenticating in a loop. Clients MUST tolerate
+It blunts password guessing against v1 tokens. A connection logs in once at a time on either path: a second
+`Authenticate` on the same connection waits until the first has answered. Together they cap each connection at
+one login a second, which bounds the membership churn a token holder can cause by re-authenticating in a loop. Clients MUST tolerate
 this latency and SHOULD apply a timeout of several seconds to the invocation.
 
 Authenticating on an already-authenticated connection is permitted and **replaces** the identity: the
@@ -306,8 +319,14 @@ Delivery semantics:
 - **No de-duplication.** A hostname listed twice is delivered twice.
 - **Loopback is permitted.** A sender MAY address its own hostname and will receive its own payload.
 - An empty `targetHosts` array, and empty strings within it, are ignored.
-- Ordering is preserved between a given pair of peers, being the ordering of a single WebSocket. No
-  ordering is implied across different senders.
+- On `/relay`, ordering is preserved between a given pair of peers, whether or not the sender waits for
+  each `Send` to complete: the relay takes a client's invocations one at a time, in the order it received
+  them (§3.4), and writes each delivery to the target before it starts the next. A sender MAY therefore send
+  `Send` as a non-blocking invocation (no `invocationId`) and send the next at once.
+- On `/relay/parallel`, no ordering is implied even between one pair of peers: two `Send`s from one sender
+  may arrive in either order. A sender that waits for each `Send`'s completion record before sending the
+  next gets them in order there too.
+- No ordering is implied across different senders.
 
 ### 5.3 `Ping() → true`
 
@@ -562,13 +581,15 @@ message structure — is the application's to build. The relay carries bytes bet
 | `RELAY_PASSWORD` | The relay password. Set, v1 tokens are accepted, and `POST /api/network-config` creates networks for whoever knows it (given a v2 key); unset, neither. |
 | `RELAY_REVOKED_NETWORKS` | Comma-separated network UUIDs whose tokens are refused, v1 and v2. |
 | `RELAY_REVOKED_IDS` | Comma-separated v2 `id` caveat values whose tokens are refused (compared ordinally). |
+| `RELAY_PARALLEL_INVOCATIONS` | How many of one client's invocations `/relay/parallel` runs at once (§3.4): a whole number from 1 to 64, default 4. Each invocation running can hold a whole message, so one client can hold this many times 32 MiB; above 8 the relay says how much when it starts. At 1 the path is not parallel, which the relay also says when it starts: a way to tell whether a fault needs invocations to overlap without changing the client. |
 | `LOCAL_PORT` | Listening port. Default `5000`. |
 | `LOCAL_ONLY` | `true` binds loopback only. |
 | `DEBUG_MESSAGES` | `true` logs per-payload routing metadata (network, sender, targets, size — not contents). |
 
 The relay refuses to start unless it can verify something (`RELAY_SIGNING_KEY`, `RELAY_SIGNING_PASSPHRASE` or
 `RELAY_PASSWORD`), and refuses a malformed key, a passphrase outside the rules of §13.1, the same key twice,
-two keys sharing a `kid`, the published test key or passphrase of §14.6, or a retired setting (`RELAY_KEY`,
+two keys sharing a `kid`, the published test key or passphrase of §14.6, a `RELAY_PARALLEL_INVOCATIONS` that is
+not a whole number from 1 to 64, or a retired setting (`RELAY_KEY`,
 `RELAY_KEY_PASSPHRASE`, `RELAY_ADMIN_PASSWORD`), naming what replaced it. Every
 change to these is a restart, which drops every peer; that is also what makes a revocation complete.
 

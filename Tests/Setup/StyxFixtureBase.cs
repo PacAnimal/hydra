@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Tests.Setup;
 
@@ -16,9 +17,12 @@ public abstract class StyxFixtureBase
     [OneTimeSetUp]
     public void StartStyx()
     {
-        _factory = StyxTestServer.Create();
+        _factory = StyxTestServer.Create(configure: ConfigureRelay);
         _ = _factory.Server; // eager init — avoid paying startup cost inside a test
     }
+
+    // services this fixture's relay adds or replaces, before it starts
+    protected virtual void ConfigureRelay(IServiceCollection services) { }
 
     [OneTimeTearDown]
     public async Task StopStyx()

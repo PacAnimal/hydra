@@ -45,6 +45,17 @@ public class StyxExpiryTests
         await WaitForPeers(watcher, []);
     }
 
+    // a peer on the parallel path is evicted as one on /relay is: through the relay's one set of connections
+    [Test]
+    public async Task AtExpiry_APeerOnTheParallelPathIsKicked()
+    {
+        await using var expiring = new TestStyxClient();
+        await expiring.Connect(Factory, Expiring(StyxToken.NewNetworkId(), TimeSpan.FromHours(1)), "expiring", global::Styx.Constants.ParallelRelayPath);
+
+        _clock.Advance(TimeSpan.FromHours(1));
+        Assert.That(await expiring.WaitForKick(), Is.EqualTo(ExpiryScheduler.ExpiredReason));
+    }
+
     [Test]
     public async Task BeforeExpiry_NothingHappens()
     {

@@ -7,6 +7,7 @@ public static class Constants
     public const string RelayPasswordEnvVar = "RELAY_PASSWORD";
     public const string RevokedNetworksEnvVar = "RELAY_REVOKED_NETWORKS";
     public const string RevokedIdsEnvVar = "RELAY_REVOKED_IDS";
+    public const string ParallelInvocationsEnvVar = "RELAY_PARALLEL_INVOCATIONS";
     public const string DebugMessagesEnvVar = "DEBUG_MESSAGES";
     public const string LocalOnlyEnvVar = "LOCAL_ONLY";
 
@@ -16,13 +17,17 @@ public static class Constants
     public const int KeepAliveSeconds = 5;
     public const int ClientTimeoutSeconds = 15;
     public const int MaxMessageMebiBytes = 32;
-    // MUST STAY >= the number of outbound lanes a peer drains at once — see RelayConnection's lane fields,
-    // which is two. TypedSignalR generates Send as InvokeCoreAsync, so a lane's invocation is not finished
-    // until the hub method returns, and the hub holds its slot across the write to the target. At 1, a
-    // 256 KiB chunk's invocation would occupy the only slot and the keystroke behind it would not even be
-    // dispatched — head-of-line blocking rebuilt at the relay, with the client-side split still looking
-    // perfectly correct and every lane test still green, because those gate on the client's own encrypt step.
-    public const int MaxParallelInvocations = 4;
+    // /relay runs a client's invocations one at a time, in the order they arrived. That is what keeps a pair of
+    // peers in order (Styx.md 5.2) for a client that does not wait for each Send to complete.
+    public const int MaxParallelInvocations = 1;
+    // /relay/parallel promises no order. Each invocation in flight can hold a whole message, so its width times
+    // MaxMessageMebiBytes is what one client, logged in or not, can pin.
+    public const int DefaultParallelInvocations = 4;
+    public const int ParallelInvocationsLimit = 64;
+    public const int ParallelInvocationsWarnAbove = 8;
+
+    public const string RelayPath = "/relay";
+    public const string ParallelRelayPath = "/relay/parallel";
 
     // throttle delays
     public const int AuthThrottleSeconds = 1;
