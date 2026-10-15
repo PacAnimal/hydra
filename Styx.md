@@ -172,7 +172,7 @@ Properties an implementer should be aware of:
 ### 4.2 v2 tokens
 
 A v2 token is an HMAC-SHA256 chain over a network UUID and a list of **caveats**, each a restriction, under a
-**relay key**: 32 random bytes held by the relay alone.
+**relay key**: 64 bytes held by the relay alone, either random or derived from a long passphrase (§13.1).
 
 String form: `styx2.` followed by the **canonical** base64url encoding (RFC 4648 §5, no padding) of the
 binary below. Canonical means decoding and re-encoding gives the identical string: padding, whitespace and
@@ -241,7 +241,9 @@ signature can reach.
 Properties:
 
 - A v2 token is still a **bearer credential**: it needs TLS and careful storage.
-- It reveals nothing to guess against: the relay key is random, and no password is involved.
+- It reveals nothing worth guessing against when the relay key is 64 random bytes. A key derived from a
+  passphrase (§13.1) can be guessed at offline, through a deliberately slow derivation, so it is only as
+  strong as the passphrase is unpredictable.
 - It lives until its `exp`, its `id` or network is revoked, or its relay key is retired.
 - Narrowing never widens: a holder of a narrowed token can add restrictions, including deeper `sub`
   paths below its own, but can reach nothing its token did not already allow.
@@ -553,7 +555,8 @@ message structure — is the application's to build. The relay carries bytes bet
 
 | Variable | Effect |
 |---|---|
-| `RELAY_KEY` | The v2 key: base64 of 32 random bytes. During a rotation, a comma-separated list whose first entry mints and whose others only verify. |
+| `RELAY_KEY` | The v2 key: base64 of 64 random bytes. During a rotation, a comma-separated list whose first entry mints and whose others only verify. |
+| `RELAY_KEY_PASSPHRASE` | A v2 key as a passphrase instead (§13.1). Set, its key comes first, so it mints, and `RELAY_KEY`'s keys only verify. |
 | `RELAY_PASSWORD` | The v1 password. Set, v1 tokens are accepted; unset, they are not. |
 | `RELAY_ADMIN_PASSWORD` | The secret `POST /api/network-config` checks. Defaults to `RELAY_PASSWORD`. |
 | `RELAY_REVOKED_NETWORKS` | Comma-separated network UUIDs whose tokens are refused, v1 and v2. |
@@ -562,16 +565,44 @@ message structure — is the application's to build. The relay carries bytes bet
 | `LOCAL_ONLY` | `true` binds loopback only. |
 | `DEBUG_MESSAGES` | `true` logs per-payload routing metadata (network, sender, targets, size — not contents). |
 
-The relay refuses to start unless it can verify something (`RELAY_KEY` or `RELAY_PASSWORD`), and refuses a
-malformed key, the same key twice, two keys sharing a `kid`, or the published test key of §14.6. Every
+The relay refuses to start unless it can verify something (`RELAY_KEY`, `RELAY_KEY_PASSPHRASE` or
+`RELAY_PASSWORD`), and refuses a malformed key, a passphrase outside the rules of §13.1, the same key twice,
+two keys sharing a `kid`, or the published test key or passphrase of §14.6. Every
 change to these is a restart, which drops every peer; that is also what makes a revocation complete.
 
-**Rotating the v2 key:** put a new key first in `RELAY_KEY`, with the old one after it; reissue tokens;
-then remove the old key, which ends every token it signed.
+**Rotating the v2 key:** the first key mints and the rest only verify, and a passphrase's key comes first.
+Put the new key first (as `RELAY_KEY_PASSPHRASE`, or first in `RELAY_KEY` with no passphrase set) and the old
+one after it in `RELAY_KEY`; reissue tokens; then remove the old key, which ends every token it signed. To
+keep an old passphrase's key verifying, put the key it derives in `RELAY_KEY` and unset or replace
+`RELAY_KEY_PASSPHRASE`; `Styx derive` prints that key, reading the passphrase from standard input (`docker run
+--rm -i`).
 
 The relay honours forwarded headers for client-address determination behind a reverse proxy, and disables
 Nagle's algorithm on accepted connections. It holds no database and no on-disk state; restarting it drops
 every peer, which then reconnect and re-announce.
+
+### 13.1 Keys from a passphrase
+
+Every client holds a token, and a token lets anyone test guesses at the key offline, as fast as their
+hardware allows. A random key leaves nothing to guess. A passphrase is exactly as strong as it is
+unpredictable, so make it **long and unique**: a long sentence nobody has ever written down, a long stretch
+of random hammering on the keyboard, or best of all a password manager's generator. Never a quotation, a
+lyric, a name or anything else that appears in print: the salt below is the same for every relay, so a
+passphrase anyone could think of falls to a dictionary that is computed once and then tried against every
+relay at the same time. The rules below set a floor, not a target.
+
+The key is derived as follows, and any implementation that follows it gets the same key:
+
+1. Refuse it if it is not valid Unicode, then normalise it to Unicode NFC.
+2. Refuse it if it has fewer than 64 characters or fewer than 16 different ones
+   (counting Unicode scalar values, not bytes or UTF-16 units); holds a line break (U+000A or U+000D)
+   anywhere; or starts or ends with a space, U+0009 to U+000D, U+0085, U+00A0 or U+FEFF, which a copy, a
+   file or a shell adds and drops without anyone noticing.
+3. `key = PBKDF2-HMAC-SHA512(password = UTF-8 of the passphrase, salt = "styx-v2/passphrase" (ASCII, no
+   terminator), iterations = 1 000 000, length = 64 bytes)`.
+
+The derivation costs the relay about a third of a second, once, when it starts, and costs an attacker the
+same for every guess.
 
 ## 14. Issuing tokens
 
@@ -666,14 +697,15 @@ A token can carry several of these at once.
 
 ### 14.6 Reference implementations and test vectors
 
-Complete implementations of reading, narrowing and blob writing. Both validate everything before signing
-anything, and both are checked against the vectors below on every build of this repository.
+Complete implementations of reading, narrowing, blob writing and deriving a key from a passphrase, in Python,
+JavaScript, C# and Rust. Each validates everything before signing anything, and each is run against the
+vectors below, and its tokens against a real relay, on every build of this repository.
 
 **Python** (standard library only):
 
 <!-- styx-test:python -->
 ```python
-import base64, hashlib, hmac, json, re
+import base64, hashlib, hmac, json, re, unicodedata
 
 PREFIX = "styx2."
 HOSTNAME = re.compile(r"[A-Za-z0-9._-]{1,63}")
@@ -749,9 +781,20 @@ def narrow_blob(blob, caveats, max_token_length=None, max_blob_bytes=None):
     if max_blob_bytes is not None and len(base64.b64decode(result)) > max_blob_bytes:
         raise ValueError("blob too large")
     return result
+
+EDGES = " \t\n\x0b\x0c\r\x85\xa0\ufeff"
+
+def key_from_passphrase(passphrase):
+    """The relay key for a passphrase (§13.1). Only an operator, who holds the passphrase, needs this."""
+    text = unicodedata.normalize("NFC", passphrase)
+    if (len(text) < 64 or len(set(text)) < 16 or "\n" in text or "\r" in text
+            or text[0] in EDGES or text[-1] in EDGES or any(0xD800 <= ord(ch) <= 0xDFFF for ch in text)):
+        raise ValueError("a passphrase is valid Unicode, 64 characters and 16 different ones, on one line, "
+                         "with no whitespace or byte order mark at either end")
+    return hashlib.pbkdf2_hmac("sha512", text.encode("utf-8"), b"styx-v2/passphrase", 1_000_000, 64)
 ```
 
-**JavaScript** (WebCrypto; runs in a browser and in Node):
+**JavaScript** (WebCrypto; Node 20 or later, or a browser from 2023 on):
 
 <!-- styx-test:javascript -->
 ```javascript
@@ -831,10 +874,329 @@ async function narrowBlob(blob, caveats, maxTokenLength = Infinity, maxBlobBytes
   if (atob(result).length > maxBlobBytes) throw new Error("blob too large");
   return result;
 }
+
+// The relay key for a passphrase (§13.1). Only an operator, who holds the passphrase, needs this.
+const EDGES = " \t\n\v\f\r\u0085\u00a0\ufeff";
+
+async function keyFromPassphrase(passphrase) {
+  const text = passphrase.normalize("NFC");
+  const chars = [...text];
+  if (!text.isWellFormed() || chars.length < 64 || new Set(chars).size < 16 || /[\n\r]/.test(text)
+      || EDGES.includes(chars[0]) || EDGES.includes(chars.at(-1)))
+    throw new Error("a passphrase is valid Unicode, 64 characters and 16 different ones, on one line, " +
+      "with no whitespace or byte order mark at either end");
+  const material = await crypto.subtle.importKey("raw", new TextEncoder().encode(text), "PBKDF2", false, ["deriveBits"]);
+  const params = { name: "PBKDF2", hash: "SHA-512", salt: ascii("styx-v2/passphrase"), iterations: 1000000 };
+  return new Uint8Array(await crypto.subtle.deriveBits(params, material, 512));
+}
 ```
 
-**Test vectors.** The key below is **TEST ONLY — a relay refuses to start with it**, and the network is a
-made-up version-8 UUID. `root` is the root token for that network under that key. Each step appends one
+**C#** (.NET 8 or later, no packages):
+
+<!-- styx-test:csharp -->
+```csharp
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using System.Text.RegularExpressions;
+
+public sealed record StyxTokenParts(byte KeyId, byte[] Network, List<string> Caveats, byte[] Signature);
+
+public static class StyxIssue
+{
+    private const string Prefix = "styx2.";
+    private const string HostName = @"^[A-Za-z0-9._-]{1,63}\z";
+    private static readonly Dictionary<string, Regex> Grammar = new()
+    {
+        ["sub"] = new Regex(@"^[A-Za-z0-9_-]{1,64}\z"),
+        ["host"] = new Regex(HostName),
+        ["hostPrefix"] = new Regex(HostName),
+        ["hostNot"] = new Regex(HostName),
+        ["id"] = new Regex(@"^[A-Za-z0-9._-]{1,72}\z"),
+        ["exp"] = new Regex(@"^(0|[1-9][0-9]{0,18})\z"),
+    };
+
+    private static string Encode(byte[] raw) => Convert.ToBase64String(raw).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+
+    private static byte[] Decode(string text)
+    {
+        byte[] raw;
+        try { raw = Convert.FromBase64String(text.Replace('-', '+').Replace('_', '/') + new string('=', (4 - text.Length % 4) % 4)); }
+        catch (FormatException) { throw new FormatException("not base64url"); }
+        if (Encode(raw) != text) throw new FormatException("not canonical base64url");
+        return raw;
+    }
+
+    public static void CheckCaveat(string caveat)
+    {
+        var at = caveat.IndexOf('=');
+        if (at < 0 || !Grammar.TryGetValue(caveat[..at], out var pattern) || !pattern.IsMatch(caveat[(at + 1)..]))
+            throw new FormatException($"caveat outside the grammar: {caveat}");
+        if (caveat[..at] == "exp" && ulong.Parse(caveat[(at + 1)..], CultureInfo.InvariantCulture) > 253402300799)
+            throw new FormatException("exp beyond 9999-12-31T23:59:59Z");
+    }
+
+    /// <summary>Key id, network, caveats and signature. Informational only: it proves nothing about validity.</summary>
+    public static StyxTokenParts Read(string token)
+    {
+        if (!token.StartsWith(Prefix, StringComparison.Ordinal)) throw new FormatException("not a v2 token; a v1 token cannot be narrowed");
+        var raw = Decode(token[Prefix.Length..]);
+        if (raw.Length is < 51 or > 1024 || raw[0] != 2 || raw[18] > 16 || raw[8] >> 4 != 8) throw new FormatException("malformed token");
+        var (caveats, offset, end) = (new List<string>(), 19, raw.Length - 32);
+        for (var i = 0; i < raw[18]; i++)
+        {
+            var length = offset < end ? raw[offset] : 0;
+            if (length is < 3 or > 200 || offset + 1 + length > end || raw.AsSpan(offset + 1, length).ContainsAnyExceptInRange((byte)0x20, (byte)0x7E))
+                throw new FormatException("malformed token");
+            caveats.Add(Encoding.ASCII.GetString(raw, offset + 1, length));
+            offset += 1 + length;
+        }
+        if (offset != end) throw new FormatException("malformed token");
+        return new StyxTokenParts(raw[1], raw[2..18], caveats, raw[end..]);
+    }
+
+    /// <summary>The token with caveats appended. Needs no key; validates everything before signing anything.</summary>
+    public static string Narrow(string token, IReadOnlyList<string> caveats, int maxLength = int.MaxValue)
+    {
+        var old = Read(token);
+        foreach (var caveat in caveats) CheckCaveat(caveat);
+        var every = old.Caveats.Concat(caveats).ToList();
+        var hosts = every.Where(c => c.StartsWith("host=", StringComparison.Ordinal)).Select(c => c[5..].ToLowerInvariant()).Distinct().Count();
+        if (every.Count > 16 || hosts > 1 || every.Count(c => c.StartsWith("sub=", StringComparison.Ordinal)) > 8)
+            throw new FormatException("too many caveats, contradictory hosts, or a path deeper than 8");
+        var size = 51 + every.Sum(c => 1 + c.Length);
+        if (size > 1024 || Prefix.Length + (size * 4 + 2) / 3 > maxLength) throw new FormatException("token too long");
+        var signature = old.Signature;
+        foreach (var caveat in caveats)
+        {
+            var data = Encoding.ASCII.GetBytes(caveat);
+            byte[] message = [.. "styx-v2/caveat\0"u8, (byte)data.Length, .. data];
+            signature = HMACSHA256.HashData(signature, message);
+        }
+        var body = new List<byte> { 2, old.KeyId };
+        body.AddRange(old.Network);
+        body.Add((byte)every.Count);
+        foreach (var caveat in every)
+        {
+            body.Add((byte)caveat.Length);
+            body.AddRange(Encoding.ASCII.GetBytes(caveat));
+        }
+        body.AddRange(signature);
+        return Prefix + Encode([.. body]);
+    }
+
+    /// <summary>The network config blob, in the one form every client reads.</summary>
+    public static string MakeBlob(string styxServer, string encryptionKey, string authorization)
+    {
+        foreach (var value in new[] { styxServer, encryptionKey, authorization })
+            if (value.Any(ch => ch is < ' ' or > '~' or '"' or '\\')) throw new FormatException("blob values must be printable ASCII without '\"' or '\\'");
+        var json = $$"""{"StyxServer":"{{styxServer}}","EncryptionKey":"{{encryptionKey}}","Authorization":"{{authorization}}"}""";
+        return Convert.ToBase64String(Encoding.ASCII.GetBytes(json));
+    }
+
+    public static string NarrowBlob(string blob, IReadOnlyList<string> caveats, int maxTokenLength = int.MaxValue, int maxBlobBytes = int.MaxValue)
+    {
+        using var json = JsonDocument.Parse(Convert.FromBase64String(blob));
+        var fields = new Dictionary<string, string>();
+        foreach (var member in json.RootElement.EnumerateObject())
+            if (member.Value.ValueKind == JsonValueKind.String) fields[member.Name.ToLowerInvariant()] = member.Value.GetString()!;
+        string Field(string name) => fields.TryGetValue(name, out var value) ? value : throw new FormatException($"the blob has no {name}");
+        var result = MakeBlob(Field("styxserver"), Field("encryptionkey"), Narrow(Field("authorization"), caveats, maxTokenLength));
+        if (Convert.FromBase64String(result).Length > maxBlobBytes) throw new FormatException("blob too large");
+        return result;
+    }
+
+    /// <summary>The relay key for a passphrase (§13.1). Only an operator, who holds the passphrase, needs this.</summary>
+    public static byte[] KeyFromPassphrase(string passphrase)
+    {
+        const string edges = " \t\n\v\f\r\u0085\u00a0\ufeff";
+        string text;
+        try { text = passphrase.Normalize(NormalizationForm.FormC); }
+        catch (ArgumentException) { throw new FormatException("a passphrase is valid Unicode"); }
+        var runes = text.EnumerateRunes().ToList();
+        if (runes.Count < 64 || runes.Distinct().Count() < 16 || text.Contains('\n') || text.Contains('\r') || edges.Contains(text[0]) || edges.Contains(text[^1]))
+            throw new FormatException("a passphrase is 64 characters and 16 different ones, on one line, with no whitespace or byte order mark at either end");
+        return Rfc2898DeriveBytes.Pbkdf2(Encoding.UTF8.GetBytes(text), "styx-v2/passphrase"u8.ToArray(), 1_000_000, HashAlgorithmName.SHA512, 64);
+    }
+}
+```
+
+**Rust**, with these dependencies:
+
+<!-- styx-test:cargo -->
+```toml
+[dependencies]
+base64 = "=0.22.1"
+hmac = "=0.12.1"
+pbkdf2 = { version = "=0.12.2", features = ["hmac"] }
+serde_json = { version = "=1.0.154", features = ["preserve_order"] }
+sha2 = "=0.10.9"
+unicode-normalization = "=0.1.25"
+```
+
+<!-- styx-test:rust -->
+```rust
+use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+use base64::Engine;
+use hmac::{Hmac, Mac};
+use serde_json::{Map, Value};
+use sha2::{Sha256, Sha512};
+use unicode_normalization::UnicodeNormalization;
+
+const PREFIX: &str = "styx2.";
+
+pub struct Token {
+    pub kid: u8,
+    pub network: [u8; 16],
+    pub caveats: Vec<String>,
+    pub signature: [u8; 32],
+}
+
+fn decode(text: &str) -> Result<Vec<u8>, String> {
+    let raw = URL_SAFE_NO_PAD.decode(text).map_err(|_| "not base64url")?;
+    if URL_SAFE_NO_PAD.encode(&raw) != text {
+        return Err("not canonical base64url".into());
+    }
+    Ok(raw)
+}
+
+fn charset(value: &str, max: usize, extra: &str) -> bool {
+    (1..=max).contains(&value.len()) && value.chars().all(|c| c.is_ascii_alphanumeric() || extra.contains(c))
+}
+
+pub fn check_caveat(caveat: &str) -> Result<(), String> {
+    let refused = || format!("caveat outside the grammar: {caveat}");
+    let (key, value) = caveat.split_once('=').ok_or_else(refused)?;
+    let valid = match key {
+        "sub" => charset(value, 64, "_-"),
+        "host" | "hostPrefix" | "hostNot" => charset(value, 63, "._-"),
+        "id" => charset(value, 72, "._-"),
+        "exp" => value == "0" || (charset(value, 19, "") && value.bytes().all(|b| b.is_ascii_digit()) && !value.starts_with('0')),
+        _ => false,
+    };
+    if !valid {
+        return Err(refused());
+    }
+    if key == "exp" && value.parse::<u64>().map_err(|e| e.to_string())? > 253_402_300_799 {
+        return Err("exp beyond 9999-12-31T23:59:59Z".into());
+    }
+    Ok(())
+}
+
+/// Key id, network, caveats and signature. Informational only: it proves nothing about validity.
+pub fn read(token: &str) -> Result<Token, String> {
+    let raw = decode(token.strip_prefix(PREFIX).ok_or("not a v2 token; a v1 token cannot be narrowed")?)?;
+    if raw.len() < 51 || raw.len() > 1024 || raw[0] != 2 || raw[18] > 16 || raw[8] >> 4 != 8 {
+        return Err("malformed token".into());
+    }
+    let end = raw.len() - 32;
+    let (mut caveats, mut offset) = (Vec::new(), 19);
+    for _ in 0..raw[18] {
+        let length = if offset < end { raw[offset] as usize } else { 0 };
+        if !(3..=200).contains(&length) || offset + 1 + length > end {
+            return Err("malformed token".into());
+        }
+        let caveat = &raw[offset + 1..offset + 1 + length];
+        if !caveat.iter().all(|b| (0x20..=0x7e).contains(b)) {
+            return Err("malformed token".into());
+        }
+        caveats.push(String::from_utf8_lossy(caveat).into_owned());
+        offset += 1 + length;
+    }
+    if offset != end {
+        return Err("malformed token".into());
+    }
+    let mut token = Token { kid: raw[1], network: [0; 16], caveats, signature: [0; 32] };
+    token.network.copy_from_slice(&raw[2..18]);
+    token.signature.copy_from_slice(&raw[end..]);
+    Ok(token)
+}
+
+/// The token with caveats appended. Needs no key; validates everything before signing anything.
+pub fn narrow(token: &str, caveats: &[&str], max_length: Option<usize>) -> Result<String, String> {
+    let old = read(token)?;
+    for caveat in caveats {
+        check_caveat(caveat)?;
+    }
+    let every: Vec<String> = old.caveats.iter().cloned().chain(caveats.iter().map(|c| c.to_string())).collect();
+    let mut hosts: Vec<String> = every.iter().filter_map(|c| c.strip_prefix("host=")).map(str::to_ascii_lowercase).collect();
+    hosts.sort();
+    hosts.dedup();
+    if every.len() > 16 || hosts.len() > 1 || every.iter().filter(|c| c.starts_with("sub=")).count() > 8 {
+        return Err("too many caveats, contradictory hosts, or a path deeper than 8".into());
+    }
+    let size = 51 + every.iter().map(|c| 1 + c.len()).sum::<usize>();
+    if size > 1024 || max_length.is_some_and(|max| PREFIX.len() + (size * 4 + 2) / 3 > max) {
+        return Err("token too long".into());
+    }
+    let mut signature = old.signature;
+    for caveat in caveats {
+        let mut mac = Hmac::<Sha256>::new_from_slice(&signature).expect("HMAC takes any key length");
+        mac.update(b"styx-v2/caveat\0");
+        mac.update(&[caveat.len() as u8]);
+        mac.update(caveat.as_bytes());
+        signature.copy_from_slice(&mac.finalize().into_bytes());
+    }
+    let mut body = vec![2, old.kid];
+    body.extend_from_slice(&old.network);
+    body.push(every.len() as u8);
+    for caveat in &every {
+        body.push(caveat.len() as u8);
+        body.extend_from_slice(caveat.as_bytes());
+    }
+    body.extend_from_slice(&signature);
+    Ok(format!("{PREFIX}{}", URL_SAFE_NO_PAD.encode(body)))
+}
+
+/// The network config blob, in the one form every client reads.
+pub fn make_blob(styx_server: &str, encryption_key: &str, authorization: &str) -> Result<String, String> {
+    for value in [styx_server, encryption_key, authorization] {
+        if value.chars().any(|c| !(' '..='~').contains(&c) || c == '"' || c == '\\') {
+            return Err("blob values must be printable ASCII without '\"' or '\\'".into());
+        }
+    }
+    let json = format!(r#"{{"StyxServer":"{styx_server}","EncryptionKey":"{encryption_key}","Authorization":"{authorization}"}}"#);
+    Ok(STANDARD.encode(json))
+}
+
+// the last of any members that differ only in case, as the other implementations take it
+fn field<'a>(fields: &'a Map<String, Value>, name: &str) -> Result<&'a str, String> {
+    let value = fields.iter().rev().find(|(key, _)| key.to_lowercase() == name).and_then(|(_, value)| value.as_str());
+    value.ok_or_else(|| format!("the blob has no {name}"))
+}
+
+pub fn narrow_blob(blob: &str, caveats: &[&str], max_token_length: Option<usize>, max_blob_bytes: Option<usize>) -> Result<String, String> {
+    let json = STANDARD.decode(blob).map_err(|_| "not base64")?;
+    let fields: Map<String, Value> = serde_json::from_slice(&json).map_err(|e| e.to_string())?;
+    let token = narrow(field(&fields, "authorization")?, caveats, max_token_length)?;
+    let result = make_blob(field(&fields, "styxserver")?, field(&fields, "encryptionkey")?, &token)?;
+    if max_blob_bytes.is_some_and(|max| STANDARD.decode(&result).map_or(0, |raw| raw.len()) > max) {
+        return Err("blob too large".into());
+    }
+    Ok(result)
+}
+
+/// The relay key for a passphrase (§13.1). Only an operator, who holds the passphrase, needs this.
+pub fn key_from_passphrase(passphrase: &str) -> Result<[u8; 64], String> {
+    const EDGES: &[char] = &[' ', '\t', '\n', '\u{b}', '\u{c}', '\r', '\u{85}', '\u{a0}', '\u{feff}'];
+    let text: String = passphrase.nfc().collect();
+    let distinct: std::collections::HashSet<char> = text.chars().collect();
+    if text.chars().count() < 64 || distinct.len() < 16 || text.contains(['\n', '\r']) || text.starts_with(EDGES) || text.ends_with(EDGES) {
+        return Err("a passphrase is 64 characters and 16 different ones, on one line, with no whitespace or byte order mark at either end".into());
+    }
+    let mut key = [0u8; 64];
+    pbkdf2::pbkdf2_hmac::<Sha512>(text.as_bytes(), b"styx-v2/passphrase", 1_000_000, &mut key);
+    Ok(key)
+}
+```
+
+**Test vectors.** The key below is **TEST ONLY — a relay refuses to start with it**, and so is the
+passphrase, whose derived key (§13.1) is `passphraseKey`; each of `passphraseRules` must be accepted or
+refused as it says; the network is a made-up version-8 UUID. `root` is the root token for that network under that key. Each step appends one
 caveat to the previous token, giving the signature and token after it. Every `rejected` token must be
 refused by a relay holding the key. `blob` is a blob around `root`, the same blob as a reader may meet it in the field
 (`camelCase`: lowercase-first members, whitespace, an escaped `+`), and the blob narrowed, which narrowing
@@ -843,106 +1205,175 @@ either form must produce; every `refusedBlobValues` entry must be refused as an 
 <!-- styx-test:vectors -->
 ```json
 {
-  "key": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
-  "kid": 109,
+  "key": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+  "kid": 108,
   "network": "00000000-0000-8000-8000-000000000001",
-  "root": "styx2.Am0AAAAAAACAAIAAAAAAAAABANl1jz_ZWK1yEx4--HYgrK8AlAgEpQCLFMJkD3q3ytuH",
+  "root": "styx2.AmwAAAAAAACAAIAAAAAAAAABAPE5nVw2q4NZacG7w01pFgaNVURkodZunnIQgulLXocU",
   "steps": [
     {
       "caveat": "sub=game",
-      "signature": "209546b8b23ba1f8aead09d28be5232d58c8ef48a82123874ef76ed5da392403",
-      "token": "styx2.Am0AAAAAAACAAIAAAAAAAAABAQhzdWI9Z2FtZSCVRriyO6H4rq0J0ovlIy1YyO9IqCEjh073btXaOSQD"
+      "signature": "662ba227cc129477471e87af5f5c889ea077be1b2e38ad402ec86ab56b15bcb0",
+      "token": "styx2.AmwAAAAAAACAAIAAAAAAAAABAQhzdWI9Z2FtZWYroifMEpR3Rx6Hr19ciJ6gd74bLjitQC7IarVrFbyw"
     },
     {
       "caveat": "sub=room-1",
-      "signature": "2e513303d6779250348238c73a0a20b55ad2d02233c83b110f27ab2357c73901",
-      "token": "styx2.Am0AAAAAAACAAIAAAAAAAAABAghzdWI9Z2FtZQpzdWI9cm9vbS0xLlEzA9Z3klA0gjjHOgogtVrS0CIzyDsRDyerI1fHOQE"
+      "signature": "171b239843d10f94c31c226cac1030a3daa08e02fb495bfd40de20bf81538bf7",
+      "token": "styx2.AmwAAAAAAACAAIAAAAAAAAABAghzdWI9Z2FtZQpzdWI9cm9vbS0xFxsjmEPRD5TDHCJsrBAwo9qgjgL7SVv9QN4gv4FTi_c"
     },
     {
       "caveat": "hostPrefix=player-",
-      "signature": "ab7fa1277b917cc292505d7b2e544f263caa2573192c540bc026be911b0e04e8",
-      "token": "styx2.Am0AAAAAAACAAIAAAAAAAAABAwhzdWI9Z2FtZQpzdWI9cm9vbS0xEmhvc3RQcmVmaXg9cGxheWVyLat_oSd7kXzCklBdey5UTyY8qiVzGSxUC8AmvpEbDgTo"
+      "signature": "43a7124ac9cab2736d8fe08e3757739587d10e4b4bed9fd77dfb4f3b63ae529c",
+      "token": "styx2.AmwAAAAAAACAAIAAAAAAAAABAwhzdWI9Z2FtZQpzdWI9cm9vbS0xEmhvc3RQcmVmaXg9cGxheWVyLUOnEkrJyrJzbY_gjjdXc5WH0Q5LS-2f1337TztjrlKc"
     },
     {
       "caveat": "hostNot=player-0",
-      "signature": "afaae1a8fcdcceb71d50d504ba43f9a1d2e918a40b8d6d5549d42fc01f24fb63",
-      "token": "styx2.Am0AAAAAAACAAIAAAAAAAAABBAhzdWI9Z2FtZQpzdWI9cm9vbS0xEmhvc3RQcmVmaXg9cGxheWVyLRBob3N0Tm90PXBsYXllci0wr6rhqPzczrcdUNUEukP5odLpGKQLjW1VSdQvwB8k-2M"
+      "signature": "96b37a109110211953ce76fbe513f9e522a54d562157ce11e6ec765c1f1bbe42",
+      "token": "styx2.AmwAAAAAAACAAIAAAAAAAAABBAhzdWI9Z2FtZQpzdWI9cm9vbS0xEmhvc3RQcmVmaXg9cGxheWVyLRBob3N0Tm90PXBsYXllci0wlrN6EJEQIRlTznb75RP55SKlTVYhV84R5ux2XB8bvkI"
     },
     {
       "caveat": "host=player-1",
-      "signature": "5cede9309335a4c0e8bf6b9a434e60c13bfcddc9edbaa75805960431e5cc3822",
-      "token": "styx2.Am0AAAAAAACAAIAAAAAAAAABBQhzdWI9Z2FtZQpzdWI9cm9vbS0xEmhvc3RQcmVmaXg9cGxheWVyLRBob3N0Tm90PXBsYXllci0wDWhvc3Q9cGxheWVyLTFc7ekwkzWkwOi_a5pDTmDBO_zdye26p1gFlgQx5cw4Ig"
+      "signature": "7485938cfb018ad4799ef957618df340c48b693ec7afdf3c575e79a9cd0b70aa",
+      "token": "styx2.AmwAAAAAAACAAIAAAAAAAAABBQhzdWI9Z2FtZQpzdWI9cm9vbS0xEmhvc3RQcmVmaXg9cGxheWVyLRBob3N0Tm90PXBsYXllci0wDWhvc3Q9cGxheWVyLTF0hZOM-wGK1Hme-VdhjfNAxItpPsev3zxXXnmpzQtwqg"
     },
     {
       "caveat": "exp=4102444800",
-      "signature": "62ce352a13e8699c70f71591bb8edbc6b2b736f2d2476c1fd0bcdd9e3bb5c44f",
-      "token": "styx2.Am0AAAAAAACAAIAAAAAAAAABBghzdWI9Z2FtZQpzdWI9cm9vbS0xEmhvc3RQcmVmaXg9cGxheWVyLRBob3N0Tm90PXBsYXllci0wDWhvc3Q9cGxheWVyLTEOZXhwPTQxMDI0NDQ4MDBizjUqE-hpnHD3FZG7jtvGsrc28tJHbB_QvN2eO7XETw"
+      "signature": "8301a879ac1afdda15624e73258cec14b646d0e8dcd1330e087d02f748932584",
+      "token": "styx2.AmwAAAAAAACAAIAAAAAAAAABBghzdWI9Z2FtZQpzdWI9cm9vbS0xEmhvc3RQcmVmaXg9cGxheWVyLRBob3N0Tm90PXBsYXllci0wDWhvc3Q9cGxheWVyLTEOZXhwPTQxMDI0NDQ4MDCDAah5rBr92hViTnMljOwUtkbQ6NzRMw4IfQL3SJMlhA"
     },
     {
       "caveat": "id=room-1",
-      "signature": "36e594549354df787c3d8378244f7d25161358fe485654f1f773fa8319c811b9",
-      "token": "styx2.Am0AAAAAAACAAIAAAAAAAAABBwhzdWI9Z2FtZQpzdWI9cm9vbS0xEmhvc3RQcmVmaXg9cGxheWVyLRBob3N0Tm90PXBsYXllci0wDWhvc3Q9cGxheWVyLTEOZXhwPTQxMDI0NDQ4MDAJaWQ9cm9vbS0xNuWUVJNU33h8PYN4JE99JRYTWP5IVlTx93P6gxnIEbk"
+      "signature": "0d84e2f470d24497304de48456b89ddb168501dc61166d8315d6db4fd0fb2294",
+      "token": "styx2.AmwAAAAAAACAAIAAAAAAAAABBwhzdWI9Z2FtZQpzdWI9cm9vbS0xEmhvc3RQcmVmaXg9cGxheWVyLRBob3N0Tm90PXBsYXllci0wDWhvc3Q9cGxheWVyLTEOZXhwPTQxMDI0NDQ4MDAJaWQ9cm9vbS0xDYTi9HDSRJcwTeSEVrid2xaFAdxhFm2DFdbbT9D7IpQ"
     }
   ],
   "rejected": [
     {
       "why": "a signature bit flipped",
-      "token": "styx2.Am0AAAAAAACAAIAAAAAAAAABBwhzdWI9Z2FtZQpzdWI9cm9vbS0xEmhvc3RQcmVmaXg9cGxheWVyLRBob3N0Tm90PXBsYXllci0wDWhvc3Q9cGxheWVyLTEOZXhwPTQxMDI0NDQ4MDAJaWQ9cm9vbS0xN-WUVJNU33h8PYN4JE99JRYTWP5IVlTx93P6gxnIEbk"
+      "token": "styx2.AmwAAAAAAACAAIAAAAAAAAABBwhzdWI9Z2FtZQpzdWI9cm9vbS0xEmhvc3RQcmVmaXg9cGxheWVyLRBob3N0Tm90PXBsYXllci0wDWhvc3Q9cGxheWVyLTEOZXhwPTQxMDI0NDQ4MDAJaWQ9cm9vbS0xDITi9HDSRJcwTeSEVrid2xaFAdxhFm2DFdbbT9D7IpQ"
     },
     {
       "why": "the last caveat dropped, keeping the final signature",
-      "token": "styx2.Am0AAAAAAACAAIAAAAAAAAABBghzdWI9Z2FtZQpzdWI9cm9vbS0xEmhvc3RQcmVmaXg9cGxheWVyLRBob3N0Tm90PXBsYXllci0wDWhvc3Q9cGxheWVyLTEOZXhwPTQxMDI0NDQ4MDA25ZRUk1TfeHw9g3gkT30lFhNY_khWVPH3c_qDGcgRuQ"
+      "token": "styx2.AmwAAAAAAACAAIAAAAAAAAABBghzdWI9Z2FtZQpzdWI9cm9vbS0xEmhvc3RQcmVmaXg9cGxheWVyLRBob3N0Tm90PXBsYXllci0wDWhvc3Q9cGxheWVyLTEOZXhwPTQxMDI0NDQ4MDANhOL0cNJElzBN5IRWuJ3bFoUB3GEWbYMV1ttP0PsilA"
     },
     {
       "why": "two caveats swapped",
-      "token": "styx2.Am0AAAAAAACAAIAAAAAAAAABBwpzdWI9cm9vbS0xCHN1Yj1nYW1lEmhvc3RQcmVmaXg9cGxheWVyLRBob3N0Tm90PXBsYXllci0wDWhvc3Q9cGxheWVyLTEOZXhwPTQxMDI0NDQ4MDAJaWQ9cm9vbS0xNuWUVJNU33h8PYN4JE99JRYTWP5IVlTx93P6gxnIEbk"
+      "token": "styx2.AmwAAAAAAACAAIAAAAAAAAABBwpzdWI9cm9vbS0xCHN1Yj1nYW1lEmhvc3RQcmVmaXg9cGxheWVyLRBob3N0Tm90PXBsYXllci0wDWhvc3Q9cGxheWVyLTEOZXhwPTQxMDI0NDQ4MDAJaWQ9cm9vbS0xDYTi9HDSRJcwTeSEVrid2xaFAdxhFm2DFdbbT9D7IpQ"
     },
     {
       "why": "padding added",
-      "token": "styx2.Am0AAAAAAACAAIAAAAAAAAABANl1jz_ZWK1yEx4--HYgrK8AlAgEpQCLFMJkD3q3ytuH="
+      "token": "styx2.AmwAAAAAAACAAIAAAAAAAAABAPE5nVw2q4NZacG7w01pFgaNVURkodZunnIQgulLXocU="
     },
     {
       "why": "whitespace added",
-      "token": "styx2.Am0AAAAAAACAAIAAAAAAAAABANl1jz_ZWK1yEx4--HYgrK8AlAgEpQCLFMJkD3q3ytuH "
+      "token": "styx2.AmwAAAAAAACAAIAAAAAAAAABAPE5nVw2q4NZacG7w01pFgaNVURkodZunnIQgulLXocU "
     },
     {
       "why": "a caveat key the relay does not know, correctly signed",
-      "token": "styx2.Am0AAAAAAACAAIAAAAAAAAABAQVtYXg9MVCRt1-rUVs7CngDDXuznqlFAddRj7HidfiM0dn0mHq-"
+      "token": "styx2.AmwAAAAAAACAAIAAAAAAAAABAQVtYXg9Mb8-0zG7TAhkgOJEC0EEJlynjxVw2RHRDhy_SBVLQ9F4"
     },
     {
       "why": "a caveat key in the wrong case, correctly signed",
-      "token": "styx2.Am0AAAAAAACAAIAAAAAAAAABAQhTdWI9Z2FtZaWXg8l2MhRiggznYcSLW8xJOT7ZGolQTGlT47q2EeYW"
+      "token": "styx2.AmwAAAAAAACAAIAAAAAAAAABAQhTdWI9Z2FtZbgeVB87QDHRhG7UXh897J50bXnA2X2swkKRm3Yieaof"
     },
     {
       "why": "contradictory host caveats, correctly signed",
-      "token": "styx2.Am0AAAAAAACAAIAAAAAAAAABAgZob3N0PWEGaG9zdD1imGoRww6ET0Pc1VE9CeNBUWD0SoXG5TsrrLy_3_SMVaY"
+      "token": "styx2.AmwAAAAAAACAAIAAAAAAAAABAgZob3N0PWEGaG9zdD1i4vPTdO3NcBcthM2pvXqJxizOLN9KkOcgvYbS5QE-Nw0"
     },
     {
       "why": "exp with a leading zero, correctly signed",
-      "token": "styx2.Am0AAAAAAACAAIAAAAAAAAABAQZleHA9MDGukX1cnYVX_7RYSZUTMosQyQ0CxCd0qS94oQpe625-Vg"
+      "token": "styx2.AmwAAAAAAACAAIAAAAAAAAABAQZleHA9MDH9nYcUyh_eIaRRfvyMv3ZD13BKVvVawtU4R3djkRbvxg"
     },
     {
       "why": "a version-4 network id, correctly signed",
-      "token": "styx2.Am0AAAAAAABAAIAAAAAAAAABAPkCl529AQwbko1Uih488QHfPJ2-vP59tMnDS3FR0K9h"
+      "token": "styx2.AmwAAAAAAABAAIAAAAAAAAABABETSgDfF5_D7m5GIPhXe75NkQzzs5pvukU1frpkO8A-"
     },
     {
       "why": "signed by a key the relay does not hold",
-      "token": "styx2.AgoAAAAAAACAAIAAAAAAAAABAMq3MO0qj5_Q-VSuAHxDHaVLi7HQ8jtYKZexmz4ERAtG"
+      "token": "styx2.AksAAAAAAACAAIAAAAAAAAABAHDkxigCOcrwpDKFKvhJsGhq0yleD4mfS2hmwdoUMkc7"
     }
   ],
   "blob": {
     "styxServer": "https://styx.example.org",
     "encryptionKey": "k+y/test=key",
-    "before": "eyJTdHl4U2VydmVyIjoiaHR0cHM6Ly9zdHl4LmV4YW1wbGUub3JnIiwiRW5jcnlwdGlvbktleSI6ImsreS90ZXN0PWtleSIsIkF1dGhvcml6YXRpb24iOiJzdHl4Mi5BbTBBQUFBQUFBQ0FBSUFBQUFBQUFBQUJBTmwxanpfWldLMXlFeDQtLUhZZ3JLOEFsQWdFcFFDTEZNSmtEM3EzeXR1SCJ9",
-    "camelCase": "eyAic3R5eFNlcnZlciI6ICJodHRwczovL3N0eXguZXhhbXBsZS5vcmciLCAiZW5jcnlwdGlvbktleSI6ICJrXHUwMDJCeS90ZXN0PWtleSIsICJhdXRob3JpemF0aW9uIjogInN0eXgyLkFtMEFBQUFBQUFDQUFJQUFBQUFBQUFBQkFObDFqel9aV0sxeUV4NC0tSFlncks4QWxBZ0VwUUNMRk1Ka0QzcTN5dHVIIiB9",
+    "before": "eyJTdHl4U2VydmVyIjoiaHR0cHM6Ly9zdHl4LmV4YW1wbGUub3JnIiwiRW5jcnlwdGlvbktleSI6ImsreS90ZXN0PWtleSIsIkF1dGhvcml6YXRpb24iOiJzdHl4Mi5BbXdBQUFBQUFBQ0FBSUFBQUFBQUFBQUJBUEU1blZ3MnE0TlphY0c3dzAxcEZnYU5WVVJrb2RadW5uSVFndWxMWG9jVSJ9",
+    "camelCase": "eyAic3R5eFNlcnZlciI6ICJodHRwczovL3N0eXguZXhhbXBsZS5vcmciLCAiZW5jcnlwdGlvbktleSI6ICJrXHUwMDJCeS90ZXN0PWtleSIsICJhdXRob3JpemF0aW9uIjogInN0eXgyLkFtd0FBQUFBQUFDQUFJQUFBQUFBQUFBQkFQRTVuVncycTROWmFjRzd3MDFwRmdhTlZVUmtvZFp1bm5JUWd1bExYb2NVIiB9",
     "narrowedWith": [
       "hostNot=admin",
       "id=page-1"
     ],
     "maxTokenLength": 255,
     "maxBlobBytes": 511,
-    "after": "eyJTdHl4U2VydmVyIjoiaHR0cHM6Ly9zdHl4LmV4YW1wbGUub3JnIiwiRW5jcnlwdGlvbktleSI6ImsreS90ZXN0PWtleSIsIkF1dGhvcml6YXRpb24iOiJzdHl4Mi5BbTBBQUFBQUFBQ0FBSUFBQUFBQUFBQUJBZzFvYjNOMFRtOTBQV0ZrYldsdUNXbGtQWEJoWjJVdE1hc3pmcGItUVpySHZRd1R4aEVWZXVGTWs5cEJJdDNoQTFEOWVPXzFVRGJZIn0="
+    "after": "eyJTdHl4U2VydmVyIjoiaHR0cHM6Ly9zdHl4LmV4YW1wbGUub3JnIiwiRW5jcnlwdGlvbktleSI6ImsreS90ZXN0PWtleSIsIkF1dGhvcml6YXRpb24iOiJzdHl4Mi5BbXdBQUFBQUFBQ0FBSUFBQUFBQUFBQUJBZzFvYjNOMFRtOTBQV0ZrYldsdUNXbGtQWEJoWjJVdE1mZDc1QU14dTFsbXZieVpvdVUtRWd1QU9NWU94Qm9KS0FiQU5YbWZ1Y3I1In0="
   },
+  "passphrase": "TEST ONLY: cafe\u0301 au lait is published in Styx.md, so no relay will ever start with it",
+  "passphraseKey": "a683e2aeec89bb7f672af11b17eb20cc33da43c8665891c6bca176843743114970d7d2effea6c8756d188ea8209cf3f14fd462cbd5b85390cbaa921a207a203a",
+  "passphraseRules": [
+    {
+      "why": "64 characters, 16 different",
+      "passphrase": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "accepted": true
+    },
+    {
+      "why": "64 characters, 16 different, outside the BMP",
+      "passphrase": "\ud83d\udc00\ud83d\udc01\ud83d\udc02\ud83d\udc03\ud83d\udc04\ud83d\udc05\ud83d\udc06\ud83d\udc07\ud83d\udc08\ud83d\udc09\ud83d\udc0a\ud83d\udc0b\ud83d\udc0c\ud83d\udc0d\ud83d\udc0e\ud83d\udc0f\ud83d\udc00\ud83d\udc01\ud83d\udc02\ud83d\udc03\ud83d\udc04\ud83d\udc05\ud83d\udc06\ud83d\udc07\ud83d\udc08\ud83d\udc09\ud83d\udc0a\ud83d\udc0b\ud83d\udc0c\ud83d\udc0d\ud83d\udc0e\ud83d\udc0f\ud83d\udc00\ud83d\udc01\ud83d\udc02\ud83d\udc03\ud83d\udc04\ud83d\udc05\ud83d\udc06\ud83d\udc07\ud83d\udc08\ud83d\udc09\ud83d\udc0a\ud83d\udc0b\ud83d\udc0c\ud83d\udc0d\ud83d\udc0e\ud83d\udc0f\ud83d\udc00\ud83d\udc01\ud83d\udc02\ud83d\udc03\ud83d\udc04\ud83d\udc05\ud83d\udc06\ud83d\udc07\ud83d\udc08\ud83d\udc09\ud83d\udc0a\ud83d\udc0b\ud83d\udc0c\ud83d\udc0d\ud83d\udc0e\ud83d\udc0f",
+      "accepted": true
+    },
+    {
+      "why": "63 characters",
+      "passphrase": "123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "accepted": false
+    },
+    {
+      "why": "63 characters, 126 UTF-16 units",
+      "passphrase": "\ud83d\udc01\ud83d\udc02\ud83d\udc03\ud83d\udc04\ud83d\udc05\ud83d\udc06\ud83d\udc07\ud83d\udc08\ud83d\udc09\ud83d\udc0a\ud83d\udc0b\ud83d\udc0c\ud83d\udc0d\ud83d\udc0e\ud83d\udc0f\ud83d\udc00\ud83d\udc01\ud83d\udc02\ud83d\udc03\ud83d\udc04\ud83d\udc05\ud83d\udc06\ud83d\udc07\ud83d\udc08\ud83d\udc09\ud83d\udc0a\ud83d\udc0b\ud83d\udc0c\ud83d\udc0d\ud83d\udc0e\ud83d\udc0f\ud83d\udc00\ud83d\udc01\ud83d\udc02\ud83d\udc03\ud83d\udc04\ud83d\udc05\ud83d\udc06\ud83d\udc07\ud83d\udc08\ud83d\udc09\ud83d\udc0a\ud83d\udc0b\ud83d\udc0c\ud83d\udc0d\ud83d\udc0e\ud83d\udc0f\ud83d\udc00\ud83d\udc01\ud83d\udc02\ud83d\udc03\ud83d\udc04\ud83d\udc05\ud83d\udc06\ud83d\udc07\ud83d\udc08\ud83d\udc09\ud83d\udc0a\ud83d\udc0b\ud83d\udc0c\ud83d\udc0d\ud83d\udc0e\ud83d\udc0f",
+      "accepted": false
+    },
+    {
+      "why": "75 characters, only 15 different",
+      "passphrase": "0123456789abcde0123456789abcde0123456789abcde0123456789abcde0123456789abcde",
+      "accepted": false
+    },
+    {
+      "why": "a leading space",
+      "passphrase": " 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "accepted": false
+    },
+    {
+      "why": "a leading byte order mark",
+      "passphrase": "\ufeff0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "accepted": false
+    },
+    {
+      "why": "a trailing line feed",
+      "passphrase": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n",
+      "accepted": false
+    },
+    {
+      "why": "a trailing vertical tab",
+      "passphrase": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\u000b",
+      "accepted": false
+    },
+    {
+      "why": "a trailing no-break space",
+      "passphrase": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\u00a0",
+      "accepted": false
+    },
+    {
+      "why": "a trailing next line",
+      "passphrase": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\u0085",
+      "accepted": false
+    },
+    {
+      "why": "a line feed inside",
+      "passphrase": "0123456789abcdef0123456789abcdef\n0123456789abcdef0123456789abcdef",
+      "accepted": false
+    },
+    {
+      "why": "a carriage return inside",
+      "passphrase": "0123456789abcdef0123456789abcdef\r0123456789abcdef0123456789abcdef",
+      "accepted": false
+    }
+  ],
   "refusedBlobValues": [
     "k\"ey",
     "k\\ey",

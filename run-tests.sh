@@ -189,8 +189,8 @@ win_ssh() {
 # against this same box, and the two should not drift:
 #
 #   PATH        an ssh session gets a PATH a login shell would have extended, so dotnet is not on it
-#               either; nor are python3 and node (C:\tools\python, C:\tools\node), which the Styx.md
-#               docs test runs and fails without
+#               either; nor are python3, node and cargo (C:\tools\python, C:\tools\node, C:\tools\cargo,
+#               with rustup's toolchains in C:\tools\rustup), which the Styx.md docs test runs and fails without
 #   PROFILEREAD cygwin's /etc/profile skips its PATH setup when this is set, which loads a SECOND
 #               cygwin1.dll into the process — fatal, and silent. `unset` alone is not enough: as
 #               SYSTEM the variable is readonly, so `env -u` strips it from the child that matters
@@ -271,7 +271,9 @@ run_windows() {
 		find . -mindepth 1 -type d -empty -delete && mkdir -p '$WIN_DIR/.git'" || return 1
 
 	win_ssh bash <<REMOTE
-export PATH="\$PATH:/cygdrive/c/Program Files/dotnet:/cygdrive/c/tools/python:/cygdrive/c/tools/node"
+export PATH="\$PATH:/cygdrive/c/Program Files/dotnet:/cygdrive/c/tools/python:/cygdrive/c/tools/node:/cygdrive/c/tools/cargo/bin"
+export CARGO_HOME='C:\\tools\\cargo'
+export RUSTUP_HOME='C:\\tools\\rustup'
 export NUGET_PACKAGES='$WIN_NUGET'
 export USERPROFILE='$WIN_PROFILE'
 export APPDATA='$WIN_PROFILE\\AppData\\Roaming'

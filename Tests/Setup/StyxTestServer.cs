@@ -16,7 +16,7 @@ public static class StyxTestServer
     public const string TestPassword = "test-relay-password-hydra";
 
     /// <summary>The test servers' v2 key. Not Styx.md's published one, which a relay refuses to start with.</summary>
-    public static readonly byte[] TestKey = [.. Enumerable.Range(0, 32).Select(i => (byte)(0xA0 + i))];
+    public static readonly byte[] TestKey = [.. Enumerable.Range(0, 64).Select(i => (byte)(0x80 + i))];
 
     public static WebApplicationFactory<global::Styx.Program> Create(string password = TestPassword, Action<IServiceCollection>? configure = null)
     {

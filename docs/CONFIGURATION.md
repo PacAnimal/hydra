@@ -620,6 +620,22 @@ Generate the relay's key once, and keep it as a secret:
 docker run --rm ghcr.io/pacanimal/styx:latest keygen
 ```
 
+A key is 64 random bytes in base64, so any secure generator makes one just as well:
+
+```bash
+openssl rand -base64 64 | tr -d '\n'
+```
+```powershell
+$key = New-Object byte[] 64; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($key); [Convert]::ToBase64String($key)
+```
+
+Or set `RELAY_KEY_PASSPHRASE` instead of `RELAY_KEY`, and the relay derives its key from that. It must be one line
+of at least 64 characters, 16 of them different, and it is only as strong as it is unpredictable: anyone holding a
+token can test guesses at it offline, and the same guesses work against every relay. Use a long sentence nobody
+has ever written down, a long stretch of random hammering on the keyboard, or best of all a password manager's
+generator; never a quotation, a lyric or a name. `docker run --rm -i ghcr.io/pacanimal/styx:latest derive` prints
+the key a passphrase gives, reading the passphrase from standard input. [Styx.md](../Styx.md) §13.1 has the rules.
+
 Then run the relay with it, and with an admin secret for creating networks:
 
 ```bash

@@ -5,13 +5,14 @@ using Cathedral.Styx;
 namespace Styx;
 
 /// <summary>
-/// The relay binary's key-holding subcommands. Run them where <c>RELAY_KEY</c> already lives (inside the relay's pod),
-/// so it never lands on an operator's machine; what they print is a secret too.
+/// The relay binary's key-holding subcommands. Run them where <c>RELAY_KEY</c> or <c>RELAY_KEY_PASSPHRASE</c> already
+/// lives (inside the relay's pod), so it never lands on an operator's machine; what they print is a secret too.
 /// </summary>
 public static class StyxTools
 {
     public const string Usage = """
         usage: Styx keygen
+               Styx derive                  (reads a passphrase from standard input, prints its key)
                Styx mint [--network <version-8 uuid>] [--sub <name>]... [--host <name>] [--host-prefix <prefix>]...
                          [--host-not <name>]... [--exp <unix seconds>] [--id <id>]... [--max-length <chars>]
                          [--server <url> [--encryption-key <key>] [--max-blob <bytes>]]
@@ -19,10 +20,10 @@ public static class StyxTools
 
     private const string EncryptionKeyAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 
-    public static bool IsCommand(string arg) => arg is "keygen" or "mint";
+    public static bool IsCommand(string arg) => arg is "keygen" or "derive" or "mint";
 
     /// <returns>0 on success, 1 when refused, 2 for a usage error</returns>
-    public static int Run(string[] args, Func<string, string?> environment, TextWriter output, TextWriter error)
+    public static int Run(string[] args, Func<string, string?> environment, TextReader input, TextWriter output, TextWriter error)
     {
         try
         {
@@ -30,6 +31,11 @@ public static class StyxTools
             {
                 case "keygen" when args.Length == 1:
                     output.WriteLine(Convert.ToBase64String(StyxToken.NewKey()));
+                    return 0;
+                // standard input, so the passphrase stays out of shell history and process listings
+                case "derive" when args.Length == 1:
+                    output.WriteLine(Convert.ToBase64String(StyxEnvironment.KeyFromPassphrase(
+                        input.ReadLine() ?? throw new StyxConfigurationException("No passphrase on standard input; with docker, run it with -i"))));
                     return 0;
                 case "mint":
                     output.WriteLine(Mint(args[1..], environment));
@@ -54,8 +60,8 @@ public static class StyxTools
 
     private static string Mint(string[] args, Func<string, string?> environment)
     {
-        var keys = StyxEnvironment.ReadKeys(environment(Constants.RelayKeyEnvVar));
-        if (keys.Count == 0) throw new StyxConfigurationException($"{Constants.RelayKeyEnvVar} is not set");
+        var keys = StyxEnvironment.ReadKeys(environment);
+        if (keys.Count == 0) throw new StyxConfigurationException($"Neither {Constants.RelayKeyEnvVar} nor {Constants.RelayKeyPassphraseEnvVar} is set");
 
         Guid? network = null;
         var caveats = new List<StyxCaveat>();

@@ -5,7 +5,7 @@ using Cathedral.Utils;
 namespace Styx.Services;
 
 /// <summary>
-/// v1 tokens: <c>SimpleAes(RELAY_PASSWORD)</c> over a JSON-quoted network UUID, which costs a 100 000-iteration PBKDF2
+/// v1 tokens: AES under a key derived from <c>RELAY_PASSWORD</c>, over a JSON-quoted network UUID, which costs a 100 000-iteration PBKDF2
 /// to check. Everything here is about not paying that for nothing: junk is refused by shape, a token already proven is
 /// answered from a cache, failures count toward the address limit, and only a few derivations run at once.
 /// </summary>

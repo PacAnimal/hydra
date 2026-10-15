@@ -8,7 +8,7 @@ namespace Tests.Styx;
 [TestFixture]
 public class StyxEnvironmentTests
 {
-    private static readonly byte[] KeyA = SHA256.HashData("key a"u8);
+    private static readonly byte[] KeyA = SHA512.HashData("key a"u8);
 
     [Test]
     public void OneKey_AndThePasswordAsTheAdminSecretByDefault()
@@ -64,7 +64,7 @@ public class StyxEnvironmentTests
     [Test]
     public void TheKeyPublishedInStyxMd_RefusesToStart()
     {
-        var published = Convert.ToBase64String([.. Enumerable.Range(0, 32).Select(i => (byte)i)]);
+        var published = Convert.ToBase64String([.. Enumerable.Range(0, 64).Select(i => (byte)i)]);
         Assert.Throws<StyxConfigurationException>(() => StyxEnvironment.Read(Env(("RELAY_KEY", published))));
     }
 
@@ -90,6 +90,51 @@ public class StyxEnvironmentTests
             StyxEnvironment.Read(Env(("RELAY_KEY", $"{Convert.ToBase64String(KeyA)},{Convert.ToBase64String(clash)}"))));
     }
 
+    private const string Passphrase = "a long sentence that nobody has ever written down before, about relays";
+
+    [Test]
+    public void ARefusal_NamesTheSettingThatCausedIt()
+    {
+        var derived = Convert.ToBase64String(StyxToken.KeyFromPassphrase(Passphrase));
+        var duplicate = Assert.Throws<StyxConfigurationException>(() => StyxEnvironment.Read(Env(("RELAY_KEY_PASSPHRASE", Passphrase), ("RELAY_KEY", derived))));
+        Assert.That(duplicate!.Message, Does.StartWith("RELAY_KEY "));
+    }
+
+    [Test]
+    public void APassphrase_DerivesTheFirstKey_AndRelayKeysOnlyVerifyBehindIt()
+    {
+        var auth = StyxEnvironment.Read(Env(("RELAY_KEY_PASSPHRASE", Passphrase), ("RELAY_KEY", Convert.ToBase64String(KeyA))));
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(auth.Keys, Has.Count.EqualTo(2));
+            Assert.That(auth.Keys[0], Is.EqualTo(StyxToken.KeyFromPassphrase(Passphrase)));
+            Assert.That(auth.Keys[1], Is.EqualTo(KeyA));
+        }
+    }
+
+    [TestCase("too short to ever be a relay key")]
+    [TestCase(" a long sentence that nobody has ever written down before, about relays")]
+    [TestCase("a long sentence that nobody has ever written down before, about relays\n")]
+    [TestCase("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")]
+    public void APassphraseOutsideTheRules_RefusesToStart_NamingTheSetting(string passphrase)
+    {
+        var refused = Assert.Throws<StyxConfigurationException>(() => StyxEnvironment.Read(Env(("RELAY_KEY_PASSPHRASE", passphrase))));
+        Assert.That(refused!.Message, Does.StartWith("RELAY_KEY_PASSPHRASE: "));
+    }
+
+    [Test]
+    public void APassphraseAndItsOwnKey_AreTheSameKeyTwice()
+    {
+        var derived = Convert.ToBase64String(StyxToken.KeyFromPassphrase(Passphrase));
+        Assert.Throws<StyxConfigurationException>(() => StyxEnvironment.Read(Env(("RELAY_KEY_PASSPHRASE", Passphrase), ("RELAY_KEY", derived))));
+    }
+
+    [Test]
+    public void AKeyOfTheOldLength_RefusesToStart()
+    {
+        Assert.Throws<StyxConfigurationException>(() => StyxEnvironment.Read(Env(("RELAY_KEY", Convert.ToBase64String(SHA256.HashData("key a"u8))))));
+    }
+
     [Test]
     public void ARevokedNetworkThatIsNotAUuid_RefusesToStart()
     {
@@ -109,7 +154,7 @@ public class StyxEnvironmentTests
     {
         for (var i = 0; ; i++)
         {
-            var candidate = SHA256.HashData(BitConverter.GetBytes(i));
+            var candidate = SHA512.HashData(BitConverter.GetBytes(i));
             if (wanted(candidate)) return candidate;
         }
     }

@@ -6,7 +6,7 @@ using MessagePack.Resolvers;
 namespace Tests.Styx;
 
 // Styx.md documents the encoding of everything crossing the hub, and third parties implement against it.
-// New hub methods are free to use Cathedral's richer encodings (enums as name strings, Guids as raw bytes),
+// New hub methods are free to use richer encodings (enums as name strings, Guids as raw bytes),
 // but the types already on the wire must keep encoding the way the document says, so an implementation that
 // has shipped keeps working. These tests compare the hub's options against a plain contractless resolver —
 // the encoding Styx.md describes — for every type that crosses today.

@@ -10,7 +10,7 @@ using System.Security.Cryptography;
 using System.Text;
 
 if (args.Length > 0 && StyxTools.IsCommand(args[0]))
-    return StyxTools.Run(args, Environment.GetEnvironmentVariable, Console.Out, Console.Error);
+    return StyxTools.Run(args, Environment.GetEnvironmentVariable, Console.In, Console.Out, Console.Error);
 
 var config = Env.Config;
 

@@ -1,3 +1,4 @@
+using Cathedral.Styx;
 using Common.DTO;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
@@ -34,7 +35,7 @@ public class StyxLoginCasingTests : StyxFixtureBase
     public async Task Authenticate_AcceptsAnyMemberCasing(Protocol protocol, string authKey, string hostKey)
     {
         var v1 = await StyxTestServer.GenerateAuthorization(Guid.NewGuid());
-        var v2 = StyxTestServer.MintToken(null, Cathedral.Styx.StyxCaveat.HostPrefix("casing-")).ToString();
+        var v2 = StyxTestServer.MintToken(null, StyxCaveat.HostPrefix("casing-")).ToString();
         foreach (var authorization in new[] { v1, v2 })
         {
             var response = await Authenticate(protocol, new Dictionary<string, string>

@@ -4,7 +4,7 @@ using Tests.Setup;
 
 namespace Tests.Styx;
 
-/// <summary>The relay binary's <c>keygen</c> and <c>mint</c> subcommands.</summary>
+/// <summary>The relay binary's <c>keygen</c>, <c>derive</c> and <c>mint</c> subcommands.</summary>
 [TestFixture]
 public class StyxToolsTests
 {
@@ -18,7 +18,7 @@ public class StyxToolsTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(code, Is.Zero);
-            Assert.That(StyxEnvironment.ReadKeys(key), Has.Count.EqualTo(1));
+            Assert.That(StyxEnvironment.ReadKeys(name => name == Constants.RelayKeyEnvVar ? key : null), Has.Count.EqualTo(1));
         }
     }
 
@@ -86,7 +86,7 @@ public class StyxToolsTests
     [Test]
     public void Mint_RefusesThePublishedTestKey_AndANoKeyEnvironment()
     {
-        var published = Convert.ToBase64String([.. Enumerable.Range(0, 32).Select(i => (byte)i)]);
+        var published = Convert.ToBase64String([.. Enumerable.Range(0, 64).Select(i => (byte)i)]);
         var (withTestKey, _, _) = Run(["mint"], published);
         var (withoutKey, _, _) = Run(["mint"]);
         using (Assert.EnterMultipleScope())
@@ -96,10 +96,57 @@ public class StyxToolsTests
         }
     }
 
+    private const string Passphrase = "a long sentence that nobody has ever written down before, about relays";
+
+    [Test]
+    public void Derive_PrintsThePassphrasesKey_FromStandardInput()
+    {
+        var (code, output, _) = Run(["derive"], input: Passphrase + "\n");
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(code, Is.Zero);
+            Assert.That(Convert.FromBase64String(output.Trim()), Is.EqualTo(StyxToken.KeyFromPassphrase(Passphrase)));
+        }
+    }
+
+    [Test]
+    public void Derive_RefusesAShortPassphrase()
+    {
+        var (code, _, error) = Run(["derive"], input: "short\n");
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(code, Is.EqualTo(1));
+            Assert.That(error, Does.Contain("64 characters"));
+        }
+    }
+
+    [Test]
+    public void Derive_SaysSo_WhenStandardInputIsEmpty()
+    {
+        var (code, _, error) = Run(["derive"]);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(code, Is.EqualTo(1));
+            Assert.That(error, Does.Contain("standard input"));
+        }
+    }
+
+    [Test]
+    public void Mint_SignsWithThePassphrasesKey()
+    {
+        var (code, output, _) = Run(["mint"], passphrase: Passphrase);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(code, Is.Zero);
+            Assert.That(StyxToken.Parse(output.Trim()).Verify(StyxToken.KeyFromPassphrase(Passphrase)), Is.True);
+        }
+    }
+
     [TestCase("mint", "--bogus", "x")]
     [TestCase("mint", "--sub")]
     [TestCase("mint", "--sub", "a.b")]
     [TestCase("keygen", "extra")]
+    [TestCase("derive", "extra")]
     public void BadArguments_AreRefused(params string[] args)
     {
         var (code, _, error) = Run(args, Key);
@@ -110,11 +157,12 @@ public class StyxToolsTests
         }
     }
 
-    private static (int Code, string Output, string Error) Run(string[] args, string? key = null)
+    private static (int Code, string Output, string Error) Run(string[] args, string? key = null, string? passphrase = null, string input = "")
     {
         var output = new StringWriter();
         var error = new StringWriter();
-        var code = StyxTools.Run(args, name => name == Constants.RelayKeyEnvVar ? key : null, output, error);
+        string? Environment(string name) => name == Constants.RelayKeyEnvVar ? key : name == Constants.RelayKeyPassphraseEnvVar ? passphrase : null;
+        var code = StyxTools.Run(args, Environment, new StringReader(input), output, error);
         return (code, output.ToString(), error.ToString());
     }
 }

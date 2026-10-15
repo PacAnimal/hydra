@@ -69,6 +69,15 @@ jobs:
         with:
           dotnet-version: "10.0.x"
 
+      # the crates Styx.md's Rust example builds with, pinned by its lock file, so a run rarely needs crates.io
+      - name: Cache Rust crates
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-${{ runner.os }}-${{ hashFiles('Tests/Styx/StyxDocs.Cargo.lock') }}
+
       - name: Install X11 headless deps
         if: matrix.os == 'linux'
         run: sudo apt-get update -qq && xargs sudo apt-get install -y -qq < .github/linux-test-packages.txt
