@@ -13,8 +13,9 @@ namespace Styx;
 public static class StyxRelayExtensions
 {
     // everything a relay host needs besides its listeners, logging and any endpoints of its own, shared by
-    // the standalone server and the one embedded in Hydra
-    public static WebApplicationBuilder AddStyxRelay(this WebApplicationBuilder builder, StyxAuth auth, StyxOptions options,
+    // the standalone server and the one embedded in Hydra. Only a host behind a proxy may believe forwarded headers:
+    // anywhere else, any machine on a private network could name itself whatever address it liked
+    public static WebApplicationBuilder AddStyxRelay(this WebApplicationBuilder builder, StyxAuth auth, StyxOptions options, bool behindProxy,
         TimeProvider? throttleClock = null)
     {
         var services = builder.Services;
@@ -36,7 +37,7 @@ public static class StyxRelayExtensions
         services.AddSingleton<AuthenticationHubFilter>();
         services.Configure<HubOptions>(hub => hub.AddFilter<AuthenticationHubFilter>());
 
-        services.AddCathedralForwardedHeaders();
+        if (behindProxy) services.AddCathedralForwardedHeaders();
         return builder;
     }
 

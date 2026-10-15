@@ -39,8 +39,12 @@ public sealed class TestStyxClient : IStyxClient, IAsyncDisposable
         ConnectRaw(new HubConnectionBuilder().WithUrl($"{factory.Server.BaseAddress}relay",
             options => options.UseTestServer(factory.Server)));
 
-    // the same, against a relay listening on a real socket, such as the embedded one
-    public Task ConnectRaw(string serverUrl) => ConnectRaw(new HubConnectionBuilder().WithUrl($"{serverUrl}/relay"));
+    // the same, against the embedded relay on a real socket, trusting its self-signed cert without the binding
+    public Task ConnectRaw(string serverUrl) => ConnectRaw(new HubConnectionBuilder().WithUrl($"{serverUrl}/relay", options =>
+    {
+        options.HttpMessageHandlerFactory = _ => new HttpClientHandler { ServerCertificateCustomValidationCallback = (_, _, _, _) => true };
+        options.WebSocketConfiguration = ws => ws.RemoteCertificateValidationCallback = (_, _, _, _) => true;
+    }));
 
     private async Task ConnectRaw(IHubConnectionBuilder builder)
     {

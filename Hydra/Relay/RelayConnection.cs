@@ -57,6 +57,8 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     /// </summary>
     private KeyBundle? _openKeyBundle;
     private RelayTransportSnapshot? _transport;
+    // the embedded relay's cert fingerprint once it has proven the password; every TLS connection must present it
+    private byte[]? _provenRelayFingerprint;
     private long _connectionAttempts;
     private long _messagesSent;
     private long _messagesReceived;
@@ -545,7 +547,14 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         };
     }
 
-    private SocketsHttpHandler CreateRelayHandler() => new()
+    private SocketsHttpHandler CreateRelayHandler()
+    {
+        var handler = NewRelayHandler();
+        if (Volatile.Read(ref _provenRelayFingerprint) is { } proven) handler.PinTo(proven);
+        return handler;
+    }
+
+    private SocketsHttpHandler NewRelayHandler() => new()
     {
         ConnectCallback = async (ctx, cancel) =>
         {
@@ -571,6 +580,13 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         {
             log.LogError(ex, "Failed to parse NetworkConfig — relay disabled");
             return;
+        }
+
+        if (netConfig.Embedded && EmbeddedRelayTls.WithHttps(netConfig.StyxServer) is var https && https != netConfig.StyxServer)
+        {
+            log.LogWarning("embeddedStyx.server is {Server}, but the embedded relay only speaks TLS, so connecting to {Https}. Change it to https:// in hydra.conf",
+                netConfig.StyxServer, https);
+            netConfig = netConfig with { StyxServer = https };
         }
 
         var hostName = profile.Name;
@@ -774,6 +790,16 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     {
         using var disco = new ConnectionCancellation(cancel);
         using var connectionScope = new ConnectionCancellationScope(this, disco);
+
+        // the embedded relay's cert is trusted once it proves the password, and nothing, the token included, goes before;
+        // a relay whose cert passes ordinary validation needs no proof, and keeps that validation
+        Volatile.Write(ref _provenRelayFingerprint, null);
+        if (netConfig.Embedded)
+        {
+            var proven = await EmbeddedRelayTls.ProveRelay(netConfig.StyxServer, netConfig.EncryptionKey, NewRelayHandler(),
+                TimeSpan.FromSeconds(Constants.AuthTimeoutSeconds), disco.Token);
+            Volatile.Write(ref _provenRelayFingerprint, proven);
+        }
 
         await using var con = new HubConnectionBuilder()
             .WithUrl($"{netConfig.StyxServer}/relay", ConfigureHubUrl)

@@ -5,7 +5,6 @@ using Common.DTO;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Time.Testing;
 using Styx;
 using Tests.Setup;
 
@@ -17,13 +16,13 @@ public class ResponseThrottleTests
 {
     private static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
 
-    private ThrottleClock _clock = null!;
+    private StartedTimers _clock = null!;
     private WebApplicationFactory<global::Styx.Program> _factory = null!;
 
     [SetUp]
     public void SetUp()
     {
-        _clock = new ThrottleClock();
+        _clock = new StartedTimers();
         _factory = StyxTestServer.Create(configure: services => services.AddSingleton(new ResponseThrottle(_clock)));
     }
 
@@ -84,7 +83,7 @@ public class ResponseThrottleTests
     // holds the answer one tick short of the throttle, then lets it through
     private async Task<T> ReleaseThrottle<T>(Task<T> answer, int seconds)
     {
-        var due = await _clock.Started.Task.WaitAsync(Bound);
+        var due = await _clock.Started.Next((int)Bound.TotalMilliseconds, "the throttle");
         Assert.That(due, Is.EqualTo(TimeSpan.FromSeconds(seconds)));
 
         _clock.Advance(due - TimeSpan.FromTicks(1));
@@ -92,18 +91,5 @@ public class ResponseThrottleTests
 
         _clock.Advance(TimeSpan.FromTicks(1));
         return await answer.WaitAsync(Bound);
-    }
-
-    // says when the throttle has started waiting, and for how long, so the test advances only a wait that exists
-    private sealed class ThrottleClock : FakeTimeProvider
-    {
-        public TaskCompletionSource<TimeSpan> Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
-        {
-            var timer = base.CreateTimer(callback, state, dueTime, period);
-            Started.TrySetResult(dueTime);
-            return timer;
-        }
     }
 }

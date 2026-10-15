@@ -1,11 +1,17 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Cathedral.Config;
 using Cathedral.Utils;
 
 namespace Common;
 
-public record NetworkConfig(string StyxServer, string EncryptionKey, string Authorization)
+// Embedded: the relay is a Hydra's embedded one, whose self-signed cert proves itself with EncryptionKey, the relay password
+public record NetworkConfig(
+    string StyxServer,
+    string EncryptionKey,
+    string Authorization,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool Embedded = false)
 {
     public static NetworkConfig Parse(string base64)
     {
@@ -19,8 +25,8 @@ public record NetworkConfig(string StyxServer, string EncryptionKey, string Auth
     public static async ValueTask<string> ComputeEmbeddedBlob(string server, string password, CancellationToken cancel = default)
     {
         var authorization = await new SimpleAes(password).EncryptBase64(EmbeddedRelayConstants.NetworkId, cancel);
-        var config = new NetworkConfig(server, password, authorization);
-        var json = JsonSerializer.Serialize(config, SaneJson.Options);
-        return Convert.ToBase64String(Encoding.UTF8.GetBytes(json));
+        return new NetworkConfig(server, password, authorization, Embedded: true).ToBlob();
     }
+
+    public string ToBlob() => Convert.ToBase64String(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(this, SaneJson.Options)));
 }

@@ -25,7 +25,7 @@ public sealed class FailureLimiter(TimeProvider clock)
             existing is not null && Current(existing) is { } tally ? tally with { Failures = tally.Failures + 1 } : new Tally(clock.GetUtcNow(), 1));
 
     /// <summary>IPv6 by its /64, since one host commonly holds a whole one; IPv4, mapped or not, by its address.</summary>
-    internal static string KeyOf(string remoteIp)
+    public static string KeyOf(string remoteIp)
     {
         if (!IPAddress.TryParse(remoteIp, out var address)) return remoteIp;
         if (address.IsIPv4MappedToIPv6) address = address.MapToIPv4();

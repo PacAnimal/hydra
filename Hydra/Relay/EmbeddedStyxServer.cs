@@ -3,11 +3,13 @@ using Cathedral.Utils;
 using Hydra.Config;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Styx;
 using Styx.Services;
 using System.Net;
+using System.Security.Cryptography.X509Certificates;
 
 namespace Hydra.Relay;
 
@@ -97,13 +99,38 @@ public class EmbeddedStyxServer(EmbeddedStyxServerConfig config, ILogger<Embedde
     {
         var builder = WebApplication.CreateBuilder();
 
-        builder.AddStyxRelay(StyxAuth.V1Only(config.Password), new StyxOptions(false), ThrottleClock);
+        // nothing proxies a Hydra's own relay, so the address a peer connects from is the only one it has
+        builder.AddStyxRelay(StyxAuth.V1Only(config.Password), new StyxOptions(false), behindProxy: false, ThrottleClock);
         builder.Services.AddSereneConsoleLogging();
-        builder.WebHost.ConfigureKestrel(options => options.Listen(IPAddress.IPv6Any, config.Port, listenOptions => listenOptions.UseTcpNoDelay()));
+        // the container makes the cert, so the app owns and disposes it, started or not; on Windows it holds a key container
+        builder.Services.AddSingleton(_ => EmbeddedRelayTls.CreateCertificate());
+        builder.WebHost.ConfigureKestrel(options => options.Listen(IPAddress.IPv6Any, config.Port, listenOptions =>
+            listenOptions.UseTcpNoDelay().RefusePlainHttp(log).UseHttps(options.ApplicationServices.GetRequiredService<X509Certificate2>())));
 
         var app = builder.Build();
+        var proofs = EmbeddedRelayTls.ProofsFor(config.Password, EmbeddedRelayTls.FingerprintOf(app.Services.GetRequiredService<X509Certificate2>()));
         _registry = app.Services.GetRequiredService<IClientRegistry>();
         app.MapHub<StyxHub>("/relay");
+        var gate = new BindingGate(app.Services.GetRequiredService<ResponseThrottle>(), app.Services.GetRequiredService<FailureLimiter>());
+        app.MapPost(EmbeddedRelayTls.BindingPath, (HttpContext http, CancellationToken cancel) => AnswerBinding(proofs, gate, http, cancel));
         return app;
+    }
+
+    // the server's proof goes only to a client that proved the password for this cert, so a stranger has nothing to guess
+    // against; the gate decides how fast anyone may try
+    private static async Task<IResult> AnswerBinding(EmbeddedRelayTls.Proofs proofs, BindingGate gate, HttpContext http, CancellationToken cancel)
+    {
+        var remoteIp = http.Connection.RemoteIpAddress?.ToString() ?? ClientRegistry.Unknown;
+        var given = new byte[EmbeddedRelayTls.ProofLength + 1];
+        var length = await http.Request.Body.ReadAtLeastAsync(given, given.Length, throwOnEndOfStream: false, cancel);
+
+        var verdict = await gate.Check(remoteIp,
+            () => length == EmbeddedRelayTls.ProofLength && EmbeddedRelayTls.Matches(given.AsSpan(0, length), proofs.Client), cancel);
+        return verdict switch
+        {
+            BindingVerdict.Proven => Results.Bytes(proofs.Server),
+            BindingVerdict.Busy => Results.StatusCode(StatusCodes.Status503ServiceUnavailable),
+            _ => Results.Unauthorized(),
+        };
     }
 }

@@ -43,7 +43,8 @@ public class StyxRelayCompositionTests
     public async Task TheEmbeddedRelayComposesTheRelayServices()
     {
         var config = new EmbeddedStyxServerConfig { Port = 0, Password = EmbeddedPassword };
-        await using var app = new EmbeddedStyxServer(config, NullLogger<EmbeddedStyxServer>.Instance).BuildApp();
+        using var embedded = new EmbeddedStyxServer(config, NullLogger<EmbeddedStyxServer>.Instance);
+        await using var app = embedded.BuildApp();
         var services = app.Services;
 
         AssertRelayServices(services);

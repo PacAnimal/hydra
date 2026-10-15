@@ -4,6 +4,7 @@ using System.Net.Sockets;
 using System.Text;
 using Hydra.Config;
 using Hydra.Relay;
+using Microsoft.Extensions.Logging;
 
 namespace Tests.Setup;
 
@@ -11,8 +12,8 @@ namespace Tests.Setup;
 /// Like HydraTestClient but connects to a real TCP URL — used for embedded Styx server tests.
 /// Does not override ConfigureHubUrl, so the base implementation (NoDelay socket) is used.
 /// </summary>
-public sealed class EmbeddedHydraTestClient(IHydraProfile profile)
-    : RelayConnection(profile, TestLog.CreateLogger<RelayConnection>(), new WorldState()), IAsyncDisposable
+public sealed class EmbeddedHydraTestClient(IHydraProfile profile, ILogger<RelayConnection>? log = null)
+    : RelayConnection(profile, log ?? TestLog.CreateLogger<RelayConnection>(), new WorldState()), IAsyncDisposable
 {
     private readonly SemaphoreSlim _readySignal = new(0);
     private readonly SemaphoreSlim _peerSignal = new(0);

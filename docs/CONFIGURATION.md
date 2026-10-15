@@ -102,7 +102,7 @@ Use `Esc` to close the TUI. It does not change Hydra's running state.
 - `profileName` — name for this profile, logged at startup so you know which one is active (no duplicates allowed)
 - `mode` — `Master` or `Slave`
 - `networkConfig` — base64 relay config string from the Styx web UI; use this to connect to a standalone Styx server
-- `embeddedStyx` — connect to a Styx server using plain-text credentials: `{ "server": "http://<host>:<port>", "password": "<password>" }` — a more readable alternative to copying the base64 `networkConfig` blob
+- `embeddedStyx` — connect to a Styx server using plain-text credentials: `{ "server": "https://<host>:<port>", "password": "<password>" }` — a more readable alternative to copying the base64 `networkConfig` blob. Always TLS: an `http://` address is reached over `https://` anyway, with a warning to change it
 - `embeddedStyxServer` — run a Styx relay server embedded inside this Hydra process: `{ "port": <port>, "password": "<password>" }` — useful for home setups where you don't want a separate Styx container; the machine running this automatically connects to its own server, and other machines connect to it using `embeddedStyx`
 - `hosts` — list of host entries for the neighbour graph (master only; slaves don't need this)
 - `screenDefinitions` — per-screen scale config (slave only; reported to master via ScreenInfo)
@@ -593,7 +593,7 @@ On startup, Hydra logs how other machines should connect:
 
 ```
 Embedded Styx relay on port 5000
-Remote hosts can connect with: embeddedStyx: {"server": "http://<your-ip>:5000", "password": "<password>"}
+Remote hosts can connect with: embeddedStyx: {"server": "https://<your-ip>:5000", "password": "<password>"}
 ```
 
 **On each other machine** (master or slave), use `embeddedStyx` with your hub's IP and the same password — no need to copy a base64 blob:
@@ -604,13 +604,15 @@ Remote hosts can connect with: embeddedStyx: {"server": "http://<your-ip>:5000",
   "profiles": [
     {
       "mode": "Slave",
-      "embeddedStyx": { "server": "http://192.168.1.10:5000", "password": "my-secret" }
+      "embeddedStyx": { "server": "https://192.168.1.10:5000", "password": "my-secret" }
     }
   ]
 }
 ```
 
-The `embeddedStyx` property is also an alternative to `networkConfig` for any external Styx server — just point it at the server URL and provide the password instead of copying a base64 string.
+The embedded relay speaks only TLS, with no certificate to set up: it makes a new self-signed one on every start, and each machine checks that the relay knows the password before it trusts that certificate or sends anything else. A machine on Hydra older than 0.3 cannot connect to it, so update them together.
+
+The `embeddedStyx` property is also an alternative to `networkConfig` for any external Styx server — just point it at the server's `https://` URL and provide the password instead of copying a base64 string. That server needs a certificate your machines already trust, such as one from the reverse proxy in front of it.
 
 ### Running standalone Styx
 

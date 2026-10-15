@@ -28,7 +28,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           # major.minor; a new series starts at .0, and every push to main after that adds one to the patch
-          SERIES: "0.2"
+          SERIES: "0.3"
         run: |
           latest=""
           if [ "${{ github.event_name }}" == "push" ]; then

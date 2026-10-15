@@ -176,7 +176,7 @@ string? embeddedNetworkConfig = null;
 if (config?.EmbeddedStyx != null)
     embeddedNetworkConfig = await NetworkConfig.ComputeEmbeddedBlob(config.EmbeddedStyx.Server, config.EmbeddedStyx.Password);
 else if (config?.EmbeddedStyxServer != null)
-    embeddedNetworkConfig = await NetworkConfig.ComputeEmbeddedBlob($"http://localhost:{config.EmbeddedStyxServer.Port}", config.EmbeddedStyxServer.Password);
+    embeddedNetworkConfig = await NetworkConfig.ComputeEmbeddedBlob($"https://localhost:{config.EmbeddedStyxServer.Port}", config.EmbeddedStyxServer.Password);
 
 var profile = new HydraProfile(configFile, config, embeddedNetworkConfig);
 services.AddSingleton<IHydraProfile>(profile);
@@ -216,7 +216,7 @@ foreach (var hotkeyError in profile.Hotkeys.Errors)
 if (config?.EmbeddedStyxServer != null && startupLog.IsEnabled(LogLevel.Information))
 {
     startupLog.LogInformation("Embedded Styx relay on port {Port}", config.EmbeddedStyxServer.Port);
-    startupLog.LogInformation("Remote hosts can connect with: embeddedStyx: {{\"server\": \"http://<your-ip>:{Port}\", \"password\": \"<password>\"}}", config.EmbeddedStyxServer.Port);
+    startupLog.LogInformation("Remote hosts can connect with: embeddedStyx: {{\"server\": \"https://<your-ip>:{Port}\", \"password\": \"<password>\"}}", config.EmbeddedStyxServer.Port);
 }
 
 // Recovery must start before platform/input services: a candidate can block while waiting for permissions

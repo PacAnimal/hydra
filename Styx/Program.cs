@@ -37,7 +37,7 @@ services.AddSereneConsoleLogging(logging =>
 services.ConfigureHttpJsonOptions(options => SaneJson.Configure(options.SerializerOptions));
 
 var debugMessages = Environment.GetEnvironmentVariable(Constants.DebugMessagesEnvVar)?.EqualsIgnoreCase("true") ?? false;
-builder.AddStyxRelay(auth, new StyxOptions(debugMessages));
+builder.AddStyxRelay(auth, new StyxOptions(debugMessages), behindProxy: true);
 
 var port = int.Parse(config.GetString("LOCAL_PORT", "5000"));
 var localOnly = Environment.GetEnvironmentVariable(Constants.LocalOnlyEnvVar)?.EqualsIgnoreCase("true") ?? false;

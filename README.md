@@ -139,7 +139,7 @@ Create `hydra.conf` next to the binary on **each machine**.
   "name": "laptop",
   "profiles": [{
     "mode": "Slave",
-    "embeddedStyx": { "server": "http://192.168.1.10:5000", "password": "secret" }
+    "embeddedStyx": { "server": "https://192.168.1.10:5000", "password": "secret" }
   }]
 }
 ```

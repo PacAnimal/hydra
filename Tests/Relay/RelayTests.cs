@@ -29,6 +29,20 @@ public class NetworkConfigTests
         }
     }
 
+    // the flag is written only when set, so a blob for any other relay is spelled as it always was
+    [Test]
+    public async Task OnlyAnEmbeddedBlobCarriesTheEmbeddedFlag()
+    {
+        var embedded = NetworkConfig.Parse(await NetworkConfig.ComputeEmbeddedBlob("https://relay:5000", "pw"));
+        var externalJson = Encoding.UTF8.GetString(Convert.FromBase64String((embedded with { Embedded = false }).ToBlob()));
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(embedded.Embedded, Is.True);
+            Assert.That(externalJson, Does.Not.Contain("embedded"));
+        }
+    }
+
     [Test]
     public void Parse_InvalidBase64_Throws()
     {
