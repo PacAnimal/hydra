@@ -87,7 +87,7 @@ public sealed class ExpiryScheduler(
             if (log.IsEnabled(LogLevel.Information))
                 log.LogInformation("Authorization of \"{HostName}\" on network {Network} expired", identity.HostName, identity.Network);
             peers.QueueBroadcast(identity.Network);
-            await writer.Kicked(connectionId, ExpiredReason);
+            writer.Kick(connectionId, ExpiredReason);
         }
         catch (Exception ex)
         {

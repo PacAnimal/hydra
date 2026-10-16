@@ -39,8 +39,10 @@ at a time. A hostname is unique within a namespace: a second connection claiming
 **always** displaces the first (§6.2), whatever tokens either holds. Where holders are not trusted with each
 other's names, the remedy is hostname-restricted tokens (§10), not a different displacement rule.
 
-The relay holds no state beyond the set of live connections. Nothing is persisted, queued, or replayed.
-A payload addressed to a peer that is not connected at that instant is discarded.
+The relay holds no state beyond the set of live connections and the deliveries each is in the middle of
+taking (§3.4). Nothing is persisted or replayed, and nothing is held for a peer that is not connected: a
+payload addressed to one that is not connected at that instant is discarded, and deliveries still waiting
+for a peer when it disconnects are discarded with it.
 
 ## 3. Transport
 
@@ -113,21 +115,35 @@ Message framing, invocation records (`type: 1`), completion records (`type: 3`),
 | Concurrent invocations per client | 1 on `/relay`; on `/relay/parallel`, `RELAY_PARALLEL_INVOCATIONS` (§13), default 4 |
 | Relay keep-alive ping interval | 5 s |
 | Configured client timeout | 15 s |
-| Deadline for a client to take a message | 30 s |
+| Longest a client may take no message while one is waiting for it | 30 s |
 
 On `/relay` the relay runs a client's invocations **one at a time, in the order it received them**: the next
 starts only once the last has finished. So a slow invocation holds up everything behind it from that client,
-whether that is a `Send` waiting on a target that is not reading or a login waiting out its second (§5.1). On
+whether that is a `Send` waiting on a slow target (for at most 30 s without progress, below) or a login
+waiting out its second (§5.1). On
 `/relay/parallel` up to the configured number run at once, so a slow one holds up nothing until that many are
 running, and in exchange nothing orders them. While a client's invocation waits its turn the relay is not reading
 from that client, and does not count the silence against its client timeout; at any other time it does, so a
 client MUST keep sending its own ping records while an invocation of its own is running.
 
-A client that does not take a message the relay is sending it (`Receive`, `Peers` or `Kicked`) within the
-deadline is disconnected, however lively its own ping records: a client that keeps sending while it has
-stopped reading would otherwise hold every sender to it, and every membership change, indefinitely. A message
-counts as taken once all but the transport's buffers' worth of it has gone, so a message that needs longer than
-the deadline on a slow target's downlink costs that target its connection, and is one more reason to fragment.
+Everything the relay sends a client (`Receive`, `Peers` and `Kicked`) joins **one queue for that client**,
+and is written to it one at a time, in queue order, whichever sender or event it came from. A `Send` waits
+until each of its deliveries has been taken, so its completion record (§5.2) comes back only once its targets
+have taken them; a kick is queued without anyone waiting on it. A sender is therefore held back by a slow target
+rather than the relay buffering for it. Membership snapshots waiting next to each other collapse into the
+latest, never the one that shows a displaced host leaving (§6.2), so a client's queue holds one delivery from
+each `Send` in progress, its kicks, those departure snapshots, and at most one other snapshot between any two
+of those. A delivery counts as taken once all but the transport's buffers' worth of it has left the
+relay. A client that reads its next message only after handling the last, as SignalR's own clients
+do, takes nothing while a handler runs once those buffers are full.
+
+A client with deliveries waiting that takes **none of them for 30 s** is disconnected, however lively its own
+ping records: a client that keeps sending while it has stopped reading would otherwise hold every sender to it,
+and every membership change, indefinitely. The clock runs only while something is waiting and restarts with
+each delivery taken, so a client is never charged for the length of its queue: one that takes each delivery
+within 30 s stays connected however many senders are queued behind it. A single delivery that needs longer
+than 30 s on a slow client's downlink costs that client its connection, which is one more reason to fragment.
+On disconnection its waiting deliveries are discarded, and the `Send`s waiting on them complete.
 
 Exceeding the size limit is fatal to the connection, not to the invocation: the relay sends a close
 record naming the limit and drops the connection. Clients MUST fragment large transfers at the
@@ -315,7 +331,9 @@ identity as it was.
 
 `targetHosts` is an array of hostnames; `payload` is a byte string. The relay resolves each target
 within the sender's network and delivers `Receive` (§6.1) to each resolved connection. There is no
-completion value and no acknowledgement.
+completion value, and no acknowledgement from the targets: the completion record, for an invocation that
+asks for one, comes back once each resolved target has taken its delivery or been disconnected (§3.4). It
+says the bytes left the relay, not that a target's application handled them.
 
 Delivery semantics:
 
@@ -326,6 +344,8 @@ Delivery semantics:
 - **No de-duplication.** A hostname listed twice is delivered twice.
 - **Loopback is permitted.** A sender MAY address its own hostname and will receive its own payload.
 - An empty `targetHosts` array, and empty strings within it, are ignored.
+- **All targets at once.** The deliveries to every resolved target join their queues (§3.4) together, before
+  the relay waits on any of them, so a slow target delays only the `Send`'s completion, never its other targets.
 - On `/relay`, ordering is preserved between a given pair of peers, whether or not the sender waits for
   each `Send` to complete: the relay takes a client's invocations one at a time, in the order it received
   them (§3.4), and writes each delivery to the target before it starts the next. A sender MAY therefore send
@@ -333,7 +353,10 @@ Delivery semantics:
 - On `/relay/parallel`, no ordering is implied even between one pair of peers: two `Send`s from one sender
   may arrive in either order. A sender that waits for each `Send`'s completion record before sending the
   next gets them in order there too.
-- No ordering is implied across different senders.
+- Across senders, a target receives its deliveries in the order they joined its queue (§3.4), together
+  with its `Peers` and `Kicked`. A `Send` queues its deliveries as soon as the relay starts running it, so two
+  `Send`s the relay starts one after the other reach every target they share in that order.
+  Two from different senders that reach the relay at the same moment are in no order either sender can know.
 
 ### 5.3 `Ping() → true`
 
@@ -349,7 +372,9 @@ forwarded client address. Informational only.
 
 A client MUST accept these three invocations. They are sent as SignalR invocations with no invocation
 identifier, so no completion is expected; a client MAY simply ignore any it does not need. Handlers
-SHOULD return promptly, since the relay dispatches them sequentially per connection.
+SHOULD return promptly, or hand their work off: the relay writes a client's deliveries one at a time
+(§3.4), every sender to the client waits on them, and a client that takes no delivery for 30 s while some
+wait is disconnected.
 
 ### 6.1 `Receive(sourceHost, sourceIp, payload)`
 
@@ -363,7 +388,10 @@ what this does and does not buy. `sourceIp` is the sender's remote address, info
 
 Reports the current membership of the client's network, **excluding the recipient**, ordered
 lexicographically. Sent to every member of a network whenever any member authenticates, is displaced, or
-disconnects. It is a complete snapshot, not a delta; a client SHOULD replace its view rather than merge.
+disconnects. It is a complete snapshot, not a delta; a client SHOULD replace its view rather than merge. A
+client slow to take its deliveries may receive only the latest of several snapshots that waited for it
+together (§3.4), but never misses the one that shows a displaced host leaving, which always comes before any
+showing it back.
 
 A newly authenticated peer receives its own snapshot, which is empty if it is alone in the network.
 
@@ -517,6 +545,11 @@ legacy network whose UUID is known, never for a v2 network, and creates new v2 n
 recover by rotating it, which invalidates every v1 token at once. Every v1 token is an offline verifier of
 the password (§4.1), so a relay that keeps v1 needs a long random password.
 
+**A slow reader slows its senders.** A `Send` completes only once its targets have taken it (§3.4), so a
+member that reads slowly holds back every `Send` addressed to it, and on `/relay` everything else its senders
+send behind that, for as long as it keeps taking a delivery at least every 30 s. A member that takes nothing
+for 30 s is disconnected.
+
 **Availability of v1.** A v1 login that is not already cached costs a PBKDF2, and only a few run at once
 with a bounded wait. Junk from many addresses can therefore starve v1 logins (after a restart especially,
 when nothing is cached), though never the relay's CPU and never a v2 login.
@@ -572,11 +605,14 @@ A minimal client:
 4. Invoke `Authenticate` with the token and a hostname. Allow for the ≥ 1 s floor.
 5. Maintain the peer set from `Peers` snapshots, replacing wholesale. A hostname that leaves and returns
    across two snapshots is a peer that reconnected; discard whatever you cached about it.
-6. `Send` to explicit hostname lists; expect no acknowledgement and tolerate silent loss.
-7. Answer relay ping records, emit your own, and reconnect with jittered backoff on loss.
-8. Treat `Kicked` as a stop, not a retry.
+6. `Send` to explicit hostname lists. A completion means the relay has written the payload, not that a peer
+   handled it, and loss is silent.
+7. Keep reading. Handle each delivery promptly or hand it off: a client that takes no delivery for 30 s
+   while some wait is disconnected (§3.4).
+8. Answer relay ping records, emit your own, and reconnect with jittered backoff on loss.
+9. Treat `Kicked` as a stop, not a retry.
 
-Anything beyond that — reliability, ordering across peers, confidentiality, authenticity of peers,
+Anything beyond that — reliability, ordering beyond what §5.2 promises, confidentiality, authenticity of peers,
 message structure — is the application's to build. The relay carries bytes between names.
 
 ## 13. Relay configuration

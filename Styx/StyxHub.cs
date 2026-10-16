@@ -76,7 +76,7 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, ITokenVer
         foreach (var connectionId in registration.Kicked)
         {
             expiry.Cancel(connectionId);
-            await writer.Kicked(connectionId, "duplicate hostname");
+            writer.Kick(connectionId, "duplicate hostname");
         }
 
         // armed before the abort check below, whose cleanup then cancels it too
@@ -106,11 +106,11 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, ITokenVer
         // re-sends the config it needs. Both halves go through the broadcaster's single-reader queue, in this
         // order, so every peer observes them that way round.
         //
-        // Awaited, not queued. The displacing client can Send the instant this method returns, and Send
-        // dispatches straight to the target — so a queued departure notice could arrive *after* the
-        // newcomer's first payload, and the recipient would still be trusting whoever held the name a
-        // moment ago. Waiting for the delivery is what makes Styx.md 6.2's ordering cover the displacing
-        // peer's own traffic, which is what every client already assumes it does.
+        // Awaited, not fire-and-forget. The displacing client can Send the instant this method returns, so a departure
+        // notice not yet in each peer's queue could arrive *after* the newcomer's first payload, and the recipient would
+        // still be trusting whoever held the name a moment ago. Waiting until it is queued ahead of anything the newcomer
+        // sends is what makes Styx.md 6.2's ordering cover the displacing peer's own traffic, which is what every client
+        // already assumes it does.
         if (registration.Kicked.Count > 0)
             await peers.BroadcastAndWait(network, registration.OtherClients, Context.ConnectionAborted);
 
@@ -142,6 +142,7 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, ITokenVer
             log.LogInformation("MSG net={Network} {Sender} → [{Targets}] {Size}B",
                 identity.Network, identity.HostName, string.Join(", ", targetHosts), payload.Length);
 
+        var targets = new List<string>(targetHosts.Length);
         foreach (var targetHost in targetHosts)
         {
             if (string.IsNullOrEmpty(targetHost))
@@ -157,8 +158,9 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, ITokenVer
                 continue;
             }
 
-            await writer.Receive(targetConnectionId, identity.HostName, identity.RemoteIp, payload);
+            targets.Add(targetConnectionId);
         }
+        await writer.Receive(targets, identity.HostName, identity.RemoteIp, payload);
     }
 
     private string RemoteIp => Context.GetHttpContext()?.Connection.RemoteIpAddress?.ToString() ?? ClientRegistry.Unknown;
