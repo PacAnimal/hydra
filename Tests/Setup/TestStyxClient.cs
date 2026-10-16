@@ -18,6 +18,7 @@ public sealed class TestStyxClient : IStyxClient, IAsyncDisposable
 
     private readonly NotificationQueue<string[]> _peers = new();
     private readonly NotificationQueue<byte[]> _received = new();
+    private readonly NotificationQueue<Exception?> _closed = new();
     private readonly SemaphoreSlim _receiveSignal = new(0);
     private readonly SemaphoreSlim _kickSignal = new(0);
 
@@ -51,6 +52,11 @@ public sealed class TestStyxClient : IStyxClient, IAsyncDisposable
     private async Task ConnectRaw(IHubConnectionBuilder builder)
     {
         _hub = builder.AddMessagePackProtocol().Build();
+        _hub.Closed += error =>
+        {
+            _closed.Push(error);
+            return Task.CompletedTask;
+        };
 
         await _hub.StartAsync();
         _registration = _hub.Register<IStyxClient>(this);
@@ -71,6 +77,11 @@ public sealed class TestStyxClient : IStyxClient, IAsyncDisposable
 
     // a non-blocking invocation, as Hydra's input lane sends: nothing comes back, and the next may go at once
     public Task SendWithoutWaiting(string[] targetHosts, byte[] payload) => _hub!.SendAsync(nameof(IStyxServer.Send), targetHosts, payload);
+
+    // the relay dropped the connection
+    public Task<Exception?> WaitForClose(int timeoutMs = 5000) => _closed.Next(timeoutMs, "the connection to close");
+
+    public HubConnectionState State => _hub?.State ?? HubConnectionState.Disconnected;
 
     public async Task<string> WaitForKick(int timeoutMs = 5000)
     {

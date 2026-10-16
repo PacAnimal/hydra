@@ -113,6 +113,7 @@ Message framing, invocation records (`type: 1`), completion records (`type: 3`),
 | Concurrent invocations per client | 1 on `/relay`; on `/relay/parallel`, `RELAY_PARALLEL_INVOCATIONS` (§13), default 4 |
 | Relay keep-alive ping interval | 5 s |
 | Configured client timeout | 15 s |
+| Deadline for a client to take a message | 30 s |
 
 On `/relay` the relay runs a client's invocations **one at a time, in the order it received them**: the next
 starts only once the last has finished. So a slow invocation holds up everything behind it from that client,
@@ -121,6 +122,12 @@ whether that is a `Send` waiting on a target that is not reading or a login wait
 running, and in exchange nothing orders them. While a client's invocation waits its turn the relay is not reading
 from that client, and does not count the silence against its client timeout; at any other time it does, so a
 client MUST keep sending its own ping records while an invocation of its own is running.
+
+A client that does not take a message the relay is sending it (`Receive`, `Peers` or `Kicked`) within the
+deadline is disconnected, however lively its own ping records: a client that keeps sending while it has
+stopped reading would otherwise hold every sender to it, and every membership change, indefinitely. A message
+counts as taken once all but the transport's buffers' worth of it has gone, so a message that needs longer than
+the deadline on a slow target's downlink costs that target its connection, and is one more reason to fragment.
 
 Exceeding the size limit is fatal to the connection, not to the invocation: the relay sends a close
 record naming the limit and drops the connection. Clients MUST fragment large transfers at the

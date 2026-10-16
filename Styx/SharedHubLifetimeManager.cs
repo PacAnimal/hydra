@@ -9,7 +9,7 @@ namespace Styx;
 /// own, which only reaches its own connections, so without this a peer on <see cref="Constants.ParallelRelayPath"/> would
 /// never be sent a <c>Receive</c>, <c>Peers</c> or <c>Kicked</c> from anything addressing it through <see cref="StyxHub"/>.
 /// </summary>
-public sealed class SharedHubLifetimeManager<THub>(HubLifetimeManager<StyxHub> shared) : HubLifetimeManager<THub> where THub : StyxHub
+public class SharedHubLifetimeManager<THub>(HubLifetimeManager<StyxHub> shared) : HubLifetimeManager<THub> where THub : StyxHub
 {
     public override Task OnConnectedAsync(HubConnectionContext connection) => shared.OnConnectedAsync(connection);
 

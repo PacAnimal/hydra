@@ -7,5 +7,5 @@ namespace Styx;
 /// of a client's invocations at once, so with no order between them. SignalR keys options by hub type, hence a type of its own.
 /// </summary>
 public sealed class ParallelStyxHub(IClientRegistry registry, IPeerBroadcaster peers, ITokenVerifier verifier, IExpiryScheduler expiry,
-    ILogger<StyxHub> log, StyxOptions options, ResponseThrottle throttler)
-    : StyxHub(registry, peers, verifier, expiry, log, options, throttler);
+    PeerWriter writer, ILogger<StyxHub> log, StyxOptions options, ResponseThrottle throttler)
+    : StyxHub(registry, peers, verifier, expiry, writer, log, options, throttler);

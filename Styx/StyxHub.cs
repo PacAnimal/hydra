@@ -6,8 +6,8 @@ using Styx.Services;
 
 namespace Styx;
 
-public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, ITokenVerifier verifier, IExpiryScheduler expiry, ILogger<StyxHub> log,
-    StyxOptions options, ResponseThrottle throttler) : Hub<IStyxClient>, IStyxServer
+public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, ITokenVerifier verifier, IExpiryScheduler expiry, PeerWriter writer,
+    ILogger<StyxHub> log, StyxOptions options, ResponseThrottle throttler) : Hub<IStyxClient>, IStyxServer
 {
     public const string HostNameNotAllowed = "Authorization does not allow this hostname";
 
@@ -17,6 +17,7 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, ITokenVer
     public override async Task OnConnectedAsync()
     {
         Context.Items[LoginGateKey] = new SemaphoreSlim(1, 1);
+        writer.Track(Context);
         await base.OnConnectedAsync();
     }
 
@@ -75,7 +76,7 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, ITokenVer
         foreach (var connectionId in registration.Kicked)
         {
             expiry.Cancel(connectionId);
-            await Clients.Client(connectionId).Kicked("duplicate hostname");
+            await writer.Kicked(connectionId, "duplicate hostname");
         }
 
         // armed before the abort check below, whose cleanup then cancels it too
@@ -156,7 +157,7 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, ITokenVer
                 continue;
             }
 
-            await Clients.Client(targetConnectionId).Receive(identity.HostName, identity.RemoteIp, payload);
+            await writer.Receive(targetConnectionId, identity.HostName, identity.RemoteIp, payload);
         }
     }
 
@@ -166,6 +167,7 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, ITokenVer
     public override async Task OnDisconnectedAsync(Exception? exception)
     {
         expiry.Cancel(Context.ConnectionId);
+        writer.Forget(Context.ConnectionId);
         var identity = await registry.GetIdentity(Context.ConnectionId);
         await registry.Unregister(Context.ConnectionId);
         if (identity != null)

@@ -1,6 +1,3 @@
-using Common.Interfaces;
-using Microsoft.AspNetCore.SignalR;
-
 namespace Styx.Services;
 
 public interface IExpiryScheduler
@@ -19,7 +16,7 @@ public interface IExpiryScheduler
 public sealed class ExpiryScheduler(
     IClientRegistry registry,
     IPeerBroadcaster peers,
-    IHubContext<StyxHub, IStyxClient> hub,
+    PeerWriter writer,
     TimeProvider clock,
     ILogger<ExpiryScheduler> log) : IExpiryScheduler, IDisposable
 {
@@ -90,7 +87,7 @@ public sealed class ExpiryScheduler(
             if (log.IsEnabled(LogLevel.Information))
                 log.LogInformation("Authorization of \"{HostName}\" on network {Network} expired", identity.HostName, identity.Network);
             peers.QueueBroadcast(identity.Network);
-            await hub.Clients.Client(connectionId).Kicked(ExpiredReason);
+            await writer.Kicked(connectionId, ExpiredReason);
         }
         catch (Exception ex)
         {

@@ -16,6 +16,9 @@ public static class Constants
     // screen within seconds, not minutes. Must stay >= 2x KeepAlive (SignalR requirement).
     public const int KeepAliveSeconds = 5;
     public const int ClientTimeoutSeconds = 15;
+    // a peer that takes no message for this long is dropped: its pings can keep the client timeout fed while its
+    // download has stalled, and every write to it waits behind the last
+    public const int PeerWriteDeadlineSeconds = 30;
     public const int MaxMessageMebiBytes = 32;
     // /relay runs a client's invocations one at a time, in the order they arrived. That is what keeps a pair of
     // peers in order (Styx.md 5.2) for a client that does not wait for each Send to complete.

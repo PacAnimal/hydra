@@ -27,6 +27,7 @@ public static class StyxRelayExtensions
         services.AddSingleton(options);
         services.AddSingleton(new ResponseThrottle(throttleClock ?? TimeProvider.System));
         services.AddSingleton<IClientRegistry, ClientRegistry>();
+        services.AddSingleton<PeerWriter>();
         services.AddHostedService<IPeerBroadcaster, PeerBroadcastService>();
         services.AddSingleton(auth);
         services.TryAddSingleton(TimeProvider.System);

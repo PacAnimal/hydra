@@ -1,8 +1,6 @@
 using System.Threading.Channels;
 using Cathedral.Extensions;
 using Cathedral.Utils;
-using Common.Interfaces;
-using Microsoft.AspNetCore.SignalR;
 
 namespace Styx.Services;
 
@@ -19,7 +17,7 @@ public interface IPeerBroadcaster
     Task BroadcastAndWait(NetworkKey network, IReadOnlyList<NetworkClient> clients, CancellationToken cancel);
 }
 
-public class PeerBroadcastService(IClientRegistry registry, IHubContext<StyxHub, IStyxClient> hubContext, ILogger<PeerBroadcastService> log)
+public class PeerBroadcastService(IClientRegistry registry, PeerWriter writer, ILogger<PeerBroadcastService> log)
     : SimpleHostedService(log), IPeerBroadcaster
 {
     private readonly Channel<PeerBroadcast> _channel = Channel.CreateUnbounded<PeerBroadcast>(new UnboundedChannelOptions
@@ -103,7 +101,7 @@ public class PeerBroadcastService(IClientRegistry registry, IHubContext<StyxHub,
                 var peers = allHostNames.Where(h => !h.EqualsOrdinal(client.HostName)).ToArray();
                 try
                 {
-                    await hubContext.Clients.Client(client.ConnectionId).Peers(peers);
+                    await writer.Peers(client.ConnectionId, peers);
                 }
                 catch (Exception ex)
                 {
