@@ -194,7 +194,6 @@ public class GuidedConfigDocumentTests
             "syncScreensaver": false,
             "screenLockPropagation": true,
             "accelerateMouseWheel": false,
-            "unicodeKeyRepeat": false,
             "clipboardSync": "System",
             "allowSystemSleep": true,
             "mouseScale": 1.5,
@@ -358,7 +357,6 @@ public class GuidedConfigDocumentTests
             Assert.That(profile.SyncScreensaver, Is.False);
             Assert.That(profile.ScreenLockPropagation, Is.True);
             Assert.That(profile.AccelerateMouseWheel, Is.False);
-            Assert.That(profile.UnicodeKeyRepeat, Is.False);
             Assert.That(profile.AllowSystemSleep, Is.True);
             Assert.That(profile.ClipboardSync, Is.EqualTo(ClipboardSyncMode.System));
             Assert.That(profile.MouseScale, Is.EqualTo(1.5m));
@@ -392,7 +390,6 @@ public class GuidedConfigDocumentTests
         [GuidedFields.SyncScreensaver] = GuidedValues.Off,
         [GuidedFields.ScreenLockPropagation] = GuidedValues.On,
         [GuidedFields.AccelerateMouseWheel] = GuidedValues.Off,
-        [GuidedFields.UnicodeKeyRepeat] = GuidedValues.Off,
         [GuidedFields.AllowSystemSleep] = GuidedValues.On,
         [GuidedFields.ClipboardSync] = "System",
         [GuidedFields.MouseScale] = "1.5",

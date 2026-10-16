@@ -316,11 +316,7 @@ public class MouseThrottleTests
 
         var msg = JsonSerializer.Deserialize<KeyEventMessage>(keySends[0].Json, Cathedral.Config.SaneJson.Options);
         Assert.That(msg, Is.Not.Null);
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(msg!.IsRepeat, Is.False, "an initial press is not a repeat");
-            Assert.That(msg.UnicodeKeyRepeat, Is.True, "default config enables unicode key repeat");
-        }
+        Assert.That(msg!.IsRepeat, Is.False, "an initial press is not a repeat");
     }
 
     [Test]

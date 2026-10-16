@@ -42,20 +42,12 @@ public class KeyEventMessageTests
     }
 
     [Test]
-    public void KeyEventMessage_UnicodeKeyRepeat_False_RoundTrip()
+    public void KeyEventMessage_FromOlderMasterWithUnicodeKeyRepeat_Decodes()
     {
-        var original = new KeyEventMessage(KeyEventType.KeyDown, KeyModifiers.None, 'w', null, UnicodeKeyRepeat: false);
-        var decoded = MessageSerializer.Decode(MessageSerializer.Encode(MessageKind.KeyEvent, original)).Deserialize<KeyEventMessage>();
-        Assert.That(decoded.UnicodeKeyRepeat, Is.False);
-    }
-
-    [Test]
-    public void KeyEventMessage_UnicodeKeyRepeat_AbsentInJson_DefaultsTrue()
-    {
-        // older wire format without UnicodeKeyRepeat field should default to the new behaviour
-        const string json = """{"Type":0,"Modifiers":0,"Character":"w","Key":null}""";
+        // older masters still send the retired UnicodeKeyRepeat field
+        const string json = """{"Type":0,"Modifiers":0,"Character":"w","Key":null,"IsRepeat":true,"UnicodeKeyRepeat":true}""";
         var decoded = json.FromSaneJson<KeyEventMessage>();
-        Assert.That(decoded?.UnicodeKeyRepeat, Is.True);
+        Assert.That(decoded?.IsRepeat, Is.True);
     }
 
     [TestCase('\u0439')] // й — Cyrillic, absent from every Latin layout

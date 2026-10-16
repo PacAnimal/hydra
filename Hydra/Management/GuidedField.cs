@@ -108,10 +108,7 @@ internal static class GuidedFields
     internal static readonly GuidedField AccelerateMouseWheel = new(GuidedSection.Behaviour, 8, 0, null, "accelerateMouseWheel", GuidedFieldKind.Toggle,
         "Accelerate Wheel", "Apply Hydra's scroll-wheel acceleration behavior.")
     { Fallback = GuidedValues.On };
-    internal static readonly GuidedField UnicodeKeyRepeat = new(GuidedSection.Behaviour, 10, 0, null, "unicodeKeyRepeat", GuidedFieldKind.Toggle,
-        "Unicode Key Repeat", "Repeat printable keys as Unicode on Mac slaves to avoid the accent popup.")
-    { Fallback = GuidedValues.On };
-    internal static readonly GuidedField AllowSystemSleep = new(GuidedSection.Behaviour, 12, 0, null, "allowSystemSleep", GuidedFieldKind.Toggle,
+    internal static readonly GuidedField AllowSystemSleep = new(GuidedSection.Behaviour, 10, 0, null, "allowSystemSleep", GuidedFieldKind.Toggle,
         "Allow System Sleep", "Let the OS sleep this machine on its normal idle policy; Hydra leaves the relay before it suspends.")
     { Fallback = GuidedValues.Off };
     internal static readonly IReadOnlyList<GuidedField> All =
@@ -119,7 +116,7 @@ internal static class GuidedFields
         Name, LogLevel, ProfileOverride, AutoUpdate, DebugShield, DebugMouse,
         ProfileName, Mode, Ssid, ScreenCount, ClipboardSync, IsPluggedIn, MouseScale, RelativeMouseScale, DeadCorners, MaxMouseHz,
         NetworkConfig, EmbeddedServer, EmbeddedPassword, EmbeddedPort, EmbeddedServerPassword,
-        HideCursor, RemoteOnly, SyncScreensaver, ScreenLockPropagation, AccelerateMouseWheel, UnicodeKeyRepeat, AllowSystemSleep
+        HideCursor, RemoteOnly, SyncScreensaver, ScreenLockPropagation, AccelerateMouseWheel, AllowSystemSleep
     ];
 
     internal static readonly IReadOnlyList<GuidedField> Root = [.. All.Where(f => f.IsRoot)];

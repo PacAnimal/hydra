@@ -130,9 +130,8 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
     public void InjectKey(KeyEventMessage msg)
     {
         var isDown = msg.Type == KeyEventType.KeyDown;
-        // unicode repeat routing applies only when the master opts in (UnicodeKeyRepeat). when disabled,
-        // a repeat falls through to the physical-key path below — the legacy re-press behaviour.
-        var isRepeat = msg.IsRepeat && msg.UnicodeKeyRepeat;
+        // a repeat re-presses the held key marked as autorepeat, as macOS's own repeats are
+        var isRepeat = isDown && msg.IsRepeat;
         var flags = MacKeyResolver.MapModifiersToFlags(msg.Modifiers);
 
         if (msg.Key is { } key && key.IsModifier())
@@ -184,22 +183,10 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
             // fires correctly before the character reaches the focused app.
             var isAltGr = (msg.Modifiers & KeyModifiers.AltGr) != 0;
 
-            // repeats inject the character as a keycode-less unicode tap rather than re-pressing the
-            // physical key. re-pressing a held accent-eligible key triggers the macOS press-and-hold
-            // accent popup instead of repeating; a unicode insertion repeats cleanly while the initial
-            // physical key-down stays held (so games and held shortcuts still see the key down).
-            if (isRepeat)
+            if (!isAltGr && _charToVk.TryGetValue(ch, out var charVk))
             {
-                var repeatFlags = isAltGr
-                    ? flags & ~(NativeMethods.KCGEventFlagMaskAlternate | NativeMethods.KCGEventFlagMaskShift)
-                    : flags;
-                InjectCharacter(ch, true, repeatFlags);
-                InjectCharacter(ch, false, repeatFlags);
-            }
-            else if (!isAltGr && _charToVk.TryGetValue(ch, out var charVk))
-            {
-                if (!PostHidKey(charVk, isDown))
-                    PostCgKey(charVk, isDown, flags);
+                if (!PostHidKey(charVk, isDown, isRepeat))
+                    PostCgKey(charVk, isDown, flags, isRepeat);
             }
             else if (!isAltGr && _charToVk.TryGetValue(char.ToLowerInvariant(ch), out charVk))
             {
@@ -207,14 +194,14 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
                 // state for Shift; if Shift is not yet in _deviceModifierFlags (e.g. focus arrived while
                 // Shift was already held), use PostCgKey which applies flags — including Shift — directly.
                 var shiftReady = (_deviceModifierFlags & (NativeMethods.NxDeviceLShiftKeyMask | NativeMethods.NxDeviceRShiftKeyMask)) != 0;
-                if (!shiftReady || !PostHidKey(charVk, isDown))
-                    PostCgKey(charVk, isDown, flags);
+                if (!shiftReady || !PostHidKey(charVk, isDown, isRepeat))
+                    PostCgKey(charVk, isDown, flags, isRepeat);
             }
             else if (!isAltGr && (flags & (NativeMethods.KCGEventFlagMaskCommand | NativeMethods.KCGEventFlagMaskControl)) != 0 &&
                      _asciiCharToVk.TryGetValue(ch, out charVk))
             {
-                if (!PostHidKey(charVk, isDown))
-                    PostCgKey(charVk, isDown, flags);
+                if (!PostHidKey(charVk, isDown, isRepeat))
+                    PostCgKey(charVk, isDown, flags, isRepeat);
             }
             else
             {
@@ -223,7 +210,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
                 // Shift was consumed by level-3 resolution on the master; it must not reach the slave.
                 InjectCharacter(ch, isDown, isAltGr
                     ? flags & ~(NativeMethods.KCGEventFlagMaskAlternate | NativeMethods.KCGEventFlagMaskShift)
-                    : flags);
+                    : flags, isRepeat);
             }
         }
         else if (msg.Key is { } key2)
@@ -249,12 +236,12 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
             else if (MacMediaKeyMap.TryGetNxKeyType(key2, out var nxType))
                 PostNsMediaKey(nxType, isDown);
             else if (MacSpecialKeyMap.OutputOverrides.TryGetValue(key2, out var ovr))
-                PostCgKey(ovr.Vk, isDown, flags | ovr.ExtraFlags);
+                PostCgKey(ovr.Vk, isDown, flags | ovr.ExtraFlags, isRepeat);
             else if (MacSpecialKeyMap.Instance.Reverse.TryGetValue(key2, out var vk))
             {
                 // non-modifier special key: IOHIDPostEvent-first, CGEvent fallback
-                if (!PostHidKey((ushort)vk, isDown))
-                    PostCgKey((ushort)vk, isDown, flags);
+                if (!PostHidKey((ushort)vk, isDown, isRepeat))
+                    PostCgKey((ushort)vk, isDown, flags, isRepeat);
             }
         }
     }
@@ -330,11 +317,12 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
     }
 
     // post a CG keyboard event — used for non-modifier special keys and as fallback for modifiers.
-    private static void PostCgKey(ushort vk, bool isDown, ulong flags)
+    private static void PostCgKey(ushort vk, bool isDown, ulong flags, bool isRepeat = false)
     {
         var eventRef = NativeMethods.CGEventCreateKeyboardEvent(EventSource, vk, isDown);
         if (eventRef == nint.Zero) return;
         NativeMethods.CGEventSetFlags(eventRef, flags | FnFlagForVk(vk));
+        MarkRepeat(eventRef, isRepeat);
         NativeMethods.CGEventPost(NativeMethods.KCGHidEventTap, eventRef);
         NativeMethods.CFRelease(eventRef);
     }
@@ -359,12 +347,12 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
     // eventFlags carries only the Fn flag (where applicable); modifier context comes from the global
     // HID state set by NX_FLAGSCHANGED — adding modifiers inline causes character translation
     // (e.g. VK_4 + Shift → '¤' on Norwegian) to happen before the shortcut handler fires.
-    private bool PostHidKey(ushort vk, bool isDown)
+    private bool PostHidKey(ushort vk, bool isDown, bool isRepeat = false)
     {
         var conn = GetHidConnection();
         if (conn == 0) return false;
 
-        var eventData = new NXEventData { KeyCode = vk };
+        var eventData = new NXEventData { KeyCode = vk, Repeat = (short)(isRepeat ? 1 : 0) };
         var eventType = isDown ? NativeMethods.NxKeyDown : NativeMethods.NxKeyUp;
         var eventFlags = (uint)FnFlagForVk(vk);
         var kr = NativeMethods.IOHIDPostEvent(conn, eventType, default, in eventData,
@@ -507,13 +495,19 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
         _ => 0,
     };
 
+    private static void MarkRepeat(nint eventRef, bool isRepeat)
+    {
+        if (isRepeat) NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGKeyboardEventAutorepeat, 1);
+    }
+
     // fallback character injection for chars with no VK mapping (foreign/composed chars).
     // vk=0 with explicit unicode string — only reached when _charToVk has no entry for the char.
-    private static unsafe void InjectCharacter(char ch, bool isDown, ulong flags)
+    private static unsafe void InjectCharacter(char ch, bool isDown, ulong flags, bool isRepeat)
     {
         var eventRef = NativeMethods.CGEventCreateKeyboardEvent(EventSource, 0, isDown);
         if (eventRef == nint.Zero) return;
         NativeMethods.CGEventSetFlags(eventRef, flags);
+        MarkRepeat(eventRef, isRepeat);
         var utf16 = (ushort)ch;
         NativeMethods.CGEventKeyboardSetUnicodeString(eventRef, 1, &utf16);
         NativeMethods.CGEventPost(NativeMethods.KCGHidEventTap, eventRef);

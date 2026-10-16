@@ -118,7 +118,6 @@ Use `Esc` to close the TUI. It does not change Hydra's running state.
 - `allowSystemSleep` — `true` lets the operating system's normal idle policy put this machine fully to sleep. Hydra stops treating background peer activity as local activity, leaves the relay when a screen-count condition no longer matches, and closes the relay before OS suspend (default: `false`).
 - `screenLockPropagation` — propagate a Mac/Windows master's local lock to connected slaves (master only; default: `false`)
 - `accelerateMouseWheel` — apply the platform wheel-acceleration behavior (default: `true`)
-- `unicodeKeyRepeat` — repeat held printable keys through Unicode insertion where supported, avoiding the macOS press-and-hold accent UI (master preference; default: `true`)
 - `conditions` — optional object; if set, this profile only activates when **all** specified conditions are met (see [Network-aware config](#network-aware-config))
   - `ssid` — activates when connected to this WiFi network name (case-insensitive)
   - `screenCount` — activates when exactly this many screens are connected (integer ≥ 1)

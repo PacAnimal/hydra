@@ -68,6 +68,15 @@ public class HydraConfigTests
     }
 
     [Test]
+    public void RetiredUnicodeKeyRepeat_StillParses()
+    {
+        // configs written before the setting was retired keep loading
+        var json = AsFile($$"""[{"mode":"Master","unicodeKeyRepeat":false{{Relay}}}]""");
+
+        Assert.That(HydraConfig.ParseAndValidate(json), Has.Count.EqualTo(1));
+    }
+
+    [Test]
     public void AllowSystemSleep_DefaultsOff_AndParsesTrue()
     {
         var defaults = HydraConfig.ParseAndValidate(AsFile($$"""[{"mode":"Slave"{{Relay}}}]"""));

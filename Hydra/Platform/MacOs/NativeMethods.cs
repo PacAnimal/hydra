@@ -676,10 +676,12 @@ internal struct IOGPoint
     internal short Y;
 }
 
-// NXEventData: union from IOLLEvent.h — verified sizeof=48, keyCode at offset 8 via SDK header
+// NXEventData: union from IOLLEvent.h — verified sizeof=48, key.repeat at offset 2, keyCode at offset 8 via SDK header
 [StructLayout(LayoutKind.Explicit, Size = 48)]
 internal struct NXEventData
 {
+    [FieldOffset(2)]
+    internal short Repeat;
     [FieldOffset(8)]
     internal ushort KeyCode;
 }

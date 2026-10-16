@@ -232,11 +232,8 @@ public static class PeerCapabilities
 public record MasterConfigMessage(LogLevel? LogLevel);
 public record SlaveLogMessage(int Level, string Category, string Message, string? Exception);
 // IsRepeat marks an OS auto-repeat the master re-resolved (with live modifier/dead-key state) and forwarded;
-// the slave injects it without tracking a new held key. UnicodeKeyRepeat is the master's per-keypress repeat
-// preference: when set, Mac slaves inject repeated characters via keycode-less unicode (avoiding the
-// press-and-hold accent popup) rather than re-pressing the physical key. travelling per-keypress lets a
-// shared slave honour each master's own preference.
-public record KeyEventMessage(KeyEventType Type, KeyModifiers Modifiers, char? Character, SpecialKey? Key, bool IsRepeat = false, bool UnicodeKeyRepeat = true);
+// the slave injects it without tracking a new held key.
+public record KeyEventMessage(KeyEventType Type, KeyModifiers Modifiers, char? Character, SpecialKey? Key, bool IsRepeat = false);
 
 /// <summary>
 /// Several key events in one frame, to be applied IN ORDER.
