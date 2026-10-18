@@ -13,7 +13,6 @@ public sealed class CopiedPrimary(Func<long> version, Func<string?> readTextCopy
     private readonly SemaphoreSlim _gate = new(1, 1);
     private string? _current;
     private long _seen = -1;
-    private long _caught = -1;
     private int _writing;
 
     public string? Read() => Guarded("read the primary selection", null, () =>
@@ -35,14 +34,10 @@ public sealed class CopiedPrimary(Func<long> version, Func<string?> readTextCopy
     // held across write, so a platform may take its own clipboard lock inside it
     public bool Write(string? incoming, Func<Action<long>, bool> write)
     {
+        if (!Begin(incoming)) return false;
         long? left = null;
         try
         {
-            Gated(() =>
-            {
-                _writing++; // the finally below pairs with it whatever happens from here
-                RelayAt(incoming, version(), ownWrite: true);
-            });
             return write(v => left = v);
         }
         catch (Exception ex)
@@ -60,19 +55,27 @@ public sealed class CopiedPrimary(Func<long> version, Func<string?> readTextCopy
         }
     }
 
-    // the version is seen once its copy was read, or a selection arrived that outranks it; an unreadable one is tried again
-    private void RelayAt(string? incoming, long at, bool ownWrite = false)
+    // a copy made since Hydra last touched the clipboard is looked for before the write begins
+    private bool Begin(string? incoming) => Guarded("begin writing clipboard", false, () =>
     {
-        var read = Catch(at, ownWrite);
+        RelayAt(incoming, version());
+        _writing++;
+        return true;
+    });
+
+    // the version is seen once its copy was read, or a selection arrived that outranks it
+    private void RelayAt(string? incoming, long at)
+    {
+        var read = Catch(at);
         if (incoming != null) _current = incoming;
         if (read || incoming != null) _seen = at;
     }
 
     // a text copy made since Hydra last touched the clipboard becomes the primary, one answer per version; false when
-    // the clipboard could not be read. ownWrite lets the write beginning now look before it starts
-    private bool Catch(long at, bool ownWrite = false)
+    // the clipboard could not be read
+    private bool Catch(long at)
     {
-        if (_writing > (ownWrite ? 1 : 0) || at == _seen || at == _caught) return true;
+        if (_writing > 0 || at == _seen) return true;
         string? text;
         try
         {
@@ -84,7 +87,7 @@ public sealed class CopiedPrimary(Func<long> version, Func<string?> readTextCopy
                 log.LogDebug(ex, "Clipboard unreadable for the primary selection; trying again on the next read");
             return false;
         }
-        _caught = at;
+        _seen = at;
         if (text != null) _current = text;
         return true;
     }

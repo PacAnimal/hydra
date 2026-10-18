@@ -12,9 +12,14 @@ public sealed class ClipboardSlave(IClipboardSync sync, ILogger log)
     // the master's hash, against this host's clipboard: what it needs pushed
     public PushNeed OnHash(ClipboardHashMessage hash, string host)
     {
-        var local = _echo.Baseline("hash check");
+        var local = hash.Hash == null ? ClipboardBaseline.SelectionOf(sync) : _echo.Baseline("hash check");
         var need = ClipboardWire.NeedsPush(hash, sync, local, log, host);
         _selectionPushFor = need == PushNeed.Selection ? local : null;
+        if (!log.IsEnabled(LogLevel.Debug)) return need;
+        if (need == PushNeed.None)
+            log.LogDebug("Clipboard hash from {Host}: matches", host);
+        else
+            log.LogDebug("Clipboard hash from {Host}: {Need} differs, requesting push", host, need);
         return need;
     }
 

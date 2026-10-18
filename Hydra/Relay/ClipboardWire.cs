@@ -6,9 +6,12 @@ namespace Hydra.Relay;
 
 // What a host compares a peer's clipboard against: its clipboard's hash, and the text and selection a selection-only
 // answer resolves against. Never the clipboard itself, which may be a large image.
-public sealed record ClipboardBaseline(ulong Hash, string? Text, string? PrimaryText)
+public sealed record ClipboardBaseline(ulong? Hash, string? Text, string? PrimaryText)
 {
     public static ClipboardBaseline Of(ClipboardSnapshot s) => new(ClipboardUtils.ClipboardHash(s), s.Text, s.PrimaryText);
+
+    // the selection alone, against a peer that offers no clipboard, so this host's need not be read
+    public static ClipboardBaseline SelectionOf(IClipboardSync sync) => new(null, null, sync.GetPrimaryText());
 }
 
 // what a slave's hash check found it needs from the master: nothing, the selection alone, or the clipboard
@@ -58,7 +61,8 @@ public static class ClipboardWire
     }
 
     // the push that check asked for; with selectionFor, it was asked for the selection alone, and the clipboard, unless the
-    // master's has changed since, is left as it is. What it applied, if anything
+    // master's has changed since, is left as it is (a baseline without a clipboard hash takes the push whole). What it
+    // applied, if anything
     internal static ClipboardSnapshot? ApplyPush(IClipboardSync sync, ClipboardPushMessage push, ClipboardBaseline? selectionFor, ILogger log, string host)
     {
         var received = From(push, log, "push", host);

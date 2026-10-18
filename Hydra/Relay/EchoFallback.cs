@@ -13,8 +13,9 @@ public sealed class EchoFallback(IClipboardSync sync, ILogger log)
     // what a peer's clipboard is compared against
     public ClipboardBaseline Baseline(string context) => ClipboardBaseline.Of(Read(context));
 
+    // what was applied from a peer: a selection alone leaves the clipboard, and so the fallback, as it was
     public void Remember(ClipboardSnapshot? applied)
     {
-        if (applied != null) Volatile.Write(ref _last, ClipboardUtils.Remember(Volatile.Read(ref _last), applied));
+        if (applied is { IsSelectionOnly: false }) Volatile.Write(ref _last, applied);
     }
 }

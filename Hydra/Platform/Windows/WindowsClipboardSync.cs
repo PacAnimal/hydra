@@ -118,8 +118,7 @@ public sealed class WindowsClipboardSync : IClipboardSync, IDisposable
         }
     }
 
-    // CopiedPrimary's readTextCopy, by clipboard format; one attempt, since it runs under CopiedPrimary's gate: a busy
-    // clipboard is simply read again next time
+    // CopiedPrimary's readTextCopy, by clipboard format; one attempt, since it runs under CopiedPrimary's gate
     private string? ReadTextCopy()
     {
         if (!NativeMethods.OpenClipboard(_ownerWindow)) throw new IOException("the clipboard is held by another app");

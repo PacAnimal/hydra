@@ -310,24 +310,6 @@ public class ClipboardUtilsRichTests
     }
 
     [Test]
-    public void Remember_SelectionOnly_KeepsTheClipboardFallback()
-    {
-        var last = new ClipboardSnapshot("written", null, null, Html: "<b>written</b>");
-
-        var remembered = ClipboardUtils.Remember(last, new ClipboardSnapshot(null, "new selection", null));
-
-        Assert.That(remembered, Is.SameAs(last));
-    }
-
-    [Test]
-    public void Remember_Clipboard_ReplacesTheFallback()
-    {
-        var applied = new ClipboardSnapshot("new", null, null);
-
-        Assert.That(ClipboardUtils.Remember(new ClipboardSnapshot("old", "selection", null), applied), Is.EqualTo(applied));
-    }
-
-    [Test]
     public void ApplyPreservingFiles_SelectionOnly_LeavesTheClipboardAlone()
     {
         var sync = new FakeClipboardSync();

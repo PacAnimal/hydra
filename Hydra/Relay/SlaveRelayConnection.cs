@@ -251,20 +251,8 @@ public class SlaveRelayConnection : RelayConnection
             case MessageKind.ClipboardHash:
                 {
                     var hashMsg = body.ParseMessage<ClipboardHashMessage>(_log, kind.ToString());
-                    if (hashMsg != null)
-                    {
-                        var need = _clipboard.OnHash(hashMsg, sourceHost);
-                        if (need != PushNeed.None)
-                        {
-                            if (_log.IsEnabled(LogLevel.Debug))
-                                _log.LogDebug("Clipboard hash from {Host}: {Need} differs, requesting push", sourceHost, need);
-                            Send([sourceHost], MessageSerializer.Encode(MessageKind.ClipboardPullRequest, new ClipboardPullRequestMessage()));
-                        }
-                        else if (_log.IsEnabled(LogLevel.Debug))
-                        {
-                            _log.LogDebug("Clipboard hash from {Host}: matches", sourceHost);
-                        }
-                    }
+                    if (hashMsg != null && _clipboard.OnHash(hashMsg, sourceHost) != PushNeed.None)
+                        Send([sourceHost], MessageSerializer.Encode(MessageKind.ClipboardPullRequest, new ClipboardPullRequestMessage()));
                     break;
                 }
             case MessageKind.ClipboardPush:

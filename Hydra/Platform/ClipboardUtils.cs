@@ -16,14 +16,18 @@ internal struct ClipboardEchoFilter
     public void Track(ClipboardSnapshot written)
     {
         _lastText = written.Text;
-        _lastImageHash = written.ImagePng is { } png ? ClipboardUtils.QuickHash(png) : null;
-        _lastHtmlHash = written.Html is { } html ? ClipboardUtils.QuickHash(Encoding.UTF8.GetBytes(html)) : null;
-        _lastRtfHash = written.Rtf is { } rtf ? ClipboardUtils.QuickHash(rtf) : null;
+        _lastImageHash = Hash(written.ImagePng);
+        _lastHtmlHash = Hash(written.Html);
+        _lastRtfHash = Hash(written.Rtf);
     }
     public readonly string? FilterText(string? text) => text == _lastText ? null : text;
-    public readonly bool IsDuplicateImage(byte[] png) => _lastImageHash.HasValue && ClipboardUtils.QuickHash(png) == _lastImageHash.Value;
-    public readonly string? FilterHtml(string? html) => html != null && _lastHtmlHash.HasValue && ClipboardUtils.QuickHash(Encoding.UTF8.GetBytes(html)) == _lastHtmlHash.Value ? null : html;
-    public readonly byte[]? FilterRtf(byte[]? rtf) => rtf != null && _lastRtfHash.HasValue && ClipboardUtils.QuickHash(rtf) == _lastRtfHash.Value ? null : rtf;
+    public readonly bool IsDuplicateImage(byte[] png) => Echoes(_lastImageHash, Hash(png));
+    public readonly string? FilterHtml(string? html) => Echoes(_lastHtmlHash, Hash(html)) ? null : html;
+    public readonly byte[]? FilterRtf(byte[]? rtf) => Echoes(_lastRtfHash, Hash(rtf)) ? null : rtf;
+
+    private static bool Echoes(ulong? written, ulong? read) => written != null && read == written;
+    private static ulong? Hash(byte[]? data) => data == null ? null : ClipboardUtils.QuickHash(data);
+    private static ulong? Hash(string? text) => text == null ? null : Hash(Encoding.UTF8.GetBytes(text));
 }
 
 public static class ClipboardUtils
@@ -104,9 +108,6 @@ public static class ClipboardUtils
 
     // a hash every host computes alike, for what crosses the wire; QuickHash is seeded per process
     public static ulong StableHash(string text) => XxHash64.HashToUInt64(Encoding.UTF8.GetBytes(text));
-
-    // what a host keeps as its echo fallback once it has applied a snapshot: a selection alone leaves the clipboard as it was
-    public static ClipboardSnapshot? Remember(ClipboardSnapshot? last, ClipboardSnapshot applied) => applied.IsSelectionOnly ? last : applied;
 
     // every format of a write, in the platform's order, each null when absent; one the clipboard refuses is warned about,
     // and the rest are still written
