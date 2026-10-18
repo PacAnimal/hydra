@@ -7,8 +7,8 @@ using Cathedral.Utils;
 
 namespace Hydra.FileTransfer;
 
-// receives tar.gz chunks via WriteChunkAsync, extracts to a temp directory on the fly.
-// call CompleteAsync after the last chunk to flush and finish extraction.
+// receives tar.gz chunks via WriteChunk, extracts to a temp directory on the fly.
+// call Complete after the last chunk to flush and finish extraction.
 public sealed class TarGzExtractor : IDisposable
 {
     private const int ExtractTaskDisposalWaitMs = 2000; // how long to wait for extract loop to exit before disposing _sha
@@ -33,10 +33,10 @@ public sealed class TarGzExtractor : IDisposable
         _tempDir = tempDir;
         _onFileStart = onFileStart;
         Directory.CreateDirectory(tempDir);
-        _extractTask = ExtractLoopAsync(cancel);
+        _extractTask = ExtractLoop(cancel);
     }
 
-    public async ValueTask WriteChunkAsync(byte[] data)
+    public async ValueTask WriteChunk(byte[] data)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         lock (_sha) _sha.AppendData(data);
@@ -45,13 +45,13 @@ public sealed class TarGzExtractor : IDisposable
     }
 
     // call after the last chunk; waits for extraction to finish
-    public async ValueTask CompleteAsync()
+    public async ValueTask Complete()
     {
         await _pipe.Writer.CompleteAsync();
         await _extractTask;
     }
 
-    // call this only after CompleteAsync returns
+    // call this only after Complete returns
     public byte[] GetHash()
     {
         if (_cachedHash != null) return _cachedHash;
@@ -64,7 +64,7 @@ public sealed class TarGzExtractor : IDisposable
         }
     }
 
-    private async Task ExtractLoopAsync(CancellationToken cancel)
+    private async Task ExtractLoop(CancellationToken cancel)
     {
         try
         {
@@ -89,7 +89,7 @@ public sealed class TarGzExtractor : IDisposable
                     case TarEntryType.V7RegularFile:
                         Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
                         _onFileStart(Path.GetFileName(destPath));
-                        await ExtractFileEntryAsync(destPath, entry.DataStream, buf, cancel);
+                        await ExtractFileEntry(destPath, entry.DataStream, buf, cancel);
                         break;
                     case TarEntryType.SymbolicLink:
                     case TarEntryType.HardLink:
@@ -105,7 +105,7 @@ public sealed class TarGzExtractor : IDisposable
     }
 
     // streams a tar entry's data to disk, incrementing _bytesExtracted per read so progress is smooth
-    private async Task ExtractFileEntryAsync(string destPath, Stream? dataStream, byte[] buf, CancellationToken cancel)
+    private async Task ExtractFileEntry(string destPath, Stream? dataStream, byte[] buf, CancellationToken cancel)
     {
         await using var dst = File.Open(destPath, FileMode.Create, FileAccess.Write, FileShare.None);
         if (dataStream == null) return;
@@ -120,7 +120,7 @@ public sealed class TarGzExtractor : IDisposable
     public void Dispose()
     {
         if (!_disposed.TrySet()) return;
-        // complete both ends to unblock ExtractLoopAsync, then wait briefly for it to exit before disposing _sha
+        // complete both ends to unblock ExtractLoop, then wait briefly for it to exit before disposing _sha
         try { _pipe.Writer.Complete(); } catch { /* already completed */ }
         try { _pipe.Reader.Complete(); } catch { /* already completed */ }
         try { _extractTask.Wait(TimeSpan.FromMilliseconds(ExtractTaskDisposalWaitMs)); } catch { /* task faulted or timed out — ignore during disposal */ }

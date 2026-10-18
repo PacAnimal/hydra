@@ -20,7 +20,8 @@ public sealed class TestableSlaveRelay : SlaveRelayConnection
     public IDormancyState Dormancy { get; }
     public FakeScreenDetector Screens { get; }
     public NullPlatformOutput Output { get; }
-    private readonly SentSignals _signals = new();
+    // everything the slave sent
+    public SentSignals Sent { get; } = new();
     private readonly WebApplicationFactory<global::Styx.Program>? _styx;
     private readonly NotificationQueue<bool> _authenticated = new();
 
@@ -85,16 +86,6 @@ public sealed class TestableSlaveRelay : SlaveRelayConnection
     public Task SimulateReceive(string host, MessageKind kind, string json) => OnReceive(host, kind, Encoding.UTF8.GetBytes(json));
     public Task SimulateDisconnected() => OnDisconnected();
 
-    public List<SentMessage> Snapshot() => _signals.Snapshot();
-    public void ClearSent() => _signals.Clear();
-    public List<SentMessage> TakeAll() => _signals.TakeAll();
-
-    // the messages of one kind sent so far, decoded
-    public List<T> Sent<T>(MessageKind kind) => _signals.Sent<T>(kind);
-
-    // completes once a message of this kind has been sent, for a reply worked out off the receive path
-    public Task WaitForSent(MessageKind kind) => _signals.WaitFor(kind);
-
     // completes once the relay has logged the slave in again
     public Task NextAuthentication() => _authenticated.Next("the slave to authenticate");
 
@@ -112,7 +103,7 @@ public sealed class TestableSlaveRelay : SlaveRelayConnection
         _authenticated.Push(true);
     }
 
-    protected override void OnSent(string[] targetHosts, byte[] payload) => _signals.Record(targetHosts, payload);
+    protected override void OnSent(string[] targetHosts, byte[] payload) => Sent.Record(targetHosts, payload);
 
     protected override void OnSentKey(string[] targetHosts, KeyEventMessage message) =>
         OnSent(targetHosts, MessageSerializer.Encode(MessageKind.KeyEvent, message));

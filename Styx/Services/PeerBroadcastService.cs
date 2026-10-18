@@ -80,7 +80,7 @@ public class PeerBroadcastService(IClientRegistry registry, PeerWriter writer, [
         var network = broadcast.Network;
         try
         {
-            var clients = broadcast.Snapshot ?? await registry.GetNetworkClients(network);
+            var clients = broadcast.Snapshot ?? registry.GetNetworkClients(network);
             var allHostNames = clients.Select(c => c.HostName).OrderBy(h => h, StringComparer.Ordinal).ToArray();
             if (log.IsEnabled(LogLevel.Information))
                 log.LogInformation("Network {Network} peers: {Peers}", network, allHostNames.Length > 0 ? string.Join(", ", allHostNames) : "<none>");

@@ -30,7 +30,10 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
     // IFileTransferDialog
     public event Action? CancelRequested;
 
-    internal static readonly string BinaryPath = Path.Combine(AppContext.BaseDirectory, "Resources", "MacShield", "hydra-shield.app", "Contents", "MacOS", "hydra-shield");
+    // the shield's app bundle in an install directory
+    internal static string AppPath(string installDir) => Path.Combine(installDir, "Resources", "MacShield", "hydra-shield.app");
+
+    internal static readonly string BinaryPath = Path.Combine(AppPath(AppContext.BaseDirectory), "Contents", "MacOS", "hydra-shield");
     private readonly SemaphoreSlim _sendSemaphore = new(1, 1);
     private volatile TaskCompletionSource<string>? _pendingReply; // completed by ReadOutput when echo arrives
     private Process? _process;
@@ -43,8 +46,8 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
     private const int RestartInitialDelayMs = 500;    // initial backoff before restarting a crashed shield
     private const int RestartMaxDelayMs = 30_000;     // backoff cap
 
-    // only accessed from ReadOutput's single async continuation — no locking needed
-    private TimeSpan _restartDelay = TimeSpan.FromMilliseconds(RestartInitialDelayMs); // exponential backoff; reset on healthy output
+    // only accessed from ReadOutput's single async continuation — no locking needed; reset on healthy output
+    private readonly DoublingBackoff _restartDelayMs = new(RestartInitialDelayMs, RestartMaxDelayMs);
 
     // assigned after DI builds so post-startup state changes are logged through the normal pipeline
     internal ILogger? Log { get; set; }
@@ -210,12 +213,7 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
         var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         using var _ = await _sendSemaphore.WaitForDisposable();
         _pendingReply = tcs;
-        try
-        {
-            _process.StandardInput.WriteLine(command);
-            _process.StandardInput.Flush();
-        }
-        catch (Exception)
+        if (!Write(_process, command))
         {
             _pendingReply = null;
             return;
@@ -230,12 +228,22 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
     {
         if (_process is null || _process.HasExited) return;
         using var _ = await _sendSemaphore.WaitForDisposable();
+        Write(_process, command);
+    }
+
+    // one line to the shield, under the send lock; false when the process has just died
+    private static bool Write(Process process, string command)
+    {
         try
         {
-            _process.StandardInput.WriteLine(command);
-            _process.StandardInput.Flush();
+            process.StandardInput.WriteLine(command);
+            process.StandardInput.Flush();
+            return true;
         }
-        catch (Exception) { /* process may have just died */ }
+        catch (Exception)
+        {
+            return false;
+        }
     }
 
     // logs stderr lines from the shield as warnings
@@ -273,7 +281,7 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
                 }
 
                 // any successful output means the process is healthy — reset restart backoff
-                _restartDelay = TimeSpan.FromMilliseconds(500);
+                _restartDelayMs.Reset();
 
                 if (line is CmdHide or CmdShow or CmdDebug)
                 {
@@ -293,14 +301,7 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
                 {
                     networkState.WifiAuthStatus = authStatus;
                     if (Log?.IsEnabled(LogLevel.Debug) == true)
-                        Log.LogDebug("Location services auth: {Status}", authStatus switch
-                        {
-                            0 => "notDetermined",
-                            1 => "restricted",
-                            2 => "denied",
-                            3 or 4 => "authorized",
-                            _ => authStatus.ToString()
-                        });
+                        Log.LogDebug("Location services auth: {Status}", MacNetworkState.AuthLabel(authStatus));
                     if (authStatus != 0) _authSettledTcs?.TrySetResult();
                 }
                 else if (line == PfxTransferCancel)
@@ -313,9 +314,9 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
             {
                 // unexpected exit — restart with exponential backoff to avoid rapid crash-loops.
                 // StartProcess re-applies _lastState, so the shield resumes its pre-crash absorb state.
-                Log?.LogWarning("Shield process exited unexpectedly — restarting in {Delay}ms", (long)_restartDelay.TotalMilliseconds);
-                await Task.Delay(_restartDelay);
-                _restartDelay = TimeSpan.FromTicks(Math.Min(_restartDelay.Ticks * 2, TimeSpan.FromMilliseconds(RestartMaxDelayMs).Ticks)); // cap
+                var delayMs = _restartDelayMs.Next();
+                Log?.LogWarning("Shield process exited unexpectedly — restarting in {Delay}ms", delayMs);
+                await Task.Delay(delayMs);
                 StartProcess();
             }
         }

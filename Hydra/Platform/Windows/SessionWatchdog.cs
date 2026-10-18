@@ -12,7 +12,7 @@ internal sealed class SessionWatchdog(ILogger<SessionWatchdog> log, string child
     private uint _lastSession = Win32Session.NoSession;
     private readonly Boxed<ChildProcess?> _child = new(null);
     private SafeFileHandle? _stopEvent;
-    private TimeSpan _backoff = TimeSpan.FromSeconds(1);
+    private readonly DoublingBackoff _backoffMs = new(1_000, 30_000);
     private DateTime _childStartedAt = DateTime.MinValue;
     // the child must stay alive at least this long before we trust it and reset the crash backoff —
     // longer than the 30s cap so a child that keeps dying shortly after launch keeps escalating
@@ -30,7 +30,7 @@ internal sealed class SessionWatchdog(ILogger<SessionWatchdog> log, string child
             if (_lastSession != Win32Session.NoSession)
             {
                 if (log.IsEnabled(LogLevel.Information)) log.LogInformation("Session changed {Old} → {New}, restarting child", _lastSession, session);
-                await StopChildAsync();
+                await StopChild();
             }
             _lastSession = session;
             if (session != Win32Session.NoSession)
@@ -38,10 +38,10 @@ internal sealed class SessionWatchdog(ILogger<SessionWatchdog> log, string child
         }
         else if (ClaimIfExited() is { } exited)
         {
-            log.LogWarning("Child exited unexpectedly, restarting in {Backoff}s", (int)_backoff.TotalSeconds);
+            var backoffMs = _backoffMs.Next();
+            log.LogWarning("Child exited unexpectedly, restarting in {Backoff}s", backoffMs / 1000);
             exited.Dispose();
-            await Task.Delay(_backoff, cancel);
-            _backoff = TimeSpan.FromSeconds(Math.Min(_backoff.TotalSeconds * 2, 30));
+            await Task.Delay(backoffMs, cancel);
             if (session != Win32Session.NoSession)
                 StartChild(session);
         }
@@ -50,13 +50,13 @@ internal sealed class SessionWatchdog(ILogger<SessionWatchdog> log, string child
             // only reset the backoff once the child has proven stable. Resetting on every alive tick let a
             // child that crashes shortly after each launch restart-storm forever (the 30s cap never engaged).
             if (_childStartedAt != DateTime.MinValue && DateTime.UtcNow - _childStartedAt >= BackoffResetAfter)
-                _backoff = TimeSpan.FromSeconds(1);
+                _backoffMs.Reset();
         }
     }
 
     protected override async Task OnShutdown(CancellationToken cancel)
     {
-        await StopChildAsync();
+        await StopChild();
         _stopEvent?.Dispose();
     }
 
@@ -88,7 +88,7 @@ internal sealed class SessionWatchdog(ILogger<SessionWatchdog> log, string child
         }
     }
 
-    internal async Task StopChildAsync()
+    internal async Task StopChild()
     {
         ChildProcess? child;
         lock (_child) { child = _child.Value; _child.Value = null; }
@@ -112,7 +112,7 @@ internal sealed class SessionWatchdog(ILogger<SessionWatchdog> log, string child
         finally
         {
             child.Dispose();
-            if (_stopEvent != null) Win32Session.ResetGlobalEvent(_stopEvent);
+            if (_stopEvent != null) Win32Session.ResetEvent(_stopEvent);
         }
     }
 }

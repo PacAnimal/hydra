@@ -116,24 +116,14 @@ public sealed class MacScreenSaverSync : SimpleHostedService, IScreenSaverSync
     public void LockScreen()
     {
         _log.LogInformation("Locking screen (ctrl+cmd+q)");
-        var src = NativeMethods.CGEventSourceCreate(NativeMethods.KCGEventSourceStateCombinedSessionState);
-        const ulong flags = NativeMethods.KCGEventFlagMaskControl | NativeMethods.KCGEventFlagMaskCommand;
-        const ushort qKeyCode = 12;  // Q key
-        var down = NativeMethods.CGEventCreateKeyboardEvent(src, qKeyCode, true);
-        var up = NativeMethods.CGEventCreateKeyboardEvent(src, qKeyCode, false);
-        if (down != nint.Zero)
+        const ushort qKeyCode = 12; // kVK_ANSI_Q
+        foreach (var isDown in new[] { true, false })
         {
-            NativeMethods.CGEventSetFlags(down, flags);
-            NativeMethods.CGEventPost(NativeMethods.KCGHidEventTap, down);
-            NativeMethods.CFRelease(down);
+            var evt = NativeMethods.CGEventCreateKeyboardEvent(NativeHelpers.EventSource, qKeyCode, isDown);
+            if (evt == nint.Zero) continue;
+            NativeMethods.CGEventSetFlags(evt, NativeMethods.KCGEventFlagMaskControl | NativeMethods.KCGEventFlagMaskCommand);
+            NativeHelpers.PostAndRelease(evt);
         }
-        if (up != nint.Zero)
-        {
-            NativeMethods.CGEventSetFlags(up, flags);
-            NativeMethods.CGEventPost(NativeMethods.KCGHidEventTap, up);
-            NativeMethods.CFRelease(up);
-        }
-        if (src != nint.Zero) NativeMethods.CFRelease(src);
     }
 
     public void Activate()
@@ -148,15 +138,8 @@ public sealed class MacScreenSaverSync : SimpleHostedService, IScreenSaverSync
     {
         _log.LogInformation("Deactivating screensaver");
         // a synthetic mouse move dismisses the screensaver reliably
-        var src = NativeMethods.CGEventSourceCreate(NativeMethods.KCGEventSourceStateCombinedSessionState);
-        var evt = NativeMethods.CGEventCreateMouseEvent(src, NativeMethods.KCGEventMouseMoved,
-            new CGPoint { X = 0, Y = 0 }, 0);
-        if (evt != nint.Zero)
-        {
-            NativeMethods.CGEventPost(NativeMethods.KCGHidEventTap, evt);
-            NativeMethods.CFRelease(evt);
-        }
-        if (src != nint.Zero) NativeMethods.CFRelease(src);
+        NativeHelpers.PostAndRelease(NativeMethods.CGEventCreateMouseEvent(NativeHelpers.EventSource, NativeMethods.KCGEventMouseMoved,
+            new CGPoint { X = 0, Y = 0 }, 0));
     }
 
     public void ResetIdleTimer()
@@ -164,17 +147,11 @@ public sealed class MacScreenSaverSync : SimpleHostedService, IScreenSaverSync
         // IOPMAssertionDeclareUserActivity doesn't reset the HID idle timer; only a real CGEvent through KCGHidEventTap does.
         // use KCGEventFlagsChanged (a keyboard event) instead of a mouse move so apps that hide the cursor
         // (e.g. WezTerm during typing) don't see it flash back. carry current modifier flags so it's a no-op to keyboard state.
-        var src = NativeMethods.CGEventSourceCreate(NativeMethods.KCGEventSourceStateCombinedSessionState);
-        var flags = NativeMethods.CGEventSourceFlagsState(NativeMethods.KCGEventSourceStateCombinedSessionState);
-        var evt = NativeMethods.CGEventCreateKeyboardEvent(src, 0, false);
-        if (evt != nint.Zero)
-        {
-            NativeMethods.CGEventSetType(evt, NativeMethods.KCGEventFlagsChanged);
-            NativeMethods.CGEventSetFlags(evt, flags);
-            NativeMethods.CGEventPost(NativeMethods.KCGHidEventTap, evt);
-            NativeMethods.CFRelease(evt);
-        }
-        if (src != nint.Zero) NativeMethods.CFRelease(src);
+        var evt = NativeMethods.CGEventCreateKeyboardEvent(NativeHelpers.EventSource, 0, false);
+        if (evt == nint.Zero) return;
+        NativeMethods.CGEventSetType(evt, NativeMethods.KCGEventFlagsChanged);
+        NativeMethods.CGEventSetFlags(evt, NativeMethods.CGEventSourceFlagsState(NativeMethods.KCGEventSourceStateCombinedSessionState));
+        NativeHelpers.PostAndRelease(evt);
     }
 
     public void WakeDisplay()

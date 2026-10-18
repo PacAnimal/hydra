@@ -5,17 +5,17 @@ namespace Styx.Services;
 public interface IClientRegistry
 {
     // what was registered on the connection, if anything
-    ValueTask<ClientIdentity?> Unregister(string connectionId);
-    ValueTask<string?> GetConnectionId(NetworkKey network, string hostName);
-    ValueTask<ClientIdentity?> GetIdentity(string connectionId);
+    ClientIdentity? Unregister(string connectionId);
+    string? GetConnectionId(NetworkKey network, string hostName);
+    ClientIdentity? GetIdentity(string connectionId);
     // atomically kicks same-network+host duplicates AND registers the new connection under one lock, so two
     // concurrent authenticates for the same host can't both find nothing to kick and both register.
-    ValueTask<RegistrationResult> Register(string connectionId, NetworkKey network, string hostName, string remoteIp, string localIp);
+    RegistrationResult Register(string connectionId, NetworkKey network, string hostName, string remoteIp, string localIp);
     // removes the registration only if it is still the one with this generation, so a timer armed for an earlier
     // login can never evict whatever holds the connection or the name now
-    ValueTask<ClientIdentity?> UnregisterIfCurrent(string connectionId, long generation);
-    ValueTask<IReadOnlyList<NetworkClient>> GetNetworkClients(NetworkKey network);
-    ValueTask<IReadOnlyList<ClientIdentity>> GetAllIdentities();
+    ClientIdentity? UnregisterIfCurrent(string connectionId, long generation);
+    IReadOnlyList<NetworkClient> GetNetworkClients(NetworkKey network);
+    IReadOnlyList<ClientIdentity> GetAllIdentities();
 }
 
 /// <param name="Generation">unique per registration, so a later login on the same connection is told apart</param>
@@ -43,16 +43,16 @@ public class ClientRegistry(ILogger<ClientRegistry> log) : IClientRegistry
     private readonly Dictionary<HostKey, string> _byNetworkHost = [];
     private long _generation;
 
-    public ValueTask<ClientIdentity?> Unregister(string connectionId)
+    public ClientIdentity? Unregister(string connectionId)
     {
         ClientIdentity? identity;
         lock (_lock)
             identity = Remove(connectionId);
         LogUnregistered(identity);
-        return ValueTask.FromResult(identity);
+        return identity;
     }
 
-    public ValueTask<ClientIdentity?> UnregisterIfCurrent(string connectionId, long generation)
+    public ClientIdentity? UnregisterIfCurrent(string connectionId, long generation)
     {
         ClientIdentity? identity = null;
         lock (_lock)
@@ -61,21 +61,21 @@ public class ClientRegistry(ILogger<ClientRegistry> log) : IClientRegistry
                 identity = Remove(connectionId);
         }
         LogUnregistered(identity);
-        return ValueTask.FromResult(identity);
+        return identity;
     }
 
     // the lock is held only for a lookup, so a relay send pays for an uncontended acquire at most
-    public ValueTask<string?> GetConnectionId(NetworkKey network, string hostName)
+    public string? GetConnectionId(NetworkKey network, string hostName)
     {
-        lock (_lock) return ValueTask.FromResult(_byNetworkHost.GetValueOrDefault(new HostKey(network, hostName)));
+        lock (_lock) return _byNetworkHost.GetValueOrDefault(new HostKey(network, hostName));
     }
 
-    public ValueTask<ClientIdentity?> GetIdentity(string connectionId)
+    public ClientIdentity? GetIdentity(string connectionId)
     {
-        lock (_lock) return ValueTask.FromResult(_byConnection.GetValueOrDefault(connectionId));
+        lock (_lock) return _byConnection.GetValueOrDefault(connectionId);
     }
 
-    public ValueTask<RegistrationResult> Register(string connectionId, NetworkKey network, string hostName, string remoteIp, string localIp)
+    public RegistrationResult Register(string connectionId, NetworkKey network, string hostName, string remoteIp, string localIp)
     {
         RegistrationResult result;
         lock (_lock)
@@ -97,17 +97,17 @@ public class ClientRegistry(ILogger<ClientRegistry> log) : IClientRegistry
         }
         if (log.IsEnabled(LogLevel.Debug))
             log.LogDebug("Registered client \"{HostName}\" from {RemoteIp} on network {Network}", hostName, remoteIp, network);
-        return ValueTask.FromResult(result);
+        return result;
     }
 
-    public ValueTask<IReadOnlyList<NetworkClient>> GetNetworkClients(NetworkKey network)
+    public IReadOnlyList<NetworkClient> GetNetworkClients(NetworkKey network)
     {
-        lock (_lock) return ValueTask.FromResult<IReadOnlyList<NetworkClient>>(OnNetwork(network, null));
+        lock (_lock) return OnNetwork(network, null);
     }
 
-    public ValueTask<IReadOnlyList<ClientIdentity>> GetAllIdentities()
+    public IReadOnlyList<ClientIdentity> GetAllIdentities()
     {
-        lock (_lock) return ValueTask.FromResult<IReadOnlyList<ClientIdentity>>([.. _byConnection.Values]);
+        lock (_lock) return [.. _byConnection.Values];
     }
 
     private List<NetworkClient> OnNetwork(NetworkKey network, string? excludeConnectionId)

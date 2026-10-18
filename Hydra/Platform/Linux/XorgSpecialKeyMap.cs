@@ -2,9 +2,8 @@ using Hydra.Keyboard;
 
 namespace Hydra.Platform.Linux;
 
-// maps X11 keysyms to SpecialKey constants.
-// only covers special (non-character) keys; printable keys are handled mechanically
-// in XorgKeyResolver (MISCELLANY range: keysym | 0x01000000 = SpecialKey value).
+// maps X11 keysyms to SpecialKey constants: every special (non-character) key Hydra knows on X11.
+// a keysym not here is no SpecialKey; printable keysyms are resolved by XorgKeyResolver.KeySymToChar.
 internal sealed class XorgSpecialKeyMap : SpecialKeyMap
 {
     internal static readonly XorgSpecialKeyMap Instance = new();
@@ -94,7 +93,7 @@ internal sealed class XorgSpecialKeyMap : SpecialKeyMap
 
         // modifiers
         { XorgVirtualKey.ISO_Level3_Shift, SpecialKey.AltGr },
-        { 0xFF7E, SpecialKey.AltGr },  // Mode_switch — legacy AltGr keysym on older X11 configurations
+        { XorgVirtualKey.Mode_switch, SpecialKey.AltGr },
         { XorgVirtualKey.Shift_L, SpecialKey.Shift_L },
         { XorgVirtualKey.Shift_R, SpecialKey.Shift_R },
         { XorgVirtualKey.Control_L, SpecialKey.Control_L },

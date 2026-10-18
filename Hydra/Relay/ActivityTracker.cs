@@ -21,9 +21,12 @@ public interface IActivityTracker
 public sealed class ActivityTracker(IHydraProfile profile, Lazy<IRelaySender> relay, IWorldState worldState,
     IScreenSaverSync screenSaverSync, ILogger<ActivityTracker> log, Func<long>? getClock = null) : IActivityTracker
 {
-    private readonly Func<long> _getClock = getClock ?? (() => Environment.TickCount64);
-    private long _lastSentTick;
+    private static readonly TimeSpan PingInterval = TimeSpan.FromSeconds(5);
+    private readonly Func<long> _getClock = getClock ?? TickCount;
+    private readonly IntervalGate _ping = new(PingInterval, getClock ?? TickCount);
     private long _lastLocalActivityTick;
+
+    private static long TickCount() => Environment.TickCount64;
 
     public long MsSinceLocalActivity => _getClock() - Interlocked.Read(ref _lastLocalActivityTick);
 
@@ -58,10 +61,7 @@ public sealed class ActivityTracker(IHydraProfile profile, Lazy<IRelaySender> re
 
     private async ValueTask BroadcastIfDue(string? excludePeer = null)
     {
-        var now = _getClock();
-        var last = Interlocked.Read(ref _lastSentTick);
-        if (now - last < 5000) return;
-        if (Interlocked.CompareExchange(ref _lastSentTick, now, last) != last) return;
+        if (!_ping.TryEnter()) return;
         if (!profile.AllowSystemSleep)
         {
             log.LogDebug("Resetting local idle timer");

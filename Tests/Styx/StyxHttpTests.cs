@@ -103,8 +103,7 @@ public class StyxHttpTests : StyxFixtureBase
         // build a NetworkConfig base64 string using the API-issued authorization
         var configBase64 = new NetworkConfig(StyxTestServer.ServerUrl(Factory), NetworkConfig.NewEncryptionKey(), authorization).ToBlob();
 
-        await using var client = HydraTestClient.Master(Factory, "api-test", configBase64);
-        await client.StartReady();
+        await using var client = await HydraTestClient.Started(HydraTestClient.Master(Factory, "api-test", configBase64));
 
         Assert.That(client.IsConnected, Is.True);
     }

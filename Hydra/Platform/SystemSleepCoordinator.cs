@@ -24,7 +24,7 @@ internal sealed class SystemSleepCoordinator(
 
     internal bool Enabled => profile.AllowSystemSleep;
 
-    internal async Task PrepareForSleepAsync(CancellationToken cancel)
+    internal async Task PrepareForSleep(CancellationToken cancel)
     {
         if (!Enabled) return;
 
@@ -41,7 +41,7 @@ internal sealed class SystemSleepCoordinator(
         log.LogInformation("System sleep requested — closing relay connection");
         try
         {
-            await relay.SuspendForSystemSleepAsync(generation, cancel);
+            await relay.SuspendForSystemSleep(generation, cancel);
             log.LogInformation("Relay connection closed for system sleep");
         }
         catch (OperationCanceledException) when (cancel.IsCancellationRequested)
@@ -79,7 +79,7 @@ internal sealed class SystemSleepCoordinator(
     internal void PrepareForSleepBlocking()
     {
         using var timeout = new CancellationTokenSource(RelayCloseTimeout);
-        PrepareForSleepAsync(timeout.Token).GetAwaiter().GetResult();
+        PrepareForSleep(timeout.Token).GetAwaiter().GetResult();
     }
 
     internal void BeginResumeAfterSleep()

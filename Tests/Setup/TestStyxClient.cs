@@ -1,3 +1,4 @@
+using Cathedral.Utils;
 using Common.DTO;
 using Common.Interfaces;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -15,6 +16,7 @@ public sealed class TestStyxClient : IStyxClient, IAsyncDisposable
 {
     private HubConnection? _hub;
     private IDisposable? _registration;
+    private readonly Toggle _disposed = new();
 
     private readonly NotificationQueue<string[]> _peers = new();
     private readonly NotificationQueue<StyxReceived> _received = new();
@@ -112,8 +114,10 @@ public sealed class TestStyxClient : IStyxClient, IAsyncDisposable
         return Task.CompletedTask;
     }
 
-    public async ValueTask DisposeAsync()
+    // stops the connection mid-test; disposal afterwards is a no-op
+    public async Task Drop()
     {
+        if (!_disposed.TrySet()) return;
         _registration?.Dispose();
         if (_hub != null)
         {
@@ -121,6 +125,8 @@ public sealed class TestStyxClient : IStyxClient, IAsyncDisposable
             await _hub.DisposeAsync();
         }
     }
+
+    public async ValueTask DisposeAsync() => await Drop();
 }
 
 public sealed record StyxReceived(string Source, string SourceIp, byte[] Payload);

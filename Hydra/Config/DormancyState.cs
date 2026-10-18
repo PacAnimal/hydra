@@ -3,19 +3,8 @@ using Microsoft.Extensions.Logging;
 
 namespace Hydra.Config;
 
-// Dormant is the state between "fully running" and "idle": the active profile's conditions stopped
-// matching for a reason a wake can undo — the displays slept, or macOS started reporting battery while
-// the machine idles on the dock. Restarting into idle there drops us off the relay entirely, and a
-// master's cursor parked on this machine would be flung back home for what is really just a dark screen.
-// So we stay connected and refuse input instead. The master needs to know none of this: it keeps sending
-// input at us as though nothing happened, and that input is itself the wake.
-//
-// The first refused input starts a deadline. Either we get our screens and power back and match the
-// profile again — the cursor still sitting exactly where its owner left it — or we leave the relay, which
-// is what finally tells the master to reclaim its cursor. That decision is ours, never the master's.
-//
-// Deliberately in-memory only: any restart forgets it and comes up genuinely idle, so a machine that was
-// carried off and rebooted stays asleep until its owner opens the lid.
+// A slave whose displays slept stays on the relay and refuses input instead of restarting into idle. The first
+// refused input starts a deadline: match the profile again within it, or leave the relay. In-memory only.
 public interface IDormancyState
 {
     bool IsDormant { get; }
@@ -35,7 +24,7 @@ public interface IDormancyState
 
 public sealed class DormancyState(ILogger<DormancyState> log, Func<DateTime>? clock = null) : SimpleHostedService(log, TimeSpan.FromSeconds(1)), IDormancyState
 {
-    // how long a woken machine has to bring its displays and power back and match the profile again
+    // how long a woken machine has to bring its displays back and match the profile again
     public static readonly TimeSpan WakeDeadline = TimeSpan.FromSeconds(30);
 
     private readonly ILogger<DormancyState> _log = log;

@@ -284,6 +284,29 @@ public class HydraConfigTests
         }
     }
 
+    [Test]
+    public void Beside_ResolvesARelativeSettingAgainstTheConfigDirectory_AndKeepsARootedOne()
+    {
+        var dir = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "hydra-beside"));
+        var configPath = Path.Combine(dir, "hydra.conf");
+        var rooted = Path.Combine(Path.GetTempPath(), "elsewhere.log");
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(HydraConfigFile.Beside(configPath, "hydra.log"), Is.EqualTo(Path.Combine(dir, "hydra.log")));
+            Assert.That(HydraConfigFile.Beside(configPath, rooted), Is.EqualTo(Path.GetFullPath(rooted)));
+        }
+    }
+
+    [Test]
+    public void ResolvedName_IsTheConfiguredName_ElseTheMachineNameWithoutDomain()
+    {
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(new HydraConfigFile { Name = "desk" }.ResolvedName, Is.EqualTo("desk"));
+            Assert.That(new HydraConfigFile().ResolvedName, Is.EqualTo(Environment.MachineName.Split('.')[0]));
+        }
+    }
+
     // HasConditions
 
     [Test]

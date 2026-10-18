@@ -39,12 +39,8 @@ internal static class ServiceHost
         services.AddSereneConsoleLogging(c => c.MinLogLevel = profile.LogLevel);
 
         if (configFile.LogFile is { } logFileSetting)
-        {
-            var logPath = Path.IsPathRooted(logFileSetting)
-                ? logFileSetting
-                : Path.GetFullPath(logFileSetting, Path.GetDirectoryName(configPath)!);
-            services.AddSereneFileLogging(logPath, c => c.MinLogLevel = profile.LogLevel);
-        }
+            services.AddSereneFileLogging(HydraConfigFile.Beside(configPath, logFileSetting), c => c.MinLogLevel = profile.LogLevel);
+
         services.AddSingleton<IHydraProfile>(profile);
         services.AddHostedSingleton(sp =>
             new SessionWatchdog(sp.GetRequiredService<ILogger<SessionWatchdog>>(), HydraArgs.SessionChildArguments(configPath)));
@@ -56,7 +52,7 @@ internal static class ServiceHost
         // wire updater to stop child before swapping binary
         var watchdog = app.Services.GetRequiredService<SessionWatchdog>();
         var updater = app.Services.GetRequiredService<SelfUpdater>();
-        updater.StopChild = () => watchdog.StopChildAsync();
+        updater.StopChild = () => watchdog.StopChild();
 
         app.Run();
     }

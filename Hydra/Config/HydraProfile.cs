@@ -49,7 +49,7 @@ public class HydraProfile(HydraConfigFile configFile, HydraConfig? activeProfile
 
     private readonly HydraConfig? _activeProfile = activeProfile;
 
-    public string Name { get; } = configFile.Name ?? Environment.MachineName.Split('.')[0];
+    public string Name { get; } = configFile.ResolvedName;
     public LogLevel LogLevel { get; } = configFile.LogLevel;
     public bool AutoUpdate { get; } = configFile.AutoUpdate;
     public UpdateChannel UpdateChannel { get; } = configFile.UpdateChannel;

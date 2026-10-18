@@ -51,7 +51,7 @@ public class PasteOutcomeTests
     {
         var relay = await StartReceivingFromRemote();
         await relay.FireMessageReceived("remote", MessageKind.FileTransferStart, Json(MessageKind.FileTransferStart, new FileTransferStartMessage(["a.txt"], 5)));
-        relay.ClearSent();
+        relay.Sent.Clear();
 
         await relay.FireMessageReceived("remote", MessageKind.FileTransferDone, "{");
 
@@ -59,8 +59,8 @@ public class PasteOutcomeTests
         {
             Assert.That(_osd.Shown.Count, Is.Zero, "the files were discarded, so nothing was pasted");
             Assert.That(_dialog.LastState, Is.EqualTo("error"));
-            Assert.That(relay.Snapshot().Select(s => s.Kind), Is.EqualTo([MessageKind.FileTransferAbort]));
-            Assert.That(relay.Snapshot()[0].Targets, Is.EqualTo(["remote"]));
+            Assert.That(relay.Sent.Snapshot().Select(s => s.Kind), Is.EqualTo([MessageKind.FileTransferAbort]));
+            Assert.That(relay.Sent.Snapshot()[0].Targets, Is.EqualTo(["remote"]));
         }
     }
 
@@ -70,11 +70,11 @@ public class PasteOutcomeTests
     {
         var (_, relay, _) = await _services.Start(TransitionTestHelper.CreateService(osd: _osd, fileTransfer: _fileTransfer));
         _fileTransfer.InitiateSend([Path.Combine(_tempRoot, "a.txt")], "remote", relay, "home");
-        await relay.WaitForSent(MessageKind.FileTransferRequest);
+        await relay.Sent.WaitFor(MessageKind.FileTransferRequest);
 
         await relay.FireMessageReceived("remote", MessageKind.FileTransferAccepted, "{}");
 
-        var shown = relay.Snapshot().Where(s => s.Kind == MessageKind.Osd).ToList();
+        var shown = relay.Sent.Of(MessageKind.Osd);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(shown.Select(s => s.Json), Is.EqualTo([Json(MessageKind.Osd, new OsdMessage("Pasting…"))]));
@@ -120,7 +120,7 @@ public class PasteOutcomeTests
     {
         var (_, relay, _) = await _services.Start(TransitionTestHelper.CreateService(osd: _osd, fileTransfer: _fileTransfer));
         _fileTransfer.InitiateSend([Path.Combine(_tempRoot, "a.txt")], "remote", relay, "home");
-        await relay.WaitForSent(MessageKind.FileTransferRequest);
+        await relay.Sent.WaitFor(MessageKind.FileTransferRequest);
 
         await relay.FireMessageReceived("remote", MessageKind.FileTransferAbort, "{");
 
@@ -145,7 +145,7 @@ public class PasteOutcomeTests
         var source = Path.Combine(_tempRoot, name);
         await File.WriteAllTextAsync(source, "hello");
         var chunks = new List<FileTransferChunkMessage>();
-        var sha = await TarGzStreamer.StreamAsync([source], (data, seq, _) =>
+        var sha = await TarGzStreamer.Compress([source], (data, seq, _) =>
         {
             chunks.Add(new FileTransferChunkMessage(seq, data));
             return ValueTask.CompletedTask;

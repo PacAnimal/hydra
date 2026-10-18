@@ -18,13 +18,13 @@ public class TarGzStreamerTests
     }
 
     [Test]
-    public async Task StreamAsync_SingleFile_ProducesChunksAndHash()
+    public async Task Compress_SingleFile_ProducesChunksAndHash()
     {
         var file = Path.Combine(_tempRoot, "hello.txt");
         await File.WriteAllTextAsync(file, "hello world");
 
         var chunks = new List<byte[]>();
-        var sha = await TarGzStreamer.StreamAsync([file],
+        var sha = await TarGzStreamer.Compress([file],
             (data, _, _) => { chunks.Add(data); return ValueTask.CompletedTask; },
             NoFileStart, CancellationToken.None);
 
@@ -36,7 +36,7 @@ public class TarGzStreamerTests
     }
 
     [Test]
-    public async Task StreamAsync_Directory_IncludesNestedFiles()
+    public async Task Compress_Directory_IncludesNestedFiles()
     {
         var dir = Path.Combine(_tempRoot, "mydir");
         Directory.CreateDirectory(Path.Combine(dir, "sub"));
@@ -44,7 +44,7 @@ public class TarGzStreamerTests
         await File.WriteAllTextAsync(Path.Combine(dir, "sub", "b.txt"), "bbb");
 
         var chunks = new List<byte[]>();
-        await TarGzStreamer.StreamAsync([dir],
+        await TarGzStreamer.Compress([dir],
             (data, _, _) => { chunks.Add(data); return ValueTask.CompletedTask; },
             NoFileStart, CancellationToken.None);
 
@@ -56,12 +56,12 @@ public class TarGzStreamerTests
     }
 
     [Test]
-    public async Task StreamAsync_EmptyDirectory_ProducesValidArchive()
+    public async Task Compress_EmptyDirectory_ProducesValidArchive()
     {
         var dir = Path.Combine(_tempRoot, "empty");
         Directory.CreateDirectory(dir);
 
-        var sha = await TarGzStreamer.StreamAsync([dir],
+        var sha = await TarGzStreamer.Compress([dir],
             (_, _, _) => ValueTask.CompletedTask,
             NoFileStart, CancellationToken.None);
 
@@ -70,14 +70,14 @@ public class TarGzStreamerTests
     }
 
     [Test]
-    public async Task StreamAsync_MissingFile_SkippedGracefully()
+    public async Task Compress_MissingFile_SkippedGracefully()
     {
         var real = Path.Combine(_tempRoot, "real.txt");
         await File.WriteAllTextAsync(real, "data");
         var missing = Path.Combine(_tempRoot, "nonexistent.txt");
 
         var chunks = new List<byte[]>();
-        await TarGzStreamer.StreamAsync([real, missing],
+        await TarGzStreamer.Compress([real, missing],
             (data, _, _) => { chunks.Add(data); return ValueTask.CompletedTask; },
             NoFileStart, CancellationToken.None);
 
@@ -90,7 +90,7 @@ public class TarGzStreamerTests
     }
 
     [Test]
-    public async Task StreamAsync_Cancellation_ThrowsOperationCancelled()
+    public async Task Compress_Cancellation_ThrowsOperationCancelled()
     {
         var file = Path.Combine(_tempRoot, "big.txt");
         await File.WriteAllTextAsync(file, new string('x', 100_000));
@@ -100,7 +100,7 @@ public class TarGzStreamerTests
         var token = cts.Token;
 
         Assert.ThrowsAsync<OperationCanceledException>(async () =>
-            await TarGzStreamer.StreamAsync([file],
+            await TarGzStreamer.Compress([file],
                 (_, _, _) => ValueTask.CompletedTask,
                 NoFileStart, token));
     }
@@ -132,13 +132,13 @@ public class TarGzStreamerTests
     }
 
     [Test]
-    public async Task StreamAsync_SequenceNumbersAreMonotonic()
+    public async Task Compress_SequenceNumbersAreMonotonic()
     {
         var file = Path.Combine(_tempRoot, "seq.txt");
         await File.WriteAllTextAsync(file, "data");
 
         var sequences = new List<int>();
-        await TarGzStreamer.StreamAsync([file],
+        await TarGzStreamer.Compress([file],
             (_, seq, _) => { sequences.Add(seq); return ValueTask.CompletedTask; },
             NoFileStart, CancellationToken.None);
 
@@ -147,7 +147,7 @@ public class TarGzStreamerTests
     }
 
     [Test]
-    public async Task StreamAsync_ChunksStayWithinLatencyBound()
+    public async Task Compress_ChunksStayWithinLatencyBound()
     {
         var file = Path.Combine(_tempRoot, "random.bin");
         var bytes = new byte[TarGzStreamer.ChunkSize * 3];
@@ -155,7 +155,7 @@ public class TarGzStreamerTests
         await File.WriteAllBytesAsync(file, bytes);
 
         var sizes = new List<int>();
-        await TarGzStreamer.StreamAsync([file],
+        await TarGzStreamer.Compress([file],
             (data, _, _) => { sizes.Add(data.Length); return ValueTask.CompletedTask; },
             NoFileStart, CancellationToken.None);
 
@@ -165,7 +165,7 @@ public class TarGzStreamerTests
 
     // the sender's backpressure: the next chunk is not produced while the previous one is still being sent
     [Test]
-    public async Task StreamAsync_AwaitsEachChunkBeforeProducingTheNext()
+    public async Task Compress_AwaitsEachChunkBeforeProducingTheNext()
     {
         var file = Path.Combine(_tempRoot, "random.bin");
         var bytes = new byte[TarGzStreamer.ChunkSize * 3];
@@ -173,7 +173,7 @@ public class TarGzStreamerTests
         await File.WriteAllBytesAsync(file, bytes);
         var chunks = new AwaitedCalls();
 
-        await TarGzStreamer.StreamAsync([file], (_, _, _) => chunks.Next(), NoFileStart, CancellationToken.None).WaitAsync(Bound);
+        await TarGzStreamer.Compress([file], (_, _, _) => chunks.Next(), NoFileStart, CancellationToken.None).WaitAsync(Bound);
 
         using (Assert.EnterMultipleScope())
         {
@@ -220,8 +220,8 @@ public class TarGzExtractorTests
         var extractDir = Path.Combine(_tempRoot, "extract");
         using var extractor = new TarGzExtractor(extractDir, NoFileStart, CancellationToken.None);
         foreach (var chunk in chunks)
-            await extractor.WriteChunkAsync(chunk);
-        await extractor.CompleteAsync();
+            await extractor.WriteChunk(chunk);
+        await extractor.Complete();
 
         var actualHash = extractor.GetHash();
         Assert.That(actualHash, Is.EqualTo(expectedHash));
@@ -247,8 +247,8 @@ public class TarGzExtractorTests
         var extractDir = Path.Combine(_tempRoot, "extract");
         using var extractor = new TarGzExtractor(extractDir, NoFileStart, CancellationToken.None);
         foreach (var chunk in chunks)
-            await extractor.WriteChunkAsync(chunk);
-        await extractor.CompleteAsync();
+            await extractor.WriteChunk(chunk);
+        await extractor.Complete();
 
         using (Assert.EnterMultipleScope())
         {
@@ -269,8 +269,8 @@ public class TarGzExtractorTests
         var extractDir = Path.Combine(_tempRoot, "extract");
         using var extractor = new TarGzExtractor(extractDir, NoFileStart, CancellationToken.None);
         foreach (var chunk in chunks)
-            await extractor.WriteChunkAsync(chunk);
-        await extractor.CompleteAsync();
+            await extractor.WriteChunk(chunk);
+        await extractor.Complete();
 
         var actualHash = extractor.GetHash();
         var fakeHash = new byte[32]; // all zeros
@@ -278,7 +278,7 @@ public class TarGzExtractorTests
     }
 
     [Test]
-    public async Task WriteChunkAsync_TracksBytesReceived()
+    public async Task WriteChunk_TracksBytesReceived()
     {
         var file = Path.Combine(_tempRoot, "tracked.txt");
         await File.WriteAllTextAsync(file, new string('x', 500));
@@ -288,7 +288,7 @@ public class TarGzExtractorTests
         var extractDir = Path.Combine(_tempRoot, "extract");
         using var extractor = new TarGzExtractor(extractDir, NoFileStart, CancellationToken.None);
         foreach (var chunk in chunks)
-            await extractor.WriteChunkAsync(chunk);
+            await extractor.WriteChunk(chunk);
 
         Assert.That(extractor.BytesReceived, Is.EqualTo(chunks.Sum(c => (long)c.Length)));
     }
@@ -301,8 +301,8 @@ public class TarGzExtractorTests
 
         var extractDir = Path.Combine(_tempRoot, "extract");
         using var extractor = new TarGzExtractor(extractDir, NoFileStart, CancellationToken.None);
-        await extractor.WriteChunkAsync(archiveBytes);
-        await extractor.CompleteAsync();
+        await extractor.WriteChunk(archiveBytes);
+        await extractor.Complete();
 
         using (Assert.EnterMultipleScope())
         {
@@ -321,8 +321,8 @@ public class TarGzExtractorTests
 
         var extractDir = Path.Combine(_tempRoot, "extract");
         using var extractor = new TarGzExtractor(extractDir, NoFileStart, CancellationToken.None);
-        await extractor.WriteChunkAsync(archiveBytes);
-        await extractor.CompleteAsync();
+        await extractor.WriteChunk(archiveBytes);
+        await extractor.Complete();
 
         using (Assert.EnterMultipleScope())
         {
@@ -340,8 +340,8 @@ public class TarGzExtractorTests
 
         var extractDir = Path.Combine(_tempRoot, "extract");
         using var extractor = new TarGzExtractor(extractDir, NoFileStart, CancellationToken.None);
-        await extractor.WriteChunkAsync(archiveBytes);
-        await extractor.CompleteAsync();
+        await extractor.WriteChunk(archiveBytes);
+        await extractor.Complete();
 
         // symlink should not have been created
         Assert.That(Directory.GetFileSystemEntries(extractDir), Is.Empty);
@@ -358,9 +358,9 @@ public class TarGzExtractorTests
         var extractDir = Path.Combine(_tempRoot, "extract");
         var extractor = new TarGzExtractor(extractDir, NoFileStart, CancellationToken.None);
         foreach (var chunk in chunks)
-            await extractor.WriteChunkAsync(chunk);
+            await extractor.WriteChunk(chunk);
 
-        // dispose without calling CompleteAsync — should not throw
+        // dispose without calling Complete — should not throw
         Assert.DoesNotThrow(() => extractor.Dispose());
     }
 
@@ -432,8 +432,8 @@ public class TarGzExtractorTests
         var extractDir = Path.Combine(_tempRoot, "extract");
         using var extractor = new TarGzExtractor(extractDir, NoFileStart, CancellationToken.None);
         foreach (var chunk in chunks)
-            await extractor.WriteChunkAsync(chunk);
-        await extractor.CompleteAsync();
+            await extractor.WriteChunk(chunk);
+        await extractor.Complete();
 
         using (Assert.EnterMultipleScope())
         {
@@ -454,8 +454,8 @@ public class TarGzExtractorTests
         var extractDir = Path.Combine(_tempRoot, "extract");
         using var extractor = new TarGzExtractor(extractDir, NoFileStart, CancellationToken.None);
         foreach (var chunk in chunks)
-            await extractor.WriteChunkAsync(chunk);
-        await extractor.CompleteAsync();
+            await extractor.WriteChunk(chunk);
+        await extractor.Complete();
 
         using (Assert.EnterMultipleScope())
         {
@@ -473,10 +473,10 @@ public class TarGzExtractorTests
 
         var extractDir = Path.Combine(_tempRoot, "extract");
         using var extractor = new TarGzExtractor(extractDir, NoFileStart, CancellationToken.None);
-        await extractor.WriteChunkAsync(garbage);
+        await extractor.WriteChunk(garbage);
         // completing with corrupt data should throw (invalid gzip/tar) without hanging
         Exception? ex = null;
-        try { await extractor.CompleteAsync(); } catch (Exception e) { ex = e; }
+        try { await extractor.Complete(); } catch (Exception e) { ex = e; }
         Assert.That(ex, Is.Not.Null);
     }
 
@@ -493,9 +493,9 @@ public class TarGzExtractorTests
         var extractDir = Path.Combine(_tempRoot, "extract");
         using var extractor = new TarGzExtractor(extractDir, NoFileStart, CancellationToken.None);
         foreach (var chunk in half)
-            await extractor.WriteChunkAsync(chunk);
+            await extractor.WriteChunk(chunk);
         Exception? ex = null;
-        try { await extractor.CompleteAsync(); } catch (Exception e) { ex = e; }
+        try { await extractor.Complete(); } catch (Exception e) { ex = e; }
         Assert.That(ex, Is.Not.Null);
     }
 
@@ -504,7 +504,7 @@ public class TarGzExtractorTests
     private static async Task<(List<byte[]> chunks, byte[] hash)> StreamToChunks(List<string> paths)
     {
         var chunks = new List<byte[]>();
-        var hash = await TarGzStreamer.StreamAsync(paths,
+        var hash = await TarGzStreamer.Compress(paths,
             (data, _, _) => { chunks.Add(data); return ValueTask.CompletedTask; },
             NoFileStart, CancellationToken.None);
         return (chunks, hash);

@@ -9,13 +9,8 @@ namespace Tests.Screen;
 
 // A screen's name is its id across the whole layout, so the master keeps only the names a peer can own.
 [TestFixture]
-public class ScreenNamingTests
+public class ScreenNamingTests : ServicesFixture
 {
-    private readonly StartedServices _services = new();
-
-    [TearDown]
-    public Task StopServices() => _services.StopAll();
-
     [TestCase("mac", "mac")]
     [TestCase("mac", "mac:0")]
     [TestCase("mac", "mac:12")]
@@ -73,21 +68,21 @@ public class ScreenNamingTests
         var log = new CapturingLog<InputRouter>(LogLevel.Warning);
         var world = new WorldState();
         var ticks = new SteppableTicks();
-        var bundle = await _services.Start(TransitionTestHelper.CreateService(profile: TransitionTestHelper.ChainConfig, world: world, log: log, getTickCount: ticks.Now));
+        var bundle = await Services.Start(TransitionTestHelper.CreateService(profile: TransitionTestHelper.ChainConfig, world: world, log: log, getTickCount: ticks.Now));
         await TransitionTestHelper.BringHostsOnline(bundle.Relay, ["remote", "remote2"]);
-        bundle.Platform.FireMouseMove(2559, 720);
+        TransitionTestHelper.EnterRemote(bundle.Platform);
         for (var i = 0; i < 30; i++)
             bundle.Platform.FireMouseDelta(100, 0);
-        Assert.That(bundle.Relay.Snapshot().Any(s => s.Kind == MessageKind.EnterScreen && s.Targets.Contains("remote2")), Is.True,
+        Assert.That(bundle.Relay.Sent.Of(MessageKind.EnterScreen, "remote2"), Is.Not.Empty,
             "pre-condition: on remote2");
-        bundle.Relay.ClearSent();
+        bundle.Relay.Sent.Clear();
 
         // remote, earlier in the layout than remote2, claims the screen the cursor is on
         await Advertise(bundle.Relay, "remote", Entry("remote", 0), Entry("remote2", 2560));
         ticks.Advance(20); // past the mouse throttle
         bundle.Platform.FireMouseDelta(-10, 0);
 
-        var sent = bundle.Relay.Snapshot();
+        var sent = bundle.Relay.Sent.Snapshot();
         var peerScreens = await world.GetPeerScreensSnapshot();
         using (Assert.EnterMultipleScope())
         {
@@ -103,7 +98,7 @@ public class ScreenNamingTests
     public async Task RepeatedNameWithinOnePeer_IsDropped_AndTheCursorStillEnters()
     {
         var world = new WorldState();
-        var bundle = await _services.Start(TransitionTestHelper.CreateService(world: world));
+        var bundle = await Services.Start(TransitionTestHelper.CreateService(world: world));
         await bundle.Relay.FirePeersChanged("remote");
         await Advertise(bundle.Relay, "remote", Entry("remote:0", 0), Entry("REMOTE:0", 2560));
 
@@ -122,7 +117,7 @@ public class ScreenNamingTests
     public async Task OnlyForeignNames_AreHandledLikeNoScreens_KeepingWhatThePeerHad()
     {
         var world = new WorldState();
-        var bundle = await _services.Start(TransitionTestHelper.CreateService(world: world));
+        var bundle = await Services.Start(TransitionTestHelper.CreateService(world: world));
         await TransitionTestHelper.BringHostOnline(bundle.Relay, "remote");
 
         await Advertise(bundle.Relay, "remote", Entry("home:0", 0));

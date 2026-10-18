@@ -9,7 +9,7 @@ public class MacSpecialKeyMapTests
     [Test]
     public void NoDuplicateVirtualKeyCodes()
     {
-        var map = MacSpecialKeyMap.Instance.All;
+        var map = MacSpecialKeyMap.Instance.Entries.ToList();
         using (Assert.EnterMultipleScope())
         {
             Assert.That(map, Is.Not.Empty);

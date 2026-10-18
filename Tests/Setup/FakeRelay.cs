@@ -11,18 +11,10 @@ public sealed class FakeRelay : NullRelaySender
     public override event Func<string, MessageKind, ReadOnlyMemory<byte>, Task>? MessageReceived;
     public override event Func<Task>? Disconnected;
 
-    private readonly SentSignals _signals = new();
+    // everything sent through this relay
+    public SentSignals Sent { get; } = new();
 
-    public override void Send(string[] targetHosts, byte[] payload) => _signals.Record(targetHosts, payload);
-
-    public List<SentMessage> Snapshot() => _signals.Snapshot();
-    public void ClearSent() => _signals.Clear();
-
-    // the messages of one kind sent so far, decoded, optionally only those sent to a host
-    public List<T> Sent<T>(MessageKind kind, string? host = null) => _signals.Sent<T>(kind, host);
-
-    // completes once a message of this kind has been sent, for a sender working on its own thread
-    public Task WaitForSent(MessageKind kind) => _signals.WaitFor(kind);
+    public override void Send(string[] targetHosts, byte[] payload) => Sent.Record(targetHosts, payload);
 
     public async Task FirePeersChanged(params string[] hosts)
     {

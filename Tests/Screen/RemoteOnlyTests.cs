@@ -1,4 +1,3 @@
-using Hydra.Keyboard;
 using Hydra.Mouse;
 using Hydra.Relay;
 using Hydra.Screen;
@@ -7,12 +6,11 @@ using Tests.Setup;
 namespace Tests.Screen;
 
 [TestFixture]
-public class RemoteOnlyTests
+public class RemoteOnlyTests : ServicesFixture
 {
     private FakePlatform _platform = null!;
     private FakeRelay _relay = null!;
     private readonly SteppableTicks _ticks = new();
-    private readonly StartedServices _services = new();
     // a lone screen is named after its host; a second one renames it to host:0
     private static readonly ScreenRect Home = new("pi", "pi", 0, 0, 2560, 1440, IsLocal: true);
     // small enough that the default park point (1280, 720) is off it
@@ -22,19 +20,16 @@ public class RemoteOnlyTests
         new([.. screens], [.. screens.Select(s => new ScreenInfoEntry(s.Name, s.X, s.Y, s.Width, s.Height, 1.0m))]);
 
     [SetUp]
-    public async Task SetUp() => (_platform, _relay, _) = await _services.Start(TransitionTestHelper.CreateRemoteOnlyService(getTickCount: _ticks.Now));
+    public async Task SetUp() => (_platform, _relay, _) = await Services.Start(TransitionTestHelper.CreateRemoteOnlyService(getTickCount: _ticks.Now));
 
     // replaces the router SetUp started
     private async Task Restart(TestServiceBundle bundle)
     {
-        await _services.StopAll();
-        (_platform, _relay, _) = await _services.Start(bundle);
+        await Services.StopAll();
+        (_platform, _relay, _) = await Services.Start(bundle);
     }
 
     private Task RestartWith(FakeScreenDetector screens) => Restart(TransitionTestHelper.CreateRemoteOnlyService(getTickCount: _ticks.Now, screens: screens));
-
-    [TearDown]
-    public Task TearDown() => _services.StopAll();
 
     // -- auto-entry --
 
@@ -153,11 +148,11 @@ public class RemoteOnlyTests
     public async Task LockHotkey_RelockWhileAButtonIsHeld_StaysLocalUntilItsRelease()
     {
         await TransitionTestHelper.BringHostOnline(_relay, "mac");
-        _platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyDown, 'l', KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Super));
+        _platform.PressHotkey('l');
         Assert.That(_platform.IsOnVirtualScreen, Is.False, "pre-condition: unlocked");
         _platform.AnyMouseButtonHeld = true;
 
-        _platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyDown, 'l', KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Super));
+        _platform.PressHotkey('l');
         var whileHeld = _platform.IsOnVirtualScreen;
         _platform.AnyMouseButtonHeld = false;
         _platform.FireMouseButton(new MouseButtonEvent(MouseButton.Left, false));
@@ -183,7 +178,7 @@ public class RemoteOnlyTests
     {
         await TransitionTestHelper.BringHostOnline(_relay, "mac");
 
-        var enters = _relay.Snapshot().Where(s => s.Kind == MessageKind.EnterScreen).ToList();
+        var enters = _relay.Sent.Of(MessageKind.EnterScreen);
         Assert.That(enters, Is.Not.Empty, "should send EnterScreen on auto-entry");
         Assert.That(enters[0].Targets, Contains.Item("mac"));
     }
@@ -196,11 +191,11 @@ public class RemoteOnlyTests
         await TransitionTestHelper.BringHostOnline(_relay, "mac");
         Assert.That(_platform.IsOnVirtualScreen, Is.True);
 
-        _relay.ClearSent();
+        _relay.Sent.Clear();
         _ticks.Advance(20); // exceed throttle interval
         _platform.FireMouseDelta(10, 5);
 
-        var moves = _relay.Snapshot().Where(s => s.Kind is MessageKind.MouseMove or MessageKind.MouseMoveDelta).ToList();
+        var moves = _relay.Sent.Snapshot().Where(s => s.Kind is MessageKind.MouseMove or MessageKind.MouseMoveDelta).ToList();
         Assert.That(moves, Is.Not.Empty, "delta should produce a mouse send");
     }
 
@@ -210,14 +205,13 @@ public class RemoteOnlyTests
         await TransitionTestHelper.BringHostOnline(_relay, "mac");
 
         // unlock — cursor leaves virtual screen
-        _platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyDown, 'l',
-            KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Super));
+        _platform.PressHotkey('l');
         Assert.That(_platform.IsOnVirtualScreen, Is.False, "pre-condition: not on virtual screen");
 
-        _relay.ClearSent();
+        _relay.Sent.Clear();
         _platform.FireMouseDelta(100, 0);
 
-        var moves = _relay.Snapshot().Where(s => s.Kind is MessageKind.MouseMove or MessageKind.MouseMoveDelta).ToList();
+        var moves = _relay.Sent.Snapshot().Where(s => s.Kind is MessageKind.MouseMove or MessageKind.MouseMoveDelta).ToList();
         Assert.That(moves, Is.Empty, "delta should be ignored when not on virtual screen");
     }
 
@@ -230,8 +224,7 @@ public class RemoteOnlyTests
         Assert.That(_platform.IsOnVirtualScreen, Is.True, "pre-condition: on virtual screen");
 
         _platform.ShowCursorCalled = false;
-        _platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyDown, 'l',
-            KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Super));
+        _platform.PressHotkey('l');
 
         using (Assert.EnterMultipleScope())
         {
@@ -246,8 +239,7 @@ public class RemoteOnlyTests
         await TransitionTestHelper.BringHostOnline(_relay, "mac");
         _platform.Calls.Clear();
 
-        _platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyDown, 'l',
-            KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Super));
+        _platform.PressHotkey('l');
 
         Assert.That(_platform.Calls.Where(c => c is "show" or "flag:False" or "warp"), Is.EqualTo(["show", "flag:False"]));
     }
@@ -258,14 +250,12 @@ public class RemoteOnlyTests
         await TransitionTestHelper.BringHostOnline(_relay, "mac");
 
         // unlock
-        _platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyDown, 'l',
-            KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Super));
+        _platform.PressHotkey('l');
         Assert.That(_platform.IsOnVirtualScreen, Is.False, "pre-condition: unlocked");
 
         // relock
         _platform.HideCursorCalled = false;
-        _platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyDown, 'l',
-            KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Super));
+        _platform.PressHotkey('l');
 
         using (Assert.EnterMultipleScope())
         {
@@ -278,12 +268,11 @@ public class RemoteOnlyTests
     public async Task LockHotkey_SendsLeaveScreen_OnUnlock()
     {
         await TransitionTestHelper.BringHostOnline(_relay, "mac");
-        _relay.ClearSent();
+        _relay.Sent.Clear();
 
-        _platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyDown, 'l',
-            KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Super));
+        _platform.PressHotkey('l');
 
-        var leaves = _relay.Snapshot().Where(s => s.Kind == MessageKind.LeaveScreen).ToList();
+        var leaves = _relay.Sent.Of(MessageKind.LeaveScreen);
         Assert.That(leaves, Is.Not.Empty, "should send LeaveScreen on unlock");
     }
 
@@ -328,8 +317,7 @@ public class RemoteOnlyTests
         await TransitionTestHelper.BringHostOnline(_relay, "mac");
 
         // unlock before disconnect
-        _platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyDown, 'l',
-            KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Super));
+        _platform.PressHotkey('l');
         await _relay.FireDisconnected();
 
         _platform.HideCursorCalled = false;
@@ -348,13 +336,13 @@ public class RemoteOnlyTests
         await TransitionTestHelper.BringHostsOnline(_relay, ["mac", "win"]);
         Assert.That(_platform.IsOnVirtualScreen, Is.True, "pre-condition: on mac");
 
-        _relay.ClearSent();
+        _relay.Sent.Clear();
 
         // push delta far enough right to hit the edge of mac (2560 wide) and cross to win
         for (var i = 0; i < 30; i++)
             _platform.FireMouseDelta(100, 0);
 
-        var enters = _relay.Snapshot().Where(s => s.Kind == MessageKind.EnterScreen).ToList();
+        var enters = _relay.Sent.Of(MessageKind.EnterScreen);
         Assert.That(enters.Any(e => e.Targets.Contains("win")), Is.True, "should send EnterScreen to 'win' after crossing edge");
     }
 
@@ -364,22 +352,21 @@ public class RemoteOnlyTests
         await Restart(TransitionTestHelper.CreateRemoteOnlyService(TransitionTestHelper.RemoteOnlyPairConfig));
 
         await TransitionTestHelper.BringHostsOnline(_relay, ["mac", "win"]);
-        _relay.ClearSent();
+        _relay.Sent.Clear();
 
         for (var i = 0; i < 30; i++)
             _platform.FireMouseDelta(100, 0);
 
-        var leaves = _relay.Snapshot().Where(s => s.Kind == MessageKind.LeaveScreen && s.Targets.Contains("mac")).ToList();
+        var leaves = _relay.Sent.Of(MessageKind.LeaveScreen, "mac");
         Assert.That(leaves, Is.Not.Empty, "should send LeaveScreen to 'mac' when crossing to 'win'");
     }
 
     // -- startup --
 
     [Test]
-    public void StartAsync_RemoteOnly_NoLocalHostEntry_StartsWithoutError()
+    public void StartAsync_RemoteOnly_NoLocalHostEntry_StaysLocalUntilARemoteReports()
     {
         // config has no entry for "pi" in hosts — this is valid for remote-only
-        Assert.That(_platform.IsAccessibilityTrusted(), Is.True, "sanity: fake platform is trusted");
-        // the fact that SetUp completed without error is the main assertion
+        Assert.That(_platform.IsOnVirtualScreen, Is.False, "nothing to enter until a remote reports its screens");
     }
 }

@@ -1,76 +1,39 @@
-using System.Runtime.InteropServices;
-
 namespace Hydra.Platform.Windows;
 
-// topmost window that covers the entire virtual desktop when active on a virtual screen.
+// topmost window, centred on the primary screen, shown while the cursor is on a virtual screen.
 // steals foreground focus so other windows stop receiving hover events.
 // handles WM_SETCURSOR to hide the cursor (true invisible, not 1x1 blank replacement).
 // must only be called from the thread that owns the message pump (HydraHookPump).
 internal sealed class WindowsShieldWindow
 {
-    private const string ShieldClassName = "HydraShield";
-    private nint _hwnd;
+    private Win32Window? _window;
     private nint _savedForeground;
-    private WndProc? _wndProc; // prevent GC while window exists
     private nint _debugBrush;
     private bool _debugShield;
     private readonly WindowsCursorSnapshot _cursor = new();
 
+    private nint Hwnd => _window?.Handle ?? nint.Zero;
+
+    // throws Win32Exception if the window cannot be made
     internal void Create(bool debugShield)
     {
         _debugShield = debugShield;
-        // reuse a single delegate across Create/Destroy cycles — if a class registration ever lingers
-        // (UnregisterClass failed) the class still points at this live, field-referenced delegate
-        _wndProc ??= WndProcImpl;
+        if (debugShield)
+            _debugBrush = NativeMethods.CreateSolidBrush(0x000000FF); // red (BGR)
 
-        var hInstance = NativeMethods.GetModuleHandleW(nint.Zero);
-        var className = Marshal.StringToHGlobalUni(ShieldClassName);
-        try
-        {
-            if (debugShield)
-                _debugBrush = NativeMethods.CreateSolidBrush(0x000000FF); // red (BGR)
+        var exStyle = NativeMethods.WS_EX_TOOLWINDOW | NativeMethods.WS_EX_TOPMOST;
+        if (debugShield) exStyle |= NativeMethods.WS_EX_LAYERED;
 
-            var wc = new NativeMethods.WNDCLASSEXW
-            {
-                cbSize = (uint)Marshal.SizeOf<NativeMethods.WNDCLASSEXW>(),
-                lpfnWndProc = Marshal.GetFunctionPointerForDelegate(_wndProc),
-                hInstance = hInstance,
-                hbrBackground = _debugBrush,
-                lpszClassName = className,
-            };
-            // a leftover registration from a prior Create (if Destroy's UnregisterClass didn't run) is
-            // fine — proceed and create the window from the class name. only a genuine failure bails.
-            var atom = NativeMethods.RegisterClassExW(in wc);
-            if (atom == 0 && Marshal.GetLastWin32Error() != NativeMethods.ERROR_CLASS_ALREADY_EXISTS)
-                return;
+        // start hidden, not disabled: a disabled window can't be activated or set foreground
+        _window = new Win32Window("HydraShield", WndProcImpl, NativeMethods.WS_POPUP, exStyle, background: _debugBrush);
 
-            var exStyle = NativeMethods.WS_EX_TOOLWINDOW | NativeMethods.WS_EX_TOPMOST;
-            if (debugShield) exStyle |= NativeMethods.WS_EX_LAYERED;
-
-            // start hidden, no WS_DISABLED — disabled windows can't be activated/set foreground.
-            // use the class NAME (not the atom) so this works whether the class was just registered
-            // or already existed from a prior instance.
-            _hwnd = NativeMethods.CreateWindowExW(
-                exStyle,
-                className, nint.Zero,
-                NativeMethods.WS_POPUP,
-                0, 0, 1, 1,
-                nint.Zero, nint.Zero, hInstance, nint.Zero);
-
-            if (_hwnd == nint.Zero) return;
-
-            if (debugShield)
-                NativeMethods.SetLayeredWindowAttributes(_hwnd, 0, 128, NativeMethods.LWA_ALPHA);
-        }
-        finally
-        {
-            Marshal.FreeHGlobal(className);
-        }
+        if (debugShield)
+            NativeMethods.SetLayeredWindowAttributes(Hwnd, 0, 128, NativeMethods.LWA_ALPHA);
     }
 
     internal void Show()
     {
-        if (_hwnd == nint.Zero) return;
+        if (Hwnd == nint.Zero) return;
 
         // don't show while a fullscreen app (e.g. a game) is active — avoid anti-cheat detection
         _savedForeground = NativeMethods.GetForegroundWindow();
@@ -84,10 +47,10 @@ internal sealed class WindowsShieldWindow
         var x = (sw - w) / 2;
         var y = (sh - h) / 2;
 
-        NativeMethods.SetWindowPos(_hwnd, NativeMethods.HWND_TOPMOST, x, y, w, h, NativeMethods.SWP_SHOWWINDOW);
+        NativeMethods.SetWindowPos(Hwnd, NativeMethods.HWND_TOPMOST, x, y, w, h, NativeMethods.SWP_SHOWWINDOW);
 
-        NativeMethods.SetActiveWindow(_hwnd);
-        NativeMethods.SetForegroundWindow(_hwnd);
+        NativeMethods.SetActiveWindow(Hwnd);
+        NativeMethods.SetForegroundWindow(Hwnd);
     }
 
     // called inline from HideCursor()/ShowCursor() — SetSystemCursor is system-wide, safe inside a hook callback
@@ -103,12 +66,10 @@ internal sealed class WindowsShieldWindow
 
     internal void Hide()
     {
-        if (_hwnd == nint.Zero) return;
+        if (Hwnd == nint.Zero) return;
 
-        _cursor.Show();
-
-        NativeMethods.ShowWindow(_hwnd, NativeMethods.SW_HIDE);
-        NativeMethods.SetWindowPos(_hwnd, NativeMethods.HWND_BOTTOM, 0, 0, 0, 0,
+        NativeMethods.ShowWindow(Hwnd, NativeMethods.SW_HIDE);
+        NativeMethods.SetWindowPos(Hwnd, NativeMethods.HWND_BOTTOM, 0, 0, 0, 0,
             NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_HIDEWINDOW);
 
         if (_savedForeground != nint.Zero)
@@ -119,16 +80,9 @@ internal sealed class WindowsShieldWindow
     internal void Destroy()
     {
         _cursor.Dispose();
-        if (_hwnd != nint.Zero) { NativeMethods.DestroyWindow(_hwnd); _hwnd = nint.Zero; }
+        _window?.Dispose();
+        _window = null;
         if (_debugBrush != nint.Zero) { NativeMethods.DeleteObject(_debugBrush); _debugBrush = nint.Zero; }
-
-        // unregister the window class — otherwise a later Create() (e.g. after a desktop switch) would
-        // fail with ERROR_CLASS_ALREADY_EXISTS and the shield would silently never appear again.
-        // must happen after DestroyWindow: a class can't be unregistered while it still has live windows.
-        var hInstance = NativeMethods.GetModuleHandleW(nint.Zero);
-        var className = Marshal.StringToHGlobalUni(ShieldClassName);
-        try { NativeMethods.UnregisterClassW(className, hInstance); }
-        finally { Marshal.FreeHGlobal(className); }
     }
 
     // foreground window covers the full primary screen — likely a fullscreen game or exclusive app

@@ -36,7 +36,7 @@ public sealed class FakePlatform : IPlatformInput, ICursorHider
 
     public int WarpY { get; private set; }
 
-    // set to InputRouter.FlushAsync to synchronize channel consumer after each Fire call
+    // set to InputRouter.Flush to synchronize channel consumer after each Fire call
     public Func<Task>? AfterFireCallback { get; set; }
 
     private void Flush() => AfterFireCallback?.Invoke().GetAwaiter().GetResult();
@@ -47,18 +47,8 @@ public sealed class FakePlatform : IPlatformInput, ICursorHider
     public void FireMouseButton(MouseButtonEvent e) { _onMouseButton?.Invoke(e); Flush(); }
     public void FireMouseScroll(MouseScrollEvent e) { _onMouseScroll?.Invoke(e); Flush(); }
 
-    public void Reset()
-    {
-        IsOnVirtualScreen = false;
-        HideCursorCalled = false;
-        ShowCursorCalled = false;
-        WarpX = 2560 / 2;
-        WarpY = 1440 / 2;
-        Calls.Clear();
-    }
-
-    public static List<DetectedScreen> GetAllScreens() => [new DetectedScreen(0, 0, 2560, 1440, null, null, null)];
-    public bool IsAccessibilityTrusted() => true;
+    // the hotkey chord with this letter, pressed (or, with up, released)
+    public void PressHotkey(char ch, bool up = false) => FireKeyEvent(KeyEvent.Char(up ? KeyEventType.KeyUp : KeyEventType.KeyDown, ch, HotkeyChord.Modifiers));
 
     public Task StartEventTap(
         Action<double, double> onMouseMove,

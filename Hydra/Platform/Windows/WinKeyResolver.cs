@@ -65,7 +65,7 @@ internal sealed class WinKeyResolver
             _injectedLCtrlPending = false;
             var prefix = FlushDeferredLCtrl();
             var up = KeyResolver.ReplayKeyUp(_keyDownId, TrackingVk(info), mods);
-            return Events(prefix, up);
+            return KeyResolver.Concat([prefix], [up]);
         }
 
         // AltGr detection: RMenu preceded by a same-timestamp or LLKHF_INJECTED synthetic LCtrl
@@ -84,7 +84,7 @@ internal sealed class WinKeyResolver
                 var deadFlush = FlushPendingDeadKey();
                 _keyDownId[vk] = new CharClassification(null, SpecialKey.AltGr);
                 var altGrEvent = KeyEvent.Special(KeyEventType.KeyDown, SpecialKey.AltGr, altGrMods);
-                return deadFlush is not null ? [.. deadFlush, altGrEvent] : [altGrEvent];
+                return KeyResolver.Concat(deadFlush, [altGrEvent]);
             }
         }
         else
@@ -106,29 +106,29 @@ internal sealed class WinKeyResolver
         {
             var kpKey = (SpecialKey)((uint)SpecialKey.KP_0 + (vk - WinVirtualKey.Numpad0));
             if (_keyDownId.ContainsKey(vk))
-                return Combine(flushed, null, KeyEvent.Special(KeyEventType.KeyDown, kpKey, mods) with { IsRepeat = true });
+                return KeyResolver.Concat([flushed, KeyEvent.Special(KeyEventType.KeyDown, kpKey, mods) with { IsRepeat = true }]);
             _keyDownId[vk] = new CharClassification(null, kpKey);
-            return Combine(flushed, FlushPendingDeadKey(), KeyEvent.Special(KeyEventType.KeyDown, kpKey, mods));
+            return KeyResolver.Concat([flushed], FlushPendingDeadKey(), [KeyEvent.Special(KeyEventType.KeyDown, kpKey, mods)]);
         }
         // numpad decimal/separator: use ToUnicodeEx for locale-correct char ('.' on US, ',' on European layouts)
         if (vk == WinVirtualKey.Decimal)
         {
             if (_keyDownId.ContainsKey(vk))
-                return Combine(flushed, null, ResolveRepeatChar(vk, info.scanCode, info.flags, mods));
+                return KeyResolver.Concat([flushed], ResolveRepeatChar(vk, info.scanCode, info.flags, mods));
             var decEvent = ResolveCharacter(vk, info.scanCode, info.flags, mods);
             // always store (even sentinel) so auto-repeat is suppressed on subsequent events
             _keyDownId[vk] = decEvent is not null
                 ? new CharClassification(decEvent[0].Character, decEvent[0].Key)
                 : new CharClassification(null, null);
-            return Combine(flushed, FlushPendingDeadKey(), decEvent);
+            return KeyResolver.Concat([flushed], FlushPendingDeadKey(), decEvent);
         }
 
         if (IsKpEnter(info))
         {
             if (_keyDownId.ContainsKey(KpEnterTrackingVk))
-                return Combine(flushed, null, KeyEvent.Special(KeyEventType.KeyDown, SpecialKey.KP_Enter, mods) with { IsRepeat = true });
+                return KeyResolver.Concat([flushed, KeyEvent.Special(KeyEventType.KeyDown, SpecialKey.KP_Enter, mods) with { IsRepeat = true }]);
             _keyDownId[KpEnterTrackingVk] = new CharClassification(null, SpecialKey.KP_Enter);
-            return Combine(flushed, FlushPendingDeadKey(), KeyEvent.Special(KeyEventType.KeyDown, SpecialKey.KP_Enter, mods));
+            return KeyResolver.Concat([flushed], FlushPendingDeadKey(), [KeyEvent.Special(KeyEventType.KeyDown, SpecialKey.KP_Enter, mods)]);
         }
 
         if (WinSpecialKeyMap.Instance.TryGet((ulong)vk, out var specialKey))
@@ -140,8 +140,8 @@ internal sealed class WinKeyResolver
             if (_keyDownId.TryGetValue(vk, out var tracked) && tracked.Key == specialKey)
             {
                 // modifiers don't repeat-type; other held specials (arrows, F-keys) forward a repeat
-                if (specialKey.IsModifier()) return Events(flushed, null);
-                return Combine(flushed, null, KeyEvent.Special(KeyEventType.KeyDown, specialKey, mods) with { IsRepeat = true });
+                if (specialKey.IsModifier()) return KeyResolver.Concat([flushed]);
+                return KeyResolver.Concat([flushed, KeyEvent.Special(KeyEventType.KeyDown, specialKey, mods) with { IsRepeat = true }]);
             }
             // modifier keys are transparent to dead key composition (Shift while dead key pending stays armed).
             // non-modifier special keys (Tab, Escape, arrows, F-keys, etc.) abort composition: flush spacing form.
@@ -151,16 +151,16 @@ internal sealed class WinKeyResolver
             {
                 // defer LCtrl — may be AltGr's synthetic key; decided on next RMenu event
                 _deferredLCtrl ??= (vk, mods, info.time);
-                return Combine(flushed, flushedDead, (KeyEvent?)null);
+                return KeyResolver.Concat([flushed], flushedDead);
             }
 
             _keyDownId[vk] = new CharClassification(null, specialKey);
-            return Combine(flushed, flushedDead, KeyEvent.Special(KeyEventType.KeyDown, specialKey, mods));
+            return KeyResolver.Concat([flushed], flushedDead, [KeyEvent.Special(KeyEventType.KeyDown, specialKey, mods)]);
         }
 
         // character key auto-repeat: re-resolve with current modifier state and forward as a repeat
         if (_keyDownId.ContainsKey(vk))
-            return Combine(flushed, null, ResolveRepeatChar(vk, info.scanCode, info.flags, mods));
+            return KeyResolver.Concat([flushed], ResolveRepeatChar(vk, info.scanCode, info.flags, mods));
 
         // dead key pending + Ctrl/Super shortcut: flush spacing form first, then send the shortcut.
         // without this, dead_grave + Ctrl+A would compose to 'à' with Ctrl — wrong on every slave.
@@ -170,7 +170,7 @@ internal sealed class WinKeyResolver
             ? FlushPendingDeadKey() : null;
 
         var charEvent = ResolveCharacter(vk, info.scanCode, info.flags, mods);
-        return Combine(flushed, shortcutDeadFlush, charEvent);
+        return KeyResolver.Concat([flushed], shortcutDeadFlush, charEvent);
     }
 
     private void UpdateKeyState(int vk, uint flags, bool isKeyUp)
@@ -392,57 +392,11 @@ internal sealed class WinKeyResolver
         return KeyEvent.Special(KeyEventType.KeyDown, SpecialKey.Control_L, def.Mods) with { PhysicalKey = def.Vk };
     }
 
-    // emit a pending dead key as its spacing form before a non-composing key.
-    // dead keys with no spacing form (e.g. dead_belowdot) are dropped — never emit the combining char.
-    // modifiers are always None: the spacing form belongs to the dead key press, not the aborting key.
-    // returns [down, up] pair so the slave does not get a stuck key from the synthetic press.
+    // emit a pending dead key as its spacing form before a non-composing key
     private KeyEvent[]? FlushPendingDeadKey()
     {
-        if (_pendingDeadKey == '\0') return null;
-        var spacing = _pendingDeadSpacing;
-        _pendingDeadKey = '\0';
-        _pendingDeadSpacing = '\0';
         _pendingDeadKeyVk = 0;
-        if (spacing == '\0') return null;  // no spacing form — drop silently
-        return [
-            KeyEvent.Char(KeyEventType.KeyDown, spacing, KeyModifiers.None),
-            KeyEvent.Char(KeyEventType.KeyUp, spacing, KeyModifiers.None),
-        ];
-    }
-
-    // combine up to two nullable events into an array (returns null when both are null)
-    private static KeyEvent[]? Events(KeyEvent? a, KeyEvent? b)
-    {
-        if (a is null && b is null) return null;
-        if (a is null) return [b!];
-        if (b is null) return [a];
-        return [a, b];
-    }
-
-    // combine a single prefix event, a dead-key flush pair, and a single main event
-    private static KeyEvent[]? Combine(KeyEvent? a, KeyEvent[]? flush, KeyEvent? c)
-    {
-        var count = (a is not null ? 1 : 0) + (flush?.Length ?? 0) + (c is not null ? 1 : 0);
-        if (count == 0) return null;
-        var result = new KeyEvent[count];
-        var i = 0;
-        if (a is not null) result[i++] = a;
-        if (flush is not null) foreach (var e in flush) result[i++] = e;
-        if (c is not null) result[i] = c;
-        return result;
-    }
-
-    // combine a single prefix event, a dead-key flush pair, and an array of main events
-    private static KeyEvent[]? Combine(KeyEvent? a, KeyEvent[]? flush, KeyEvent[]? c)
-    {
-        var count = (a is not null ? 1 : 0) + (flush?.Length ?? 0) + (c?.Length ?? 0);
-        if (count == 0) return null;
-        var result = new KeyEvent[count];
-        var i = 0;
-        if (a is not null) result[i++] = a;
-        if (flush is not null) foreach (var e in flush) result[i++] = e;
-        if (c is not null) foreach (var e in c) result[i++] = e;
-        return result;
+        return KeyResolver.TakeDeadKeySpacing(ref _pendingDeadKey, ref _pendingDeadSpacing);
     }
 
     // gets the keyboard layout associated with the foreground window's thread.

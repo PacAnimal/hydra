@@ -9,7 +9,6 @@ public sealed class WindowsScreenSaverSync(ILogger<WindowsScreenSaverSync> log) 
 {
     private readonly ILogger<WindowsScreenSaverSync> _log = log;
     private StaMessageLoop? _lockLoop;
-    private WndProc? _lockWndProc;  // keep-alive to prevent GC
     private bool _lockLoopStarted;
 
     protected override Task Execute(CancellationToken cancel)
@@ -26,70 +25,43 @@ public sealed class WindowsScreenSaverSync(ILogger<WindowsScreenSaverSync> log) 
     {
         var loop = Interlocked.Exchange(ref _lockLoop, null);
         loop?.Dispose();
-        _lockWndProc = null;
         return Task.CompletedTask;
     }
 
     private void StartLockWatcher()
     {
-        var hwnd = nint.Zero;
-        var className = Marshal.StringToHGlobalUni("HydraLockWatcher");
-
-        _lockWndProc = (h, msg, wParam, lParam) =>
-        {
-            if (msg == NativeMethods.WM_WTSSESSION_CHANGE && wParam == NativeMethods.WTS_SESSION_LOCK)
-                OnScreenLocked();
-            else if (msg == NativeMethods.WM_WTSSESSION_CHANGE && wParam == NativeMethods.WTS_SESSION_UNLOCK)
-                OnScreenUnlocked();
-            return NativeMethods.DefWindowProcW(h, msg, wParam, lParam);
-        };
-
+        Win32Window? window = null;
         try
         {
             _lockLoop = new StaMessageLoop("lock-watcher",
                 init: () =>
                 {
-                    var hInst = NativeMethods.GetModuleHandleW(nint.Zero);
-                    var wc = new NativeMethods.WNDCLASSEXW
-                    {
-                        cbSize = (uint)Marshal.SizeOf<NativeMethods.WNDCLASSEXW>(),
-                        lpfnWndProc = Marshal.GetFunctionPointerForDelegate(_lockWndProc),
-                        hInstance = hInst,
-                        lpszClassName = className,
-                    };
-                    var atom = NativeMethods.RegisterClassExW(in wc);
-                    if (atom == 0)
-                    {
-                        _log.LogWarning("RegisterClassExW failed for lock watcher (error {Error})", Marshal.GetLastWin32Error());
-                        return;
-                    }
-                    hwnd = NativeMethods.CreateWindowExW(0, atom, nint.Zero, 0,
-                        0, 0, 0, 0, NativeMethods.HWND_MESSAGE, nint.Zero, hInst, nint.Zero);
-                    if (hwnd == nint.Zero)
-                    {
-                        _log.LogWarning("CreateWindowExW failed for lock watcher (error {Error})", Marshal.GetLastWin32Error());
-                        return;
-                    }
-                    if (!NativeMethods.WTSRegisterSessionNotification(hwnd, NativeMethods.NOTIFY_FOR_THIS_SESSION))
+                    window = Win32Window.MessageOnly("HydraLockWatcher", LockWndProc);
+                    if (!NativeMethods.WTSRegisterSessionNotification(window.Handle, NativeMethods.NOTIFY_FOR_THIS_SESSION))
                         _log.LogWarning("WTSRegisterSessionNotification failed (error {Error})", Marshal.GetLastWin32Error());
                     else
                         _log.LogInformation("Watching for session lock notifications");
                 },
                 onExit: () =>
                 {
-                    if (hwnd != nint.Zero)
-                    {
-                        NativeMethods.WTSUnRegisterSessionNotification(hwnd);
-                        NativeMethods.DestroyWindow(hwnd);
-                    }
-                    Marshal.FreeHGlobal(className);
+                    if (window == null) return;
+                    NativeMethods.WTSUnRegisterSessionNotification(window.Handle);
+                    window.Dispose();
                 });
         }
         catch (Exception ex)
         {
             _log.LogWarning(ex, "Failed to start lock watcher");
-            Marshal.FreeHGlobal(className);
         }
+    }
+
+    private nint LockWndProc(nint hWnd, uint msg, nint wParam, nint lParam)
+    {
+        if (msg == NativeMethods.WM_WTSSESSION_CHANGE && wParam == NativeMethods.WTS_SESSION_LOCK)
+            OnScreenLocked();
+        else if (msg == NativeMethods.WM_WTSSESSION_CHANGE && wParam == NativeMethods.WTS_SESSION_UNLOCK)
+            OnScreenUnlocked();
+        return NativeMethods.DefWindowProcW(hWnd, msg, wParam, lParam);
     }
 
     public override void LockScreen()
@@ -122,11 +94,7 @@ public sealed class WindowsScreenSaverSync(ILogger<WindowsScreenSaverSync> log) 
         // SetThreadExecutionState doesn't update GetLastInputInfo() which the screensaver polls; SendInput does.
         // use a keyboard event (VK_NONAME key-up) rather than a mouse move so apps that hide the cursor
         // during typing (e.g. WezTerm) don't see it flash back.
-        unsafe
-        {
-            var input = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = NativeMethods.VK_NONAME, dwFlags = NativeMethods.KEYEVENTF_KEYUP } };
-            _ = NativeMethods.SendInput(1, &input, sizeof(INPUT));
-        }
+        _ = InputSender.Key(NativeMethods.VK_NONAME, NativeMethods.KEYEVENTF_KEYUP);
     }
 
     protected override bool IsScreensaverOn()

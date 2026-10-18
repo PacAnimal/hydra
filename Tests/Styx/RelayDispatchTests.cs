@@ -110,7 +110,7 @@ public class RelayDispatchTests : StyxFixtureBase
         await using var pair = await ConnectedPair();
         var (sender, receiver) = pair;
 
-        _sends.Hold(async invocation => await HostOf(invocation) == "sender");
+        _sends.Hold(invocation => HostOf(invocation) == "sender");
         sender.SendKeyEvent(["receiver"], TestMessages.KeyMessage(1));
         await _sends.Held.Next("the sender's frame to be parked in the hub");
 
@@ -159,7 +159,7 @@ public class RelayDispatchTests : StyxFixtureBase
     [Test]
     public async Task ALoginWaitingItsTurn_EndsWhenItsConnectionDrops()
     {
-        var client = new TestStyxClient();
+        await using var client = new TestStyxClient();
         await client.ConnectRaw(Factory, global::Styx.Constants.ParallelRelayPath);
         var network = StyxToken.NewNetworkId();
 
@@ -170,14 +170,14 @@ public class RelayDispatchTests : StyxFixtureBase
         await _logins.Started.Next("the first login to start");
         await _logins.Started.Next("the second login to start, and wait its turn");
 
-        await client.DisposeAsync();
+        await client.Drop();
         await _logins.Finished.Next("one login to end with its connection");
         await _logins.Finished.Next("the other login to end with its connection");
 
-        // the client gave up on both when it stopped; WhenAny observes that without rethrowing it
-        await Task.WhenAny(Task.WhenAll(first, second)).WaitAsync(Bound);
+        // the client gave up on both when it stopped
         using (Assert.EnterMultipleScope())
         {
+            Assert.That(await Settles(Task.WhenAll(first, second)), Is.True, "the logins never ended");
             Assert.That(Verifier.MostRunning, Is.EqualTo(1));
             Assert.That(first.IsCompletedSuccessfully || second.IsCompletedSuccessfully, Is.False);
         }
@@ -189,8 +189,8 @@ public class RelayDispatchTests : StyxFixtureBase
     private static RelayLogin Login(Guid network, string hostName) =>
         new() { Authorization = StyxTestServer.MintToken(network).ToString(), HostName = hostName };
 
-    private static async ValueTask<string?> HostOf(HubInvocationContext invocation) =>
-        (await invocation.ServiceProvider.GetRequiredService<IClientRegistry>().GetIdentity(invocation.Context.ConnectionId))?.HostName;
+    private static string? HostOf(HubInvocationContext invocation) =>
+        invocation.ServiceProvider.GetRequiredService<IClientRegistry>().GetIdentity(invocation.Context.ConnectionId)?.HostName;
 
     /// <summary>The relay's own verifier behind a gate, counting how many checks run at once.</summary>
     private sealed class HeldVerifier(ITokenVerifier inner) : ITokenVerifier

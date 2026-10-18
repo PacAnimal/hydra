@@ -1,5 +1,4 @@
 using Hydra.Config;
-using Hydra.Keyboard;
 using Hydra.Mouse;
 using Hydra.Relay;
 using Hydra.Screen;
@@ -11,18 +10,13 @@ namespace Tests.Screen;
 // A button pressed on a remote holds the cursor on that host until its up, so the up reaches the host that has its
 // down; whatever ends a visit regardless releases the buttons pressed there first.
 [TestFixture]
-public class HeldButtonTests
+public class HeldButtonTests : ServicesFixture
 {
-    private readonly StartedServices _services = new();
-
-    [TearDown]
-    public Task StopServices() => _services.StopAll();
-
     // 50px per move, inside the absolute path's warp-artifact filter; 120 of them cross two monitors
     private const int Steps = 120, Step = 50;
 
     private Task<TestServiceBundle> Started(IHydraProfile? profile = null, ILogger<InputRouter>? log = null) =>
-        _services.Visiting(TransitionTestHelper.CreateService(profile: profile, log: log), profile is null ? [] : ["remote", "remote2"]);
+        Services.Visiting(TransitionTestHelper.CreateService(profile: profile, log: log), profile is null ? [] : ["remote", "remote2"]);
 
     private static void Press(FakePlatform platform, MouseButton button = MouseButton.Left) =>
         platform.FireMouseButton(new MouseButtonEvent(button, true));
@@ -40,14 +34,14 @@ public class HeldButtonTests
         }
     }
 
-    private static bool Entered(FakeRelay relay, string host) => relay.Sent<EnterScreenMessage>(MessageKind.EnterScreen, host).Count > 0;
+    private static bool Entered(FakeRelay relay, string host) => relay.Sent.Of(MessageKind.EnterScreen, host).Count > 0;
 
-    private static List<MouseButtonMessage> Buttons(FakeRelay relay, string host) => relay.Sent<MouseButtonMessage>(MessageKind.MouseButton, host);
+    private static List<MouseButtonMessage> Buttons(FakeRelay relay, string host) => relay.Sent.Of<MouseButtonMessage>(MessageKind.MouseButton, host);
 
     // the ups sent to a host the cursor left, and whether every one of them went before its LeaveScreen
     private static void AssertReleasedBeforeLeaving(FakeRelay relay, string host, MouseButton button)
     {
-        var sent = relay.Snapshot().Where(s => s.Targets.Contains(host)).ToList();
+        var sent = relay.Sent.Snapshot().Where(s => s.Targets.Contains(host)).ToList();
         var up = sent.FindIndex(s => s.Kind == MessageKind.MouseButton);
         var leave = sent.FindIndex(s => s.Kind == MessageKind.LeaveScreen);
         using (Assert.EnterMultipleScope())
@@ -84,7 +78,7 @@ public class HeldButtonTests
     {
         var bundle = await Started(TransitionTestHelper.ChainConfig);
         Press(bundle.Platform);
-        bundle.Relay.ClearSent();
+        bundle.Relay.Sent.Clear();
 
         Push(bundle.Platform, delta, 1);
         var whileHeld = Entered(bundle.Relay, "remote2");
@@ -119,18 +113,18 @@ public class HeldButtonTests
                 },
             ],
         });
-        var bundle = await _services.Start(TransitionTestHelper.CreateService(profile: profile));
+        var bundle = await Services.Start(TransitionTestHelper.CreateService(profile: profile));
         await bundle.Relay.FirePeersChanged("remote");
         await TransitionTestHelper.AdvertiseScreens(bundle.Relay, "remote", 2);
-        bundle.Platform.FireMouseMove(2559, 720);
+        TransitionTestHelper.EnterRemote(bundle.Platform);
         Press(bundle.Platform);
-        bundle.Relay.ClearSent();
+        bundle.Relay.Sent.Clear();
 
         // remote:0, then remote:1, then through remote:1's right edge back onto remote:0
         Push(bundle.Platform, delta: true, 1);
 
-        var enters = bundle.Relay.Sent<EnterScreenMessage>(MessageKind.EnterScreen).Select(e => e.Screen);
-        var left = bundle.Relay.Snapshot().Any(s => s.Kind == MessageKind.LeaveScreen);
+        var enters = bundle.Relay.Sent.Of<EnterScreenMessage>(MessageKind.EnterScreen).Select(e => e.Screen);
+        var left = bundle.Relay.Sent.Of(MessageKind.LeaveScreen).Count > 0;
         using (Assert.EnterMultipleScope())
         {
             Assert.That(enters, Is.EqualTo(["remote:1", "remote:0"]), "wraps onto remote:0 with the button held");
@@ -195,7 +189,7 @@ public class HeldButtonTests
         var bundle = await Started(TransitionTestHelper.ChainConfig);
         bundle.Platform.SeesSwallowedButtons = true;
         Press(bundle.Platform);
-        bundle.Relay.ClearSent();
+        bundle.Relay.Sent.Clear();
 
         Push(bundle.Platform, delta: true, 1);
 
@@ -211,13 +205,13 @@ public class HeldButtonTests
     public async Task ReturnByHotkey_ReleasesTheButtonsHeldOnTheHostBeforeLeavingIt()
     {
         // a remote-only master's lock hotkey returns home whatever is held
-        var bundle = await _services.Start(TransitionTestHelper.CreateRemoteOnlyService());
+        var bundle = await Services.Start(TransitionTestHelper.CreateRemoteOnlyService());
         await TransitionTestHelper.BringHostOnline(bundle.Relay, "mac");
         Assert.That(bundle.Platform.IsOnVirtualScreen, Is.True, "pre-condition: on mac");
         Press(bundle.Platform);
-        bundle.Relay.ClearSent();
+        bundle.Relay.Sent.Clear();
 
-        bundle.Platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyDown, 'l', KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Super));
+        bundle.Platform.PressHotkey('l');
 
         var returned = !bundle.Platform.IsOnVirtualScreen;
         Assert.That(returned, Is.True, "pre-condition: returned home");

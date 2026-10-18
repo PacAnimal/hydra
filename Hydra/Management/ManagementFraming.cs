@@ -5,7 +5,7 @@ namespace Hydra.Management;
 
 internal static class ManagementFraming
 {
-    internal static async Task WriteAsync<T>(Stream stream, T value, CancellationToken cancel)
+    internal static async Task Write<T>(Stream stream, T value, CancellationToken cancel)
     {
         var payload = JsonSerializer.SerializeToUtf8Bytes(value, ManagementJson.Options);
         if (payload.Length > ManagementProtocol.MaxMessageBytes)
@@ -17,7 +17,7 @@ internal static class ManagementFraming
         await stream.FlushAsync(cancel);
     }
 
-    internal static async Task<T> ReadAsync<T>(Stream stream, CancellationToken cancel)
+    internal static async Task<T> Read<T>(Stream stream, CancellationToken cancel)
     {
         var header = new byte[4];
         await stream.ReadExactlyAsync(header, cancel);

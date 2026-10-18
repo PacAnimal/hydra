@@ -12,7 +12,7 @@ public class NullRelaySenderTests
         IRelaySender relay = new OverridingRelay();
 
         await relay.SendReliableAsync(["peer"], TestMessages.Move(1));
-        await relay.SuspendConnectionAsync();
+        await relay.SuspendConnection();
         relay.ResumeConnection();
 
         Assert.That(((OverridingRelay)relay).Calls, Is.EqualTo(["reliable", "suspend", "resume"]));
@@ -24,7 +24,7 @@ public class NullRelaySenderTests
         var recording = new OverridingRelay();
         IRelaySender relay = recording;
 
-        await relay.SuspendForSystemSleepAsync(1);
+        await relay.SuspendForSystemSleep(1);
         relay.BeginSystemWake(1);
         relay.CompleteSystemWake(1);
 
@@ -60,7 +60,7 @@ public class NullRelaySenderTests
             return ValueTask.CompletedTask;
         }
 
-        public override ValueTask SuspendConnectionAsync(CancellationToken cancel = default)
+        public override ValueTask SuspendConnection(CancellationToken cancel = default)
         {
             Calls.Add("suspend");
             return ValueTask.CompletedTask;

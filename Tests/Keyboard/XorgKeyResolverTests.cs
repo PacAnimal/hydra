@@ -12,47 +12,30 @@ public class XorgKeyResolverTests
     private const ulong XkDeadBelowdot = 0xFE60; // Combining=U+0323, Spacing='\0' (no spacing form)
     private const ulong XkTab = 0xFF09;  // → SpecialKey.Tab  (non-modifier special)
     private const ulong XkShiftL = 0xFFE1;  // → SpecialKey.Shift_L (modifier — transparent)
+    private const ulong XkMetaL = 0xFFE7;   // MISCELLANY, but no SpecialKey
+    private const ulong XkA = 0x61;
 
-    // -- TakeDeadKeySpacing --
+    // -- KeySymToSpecialKey --
 
     [Test]
-    public void TakeDeadKeySpacing_WithPendingAndSpacingForm_EmitsSpacingEvent()
+    public void KeySymToSpecialKey_MiscellanyKeysyms_MapOnlyToDefinedKeys()
     {
-        var dead = '\u0300';      // combining grave
-        var spacing = '\u0060';   // `
-        var ev = XorgKeyResolver.TakeDeadKeySpacing(ref dead, ref spacing);
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(ev, Is.Not.Null);
-            Assert.That(ev![0]!.Character, Is.EqualTo('`'));
-            Assert.That(ev[0]!.Modifiers, Is.EqualTo(KeyModifiers.None));
-            Assert.That(ev[0]!.Type, Is.EqualTo(KeyEventType.KeyDown));
-            Assert.That(ev[1]!.Type, Is.EqualTo(KeyEventType.KeyUp));
-            Assert.That(dead, Is.EqualTo('\0'));
-            Assert.That(spacing, Is.EqualTo('\0'));
-        }
+        var invented = Enumerable.Range(0xFF00, 0x100)
+            .Select(k => XorgKeyResolver.KeySymToSpecialKey((ulong)k))
+            .Where(k => k.HasValue && !Enum.IsDefined(k.Value));
+        Assert.That(invented, Is.Empty);
     }
 
     [Test]
-    public void TakeDeadKeySpacing_WithNoPendingDead_ReturnsNull()
+    public void FlushDeadKeyBeforeSpecial_UnmappedMiscellanyKeysym_KeepsPendingDeadKey()
     {
-        var dead = '\0';
+        var dead = '\u0300';
         var spacing = '`';
-        var ev = XorgKeyResolver.TakeDeadKeySpacing(ref dead, ref spacing);
-        Assert.That(ev, Is.Null);
-    }
-
-    [Test]
-    public void TakeDeadKeySpacing_WithNoSpacingForm_ReturnsNullAndClearsState()
-    {
-        // dead_belowdot has no spacing form; state must still be cleared
-        var dead = '\u0323';
-        var spacing = '\0';
-        var ev = XorgKeyResolver.TakeDeadKeySpacing(ref dead, ref spacing);
+        var ev = XorgKeyResolver.FlushDeadKeyBeforeSpecial(XkMetaL, ref dead, ref spacing);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(ev, Is.Null);
-            Assert.That(dead, Is.EqualTo('\0'));
+            Assert.That(dead, Is.EqualTo('\u0300'));
         }
     }
 
@@ -67,7 +50,7 @@ public class XorgKeyResolverTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(ev, Is.Not.Null);
-            Assert.That(ev![0]!.Character, Is.EqualTo('`'));
+            Assert.That(ev![0].Character, Is.EqualTo('`'));
             Assert.That(dead, Is.EqualTo('\0'));
         }
     }
@@ -132,17 +115,17 @@ public class XorgKeyResolverTests
         var dead = '\0';
         var spacing = '\0';
         var keyDownId = new Dictionary<uint, CharClassification>();
-        XorgKeyResolver.ResolveKeysym(XkDeadGrave, 1, keyDownId, ref dead, ref spacing, KeyModifiers.None, KeyEventType.KeyDown, trackDeadKey: true);
+        XorgKeyResolver.ResolveKeysym(XkDeadGrave, 1, keyDownId, ref dead, ref spacing, KeyModifiers.None);
         Assert.That(dead, Is.EqualTo('\u0300'));  // grave pending
 
-        var ev = XorgKeyResolver.ResolveKeysym(XkDeadAcute, 2, keyDownId, ref dead, ref spacing, KeyModifiers.None, KeyEventType.KeyDown, trackDeadKey: true);
+        var ev = XorgKeyResolver.ResolveKeysym(XkDeadAcute, 2, keyDownId, ref dead, ref spacing, KeyModifiers.None);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(ev, Is.Not.Null);
-            Assert.That(ev![0]!.Character, Is.EqualTo('\u0060'), "spacing form of dead_grave is backtick (U+0060)");
-            Assert.That(ev[0]!.Modifiers, Is.EqualTo(KeyModifiers.None));
-            Assert.That(ev[0]!.Type, Is.EqualTo(KeyEventType.KeyDown));
-            Assert.That(ev[1]!.Type, Is.EqualTo(KeyEventType.KeyUp));
+            Assert.That(ev![0].Character, Is.EqualTo('\u0060'), "spacing form of dead_grave is backtick (U+0060)");
+            Assert.That(ev[0].Modifiers, Is.EqualTo(KeyModifiers.None));
+            Assert.That(ev[0].Type, Is.EqualTo(KeyEventType.KeyDown));
+            Assert.That(ev[1].Type, Is.EqualTo(KeyEventType.KeyUp));
         }
     }
 
@@ -152,9 +135,9 @@ public class XorgKeyResolverTests
         var dead = '\0';
         var spacing = '\0';
         var keyDownId = new Dictionary<uint, CharClassification>();
-        XorgKeyResolver.ResolveKeysym(XkDeadGrave, 1, keyDownId, ref dead, ref spacing, KeyModifiers.None, KeyEventType.KeyDown, trackDeadKey: true);
+        XorgKeyResolver.ResolveKeysym(XkDeadGrave, 1, keyDownId, ref dead, ref spacing, KeyModifiers.None);
 
-        XorgKeyResolver.ResolveKeysym(XkDeadAcute, 2, keyDownId, ref dead, ref spacing, KeyModifiers.None, KeyEventType.KeyDown, trackDeadKey: true);
+        XorgKeyResolver.ResolveKeysym(XkDeadAcute, 2, keyDownId, ref dead, ref spacing, KeyModifiers.None);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(dead, Is.EqualTo('\u0301'), "acute combining char must now be pending");
@@ -168,8 +151,8 @@ public class XorgKeyResolverTests
         var dead = '\0';
         var spacing = '\0';
         var keyDownId = new Dictionary<uint, CharClassification>();
-        XorgKeyResolver.ResolveKeysym(XkDeadGrave, 1, keyDownId, ref dead, ref spacing, KeyModifiers.None, KeyEventType.KeyDown, trackDeadKey: true);
-        XorgKeyResolver.ResolveKeysym(XkDeadAcute, 2, keyDownId, ref dead, ref spacing, KeyModifiers.None, KeyEventType.KeyDown, trackDeadKey: true);
+        XorgKeyResolver.ResolveKeysym(XkDeadGrave, 1, keyDownId, ref dead, ref spacing, KeyModifiers.None);
+        XorgKeyResolver.ResolveKeysym(XkDeadAcute, 2, keyDownId, ref dead, ref spacing, KeyModifiers.None);
 
         // keycode 2 must have a (null, null) placeholder so key-up doesn't replay the spacing form
         Assert.That(keyDownId.ContainsKey(2), Is.True);
@@ -187,9 +170,9 @@ public class XorgKeyResolverTests
         var dead = '\0';
         var spacing = '\0';
         var keyDownId = new Dictionary<uint, CharClassification>();
-        XorgKeyResolver.ResolveKeysym(XkDeadBelowdot, 1, keyDownId, ref dead, ref spacing, KeyModifiers.None, KeyEventType.KeyDown, trackDeadKey: true);
+        XorgKeyResolver.ResolveKeysym(XkDeadBelowdot, 1, keyDownId, ref dead, ref spacing, KeyModifiers.None);
 
-        var ev = XorgKeyResolver.ResolveKeysym(XkDeadGrave, 2, keyDownId, ref dead, ref spacing, KeyModifiers.None, KeyEventType.KeyDown, trackDeadKey: true);
+        var ev = XorgKeyResolver.ResolveKeysym(XkDeadGrave, 2, keyDownId, ref dead, ref spacing, KeyModifiers.None);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(ev, Is.Null, "no spacing form to emit for dead_belowdot");
@@ -267,57 +250,76 @@ public class XorgKeyResolverTests
         Assert.That(standard, Is.EqualTo(0xFF50UL)); // Home
     }
 
-    // -- shortcutFlush path in Resolve() --
-    // Resolve() contains: if (isShortcut && _pendingDeadKey != '\0') shortcutFlush = TakeDeadKeySpacing(...)
-    // the tests below simulate that exact conditional using the same static helpers.
+    // -- ResolveDown --
 
     [Test]
-    public void ShortcutFlush_DeadKeyPendingWithCtrlShortcut_FlushesSpacingFormBeforeShortcut()
+    public void ResolveDown_DeadKeyPendingWithCtrlShortcut_FlushesSpacingFormBeforeShortcut()
     {
         var dead = '\0';
         var spacing = '\0';
         var keyDownId = new Dictionary<uint, CharClassification>();
+        XorgKeyResolver.ResolveDown(XkDeadGrave, 1, false, KeyModifiers.None, keyDownId, ref dead, ref spacing);
 
-        // step 1: dead_grave pressed — pending dead key set
-        XorgKeyResolver.ResolveKeysym(XkDeadGrave, 1, keyDownId, ref dead, ref spacing, KeyModifiers.None, KeyEventType.KeyDown, trackDeadKey: true);
-        Assert.That(dead, Is.EqualTo('\u0300'), "dead_grave must leave combining grave pending");
-
-        // step 2: isShortcut=true (Ctrl held) — shortcutFlush triggers TakeDeadKeySpacing
-        var flush = XorgKeyResolver.TakeDeadKeySpacing(ref dead, ref spacing);
+        var ev = XorgKeyResolver.ResolveDown(XkA, 2, true, KeyModifiers.Control, keyDownId, ref dead, ref spacing);
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(flush, Is.Not.Null, "pending dead key must be flushed before Ctrl shortcut");
-            Assert.That(flush![0]!.Character, Is.EqualTo('`'), "spacing form of dead_grave is backtick");
-            Assert.That(flush[0]!.Type, Is.EqualTo(KeyEventType.KeyDown));
-            Assert.That(flush[1]!.Type, Is.EqualTo(KeyEventType.KeyUp));
+            Assert.That(ev!.Select(e => (e.Type, e.Character, e.Modifiers)), Is.EqualTo(
+            [
+                (KeyEventType.KeyDown, '`', KeyModifiers.None),
+                (KeyEventType.KeyUp, (char?)'`', KeyModifiers.None),
+                (KeyEventType.KeyDown, (char?)'a', KeyModifiers.Control),
+            ]));
             Assert.That(dead, Is.EqualTo('\0'), "dead key state cleared after flush");
         }
     }
 
     [Test]
-    public void ShortcutFlush_DeadKeyPendingWithCtrlShortcut_SubsequentDeadFlushSeesCleanState()
+    public void ResolveDown_DeadKeyPendingWithCtrlTab_FlushesOnce()
     {
-        // after shortcutFlush fires and clears _pendingDeadKey, FlushDeadKeyBeforeSpecial returns null —
-        // confirming the shortcutFlush ?? deadFlush ordering guarantee (no double-flush).
         var dead = '\u0300';
-        var spacing = '\u0060';
-
-        _ = XorgKeyResolver.TakeDeadKeySpacing(ref dead, ref spacing);  // simulate shortcutFlush
-
-        // deadFlush path: _pendingDeadKey is now '\0', so FlushDeadKeyBeforeSpecial must return null
-        var deadFlush = XorgKeyResolver.FlushDeadKeyBeforeSpecial(XkTab, ref dead, ref spacing);
-        Assert.That(deadFlush, Is.Null, "deadFlush must be null after shortcutFlush cleared the dead key state");
+        var spacing = '`';
+        var ev = XorgKeyResolver.ResolveDown(XkTab, 1, true, KeyModifiers.Control, [], ref dead, ref spacing);
+        Assert.That(ev!.Select(e => (e.Type, e.Character, e.Key)), Is.EqualTo(
+        [
+            (KeyEventType.KeyDown, '`', null),
+            (KeyEventType.KeyUp, (char?)'`', (SpecialKey?)null),
+            (KeyEventType.KeyDown, null, SpecialKey.Tab),
+        ]));
     }
 
     [Test]
-    public void ShortcutFlush_NoPendingDeadKey_NoFlush()
+    public void ResolveDown_CtrlShortcutWithoutPendingDeadKey_SendsOnlyTheShortcut()
     {
         var dead = '\0';
         var spacing = '\0';
+        var ev = XorgKeyResolver.ResolveDown(XkA, 1, true, KeyModifiers.Control, [], ref dead, ref spacing);
+        Assert.That(ev!.Select(e => e.Character), Is.EqualTo(new char?[] { 'a' }));
+    }
 
-        // no dead key pending — TakeDeadKeySpacing must return null (no spurious flush on shortcuts)
-        var flush = XorgKeyResolver.TakeDeadKeySpacing(ref dead, ref spacing);
-        Assert.That(flush, Is.Null, "no flush when no dead key pending");
+    [Test]
+    public void ResolveDown_CtrlOnDeadKey_SendsSpacingForm()
+    {
+        var dead = '\0';
+        var spacing = '\0';
+        var ev = XorgKeyResolver.ResolveDown(XkDeadGrave, 1, true, KeyModifiers.Control, [], ref dead, ref spacing);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(ev!.Select(e => (e.Character, e.Modifiers)), Is.EqualTo([((char?)'`', KeyModifiers.Control)]));
+            Assert.That(dead, Is.EqualTo('\0'), "a shortcut never arms a dead key");
+        }
+    }
+
+    [Test]
+    public void ResolveDown_CtrlOnDeadKeyWithNoSpacingForm_KeepsPendingDeadKey()
+    {
+        var dead = '\u0300';
+        var spacing = '`';
+        var ev = XorgKeyResolver.ResolveDown(XkDeadBelowdot, 1, true, KeyModifiers.Control, [], ref dead, ref spacing);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(ev, Is.Null);
+            Assert.That(dead, Is.EqualTo('\u0300'));
+        }
     }
 }

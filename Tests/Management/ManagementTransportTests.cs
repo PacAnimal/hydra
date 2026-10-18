@@ -18,7 +18,7 @@ public class ManagementTransportTests
         Socket? listener = null;
         if (endpoint.IsNamedPipe)
         {
-            server = ServePipeAsync(endpoint.Address, endpoint.InstanceId, timeout.Token);
+            server = ServePipe(endpoint.Address, endpoint.InstanceId, timeout.Token);
         }
         else
         {
@@ -26,12 +26,12 @@ public class ManagementTransportTests
             listener = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
             listener.Bind(new UnixDomainSocketEndPoint(endpoint.Address));
             listener.Listen(1);
-            server = ServeSocketAsync(listener, endpoint.InstanceId, timeout.Token);
+            server = ServeSocket(listener, endpoint.InstanceId, timeout.Token);
         }
 
         try
         {
-            var hello = await new ManagementClient(configPath).HelloAsync(timeout.Token);
+            var hello = await new ManagementClient(configPath).Hello(timeout.Token);
             await server;
             using (Assert.EnterMultipleScope())
             {
@@ -58,7 +58,7 @@ public class ManagementTransportTests
         Socket? listener = null;
         if (endpoint.IsNamedPipe)
         {
-            server = ServePipeAsync(endpoint.Address, endpoint.InstanceId, timeout.Token, expectShutdown: true);
+            server = ServePipe(endpoint.Address, endpoint.InstanceId, timeout.Token, expectShutdown: true);
         }
         else
         {
@@ -66,12 +66,12 @@ public class ManagementTransportTests
             listener = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
             listener.Bind(new UnixDomainSocketEndPoint(endpoint.Address));
             listener.Listen(1);
-            server = ServeSocketAsync(listener, endpoint.InstanceId, timeout.Token, expectShutdown: true);
+            server = ServeSocket(listener, endpoint.InstanceId, timeout.Token, expectShutdown: true);
         }
 
         try
         {
-            var result = await new ManagementClient(configPath).ShutdownHydraAsync(timeout.Token);
+            var result = await new ManagementClient(configPath).ShutdownHydra(timeout.Token);
             await server;
             Assert.That(result, Is.EqualTo(new CommandResult(true, "Shutdown requested.")));
         }
@@ -82,33 +82,33 @@ public class ManagementTransportTests
         }
     }
 
-    private static async Task ServePipeAsync(string name, string instanceId, CancellationToken cancel, bool expectShutdown = false)
+    private static async Task ServePipe(string name, string instanceId, CancellationToken cancel, bool expectShutdown = false)
     {
         await using var pipe = new NamedPipeServerStream(name, PipeDirection.InOut, 1,
             PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
         await pipe.WaitForConnectionAsync(cancel);
-        await RespondAsync(pipe, instanceId, expectShutdown, cancel);
+        await Respond(pipe, instanceId, expectShutdown, cancel);
     }
 
-    private static async Task ServeSocketAsync(Socket listener, string instanceId, CancellationToken cancel, bool expectShutdown = false)
+    private static async Task ServeSocket(Socket listener, string instanceId, CancellationToken cancel, bool expectShutdown = false)
     {
         using var socket = await listener.AcceptAsync(cancel);
         await using var stream = new NetworkStream(socket, ownsSocket: false);
-        await RespondAsync(stream, instanceId, expectShutdown, cancel);
+        await Respond(stream, instanceId, expectShutdown, cancel);
     }
 
-    private static async Task RespondAsync(Stream stream, string instanceId, bool expectShutdown, CancellationToken cancel)
+    private static async Task Respond(Stream stream, string instanceId, bool expectShutdown, CancellationToken cancel)
     {
-        var request = await ManagementFraming.ReadAsync<ManagementRequest>(stream, cancel);
+        var request = await ManagementFraming.Read<ManagementRequest>(stream, cancel);
         if (expectShutdown)
         {
             Assert.That(request.Method, Is.EqualTo(ManagementMethods.HydraShutdown));
-            await ManagementFraming.WriteAsync(stream,
+            await ManagementFraming.Write(stream,
                 ManagementResponse.Ok(new CommandResult(true, "Shutdown requested.")), cancel);
             return;
         }
         Assert.That(request.Method, Is.EqualTo(ManagementMethods.Hello));
-        await ManagementFraming.WriteAsync(stream,
+        await ManagementFraming.Write(stream,
             ManagementResponse.Ok(new ServerHello(ManagementProtocol.Version, "1.2.3", instanceId, 42)), cancel);
     }
 }

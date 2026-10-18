@@ -1,4 +1,5 @@
 using Hydra.Management;
+using static Tests.Setup.ConfigJson;
 
 namespace Tests.Management;
 
@@ -7,8 +8,8 @@ public class RemoteConnectivityGuardTests
     [Test]
     public void ChangingTheDuplicateTheLoaderUses_IsRisky()
     {
-        const string current = """{"profiles":[{"mode":"Slave","networkConfig":"shadowed","NetworkConfig":"effective"}]}""";
-        const string candidate = """{"profiles":[{"mode":"Slave","networkConfig":"shadowed","NetworkConfig":"different"}]}""";
+        var current = AsFile("""[{"mode":"Slave","networkConfig":"shadowed","NetworkConfig":"effective"}]""");
+        var candidate = AsFile("""[{"mode":"Slave","networkConfig":"shadowed","NetworkConfig":"different"}]""");
 
         Assert.That(RemoteConnectivityGuard.FindRiskyChanges(current, candidate), Is.EquivalentTo(["profile 1 networkConfig"]));
     }

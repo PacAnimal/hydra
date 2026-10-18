@@ -15,24 +15,26 @@ public interface ITokenVerifier
 /// </summary>
 public sealed class TokenVerifier(StyxAuth auth, V1TokenVerifier v1, TimeProvider clock) : ITokenVerifier
 {
+    private static readonly TokenVerdict Invalid = TokenVerdict.Refused(RelayReasons.InvalidAuthorization);
+
     public async Task<TokenVerdict> Verify(string authorization, string remoteIp, CancellationToken cancel)
     {
         if (authorization.StartsWithOrdinal(StyxToken.Prefix)) return VerifyV2(authorization);
 
         var network = await v1.Verify(authorization, remoteIp, cancel);
-        if (network is not { } id || auth.RevokedNetworks.Contains(id)) return TokenVerdict.Refused(RelayReasons.InvalidAuthorization);
+        if (network is not { } id || auth.RevokedNetworks.Contains(id)) return Invalid;
         return TokenVerdict.Accepted(id, null);
     }
 
     private TokenVerdict VerifyV2(string authorization)
     {
-        if (!StyxToken.TryParse(authorization, out var token)) return TokenVerdict.Refused(RelayReasons.InvalidAuthorization);
+        if (!StyxToken.TryParse(authorization, out var token)) return Invalid;
         var key = auth.KeyFor(token.KeyId);
-        if (key is null || !token.Verify(key)) return TokenVerdict.Refused(RelayReasons.InvalidAuthorization);
+        if (key is null || !token.Verify(key)) return Invalid;
 
         var rules = token.Describe();
         if (auth.RevokedNetworks.Contains(token.Network) || rules.Ids.Any(auth.RevokedIds.Contains))
-            return TokenVerdict.Refused(RelayReasons.InvalidAuthorization);
+            return Invalid;
         if (rules.IsExpiredAt(clock.GetUtcNow())) return TokenVerdict.Refused(RelayReasons.AuthorizationExpired);
         return TokenVerdict.Accepted(new NetworkKey(token.Network, rules.PathKey), rules);
     }

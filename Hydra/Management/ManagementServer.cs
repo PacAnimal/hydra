@@ -32,11 +32,11 @@ internal sealed class ManagementServer(
             log.LogInformation("Hydra management endpoint disabled (managementListener: false)");
             return Task.CompletedTask;
         }
-        return OperatingSystem.IsWindows() ? RunNamedPipeAsync(stoppingToken) : RunUnixSocketAsync(stoppingToken);
+        return OperatingSystem.IsWindows() ? RunNamedPipe(stoppingToken) : RunUnixSocket(stoppingToken);
     }
 
     [SupportedOSPlatform("windows")]
-    private async Task RunNamedPipeAsync(CancellationToken cancel)
+    private async Task RunNamedPipe(CancellationToken cancel)
     {
         while (!cancel.IsCancellationRequested)
         {
@@ -54,7 +54,7 @@ internal sealed class ManagementServer(
                     await pipe.DisposeAsync();
                     continue;
                 }
-                _ = HandleAndDisposeAsync(pipe, cancel);
+                _ = HandleAndDispose(pipe, cancel);
             }
             catch
             {
@@ -88,9 +88,9 @@ internal sealed class ManagementServer(
             Win32Session.CreateManagementPipeSecurity());
     }
 
-    private async Task RunUnixSocketAsync(CancellationToken cancel)
+    private async Task RunUnixSocket(CancellationToken cancel)
     {
-        if (!await _endpoint.RemoveStaleUnixSocketAsync(cancel))
+        if (!await _endpoint.RemoveStaleUnixSocket(cancel))
         {
             log.LogWarning("Hydra management endpoint is already owned by another process");
             return;
@@ -117,7 +117,7 @@ internal sealed class ManagementServer(
             while (!cancel.IsCancellationRequested)
             {
                 var socket = await _unixListener.AcceptAsync(cancel);
-                _ = HandleAndDisposeAsync(new NetworkStream(socket, ownsSocket: true), cancel);
+                _ = HandleAndDispose(new NetworkStream(socket, ownsSocket: true), cancel);
             }
         }
         finally
@@ -128,7 +128,7 @@ internal sealed class ManagementServer(
         }
     }
 
-    private async Task HandleAndDisposeAsync(Stream stream, CancellationToken serverCancel)
+    private async Task HandleAndDispose(Stream stream, CancellationToken serverCancel)
     {
         await using (stream)
         {
@@ -136,44 +136,42 @@ internal sealed class ManagementServer(
             timeout.CancelAfter(TimeSpan.FromSeconds(15));
             try
             {
-                var request = await ManagementFraming.ReadAsync<ManagementRequest>(stream, timeout.Token);
-                var response = await DispatchAsync(request, timeout.Token);
-                await ManagementFraming.WriteAsync(stream, response, timeout.Token);
+                var request = await ManagementFraming.Read<ManagementRequest>(stream, timeout.Token);
+                var response = await Dispatch(request, timeout.Token);
+                await ManagementFraming.Write(stream, response, timeout.Token);
             }
             catch (OperationCanceledException) when (serverCancel.IsCancellationRequested) { }
             catch (Exception ex)
             {
-                try { await ManagementFraming.WriteAsync(stream, ManagementResponse.Fail(ex.Message), CancellationToken.None); }
+                try { await ManagementFraming.Write(stream, ManagementResponse.Fail(ex.Message), CancellationToken.None); }
                 catch { /* best-effort failure notice — the client may already be gone (closed pipe, process exit) */ }
                 log.LogDebug(ex, "Management request failed");
             }
         }
     }
 
-    internal async Task<ManagementResponse> DispatchAsync(ManagementRequest request, CancellationToken cancel)
+    internal async Task<ManagementResponse> Dispatch(ManagementRequest request, CancellationToken cancel)
     {
         switch (request.Method)
         {
             case ManagementMethods.Hello:
                 return ManagementResponse.Ok(new ServerHello(ManagementProtocol.Version, HydraVersion.Current, _endpoint.InstanceId, Environment.ProcessId));
             case ManagementMethods.Status:
-                return ManagementResponse.Ok(await status.GetAsync(cancel));
+                return ManagementResponse.Ok(await status.Get(cancel));
             case ManagementMethods.Logs:
                 return ManagementResponse.Ok(logs.Read(ManagementJson.Deserialize<long>(request.Json)));
             case ManagementMethods.ConfigGet:
-                return ManagementResponse.Ok(await config.ReadAsync(cancel));
-            case ManagementMethods.ConfigValidate:
-                return ManagementResponse.Ok(TransactionalConfigStore.Validate(ManagementJson.Deserialize<string>(request.Json)));
+                return ManagementResponse.Ok(await config.Read(cancel));
             case ManagementMethods.ConfigSave:
                 {
                     var save = ManagementJson.Deserialize<SaveConfigRequest>(request.Json);
-                    var document = await config.SaveAsync(save.ExpectedRevision, save.Json, cancel);
+                    var document = await config.Save(save.ExpectedRevision, save.Json, cancel);
                     if (save.Restart) lifetime.RestartAfterResponse();
                     return ManagementResponse.Ok(document);
                 }
             case ManagementMethods.RelayReconnect:
                 {
-                    var relay = services.GetService(typeof(IRelaySender)) as IRelaySender;
+                    var relay = services.GetService<IRelaySender>();
                     var accepted = relay?.RequestReconnect() == true;
                     return ManagementResponse.Ok(new CommandResult(accepted, accepted ? "Relay reconnect requested." : "Relay is not connected."));
                 }
@@ -184,20 +182,20 @@ internal sealed class ManagementServer(
                 return ManagementResponse.Ok(lifetime.ShutdownAfterResponse());
             case ManagementMethods.RemotePair:
                 return ManagementResponse.Ok(await services.GetRequiredService<RemoteManagementService>()
-                    .PairAsync(ManagementJson.Deserialize<RemotePairRequest>(request.Json), cancel));
+                    .Pair(ManagementJson.Deserialize<RemotePairRequest>(request.Json), cancel));
             case ManagementMethods.RemoteConfigGet:
                 return ManagementResponse.Ok(await services.GetRequiredService<RemoteManagementService>()
-                    .GetConfigAsync(ManagementJson.Deserialize<RemoteHostRequest>(request.Json).Host, cancel));
+                    .GetConfig(ManagementJson.Deserialize<RemoteHostRequest>(request.Json).Host, cancel));
             case ManagementMethods.RemoteConfigValidate:
                 return ManagementResponse.Ok(await services.GetRequiredService<RemoteManagementService>()
-                    .ValidateConfigAsync(ManagementJson.Deserialize<RemoteValidateRequest>(request.Json), cancel));
+                    .ValidateConfig(ManagementJson.Deserialize<RemoteValidateRequest>(request.Json), cancel));
             case ManagementMethods.RemoteConfigApply:
                 return ManagementResponse.Ok(await services.GetRequiredService<RemoteManagementService>()
-                    .ApplyConfigAsync(ManagementJson.Deserialize<RemoteApplyRequest>(request.Json), cancel));
+                    .ApplyConfig(ManagementJson.Deserialize<RemoteApplyRequest>(request.Json), cancel));
             case ManagementMethods.RemoteConfigConfirm:
                 await services.GetRequiredService<RemoteManagementService>()
-                    .ConfirmConfigAsync(ManagementJson.Deserialize<RemoteConfirmRequest>(request.Json), cancel);
-                return ManagementResponse.Ok(new CommandResult(true, "Remote configuration confirmed."));
+                    .ConfirmConfig(ManagementJson.Deserialize<RemoteConfirmRequest>(request.Json), cancel);
+                return ManagementResponse.Ok(RemoteManagementService.Confirmed);
             default:
                 return ManagementResponse.Fail($"Unknown management method '{request.Method}'.");
         }

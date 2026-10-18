@@ -36,11 +36,7 @@ public sealed class HydraTestClient(WebApplicationFactory<global::Styx.Program>?
     private readonly SemaphoreSlim _parkedSignal = new(0);
     private readonly ConcurrentQueue<Socket> _connectorSockets = new();
 
-    private string? _kickReason;
-
     private volatile LaneGate? _gate;
-
-    public string? KickReason => _kickReason;
 
     protected override TimeSpan ReconnectDelay => TimeSpan.Zero;
 
@@ -125,7 +121,6 @@ public sealed class HydraTestClient(WebApplicationFactory<global::Styx.Program>?
 
     protected override Task OnKicked(string reason)
     {
-        _kickReason = reason;
         _kicks.Push(reason);
         return Task.CompletedTask;
     }
@@ -142,6 +137,21 @@ public sealed class HydraTestClient(WebApplicationFactory<global::Styx.Program>?
     {
         if (!await _parkedSignal.WaitAsync(TestBound.Bound))
             throw new TimeoutException("Timed out waiting for the suspended relay to park");
+    }
+
+    // the client started and authenticated, or disposed and the failure thrown
+    public static async Task<HydraTestClient> Started(HydraTestClient client)
+    {
+        try
+        {
+            await client.StartReady();
+            return client;
+        }
+        catch
+        {
+            await client.DisposeAsync();
+            throw;
+        }
     }
 
     // starts the client and waits until it has authenticated

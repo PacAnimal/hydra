@@ -9,7 +9,7 @@ namespace Tests.Setup;
 public sealed class InvocationProbe(string method) : IHubFilter
 {
     private readonly Gate _gate = new();
-    private Func<HubInvocationContext, ValueTask<bool>> _which = Everything;
+    private Func<HubInvocationContext, bool> _which = Everything;
     private readonly RunningCounter _running = new();
 
     // the arguments of each invocation parked by Hold, in the order they reached it
@@ -25,7 +25,7 @@ public sealed class InvocationProbe(string method) : IHubFilter
     public int MostRunning => _running.MostRunning;
 
     // parks the invocations `which` picks, all of them when null
-    public void Hold(Func<HubInvocationContext, ValueTask<bool>>? which = null)
+    public void Hold(Func<HubInvocationContext, bool>? which = null)
     {
         _which = which ?? Everything;
         _gate.Hold();
@@ -43,7 +43,7 @@ public sealed class InvocationProbe(string method) : IHubFilter
         _running.Reset();
     }
 
-    private static ValueTask<bool> Everything(HubInvocationContext _) => ValueTask.FromResult(true);
+    private static bool Everything(HubInvocationContext _) => true;
 
     public async ValueTask<object?> InvokeMethodAsync(HubInvocationContext context, Func<HubInvocationContext, ValueTask<object?>> next)
     {
@@ -53,7 +53,7 @@ public sealed class InvocationProbe(string method) : IHubFilter
         var arguments = context.HubMethodArguments.ToArray();
         try
         {
-            if (_gate.IsHeld && await _which(context))
+            if (_gate.IsHeld && _which(context))
             {
                 Held.Push(arguments);
                 await _gate.Passed();

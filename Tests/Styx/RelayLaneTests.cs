@@ -159,7 +159,7 @@ public class RelayLaneTests : StyxFixtureBase
     /// <summary>
     /// The stream's own three kinds keep their order even while input floods the other lane — they share a
     /// lane precisely so this holds. A Start that lost its race with chunk 0 would be dropped in silence by
-    /// <c>HandleFileTransferChunkAsync</c>'s null-extractor guard; a Done that overtook the last chunk would
+    /// <c>HandleFileTransferChunk</c>'s null-extractor guard; a Done that overtook the last chunk would
     /// truncate the transfer and fail its hash.
     /// </summary>
     [Test]
@@ -293,7 +293,7 @@ public class RelayLaneTests : StyxFixtureBase
         // never unwinds, the iteration never ends, and this call waits for ever — turning the regression
         // this test exists for into a wedged run rather than a failure.
         using var bound = new CancellationTokenSource(Bound);
-        await sender.SuspendConnectionAsync(bound.Token);
+        await sender.SuspendConnection(bound.Token);
 
         foreach (var (task, where) in new[] { (parked, "parked in the lane"), (behind, "queued behind it") })
         {

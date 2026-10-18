@@ -109,12 +109,7 @@ public class EmbeddedStyxTests
     private static HydraTestClient Client(string name, string? networkConfig = null, ILogger<RelayConnection>? log = null)
         => HydraTestClient.OverTcp(TransitionTestHelper.Profile(name, new HydraConfig { Mode = Mode.Master, NetworkConfig = networkConfig }), log);
 
-    private static async Task<HydraTestClient> ConnectedClient(string name, string networkConfig)
-    {
-        var client = Client(name, networkConfig);
-        await client.StartReady();
-        return client;
-    }
+    private static Task<HydraTestClient> ConnectedClient(string name, string networkConfig) => HydraTestClient.Started(Client(name, networkConfig));
 
     // computes a network config blob for the test server using the given password
     private ValueTask<string> Blob(string password = TestPassword) =>
@@ -162,7 +157,7 @@ public class EmbeddedStyxTests
 
         await log.WaitFor(e => e.Level == LogLevel.Warning && e.Message.Contains("refused this machine's proof"));
 
-        Assert.That(await _server!.GetClients(), Is.Empty);
+        Assert.That(_server!.GetClients(), Is.Empty);
     }
 
     // ─── messaging ───────────────────────────────────────────────────────────
@@ -172,8 +167,8 @@ public class EmbeddedStyxTests
     {
         var cfg = await Blob();
 
-        await using var sender = await ConnectedClient("sender", cfg);
-        await using var receiver = await ConnectedClient("receiver", cfg);
+        await using var pair = await ClientPair.Start(Client("sender", cfg), Client("receiver", cfg));
+        var (sender, receiver) = pair;
 
         sender.Send(["receiver"], TestMessages.Move(42, 99));
 
@@ -193,8 +188,8 @@ public class EmbeddedStyxTests
     {
         var cfg = await Blob();
 
-        await using var alpha = await ConnectedClient("alpha", cfg);
-        await using var beta = await ConnectedClient("beta", cfg);
+        await using var pair = await ClientPair.Start(Client("alpha", cfg), Client("beta", cfg));
+        var (alpha, beta) = pair;
 
         alpha.Send(["beta"], TestMessages.Move(1, 2));
         var (fromAlpha, _, _) = await beta.WaitForMessage();
@@ -216,11 +211,12 @@ public class EmbeddedStyxTests
         var initialPeers = await clientA.WaitForPeers();
         Assert.That(initialPeers, Is.Empty);
 
-        var clientB = await ConnectedClient("host-b", cfg);
-        var peersForA = await clientA.WaitForPeers();
-        Assert.That(peersForA, Contains.Item("host-b"));
+        await using (await ConnectedClient("host-b", cfg))
+        {
+            var peersForA = await clientA.WaitForPeers();
+            Assert.That(peersForA, Contains.Item("host-b"));
+        }
 
-        await clientB.DisposeAsync();
         var finalPeers = await clientA.WaitForPeers();
         Assert.That(finalPeers, Is.Empty);
     }
@@ -374,7 +370,7 @@ public class EmbeddedStyxTests
         {
             Assert.That(afterBinding, Is.Null, "the hub connection accepted a cert the binding never proved");
             Assert.That(nextAttempt, Does.StartWith($"POST {EmbeddedRelayTls.BindingPath} "), "the next attempt must start over from the binding");
-            Assert.That(await _server!.GetClients(), Is.Empty);
+            Assert.That(_server!.GetClients(), Is.Empty);
         }
     }
 
@@ -405,7 +401,7 @@ public class EmbeddedStyxTests
 
         await log.WaitFor(e => e.Level == LogLevel.Warning && e.Message.Contains("Relay connection failed"));
 
-        Assert.That(await _server!.GetClients(), Is.Empty);
+        Assert.That(_server!.GetClients(), Is.Empty);
     }
 
     [Test]
@@ -428,7 +424,7 @@ public class EmbeddedStyxTests
 
         await client.WaitForReady();
 
-        Assert.That(await _server!.GetClients(), Has.Count.EqualTo(1));
+        Assert.That(_server!.GetClients(), Has.Count.EqualTo(1));
     }
 
     [TestCase("https://relay:5000", "https://relay:5000")]

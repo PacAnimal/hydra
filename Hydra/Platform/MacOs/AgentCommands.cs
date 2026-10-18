@@ -9,7 +9,7 @@ internal static partial class AgentCommands
 {
     private const string Label = AgentPlist.Label;
     private const string ShieldLabel = "com.cathedral.hydra.shield";
-    private const string PlistFileName = "com.cathedral.hydra.plist";
+    private const string PlistFileName = Label + ".plist";
 
     [LibraryImport("libc")]
     private static partial uint getuid();
@@ -23,22 +23,16 @@ internal static partial class AgentCommands
         var workingDir = Path.GetDirectoryName(exePath)
             ?? throw new InvalidOperationException("cannot determine working directory");
 
-        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        var agentsDir = Path.Combine(home, "Library", "LaunchAgents");
-        var logDir = Path.Combine(home, "Library", "Logs", "Hydra");
-        var plistPath = Path.Combine(agentsDir, PlistFileName);
+        var logDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Library", "Logs", "Hydra");
+        var plistPath = PlistPath();
 
-        Directory.CreateDirectory(agentsDir);
+        Directory.CreateDirectory(Path.GetDirectoryName(plistPath)!);
         Directory.CreateDirectory(logDir);
 
         RemoveQuarantine(exePath);
-        Codesign(exePath, Label);
-        var shieldPath = Path.Combine(workingDir, "Resources", "MacShield", "hydra-shield.app");
-        if (Directory.Exists(shieldPath))
-        {
-            RemoveQuarantine(shieldPath, recursive: true);
-            Codesign(shieldPath, ShieldLabel);
-        }
+        var shieldPath = MacShieldProcess.AppPath(workingDir);
+        if (Directory.Exists(shieldPath)) RemoveQuarantine(shieldPath, recursive: true);
+        CodesignApp(exePath);
 
         // remove any running instance before overwriting the plist
         RunLaunchctl(tolerateFailure: true, "bootout", $"{DomainTarget()}/{Label}");
@@ -87,54 +81,41 @@ internal static partial class AgentCommands
     private static string PlistPath() =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Library", "LaunchAgents", PlistFileName);
 
-    internal static void Codesign(string path, string identifier)
+    // signs the executable and the shield beside it, each under its own identifier
+    internal static void CodesignApp(string exePath)
     {
-        // --requirements sets a permissive designated requirement: any binary with our bundle identifier
-        // is trusted, rather than the default which ties the csreq to the specific binary's CDHash.
-        // this makes the TCC accessibility entry survive auto-updates — the stored csreq matches
-        // any future binary as long as it's signed with the same identifier.
-        var psi = new ProcessStartInfo("/usr/bin/codesign")
-        {
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-        };
-        psi.ArgumentList.Add("--force");
-        psi.ArgumentList.Add("--sign");
-        psi.ArgumentList.Add("-");
-        psi.ArgumentList.Add("-i");
-        psi.ArgumentList.Add(identifier);
-        psi.ArgumentList.Add("--requirements");
-        psi.ArgumentList.Add($"=designated => identifier {identifier}");
-        psi.ArgumentList.Add(path);
-        using var proc = Process.Start(psi);
-        proc?.WaitForExit(); // failure is non-fatal
+        Codesign(exePath, Label);
+        var shieldPath = MacShieldProcess.AppPath(Path.GetDirectoryName(exePath)!);
+        if (Directory.Exists(shieldPath)) Codesign(shieldPath, ShieldLabel);
     }
 
+    // --requirements sets a permissive designated requirement: any binary with our bundle identifier
+    // is trusted, rather than the default which ties the csreq to the specific binary's CDHash.
+    // this makes the TCC accessibility entry survive auto-updates — the stored csreq matches
+    // any future binary as long as it's signed with the same identifier. failure is non-fatal.
+    private static void Codesign(string path, string identifier) =>
+        Run("/usr/bin/codesign", "--force", "--sign", "-", "-i", identifier, "--requirements", $"=designated => identifier {identifier}", path);
+
+    // failure is fine — the attribute may not exist
     private static void RemoveQuarantine(string path, bool recursive = false)
     {
         foreach (var attr in new[] { "com.apple.quarantine", "com.apple.provenance" })
-        {
-            var psi = new ProcessStartInfo("/usr/bin/xattr")
-            {
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-            };
-            if (recursive) psi.ArgumentList.Add("-r");
-            psi.ArgumentList.Add("-d");
-            psi.ArgumentList.Add(attr);
-            psi.ArgumentList.Add(path);
-            using var proc = Process.Start(psi);
-            proc?.WaitForExit(); // failure is fine — attribute may not exist
-        }
+            Run("/usr/bin/xattr", recursive ? ["-r", "-d", attr, path] : ["-d", attr, path]);
     }
 
     private static void RunLaunchctl(params string[] args) => RunLaunchctl(false, args);
 
     private static void RunLaunchctl(bool tolerateFailure, params string[] args)
     {
-        var startInfo = new ProcessStartInfo("/bin/launchctl")
+        var result = Run("/bin/launchctl", args);
+        if (result.ExitCode != 0 && !tolerateFailure)
+            throw new InvalidOperationException($"launchctl {string.Join(' ', args)} failed (exit {result.ExitCode}): {result.Output}");
+    }
+
+    // runs a tool to its exit, draining both its streams
+    private static RunResult Run(string file, params string[] args)
+    {
+        var startInfo = new ProcessStartInfo(file)
         {
             UseShellExecute = false,
             RedirectStandardOutput = true,
@@ -143,15 +124,12 @@ internal static partial class AgentCommands
         foreach (var arg in args)
             startInfo.ArgumentList.Add(arg);
 
-        using var proc = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("failed to start launchctl");
-
+        using var proc = Process.Start(startInfo) ?? throw new InvalidOperationException($"failed to start {file}");
+        var error = proc.StandardError.ReadToEndAsync();
         var output = proc.StandardOutput.ReadToEnd();
-        var error = proc.StandardError.ReadToEnd();
         proc.WaitForExit();
-
-        if (proc.ExitCode != 0 && !tolerateFailure)
-            throw new InvalidOperationException(
-                $"launchctl {string.Join(' ', args)} failed (exit {proc.ExitCode}): {output}{error}");
+        return new RunResult(proc.ExitCode, output + error.Result);
     }
+
+    private sealed record RunResult(int ExitCode, string Output);
 }

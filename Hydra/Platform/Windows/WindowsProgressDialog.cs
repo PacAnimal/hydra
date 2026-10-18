@@ -6,8 +6,8 @@ using Microsoft.Extensions.Logging;
 namespace Hydra.Platform.Windows;
 
 // wraps IProgressDialog (shell32) — the same COM progress dialog Windows Explorer uses for file copies.
-// IProgressDialog is apartment-threaded (STA). all COM calls are dispatched to the dedicated STA thread
-// via PostThreadMessage so they're serviced by its active message pump.
+// IProgressDialog is apartment-threaded (STA). all COM calls are posted to the dedicated STA thread
+// so they're serviced by its active message pump.
 [SupportedOSPlatform("windows")]
 public sealed class WindowsProgressDialog : IFileTransferDialog, IDisposable
 {
@@ -19,8 +19,6 @@ public sealed class WindowsProgressDialog : IFileTransferDialog, IDisposable
     private long _lastProgressTick;
     private CancellationTokenSource? _pollCts;
 
-    // custom thread message: lParam = GCHandle<Action>
-    private const uint WmRunAction = NativeMethods.WM_USER + 50;
     private const uint ProgdlgAutotime = 0x00000002; // auto time-remaining estimate
     private const uint ProgdlgNominimize = 0x00000008;
     private const uint PdtimerReset = 1;
@@ -34,7 +32,6 @@ public sealed class WindowsProgressDialog : IFileTransferDialog, IDisposable
         _loop = new StaMessageLoop(
             "HydraProgressDlg",
             init: () => { _ = NativeMethods.OleInitialize(nint.Zero); },
-            onThreadMessage: HandleThreadMessage,
             onExit: () =>
             {
                 StopOnSta();
@@ -42,22 +39,11 @@ public sealed class WindowsProgressDialog : IFileTransferDialog, IDisposable
             });
     }
 
-    private bool HandleThreadMessage(MSG msg)
+    private void PostToSta(Action action) => _loop.Post(() =>
     {
-        if (msg.message != WmRunAction) return false;
-        var handle = GCHandle.FromIntPtr(msg.lParam);
-        try { ((Action?)handle.Target)?.Invoke(); }
+        try { action(); }
         catch (Exception ex) { _log.LogDebug(ex, "STA action threw"); }
-        finally { handle.Free(); }
-        return true;
-    }
-
-    private void PostToSta(Action action)
-    {
-        var handle = GCHandle.Alloc(action);
-        if (!NativeMethods.PostThreadMessage(_loop.ThreadId, WmRunAction, nint.Zero, GCHandle.ToIntPtr(handle)))
-            handle.Free();
-    }
+    });
 
     public void ShowTransferring(FileTransferInfo info)
     {
@@ -159,20 +145,22 @@ public sealed class WindowsProgressDialog : IFileTransferDialog, IDisposable
 
     public void Close()
     {
-        CancellationTokenSource? cts;
-        lock (_lock) { cts = _pollCts; _pollCts = null; }
-        cts?.Cancel();
+        StopCancelPoll();
         PostToSta(StopOnSta);
     }
 
+    // the loop stops the dialog on its way out
     public void Dispose()
+    {
+        StopCancelPoll();
+        _loop.Dispose();
+    }
+
+    private void StopCancelPoll()
     {
         CancellationTokenSource? cts;
         lock (_lock) { cts = _pollCts; _pollCts = null; }
         cts?.Cancel();
-        // StopOnSta runs before the loop exits (WM_QUIT is queued after it by loop.Dispose)
-        PostToSta(StopOnSta);
-        _loop.Dispose();
     }
 
     private void StartCancelPoll()
@@ -194,14 +182,9 @@ public sealed class WindowsProgressDialog : IFileTransferDialog, IDisposable
                     // poll HasUserCancelled on the STA thread (it owns _dlg)
                     PostToSta(() =>
                     {
-                        try
-                        {
-                            if (_dlg?.HasUserCancelled() != true) return;
-                            lock (_lock) { _pollCts?.Cancel(); _pollCts = null; }
-                            try { CancelRequested?.Invoke(); }
-                            catch { /* ignored */ }
-                        }
-                        catch { /* ignored */ }
+                        if (_dlg?.HasUserCancelled() != true) return;
+                        StopCancelPoll();
+                        CancelRequested?.Invoke();
                     });
                 }
             }

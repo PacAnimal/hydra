@@ -8,7 +8,18 @@ internal static class NativeHelpers
     // ensure frameworks are loaded before calling into objc_getClass for their classes.
     // NativeLibrary.Load is idempotent — safe to call from multiple constructors.
     internal static void EnsureAppKitLoaded() => NativeLibrary.Load(NativeMethods.AppKit);
-    internal static void EnsureApplicationServicesLoaded() => NativeLibrary.Load(NativeMethods.ApplicationServices);
+
+    // combined session state source for synthetic events; the output handler's mouse events pass none
+    // instead, so system UI does not filter them as synthetic
+    internal static readonly nint EventSource = NativeMethods.CGEventSourceCreate(NativeMethods.KCGEventSourceStateCombinedSessionState);
+
+    // posts a created CGEvent at the HID tap and releases it; a null event is skipped
+    internal static void PostAndRelease(nint eventRef)
+    {
+        if (eventRef == nint.Zero) return;
+        NativeMethods.CGEventPost(NativeMethods.KCGHidEventTap, eventRef);
+        NativeMethods.CFRelease(eventRef);
+    }
 
     // AppKit's NSEvent class, loading AppKit on first use
     internal static nint NsEventClass
@@ -41,9 +52,12 @@ internal static class NativeHelpers
         finally { Marshal.FreeHGlobal(buf); }
     }
 
+    // trusted now, or after the system prompt
+    internal static bool EnsureAccessibilityTrusted() => PollAccessibilityTrusted() || ShowAccessibilityPrompt();
+
     // polls for up to ~4s using CGEventTapCreate — the reliable live check, unlike AXIsProcessTrusted()
     // which returns a cached value for a running process and won't reflect a live grant.
-    internal static bool PollAccessibilityTrusted()
+    private static bool PollAccessibilityTrusted()
     {
         for (var i = 0; i < 8; i++)
         {
@@ -54,7 +68,7 @@ internal static class NativeHelpers
     }
 
     // opens the system accessibility prompt (System Settings), returns current trust state.
-    internal static bool ShowAccessibilityPrompt()
+    private static bool ShowAccessibilityPrompt()
     {
         EnsureAppKitLoaded();
         var cls = NativeMethods.objc_getClass("NSMutableDictionary");

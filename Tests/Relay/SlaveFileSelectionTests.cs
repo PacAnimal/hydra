@@ -33,8 +33,8 @@ public class SlaveFileSelectionTests
             finder.Release(new FileSelectionResult(true, ["/Users/me/report.pdf"]));
         }
 
-        await relay.WaitForSent(MessageKind.FileSelectionResponse);
-        var (targets, _, json) = relay.Snapshot().Single(s => s.Kind == MessageKind.FileSelectionResponse);
+        await relay.Sent.WaitFor(MessageKind.FileSelectionResponse);
+        var (targets, _, json) = relay.Sent.Of(MessageKind.FileSelectionResponse).Single();
         using (Assert.EnterMultipleScope())
         {
             Assert.That(targets, Is.EqualTo(["master-pc"]));
@@ -53,7 +53,7 @@ public class SlaveFileSelectionTests
 
         await relay.SimulateReceive("master-pc", MessageKind.FileSelectionQuery, "{}").WaitAsync(Bound);
         finder.Release(new FileSelectionResult(true, ["/Users/me/a.pdf", "/Users/me/b.pdf"]));
-        await relay.WaitForSent(MessageKind.FileSelectionResponse);
+        await relay.Sent.WaitFor(MessageKind.FileSelectionResponse);
 
         var entry = log.Entries.Single(e => e.Message.Contains("/Users/me/a.pdf"));
         using (Assert.EnterMultipleScope())
@@ -74,8 +74,8 @@ public class SlaveFileSelectionTests
         await relay.SimulateReceive("master-pc", MessageKind.FileSelectionQuery, "{}").WaitAsync(Bound);
         finder.Release(FileSelectionResult.Failure);
 
-        await relay.WaitForSent(MessageKind.FileSelectionResponse);
-        Assert.That(relay.Snapshot().Single(s => s.Kind == MessageKind.FileSelectionResponse).Json, Does.Contain("Copy failed"));
+        await relay.Sent.WaitFor(MessageKind.FileSelectionResponse);
+        Assert.That(relay.Sent.Of(MessageKind.FileSelectionResponse).Single().Json, Does.Contain("Copy failed"));
     }
 
     // the master holds a copy pending until its query is answered, so a dropped query must still get one
@@ -93,13 +93,13 @@ public class SlaveFileSelectionTests
             await finder.Queried.WaitAsync(Bound);
             await relay.SimulateReceive("other-pc", MessageKind.FileSelectionQuery, "{}").WaitAsync(Bound);
 
-            var (targets, _, json) = relay.Snapshot().Single(s => s.Kind == MessageKind.FileSelectionResponse);
+            var (targets, _, json) = relay.Sent.Of(MessageKind.FileSelectionResponse).Single();
             using (Assert.EnterMultipleScope())
             {
                 Assert.That(targets, Is.EqualTo(["other-pc"]));
                 Assert.That(json, Does.Contain(FileSelectionResult.InProgressMessage));
             }
-            relay.ClearSent();
+            relay.Sent.Clear();
         }
         finally
         {
@@ -107,11 +107,11 @@ public class SlaveFileSelectionTests
             finder.Release(1, new FileSelectionResult(true, ["/Users/me/second.txt"]));
         }
 
-        await relay.WaitForSent(MessageKind.FileSelectionResponse);
+        await relay.Sent.WaitFor(MessageKind.FileSelectionResponse);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(finder.QueriedAt(1).IsCompleted, Is.False, "the second query reached Finder alongside the first");
-            Assert.That(relay.Snapshot().Single(s => s.Kind == MessageKind.FileSelectionResponse).Json, Does.Contain("first.txt"));
+            Assert.That(relay.Sent.Of(MessageKind.FileSelectionResponse).Single().Json, Does.Contain("first.txt"));
         }
     }
 
@@ -129,7 +129,7 @@ public class SlaveFileSelectionTests
             await finder.Queried.WaitAsync(Bound);
             await relay.SimulateReceive("master-pc", MessageKind.FileSelectionQuery, "{}").WaitAsync(Bound);
 
-            Assert.That(relay.Snapshot().Where(s => s.Kind == MessageKind.FileSelectionResponse), Is.Empty);
+            Assert.That(relay.Sent.Of(MessageKind.FileSelectionResponse), Is.Empty);
         }
         finally
         {
@@ -137,11 +137,11 @@ public class SlaveFileSelectionTests
             finder.Release(1, new FileSelectionResult(true, ["/Users/me/second.txt"]));
         }
 
-        await relay.WaitForSent(MessageKind.FileSelectionResponse);
+        await relay.Sent.WaitFor(MessageKind.FileSelectionResponse);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(finder.QueriedAt(1).IsCompleted, Is.False, "the second query reached Finder alongside the first");
-            Assert.That(relay.Snapshot().Single(s => s.Kind == MessageKind.FileSelectionResponse).Json, Does.Contain("first.txt"));
+            Assert.That(relay.Sent.Of(MessageKind.FileSelectionResponse).Single().Json, Does.Contain("first.txt"));
         }
     }
 
@@ -156,7 +156,7 @@ public class SlaveFileSelectionTests
 
         await relay.SimulateReceive("master-pc", MessageKind.FileSelectionQuery, "{}").WaitAsync(Bound);
 
-        var (targets, _, json) = relay.Snapshot().Single(s => s.Kind == MessageKind.FileSelectionResponse);
+        var (targets, _, json) = relay.Sent.Of(MessageKind.FileSelectionResponse).Single();
         using (Assert.EnterMultipleScope())
         {
             Assert.That(targets, Is.EqualTo(["master-pc"]));
@@ -176,7 +176,7 @@ public class SlaveFileSelectionTests
         finder.Release(1, new FileSelectionResult(true, ["/Users/me/second.txt"]));
 
         await relay.SimulateReceive("master-pc", MessageKind.FileSelectionQuery, "{}").WaitAsync(Bound);
-        await relay.WaitForSent(MessageKind.FileSelectionResponse);
+        await relay.Sent.WaitFor(MessageKind.FileSelectionResponse);
         await relay.SimulateReceive("master-pc", MessageKind.FileSelectionQuery, "{}").WaitAsync(Bound);
 
         await finder.QueriedAt(1).WaitAsync(Bound);

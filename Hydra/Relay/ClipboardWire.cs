@@ -42,8 +42,9 @@ public static class ClipboardWire
 
     public static ClipboardPullMessage ToPull(ClipboardBaseline against, int pullId) => new(pullId, against.Hash, SelectionHash(against.PrimaryText));
 
-    public static ClipboardSnapshot From(IClipboardPayload m, ILogger log, string context, string host) =>
-        ValidateFields(m.Text, Primary(m.Text, m.PrimaryText, m.PrimaryIsText), m.ImagePng, m.Html, m.Rtf, log, context, host);
+    // context names the message and its sender, for the logs
+    public static ClipboardSnapshot From(IClipboardPayload m, ILogger log, string context) =>
+        ValidateFields(m.Text, Primary(m.Text, m.PrimaryText, m.PrimaryIsText), m.ImagePng, m.Html, m.Rtf, log, context);
 
     // for the logs of both sides
     public static string Describe(IClipboardPayload m) =>
@@ -56,7 +57,7 @@ public static class ClipboardWire
     {
         if (m.Hash is { } hash && hash != local.Hash) return PushNeed.Clipboard;
         if (m.PrimaryHash is { } selectionHash) return selectionHash != SelectionHash(local.PrimaryText) ? PushNeed.Selection : PushNeed.None;
-        TakeSelectionBeside(sync, m, local, log, $"selection from {host}", host);
+        TakeSelectionBeside(sync, m, local, log, $"selection from {host}");
         return PushNeed.None;
     }
 
@@ -65,10 +66,10 @@ public static class ClipboardWire
     // applied, if anything
     internal static ClipboardSnapshot? ApplyPush(IClipboardSync sync, ClipboardPushMessage push, ClipboardBaseline? selectionFor, ILogger log, string host)
     {
-        var received = From(push, log, "push", host);
         var context = $"push from {host}";
+        var received = From(push, log, context);
         return selectionFor != null && ClipboardUtils.ClipboardHash(received) == selectionFor.Hash
-            ? TakeSelectionBeside(sync, push, selectionFor, log, context, host)
+            ? TakeSelectionBeside(sync, push, selectionFor, log, context)
             : ClipboardUtils.ApplyPreservingFiles(sync, received, log, context);
     }
 
@@ -89,37 +90,36 @@ public static class ClipboardWire
     {
         var context = $"pull response from {host}";
         return answer.Unchanged == true
-            ? TakeSelectionBeside(sync, answer, pulledAgainst, log, context, host)
-            : ClipboardUtils.ApplyPreservingFiles(sync, From(answer, log, context, host), log, context);
+            ? TakeSelectionBeside(sync, answer, pulledAgainst, log, context)
+            : ClipboardUtils.ApplyPreservingFiles(sync, From(answer, log, context), log, context);
     }
 
     // the selection beside a clipboard this host already has, set if it differs; a primary repeating the text is the
     // receiver's own text. What it applied, if anything
-    private static ClipboardSnapshot? TakeSelectionBeside(IClipboardSync sync, IClipboardSelection m, ClipboardBaseline beside, ILogger log, string context,
-        string host)
+    private static ClipboardSnapshot? TakeSelectionBeside(IClipboardSync sync, IClipboardSelection m, ClipboardBaseline beside, ILogger log, string context)
     {
-        var selection = Fit(Primary(beside.Text, m.PrimaryText, m.PrimaryIsText), "primary text", log, context, host);
+        var selection = Fit(Primary(beside.Text, m.PrimaryText, m.PrimaryIsText), "primary text", log, context);
         return selection != beside.PrimaryText && ClipboardSnapshot.SelectionOnly(selection) is { } alone
             ? ClipboardUtils.ApplyPreservingFiles(sync, alone, log, context)
             : null;
     }
 
     // null-out any field that individually exceeds the limit
-    private static ClipboardSnapshot ValidateFields(string? text, string? primaryText, byte[]? image, string? html, byte[]? rtf, ILogger log, string context, string host) =>
-        new(Fit(text, "text", log, context, host), Fit(primaryText, "primary text", log, context, host), Fit(image, "image", log, context, host),
-            Fit(html, "html", log, context, host), Fit(rtf, "rtf", log, context, host));
+    private static ClipboardSnapshot ValidateFields(string? text, string? primaryText, byte[]? image, string? html, byte[]? rtf, ILogger log, string context) =>
+        new(Fit(text, "text", log, context), Fit(primaryText, "primary text", log, context), Fit(image, "image", log, context),
+            Fit(html, "html", log, context), Fit(rtf, "rtf", log, context));
 
     // the text if it is within the limit, else null and a warning; empty is null
-    private static string? Fit(string? text, string what, ILogger log, string context, string host) =>
-        string.IsNullOrEmpty(text) ? null : Fits(Encoding.UTF8.GetByteCount(text), what, log, context, host) ? text : null;
+    private static string? Fit(string? text, string what, ILogger log, string context) =>
+        string.IsNullOrEmpty(text) ? null : Fits(Encoding.UTF8.GetByteCount(text), what, log, context) ? text : null;
 
-    private static byte[]? Fit(byte[]? data, string what, ILogger log, string context, string host) =>
-        data != null && Fits(data.Length, what, log, context, host) ? data : null;
+    private static byte[]? Fit(byte[]? data, string what, ILogger log, string context) =>
+        data != null && Fits(data.Length, what, log, context) ? data : null;
 
-    private static bool Fits(long bytes, string what, ILogger log, string context, string host)
+    private static bool Fits(long bytes, string what, ILogger log, string context)
     {
         if (bytes <= ClipboardUtils.MaxClipboardBytes) return true;
-        log.LogWarning("Clipboard {Context} from {Host}: {What} exceeds {Max} bytes, dropping", context, host, what, ClipboardUtils.MaxClipboardBytes);
+        log.LogWarning("Clipboard {Context}: {What} exceeds {Max} bytes, dropping", context, what, ClipboardUtils.MaxClipboardBytes);
         return false;
     }
 

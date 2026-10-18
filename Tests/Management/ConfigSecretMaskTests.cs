@@ -2,6 +2,7 @@ using System.Text.Json.Nodes;
 using Cathedral.Extensions;
 using Hydra.Config;
 using Hydra.Management;
+using static Tests.Setup.ConfigJson;
 
 namespace Tests.Management;
 
@@ -51,7 +52,7 @@ public class ConfigSecretMaskTests
     [Test]
     public void Restore_PutsBackTheValueTheLoaderUses_WhenKeysDifferOnlyInCase()
     {
-        const string source = """{"profiles":[{"mode":"Slave","networkConfig":"shadowed","NetworkConfig":"effective"}]}""";
+        var source = AsFile("""[{"mode":"Slave","networkConfig":"shadowed","NetworkConfig":"effective"}]""");
 
         var restored = ConfigSecretMask.Restore(ConfigSecretMask.Mask(source), source);
 

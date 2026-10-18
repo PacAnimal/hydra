@@ -55,8 +55,12 @@ public sealed class CursorHiderService(ILogger<CursorHiderService> log, IPlatfor
         Trigger();
     }
 
+    // test seam: runs as Show is about to take the state lock
+    internal Action? BeforeShowLocks { get; set; }
+
     public void Show()
     {
+        BeforeShowLocks?.Invoke();
         lock (_stateLock)
         {
             _hideIntent = false;

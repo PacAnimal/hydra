@@ -1,13 +1,12 @@
 using Hydra.Config;
 using Hydra.Keyboard;
+using Tests.Setup;
 
 namespace Tests.Config;
 
 [TestFixture]
 public class HotkeyTests
 {
-    private const KeyModifiers Chord = KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Super;
-
     private static KeyEvent Char(char ch, KeyModifiers mods) => KeyEvent.Char(KeyEventType.KeyDown, ch, mods);
     private static KeyEvent Special(SpecialKey key, KeyModifiers mods = KeyModifiers.None) => KeyEvent.Special(KeyEventType.KeyDown, key, mods);
 
@@ -23,7 +22,7 @@ public class HotkeyTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(hotkeys.Errors, Is.Empty);
-            Assert.That(hotkeys.Match(Char(ch, Chord)), Is.EqualTo(expected));
+            Assert.That(hotkeys.Match(Char(ch, HotkeyChord.Modifiers)), Is.EqualTo(expected));
         }
     }
 
@@ -33,7 +32,7 @@ public class HotkeyTests
         var hotkeys = HotkeyBindings.Build(null);
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(hotkeys.Match(Char('q', Chord)), Is.Null);
+            Assert.That(hotkeys.Match(Char('q', HotkeyChord.Modifiers)), Is.Null);
             Assert.That(hotkeys.Match(Char('l', KeyModifiers.None)), Is.Null, "plain 'l' must stay typeable");
             Assert.That(hotkeys.Match(Char('l', KeyModifiers.Control)), Is.Null, "a partial chord must not fire");
         }
@@ -44,7 +43,7 @@ public class HotkeyTests
     {
         // CapsLock/NumLock/ScrollLock ride along in Modifiers as lock state, not as part of the chord
         var hotkeys = HotkeyBindings.Build(null);
-        Assert.That(hotkeys.Match(Char('l', Chord | KeyModifiers.CapsLock | KeyModifiers.NumLock)),
+        Assert.That(hotkeys.Match(Char('l', HotkeyChord.Modifiers | KeyModifiers.CapsLock | KeyModifiers.NumLock)),
             Is.EqualTo(HotkeyAction.ToggleCursorLock));
     }
 
@@ -58,7 +57,7 @@ public class HotkeyTests
             Assert.That(hotkeys.Match(Special(SpecialKey.ScrollLock)), Is.EqualTo(HotkeyAction.ToggleCursorLock));
             // pressing ScrollLock also sets its own lock bit on that very event
             Assert.That(hotkeys.Match(Special(SpecialKey.ScrollLock, KeyModifiers.ScrollLock)), Is.EqualTo(HotkeyAction.ToggleCursorLock));
-            Assert.That(hotkeys.Match(Char('l', Chord)), Is.Null, "a configured array replaces the default");
+            Assert.That(hotkeys.Match(Char('l', HotkeyChord.Modifiers)), Is.Null, "a configured array replaces the default");
         }
     }
 
@@ -69,7 +68,7 @@ public class HotkeyTests
         Assert.That(hotkeys.Errors, Is.Empty);
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(hotkeys.Match(Char('l', Chord)), Is.EqualTo(HotkeyAction.ToggleCursorLock));
+            Assert.That(hotkeys.Match(Char('l', HotkeyChord.Modifiers)), Is.EqualTo(HotkeyAction.ToggleCursorLock));
             Assert.That(hotkeys.Match(Special(SpecialKey.ScrollLock)), Is.EqualTo(HotkeyAction.ToggleCursorLock));
         }
     }
@@ -81,7 +80,7 @@ public class HotkeyTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(hotkeys.Match(Special(SpecialKey.F13)), Is.EqualTo(HotkeyAction.ToggleCursorLock));
-            Assert.That(hotkeys.Match(Char('v', Chord)), Is.EqualTo(HotkeyAction.PasteFiles));
+            Assert.That(hotkeys.Match(Char('v', HotkeyChord.Modifiers)), Is.EqualTo(HotkeyAction.PasteFiles));
         }
     }
 
@@ -95,7 +94,7 @@ public class HotkeyTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(hotkeys.Errors, Is.Empty, $"'{spec}' should parse");
-            Assert.That(hotkeys.Match(Char('l', Chord)), Is.EqualTo(HotkeyAction.ToggleCursorLock));
+            Assert.That(hotkeys.Match(Char('l', HotkeyChord.Modifiers)), Is.EqualTo(HotkeyAction.ToggleCursorLock));
         }
     }
 
@@ -151,7 +150,7 @@ public class HotkeyTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(hotkeys.Errors, Has.One.Contains(expectedError));
-            Assert.That(hotkeys.Match(Char('l', Chord)), Is.EqualTo(HotkeyAction.ToggleCursorLock),
+            Assert.That(hotkeys.Match(Char('l', HotkeyChord.Modifiers)), Is.EqualTo(HotkeyAction.ToggleCursorLock),
                 "a rejected binding must leave the action on its default, not unreachable");
         }
     }
@@ -170,7 +169,7 @@ public class HotkeyTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(hotkeys.Errors, Has.One.Contains("is empty"));
-            Assert.That(hotkeys.Match(Char('l', Chord)), Is.EqualTo(HotkeyAction.ToggleCursorLock));
+            Assert.That(hotkeys.Match(Char('l', HotkeyChord.Modifiers)), Is.EqualTo(HotkeyAction.ToggleCursorLock));
         }
     }
 }

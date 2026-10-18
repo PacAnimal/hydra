@@ -1,9 +1,9 @@
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Cathedral.Extensions;
 using Common;
 using Hydra.Relay;
-using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Tests.Relay;
 
@@ -58,11 +58,10 @@ public class RelayEncryptionTests
     {
         var enc = new RelayEncryption("testkey");
         var dec = new RelayEncryption("testkey");
-        var log = NullLogger.Instance;
 
         var payload = "Hello, World!"u8.ToArray();
         var encrypted = await enc.Encrypt(payload);
-        var decrypted = await dec.Decrypt("peer", encrypted, log);
+        var decrypted = await dec.Decrypt("peer", encrypted);
 
         Assert.That(decrypted, Is.EqualTo(payload));
     }
@@ -74,17 +73,83 @@ public class RelayEncryptionTests
         var sender1 = new RelayEncryption(key);
         var sender2 = new RelayEncryption(key); // simulates peer reconnecting (new GenerateKey salt)
         var receiver = new RelayEncryption(key);
-        var log = NullLogger.Instance;
 
         // first message from sender1 — receiver caches its remote key
         var msg1 = await sender1.Encrypt("first"u8.ToArray());
-        var dec1 = await receiver.Decrypt("peer", msg1, log);
+        var dec1 = await receiver.Decrypt("peer", msg1);
         Assert.That(dec1, Is.EqualTo("first"u8.ToArray()));
 
         // peer reconnects — sender2 has a different salt
         var msg2 = await sender2.Encrypt("second"u8.ToArray());
-        var dec2 = await receiver.Decrypt("peer", msg2, log);
+        var dec2 = await receiver.Decrypt("peer", msg2);
         Assert.That(dec2, Is.EqualTo("second"u8.ToArray()));
+    }
+
+    [Test]
+    public async Task Decrypt_JunkFrame_KeepsCachedKey()
+    {
+        const string key = "mypassword";
+        var state = new WorldState();
+        var sender = new RelayEncryption(key);
+        var receiver = new RelayEncryption(key, state);
+
+        await receiver.Decrypt("peer", await sender.Encrypt("first"u8.ToArray()));
+        var good = await state.GetRemoteKey("peer");
+
+        Assert.That(async () => await receiver.Decrypt("peer", RandomNumberGenerator.GetBytes(200)), Throws.Exception);
+
+        var after = await state.GetRemoteKey("peer");
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(after?.AesGcmKey, Is.SameAs(good?.AesGcmKey));
+            Assert.That(await receiver.Decrypt("peer", await sender.Encrypt("second"u8.ToArray())), Is.EqualTo("second"u8.ToArray()));
+        }
+    }
+
+    [Test]
+    public async Task Decrypt_JunkFirstFrame_CachesNothing()
+    {
+        var state = new WorldState();
+        var receiver = new RelayEncryption("mypassword", state);
+
+        Assert.That(async () => await receiver.Decrypt("peer", RandomNumberGenerator.GetBytes(200)), Throws.Exception);
+
+        Assert.That(await state.GetRemoteKey("peer"), Is.Null);
+    }
+
+    [Test]
+    public async Task Decrypt_TamperedFrameWithCachedSalt_KeepsCachedKey()
+    {
+        const string key = "mypassword";
+        var state = new WorldState();
+        var sender = new RelayEncryption(key);
+        var receiver = new RelayEncryption(key, state);
+
+        await receiver.Decrypt("peer", await sender.Encrypt("first"u8.ToArray()));
+        var good = await state.GetRemoteKey("peer");
+
+        var tampered = await sender.Encrypt("second"u8.ToArray());
+        tampered[^1] ^= 0xFF;
+        Assert.That(async () => await receiver.Decrypt("peer", tampered), Throws.Exception);
+
+        var after = await state.GetRemoteKey("peer");
+        Assert.That(after?.AesGcmKey, Is.SameAs(good?.AesGcmKey));
+    }
+
+    [Test]
+    public async Task Decrypt_SameSalt_DerivesOnce()
+    {
+        const string key = "mypassword";
+        var state = new WorldState();
+        var sender = new RelayEncryption(key);
+        var receiver = new RelayEncryption(key, state);
+
+        await receiver.Decrypt("peer", await sender.Encrypt("first"u8.ToArray()));
+        var first = await state.GetRemoteKey("peer");
+        await receiver.Decrypt("peer", await sender.Encrypt("second"u8.ToArray()));
+
+        var second = await state.GetRemoteKey("peer");
+        Assert.That(second?.AesGcmKey, Is.SameAs(first?.AesGcmKey));
     }
 
     [Test]
@@ -94,16 +159,15 @@ public class RelayEncryptionTests
         var peerA = new RelayEncryption(key);
         var peerB = new RelayEncryption(key);
         var receiver = new RelayEncryption(key);
-        var log = NullLogger.Instance;
 
         var msgA = await peerA.Encrypt("from-a"u8.ToArray());
         var msgB = await peerB.Encrypt("from-b"u8.ToArray());
 
         // interleaved messages from two peers
-        var decA1 = await receiver.Decrypt("peer-a", msgA, log);
-        var decB1 = await receiver.Decrypt("peer-b", msgB, log);
-        var decA2 = await receiver.Decrypt("peer-a", await peerA.Encrypt("from-a-again"u8.ToArray()), log);
-        var decB2 = await receiver.Decrypt("peer-b", await peerB.Encrypt("from-b-again"u8.ToArray()), log);
+        var decA1 = await receiver.Decrypt("peer-a", msgA);
+        var decB1 = await receiver.Decrypt("peer-b", msgB);
+        var decA2 = await receiver.Decrypt("peer-a", await peerA.Encrypt("from-a-again"u8.ToArray()));
+        var decB2 = await receiver.Decrypt("peer-b", await peerB.Encrypt("from-b-again"u8.ToArray()));
 
         using (Assert.EnterMultipleScope())
         {
@@ -122,19 +186,18 @@ public class RelayEncryptionTests
         var peerB = new RelayEncryption(key);
         var peerBReconnected = new RelayEncryption(key); // new instance = new salt
         var receiver = new RelayEncryption(key);
-        var log = NullLogger.Instance;
 
         // establish both peers
-        var decA1 = await receiver.Decrypt("peer-a", await peerA.Encrypt("a-hello"u8.ToArray()), log);
-        var decB1 = await receiver.Decrypt("peer-b", await peerB.Encrypt("b-hello"u8.ToArray()), log);
+        var decA1 = await receiver.Decrypt("peer-a", await peerA.Encrypt("a-hello"u8.ToArray()));
+        var decB1 = await receiver.Decrypt("peer-b", await peerB.Encrypt("b-hello"u8.ToArray()));
 
         // peer-b reconnects with a new key; peer-a keeps sending normally
-        var decA2 = await receiver.Decrypt("peer-a", await peerA.Encrypt("a-after-b-reconnect"u8.ToArray()), log);
-        var decB2 = await receiver.Decrypt("peer-b", await peerBReconnected.Encrypt("b-reconnected"u8.ToArray()), log);
+        var decA2 = await receiver.Decrypt("peer-a", await peerA.Encrypt("a-after-b-reconnect"u8.ToArray()));
+        var decB2 = await receiver.Decrypt("peer-b", await peerBReconnected.Encrypt("b-reconnected"u8.ToArray()));
 
         // both peers continue working correctly after the reconnect
-        var decA3 = await receiver.Decrypt("peer-a", await peerA.Encrypt("a-final"u8.ToArray()), log);
-        var decB3 = await receiver.Decrypt("peer-b", await peerBReconnected.Encrypt("b-final"u8.ToArray()), log);
+        var decA3 = await receiver.Decrypt("peer-a", await peerA.Encrypt("a-final"u8.ToArray()));
+        var decB3 = await receiver.Decrypt("peer-b", await peerBReconnected.Encrypt("b-final"u8.ToArray()));
 
         using (Assert.EnterMultipleScope())
         {

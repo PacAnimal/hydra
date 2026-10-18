@@ -1,21 +1,22 @@
+using System.ComponentModel;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Text;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform.Windows;
 
 // borderless per-pixel-alpha layered window that floats above everything else.
-// displays outlined text centered horizontally, 10% from the bottom of the primary screen.
+// displays outlined text centered horizontally, 10% from the bottom of the monitor the pointer is on.
 // shows for 1.5s then fades out over 0.3s. click-through (WS_EX_TRANSPARENT).
 [SupportedOSPlatform("windows")]
 internal sealed class WindowsOsdNotification : IOsdNotification, IDisposable
 {
+    private readonly ILogger<WindowsOsdNotification> _log;
     private readonly StaMessageLoop _loop;
-    private nint _hwnd;
-    private WndProc? _wndProc;
+    private Win32Window? _window; // STA thread only
 
     private nint _hbmp;
     private int _bmpW, _bmpH, _posX, _posY;
@@ -26,85 +27,46 @@ internal sealed class WindowsOsdNotification : IOsdNotification, IDisposable
     private const uint ShowDurationMs = 1500; // solid display before fade (matches Mac)
     private const uint FadeTickMs = 16;       // ~60fps
     private const int FadeStep = 14;          // 255/14 ≈ 18 ticks ≈ 0.29s fade (matches Mac 0.3s)
-    private const uint WmShowOsd = NativeMethods.WM_USER + 61;
 
-    public WindowsOsdNotification()
+    public WindowsOsdNotification(ILogger<WindowsOsdNotification> log)
     {
+        _log = log;
         _loop = new StaMessageLoop(
             "HydraOsd",
             init: CreateWindow,
-            onThreadMessage: HandleThreadMessage);
+            onExit: () =>
+            {
+                _window?.Dispose();
+                _window = null;
+                FreeHbmp();
+            });
     }
 
-    public void Show(string message)
-    {
-        var handle = GCHandle.Alloc(message);
-        if (!NativeMethods.PostThreadMessage(_loop.ThreadId, WmShowOsd, nint.Zero, GCHandle.ToIntPtr(handle)))
-            handle.Free();
-    }
+    public void Show(string message) => _loop.Post(() => ShowOnSta(message));
 
-    private bool HandleThreadMessage(MSG msg)
-    {
-        if (msg.message == WmShowOsd)
-        {
-            var handle = GCHandle.FromIntPtr(msg.lParam);
-            var text = (string?)handle.Target ?? "";
-            handle.Free();
-            ShowOnSta(text);
-            return true;
-        }
-        if (msg.hwnd == nint.Zero && msg.message == NativeMethods.WM_TIMER)
-        {
-            if ((nuint)msg.wParam == TimerId) { StartFadeOnSta(); return true; }
-            if ((nuint)msg.wParam == FadeTimerId) { FadeTickOnSta(); return true; }
-        }
-        return false;
-    }
+    // the window's handle, zero if it could not be made
+    private nint Hwnd => _window?.Handle ?? nint.Zero;
 
     private void CreateWindow()
     {
         // prime GDI+ font + rendering pipeline so the first real Show() is instant
         try { using var warm = RenderText(" ", 1f, out _, out _); } catch { /* ignore */ }
 
-        _wndProc = WndProcImpl;
-        var hInstance = NativeMethods.GetModuleHandleW(nint.Zero);
-        var className = Marshal.StringToHGlobalUni("HydraOsd");
-        try
-        {
-            var wc = new NativeMethods.WNDCLASSEXW
-            {
-                cbSize = (uint)Marshal.SizeOf<NativeMethods.WNDCLASSEXW>(),
-                lpfnWndProc = Marshal.GetFunctionPointerForDelegate(_wndProc),
-                hInstance = hInstance,
-                lpszClassName = className,
-            };
-            var atom = NativeMethods.RegisterClassExW(in wc);
-            if (atom == 0) return;
-
-            var exStyle = NativeMethods.WS_EX_LAYERED
-                | NativeMethods.WS_EX_TOPMOST
-                | NativeMethods.WS_EX_TOOLWINDOW
-                | NativeMethods.WS_EX_NOACTIVATE
-                | NativeMethods.WS_EX_TRANSPARENT;
-
-            _hwnd = NativeMethods.CreateWindowExW(
-                exStyle, atom, nint.Zero,
-                NativeMethods.WS_POPUP,
-                0, 0, 1, 1,
-                nint.Zero, nint.Zero, hInstance, nint.Zero);
-        }
-        finally
-        {
-            Marshal.FreeHGlobal(className);
-        }
+        const uint exStyle = NativeMethods.WS_EX_LAYERED
+            | NativeMethods.WS_EX_TOPMOST
+            | NativeMethods.WS_EX_TOOLWINDOW
+            | NativeMethods.WS_EX_NOACTIVATE
+            | NativeMethods.WS_EX_TRANSPARENT;
+        try { _window = new Win32Window("HydraOsd", WndProcImpl, NativeMethods.WS_POPUP, exStyle); }
+        catch (Win32Exception ex) { _log.LogWarning(ex, "Could not create the OSD window; notifications will not show"); }
     }
 
     private void ShowOnSta(string text)
     {
-        if (_hwnd == nint.Zero) return;
+        if (Hwnd == nint.Zero) return;
 
-        NativeMethods.KillTimer(_hwnd, TimerId);
-        NativeMethods.KillTimer(_hwnd, FadeTimerId);
+        NativeMethods.KillTimer(Hwnd, TimerId);
+        NativeMethods.KillTimer(Hwnd, FadeTimerId);
         FreeHbmp();
 
         NativeMethods.GetCursorPos(out var cursor);
@@ -126,18 +88,18 @@ internal sealed class WindowsOsdNotification : IOsdNotification, IDisposable
         _posX = mx + (sw - bmpW) / 2;
         _posY = my + sh - bmpH - (int)(sh * 0.1);
 
-        NativeMethods.SetWindowPos(_hwnd, NativeMethods.HWND_TOPMOST, _posX, _posY, _bmpW, _bmpH,
+        NativeMethods.SetWindowPos(Hwnd, NativeMethods.HWND_TOPMOST, _posX, _posY, _bmpW, _bmpH,
             NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_SHOWWINDOW);
         DrawAlpha(255);
 
-        NativeMethods.SetTimer(_hwnd, TimerId, ShowDurationMs, nint.Zero);
+        NativeMethods.SetTimer(Hwnd, TimerId, ShowDurationMs, nint.Zero);
     }
 
     private void StartFadeOnSta()
     {
-        NativeMethods.KillTimer(_hwnd, TimerId);
+        NativeMethods.KillTimer(Hwnd, TimerId);
         _fadeAlpha = 255;
-        NativeMethods.SetTimer(_hwnd, FadeTimerId, FadeTickMs, nint.Zero);
+        NativeMethods.SetTimer(Hwnd, FadeTimerId, FadeTickMs, nint.Zero);
     }
 
     private void FadeTickOnSta()
@@ -163,7 +125,7 @@ internal sealed class WindowsOsdNotification : IOsdNotification, IDisposable
         var screenDc = NativeMethods.GetDC(nint.Zero);
         var memDc = NativeMethods.CreateCompatibleDC(screenDc);
         var oldBmp = NativeMethods.SelectObject(memDc, _hbmp);
-        NativeMethods.UpdateLayeredWindow(_hwnd, nint.Zero, ref dstPt, ref size, memDc, ref srcPt, 0, ref blend, NativeMethods.ULW_ALPHA);
+        NativeMethods.UpdateLayeredWindow(Hwnd, nint.Zero, ref dstPt, ref size, memDc, ref srcPt, 0, ref blend, NativeMethods.ULW_ALPHA);
         NativeMethods.SelectObject(memDc, oldBmp);
         NativeMethods.DeleteDC(memDc);
         _ = NativeMethods.ReleaseDC(nint.Zero, screenDc);
@@ -171,10 +133,10 @@ internal sealed class WindowsOsdNotification : IOsdNotification, IDisposable
 
     private void HideOnSta()
     {
-        if (_hwnd == nint.Zero) return;
-        NativeMethods.KillTimer(_hwnd, TimerId);
-        NativeMethods.KillTimer(_hwnd, FadeTimerId);
-        NativeMethods.ShowWindow(_hwnd, NativeMethods.SW_HIDE);
+        if (Hwnd == nint.Zero) return;
+        NativeMethods.KillTimer(Hwnd, TimerId);
+        NativeMethods.KillTimer(Hwnd, FadeTimerId);
+        NativeMethods.ShowWindow(Hwnd, NativeMethods.SW_HIDE);
         FreeHbmp();
     }
 
@@ -261,10 +223,5 @@ internal sealed class WindowsOsdNotification : IOsdNotification, IDisposable
         return NativeMethods.DefWindowProcW(hWnd, msg, wParam, lParam);
     }
 
-    public void Dispose()
-    {
-        if (_hwnd != nint.Zero) { NativeMethods.DestroyWindow(_hwnd); _hwnd = nint.Zero; }
-        FreeHbmp();
-        _loop.Dispose();
-    }
+    public void Dispose() => _loop.Dispose();
 }

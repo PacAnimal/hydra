@@ -29,65 +29,34 @@ public sealed class WindowsClipboardSync : IClipboardSync, IDisposable
 
     // dedicated owner window for the clipboard — passing NULL to OpenClipboard makes EmptyClipboard
     // set a NULL owner, which per MSDN causes SetClipboardData to fail. A real HWND fixes that.
-    private nint _ownerWindow;
-    private WndProc? _ownerWndProc;  // keep-alive to prevent GC of the delegate
-    private nint _ownerClassName;
+    private readonly Win32Window? _owner;
 
     public WindowsClipboardSync(ILogger<WindowsClipboardSync> log)
     {
         _log = log;
-        CreateOwnerWindow();
+        _owner = CreateOwnerWindow();
         _primary = new CopiedPrimary(() => NativeMethods.GetClipboardSequenceNumber(), ReadTextCopy, log);
         _echo = new ClipboardEchoFilter(_primary.Owns);
     }
 
     // message-only window created once on the constructing (main) thread. No message pump is needed:
     // OpenClipboard/SetClipboardData do not require one — only clipboard-listener notifications do.
-    private void CreateOwnerWindow()
+    private Win32Window? CreateOwnerWindow()
     {
         try
         {
-            _ownerWndProc = (h, msg, wParam, lParam) => NativeMethods.DefWindowProcW(h, msg, wParam, lParam);
-            var hInst = NativeMethods.GetModuleHandleW(nint.Zero);
-            _ownerClassName = Marshal.StringToHGlobalUni("HydraClipboardOwner");
-            var wc = new NativeMethods.WNDCLASSEXW
-            {
-                cbSize = (uint)Marshal.SizeOf<NativeMethods.WNDCLASSEXW>(),
-                lpfnWndProc = Marshal.GetFunctionPointerForDelegate(_ownerWndProc),
-                hInstance = hInst,
-                lpszClassName = _ownerClassName,
-            };
-            var atom = NativeMethods.RegisterClassExW(in wc);
-            if (atom == 0)
-            {
-                _log.LogWarning("RegisterClassExW failed for clipboard owner (error {Error})", Marshal.GetLastWin32Error());
-                return;
-            }
-            _ownerWindow = NativeMethods.CreateWindowExW(0, atom, nint.Zero, 0,
-                0, 0, 0, 0, NativeMethods.HWND_MESSAGE, nint.Zero, hInst, nint.Zero);
-            if (_ownerWindow == nint.Zero)
-                _log.LogWarning("CreateWindowExW failed for clipboard owner (error {Error}) — falling back to NULL owner", Marshal.GetLastWin32Error());
+            return Win32Window.MessageOnly("HydraClipboardOwner");
         }
         catch (Exception ex)
         {
             _log.LogWarning(ex, "Failed to create clipboard owner window — falling back to NULL owner");
+            return null;
         }
     }
 
-    public void Dispose()
-    {
-        if (_ownerWindow != nint.Zero)
-        {
-            NativeMethods.DestroyWindow(_ownerWindow);
-            _ownerWindow = nint.Zero;
-        }
-        if (_ownerClassName != nint.Zero)
-        {
-            Marshal.FreeHGlobal(_ownerClassName);
-            _ownerClassName = nint.Zero;
-        }
-        _ownerWndProc = null;
-    }
+    private nint OwnerWindow => _owner?.Handle ?? nint.Zero;
+
+    public void Dispose() => _owner?.Dispose();
 
     public string? GetText() => WithClipboard(() => _echo.FilterText(ReadOpenText()));
 
@@ -110,7 +79,7 @@ public sealed class WindowsClipboardSync : IClipboardSync, IDisposable
 
     // CopiedPrimary's readTextCopy, by clipboard format; one attempt, since it runs under CopiedPrimary's gate
     private string? ReadTextCopy() =>
-        NativeMethods.OpenClipboard(_ownerWindow)
+        NativeMethods.OpenClipboard(OwnerWindow)
             ? WhileOpen(() => NotTextCopyFormats.Any(NativeMethods.IsClipboardFormatAvailable) || IsConcealed() ? null : ReadOpenText())
             : throw new IOException("the clipboard is held by another app");
 
@@ -178,7 +147,7 @@ public sealed class WindowsClipboardSync : IClipboardSync, IDisposable
             // after closing, which moves the sequence number too; read before asking who owns the clipboard, so
             // another app writing after either leaves it untaken, never taken as ours
             var after = NativeMethods.GetClipboardSequenceNumber();
-            if (NativeMethods.GetClipboardOwner() == _ownerWindow) leftAt(after);
+            if (NativeMethods.GetClipboardOwner() == OwnerWindow) leftAt(after);
         }));
     }
 
@@ -381,7 +350,7 @@ public sealed class WindowsClipboardSync : IClipboardSync, IDisposable
         // clipboard is a global mutex; retry a few times if another app has it
         for (var i = 0; i < 5; i++)
         {
-            if (NativeMethods.OpenClipboard(_ownerWindow)) return true;
+            if (NativeMethods.OpenClipboard(OwnerWindow)) return true;
             Thread.Sleep(5);
         }
         _log.LogWarning("Failed to open clipboard after 5 retries");

@@ -12,13 +12,8 @@ using Tests.Setup;
 namespace Tests.Relay;
 
 [TestFixture]
-public class MasterSlaveProtocolTests
+public class MasterSlaveProtocolTests : ServicesFixture
 {
-    private readonly StartedServices _services = new();
-
-    [TearDown]
-    public Task TearDown() => _services.StopAll();
-
     // -- MasterRelayConnection message filtering --
 
     [Test]
@@ -66,7 +61,7 @@ public class MasterSlaveProtocolTests
     {
         var config = MakeConfig("slave-pc");
         var logs = new LogCapture();
-        var (_, relay, _) = await _services.Start(TransitionTestHelper.CreateService(profile: config, loggerFactory: logs));
+        var (_, relay, _) = await Services.Start(TransitionTestHelper.CreateService(profile: config, loggerFactory: logs));
 
         var msg = new SlaveLogMessage((int)LogLevel.Warning, "MyService", "something went wrong", null);
         await relay.FireMessageReceived("slave-pc", MessageKind.SlaveLog, JsonSerializer.Serialize(msg, SaneJson.Options));
@@ -85,7 +80,7 @@ public class MasterSlaveProtocolTests
     {
         var config = MakeConfig("slave-pc");
         var logs = new LogCapture();
-        var (_, relay, _) = await _services.Start(TransitionTestHelper.CreateService(profile: config, loggerFactory: logs));
+        var (_, relay, _) = await Services.Start(TransitionTestHelper.CreateService(profile: config, loggerFactory: logs));
 
         var msg = new SlaveLogMessage((int)LogLevel.Error, "Crasher", "boom", "System.Exception: kaboom");
         await relay.FireMessageReceived("slave-pc", MessageKind.SlaveLog, JsonSerializer.Serialize(msg, SaneJson.Options));
@@ -100,38 +95,38 @@ public class MasterSlaveProtocolTests
     public async Task OnPeersChanged_SendsMasterConfigOnlyToConfiguredSlaves()
     {
         var config = MakeConfig("slave-pc");
-        var (_, relay, _) = await _services.Start(TransitionTestHelper.CreateService(profile: config));
+        var (_, relay, _) = await Services.Start(TransitionTestHelper.CreateService(profile: config));
 
         await relay.FirePeersChanged("slave-pc", "other-master");
 
-        Assert.That(MasterConfigTargets(relay), Is.EqualTo(["slave-pc"]));
+        Assert.That(relay.Sent.TargetsOf(MessageKind.MasterConfig), Is.EqualTo(["slave-pc"]));
     }
 
     [Test]
     public async Task OnPeersChanged_SendsMasterConfigAgainAfterSlaveReappears()
     {
         var config = MakeConfig("slave-pc");
-        var (_, relay, _) = await _services.Start(TransitionTestHelper.CreateService(profile: config));
+        var (_, relay, _) = await Services.Start(TransitionTestHelper.CreateService(profile: config));
 
         await relay.FirePeersChanged("slave-pc");
         await relay.FirePeersChanged();           // slave disappears
-        relay.ClearSent();
+        relay.Sent.Clear();
         await relay.FirePeersChanged("slave-pc"); // slave reappears
 
-        Assert.That(MasterConfigTargets(relay), Is.EqualTo(["slave-pc"]));
+        Assert.That(relay.Sent.TargetsOf(MessageKind.MasterConfig), Is.EqualTo(["slave-pc"]));
     }
 
     [Test]
     public async Task OnPeersChanged_DoesNotResendMasterConfigWhileSlaveStillConnected()
     {
         var config = MakeConfig("slave-pc");
-        var (_, relay, _) = await _services.Start(TransitionTestHelper.CreateService(profile: config));
+        var (_, relay, _) = await Services.Start(TransitionTestHelper.CreateService(profile: config));
 
         await relay.FirePeersChanged("slave-pc");
-        relay.ClearSent();
+        relay.Sent.Clear();
         await relay.FirePeersChanged("slave-pc", "another-peer"); // slave still present
 
-        Assert.That(MasterConfigTargets(relay), Is.Empty);
+        Assert.That(relay.Sent.TargetsOf(MessageKind.MasterConfig), Is.Empty);
     }
 
     // -- slave relay disconnect --
@@ -205,15 +200,9 @@ public class MasterSlaveProtocolTests
         await state.AddMaster("quiet-master", new MasterConfigMessage(LogLevel.Warning));
 
         var forwarder = new SlaveLogForwarder();
-        await forwarder.ForwardAsync(new LogEntry(LogLevel.Debug, "Test", default, "debug msg", "debug msg", null));
+        await forwarder.Forward(new LogEntry(LogLevel.Debug, "Test", default, "debug msg", "debug msg", null));
 
-        var relay = new FakeRelay();
-        var sender = new SlaveLogSender(relay, forwarder, state, NullLogger<SlaveLogSender>.Instance);
-        await sender.StartAsync(CancellationToken.None);
-        await relay.WaitForSent(MessageKind.SlaveLog);
-        await sender.StopAsync(CancellationToken.None);
-
-        var sent = relay.Snapshot().Where(s => s.Kind == MessageKind.SlaveLog).ToList();
+        var sent = await SlaveLogsSent(forwarder, state);
         Assert.That(sent, Has.Count.EqualTo(1));
         Assert.That(sent[0].Targets, Is.EquivalentTo(["verbose-master"]));
     }
@@ -225,17 +214,11 @@ public class MasterSlaveProtocolTests
         await state.AddMaster("master", new MasterConfigMessage(LogLevel.Warning));
 
         var forwarder = new SlaveLogForwarder();
-        await forwarder.ForwardAsync(new LogEntry(LogLevel.Debug, "Test", default, "debug msg", "debug msg", null));
+        await forwarder.Forward(new LogEntry(LogLevel.Debug, "Test", default, "debug msg", "debug msg", null));
         // entries go out in order, so this one arriving means the debug entry before it was already judged
-        await forwarder.ForwardAsync(new LogEntry(LogLevel.Warning, "Test", default, "warning msg", "warning msg", null));
+        await forwarder.Forward(new LogEntry(LogLevel.Warning, "Test", default, "warning msg", "warning msg", null));
 
-        var relay = new FakeRelay();
-        var sender = new SlaveLogSender(relay, forwarder, state, NullLogger<SlaveLogSender>.Instance);
-        await sender.StartAsync(CancellationToken.None);
-        await relay.WaitForSent(MessageKind.SlaveLog);
-        await sender.StopAsync(CancellationToken.None);
-
-        var sent = relay.Snapshot().Where(s => s.Kind == MessageKind.SlaveLog).ToList();
+        var sent = await SlaveLogsSent(forwarder, state);
         Assert.That(sent, Has.Count.EqualTo(1));
         Assert.That(sent[0].Json, Does.Contain("warning msg"), "the debug entry below every master's level went out");
     }
@@ -246,17 +229,11 @@ public class MasterSlaveProtocolTests
         var state = new WorldState();
         await state.AddMaster("master", new MasterConfigMessage(LogLevel.Information));
         var forwarder = new SlaveLogForwarder();
-        await forwarder.ForwardAsync(new LogEntry(LogLevel.Information, "Test", LogEvents.FilePaths, "/Users/me/a.pdf", "/Users/me/a.pdf", null));
+        await forwarder.Forward(new LogEntry(LogLevel.Information, "Test", LogEvents.FilePaths, "/Users/me/a.pdf", "/Users/me/a.pdf", null));
         // entries go out in order, so this one arriving means the marked entry before it was already judged
-        await forwarder.ForwardAsync(new LogEntry(LogLevel.Information, "Test", default, "plain msg", "plain msg", null));
+        await forwarder.Forward(new LogEntry(LogLevel.Information, "Test", default, "plain msg", "plain msg", null));
 
-        var relay = new FakeRelay();
-        var sender = new SlaveLogSender(relay, forwarder, state, NullLogger<SlaveLogSender>.Instance);
-        await sender.StartAsync(CancellationToken.None);
-        await relay.WaitForSent(MessageKind.SlaveLog);
-        await sender.StopAsync(CancellationToken.None);
-
-        var sent = relay.Snapshot().Where(s => s.Kind == MessageKind.SlaveLog).ToList();
+        var sent = await SlaveLogsSent(forwarder, state);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(sent, Has.Count.EqualTo(1));
@@ -273,8 +250,14 @@ public class MasterSlaveProtocolTests
             Hosts = [new HostConfig { Name = "main" }, .. slaveNames.Select(n => new HostConfig { Name = n })],
         });
 
-    private static List<string> MasterConfigTargets(FakeRelay relay) =>
-        [.. relay.Snapshot().Where(s => s.Kind == MessageKind.MasterConfig).SelectMany(s => s.Targets)];
+    // runs a sender over what was forwarded, until its first SlaveLog has gone out
+    private async Task<List<SentMessage>> SlaveLogsSent(SlaveLogForwarder forwarder, WorldState state)
+    {
+        var relay = new FakeRelay();
+        await Services.Start(new SlaveLogSender(relay, forwarder, state, NullLogger<SlaveLogSender>.Instance));
+        await relay.Sent.WaitFor(MessageKind.SlaveLog);
+        return relay.Sent.Of(MessageKind.SlaveLog);
+    }
 
     private sealed class TestableMasterRelay : MasterRelayConnection
     {

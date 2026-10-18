@@ -97,20 +97,12 @@ public class SlaveRelayConnection : RelayConnection
             SendScreenInfo(master, snapshot.Entries);
     }
 
-    // the geometry we advertise to masters: live while awake, the last awake snapshot while dormant. A
-    // dormant machine is still a normal, fully-sized peer as far as its masters are concerned — it is
-    // refusing input, not shrinking — and a master told otherwise rebuilds its layout around the phantom
-    // and drags a parked cursor off us.
+    // live while awake, the last awake snapshot while dormant: dormant means refusing input, not shrinking
     private async ValueTask<LocalScreenSnapshot> AdvertisedScreens()
     {
         if (_dormancy.IsDormant && _cachedScreens is { } lastAwake) return lastAwake;
 
-        // ON THE CONNECTION'S TOKEN. ScreenDetector completes its readiness only once Detect() has succeeded
-        // once, and Detect() throwing — an X server restart, a display hot-unplugged — leaves it retrying
-        // every two seconds with readiness still unset. Awaited with no token, from OnAuthenticated, that is
-        // a slave which never finishes authenticating, never starts either drain, and never drops the
-        // connection: silent and permanent. The token does not fix the detector; it stops one wedged
-        // subsystem taking the relay down with it.
+        // connection token: a wedged detector must not hold the login
         var snapshot = await _screens.Get(ConnectionToken);
         _cachedScreens = snapshot;
         return snapshot;
@@ -284,7 +276,7 @@ public class SlaveRelayConnection : RelayConnection
                 await HandleFileStreamRequest(sourceHost, body);
                 break;
             case var _ when FileTransferService.IsFileTransferMessage(kind):
-                if (await _fileTransfer.OnMessageAsync(sourceHost, kind, body, this))
+                if (await _fileTransfer.OnMessage(sourceHost, kind, body, this))
                     _osd.Show(FileTransferService.PastedOsd);
                 break;
             default:
@@ -335,26 +327,19 @@ public class SlaveRelayConnection : RelayConnection
         await base.OnPeers(hostNames);
     }
 
-    // messages that mean a human is doing something. We are only dormant because the user stepped away and
-    // the displays slept, so any of these says they are back — including ActivityPing, which a master only
-    // sends off the back of real local input. The ping usually arrives first, while they are still working
-    // on the master and have not reached for us yet.
+    // messages that mean a human is back, ActivityPing included (a master sends it only on real local input)
     private static bool IsWakeSignal(MessageKind kind) => kind is
         MessageKind.MouseMove or MessageKind.MouseMoveDelta or MessageKind.MouseButton or
         MessageKind.MouseScroll or MessageKind.KeyEvent or MessageKind.KeyEventBatch or
         MessageKind.EnterScreen or MessageKind.ActivityPing;
 
-    // returns true when the message must not reach the normal handlers. Dormant means we stay on the relay
-    // but touch nothing locally: input is refused rather than injected, and everything else is discarded.
-    // MasterConfig, LeaveScreen and EnterScreen fall through so peer, held-key and on-screen bookkeeping
-    // is still correct once we wake.
+    // true when the message must not reach its handler; what falls through keeps the bookkeeping right for the wake
     private bool DropWhileDormant(string sourceHost, MessageKind kind)
     {
         if (IsWakeSignal(kind))
         {
             OnActivityWhileDormant(sourceHost, kind);
-            // EnterScreen still runs: we must know a master is parked on us when we wake, or the local
-            // cursor stays hidden under a remote pointer. Only its cursor move is suppressed, in the handler.
+            // EnterScreen still runs, minus its cursor move, so we know a master is parked on us when we wake
             return kind != MessageKind.EnterScreen;
         }
         if (kind is MessageKind.MasterConfig or MessageKind.LeaveScreen
@@ -371,9 +356,7 @@ public class SlaveRelayConnection : RelayConnection
     private void AnswerSelectionQuery(string sourceHost, string message) =>
         this.Send(sourceHost, MessageKind.FileSelectionResponse, new FileSelectionResponseMessage(null, message));
 
-    // activity keeps arriving for as long as its owner is at their desk, so this doubles as a retry if the
-    // first attempt to light the displays didn't take. Only the first one starts the clock — otherwise a
-    // master moving its mouse would keep pushing the deadline out and we would never hand the cursor back.
+    // every activity retries the wake, but only the first starts the deadline, or input would keep pushing it out
     private void OnActivityWhileDormant(string sourceHost, MessageKind kind)
     {
         if (_dormancy.RequestWake())
@@ -387,18 +370,14 @@ public class SlaveRelayConnection : RelayConnection
         WakeDisplay();
     }
 
-    // one attempt per second: input arrives in floods, and the displays need a moment to come back and
-    // fire the screen change that has NetworkWatcher re-check the conditions and lift dormancy.
-    private const long WakeThrottleMs = 1000;
-    private long _lastWakeTicks;
+    // input arrives in floods, and the displays need a moment to come back
+    private static readonly TimeSpan WakeInterval = TimeSpan.FromSeconds(1);
+    private readonly IntervalGate _wake = new(WakeInterval);
 
     private void WakeDisplay()
     {
-        var now = Environment.TickCount64;
-        var last = Interlocked.Read(ref _lastWakeTicks);
-        if (now - last < WakeThrottleMs) return;
-        if (Interlocked.CompareExchange(ref _lastWakeTicks, now, last) != last) return;
-        _screenSaverSync.WakeDisplay();
+        if (_wake.TryEnter())
+            _screenSaverSync.WakeDisplay();
     }
 
     // parses and dispatches an input event; shows cursor if the master is actively on screen
@@ -444,10 +423,8 @@ public class SlaveRelayConnection : RelayConnection
         if (Log.IsEnabled(LogLevel.Debug))
             Log.LogDebug("Key: {Type}{Label} mods={Modifiers}", msg.Type, label, msg.Modifiers);
 
-        // repeats are master-driven: each OS auto-repeat is re-resolved with live modifier/dead-key state on
-        // the master and injected here as-is. a repeat implies the key is held on the master, so track it too
-        // (Add is idempotent) — this covers a master entering the screen mid-hold, where the slave never saw
-        // the initial press and the key would otherwise be left untracked and stuck on screen leave. injection runs under the lock so it serialises with release-all.
+        // a repeat is injected as-is and leaves the key held (Add is idempotent); injecting under the lock serialises
+        // with release-all
         var heldKey = (msg.Character, msg.Key);
         using (await _heldLock.WaitForDisposable())
         {
@@ -494,7 +471,7 @@ public class SlaveRelayConnection : RelayConnection
         {
             if (Log.IsEnabled(LogLevel.Information))
                 Log.LogInformation("File selection query from {Host}: file transfer not supported on this platform", sourceHost);
-            return MessageSerializer.Encode(MessageKind.FileSelectionResponse, new FileSelectionResponseMessage(null, "Action not supported"));
+            return MessageSerializer.Encode(MessageKind.FileSelectionResponse, new FileSelectionResponseMessage(null, FileTransferService.NotSupportedOsd));
         }
         FileSelectionResult result;
         try

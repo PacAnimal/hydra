@@ -4,7 +4,7 @@ namespace Hydra.Management;
 
 internal sealed class RemoteManagementStore
 {
-    private static readonly TimeSpan PairingLifetime = TimeSpan.FromMinutes(10);
+    internal static readonly TimeSpan PairingLifetime = TimeSpan.FromMinutes(10);
     private readonly string _path;
     private readonly string _lockPath;
     private readonly SemaphoreSlim _lock = new(1, 1);
@@ -18,10 +18,10 @@ internal sealed class RemoteManagementStore
         _lockPath = dir.ManagementLock;
     }
 
-    internal async Task<string> CreatePairingCodeAsync(CancellationToken cancel = default)
+    internal async Task<string> CreatePairingCode(CancellationToken cancel = default)
     {
         var code = RemoteManagementCrypto.RandomSecret();
-        await MutateAsync(state =>
+        await Mutate(state =>
         {
             state.PairingCodes.RemoveAll(item => item.ExpiresAt <= DateTimeOffset.UtcNow);
             state.PairingCodes.Add(new StoredPairingCode(RemoteManagementCrypto.HashPairingCode(code), DateTimeOffset.UtcNow + PairingLifetime));
@@ -29,10 +29,10 @@ internal sealed class RemoteManagementStore
         return code;
     }
 
-    internal async Task<bool> ConsumePairingCodeAsync(string code, CancellationToken cancel)
+    internal async Task<bool> ConsumePairingCode(string code, CancellationToken cancel)
     {
         var consumed = false;
-        await MutateAsync(state =>
+        await Mutate(state =>
         {
             var hash = RemoteManagementCrypto.HashPairingCode(code);
             var match = state.PairingCodes.FirstOrDefault(item => item.ExpiresAt > DateTimeOffset.UtcNow
@@ -45,42 +45,42 @@ internal sealed class RemoteManagementStore
         return consumed;
     }
 
-    internal async Task<TargetCredential> CreateTargetCredentialAsync(CancellationToken cancel)
+    internal async Task<TargetCredential> CreateTargetCredential(CancellationToken cancel)
     {
         var controllerId = "";
-        await MutateAsync(state => controllerId = state.ControllerId, cancel);
+        await Mutate(state => controllerId = state.ControllerId, cancel);
         return new TargetCredential(controllerId, RemoteManagementCrypto.RandomSecret());
     }
 
-    internal Task SaveTargetAsync(string host, string secret, CancellationToken cancel) => MutateAsync(state =>
+    internal Task SaveTarget(string host, string secret, CancellationToken cancel) => Mutate(state =>
     {
         state.Targets.RemoveAll(item => item.Host.EqualsIgnoreCase(host));
         state.Targets.Add(new StoredRemoteTarget(host, secret));
     }, cancel);
 
-    internal async Task<TargetCredential?> GetTargetAsync(string host, CancellationToken cancel)
+    internal async Task<TargetCredential?> GetTarget(string host, CancellationToken cancel)
     {
-        var state = await ReadAsync(cancel);
+        var state = await Read(cancel);
         var target = state.Targets.FirstOrDefault(item => item.Host.EqualsIgnoreCase(host));
         return target == null ? null : new TargetCredential(state.ControllerId, target.Secret);
     }
 
-    internal Task SaveControllerAsync(string id, string secret, CancellationToken cancel) => MutateAsync(state =>
+    internal Task SaveController(string id, string secret, CancellationToken cancel) => Mutate(state =>
     {
         state.Controllers.RemoveAll(item => item.Id.Equals(id, StringComparison.Ordinal));
         state.Controllers.Add(new StoredRemoteController(id, secret));
     }, cancel);
 
-    internal async Task<string?> GetControllerSecretAsync(string id, CancellationToken cancel)
+    internal async Task<string?> GetControllerSecret(string id, CancellationToken cancel)
     {
-        var state = await ReadAsync(cancel);
+        var state = await Read(cancel);
         return state.Controllers.FirstOrDefault(item => item.Id.Equals(id, StringComparison.Ordinal))?.Secret;
     }
 
-    internal async Task<bool> RememberRequestAsync(string controllerId, string nonce, long seenAtUnixMs, CancellationToken cancel)
+    internal async Task<bool> RememberRequest(string controllerId, string nonce, long seenAtUnixMs, CancellationToken cancel)
     {
         var accepted = false;
-        await MutateAsync(state =>
+        await Mutate(state =>
         {
             var cutoff = DateTimeOffset.UtcNow.Subtract(RemoteManagementProtocol.ClockSkew).ToUnixTimeMilliseconds();
             state.ReplayNonces.RemoveAll(item => item.SeenAtUnixMs < cutoff);
@@ -96,51 +96,50 @@ internal sealed class RemoteManagementStore
     // rewrites an existing sidecar so its private DACL names whoever is at the console now, not at its last write
     internal async Task Restamp(CancellationToken cancel)
     {
-        await _lock.WaitAsync(cancel);
-        try
-        {
-            await using var fileLock = await ConfigFileLock.Acquire(_lockPath, cancel);
-            if (!File.Exists(_path)) return;
-            await WriteUnlockedAsync(await ReadUnlockedAsync(cancel), cancel);
-        }
-        finally { _lock.Release(); }
+        await using var held = await Locked(cancel);
+        if (File.Exists(_path)) await WriteUnlocked(await ReadUnlocked(cancel), cancel);
     }
 
-    /// <summary>
-    /// Reads under the SAME cross-process lock a mutation takes, not just the in-process one.
-    ///
-    /// <para><b>A read that skips it breaks a concurrent WRITE, on Windows.</b> The reader opens the state
-    /// file without <c>FILE_SHARE_DELETE</c>, so a writer replacing it at that moment gets
-    /// <c>ERROR_ACCESS_DENIED</c> from <c>MoveFileEx</c> — the write fails, and the pairing code or
-    /// controller it was recording is gone. POSIX hides this completely: a rename over an open file
-    /// succeeds and the reader simply goes on reading the old inode. So one process reading status could
-    /// make another process lose a write, on one platform only.</para>
-    /// </summary>
-    private async Task<RemoteManagementState> ReadAsync(CancellationToken cancel)
+    // reads take the cross-process lock too (see ConfigFileLock)
+    private async Task<RemoteManagementState> Read(CancellationToken cancel)
+    {
+        await using var held = await Locked(cancel);
+        return await ReadUnlocked(cancel);
+    }
+
+    private async Task Mutate(Action<RemoteManagementState> mutation, CancellationToken cancel)
+    {
+        await using var held = await Locked(cancel);
+        var state = await ReadUnlocked(cancel);
+        mutation(state);
+        await WriteUnlocked(state, cancel);
+    }
+
+    // the in-process lock and then the cross-process one, released together
+    private async Task<IAsyncDisposable> Locked(CancellationToken cancel)
     {
         await _lock.WaitAsync(cancel);
         try
         {
-            await using var fileLock = await ConfigFileLock.Acquire(_lockPath, cancel);
-            return await ReadUnlockedAsync(cancel);
+            return new Held(_lock, await ConfigFileLock.Acquire(_lockPath, cancel));
         }
-        finally { _lock.Release(); }
-    }
-
-    private async Task MutateAsync(Action<RemoteManagementState> mutation, CancellationToken cancel)
-    {
-        await _lock.WaitAsync(cancel);
-        try
+        catch
         {
-            await using var fileLock = await ConfigFileLock.Acquire(_lockPath, cancel);
-            var state = await ReadUnlockedAsync(cancel);
-            mutation(state);
-            await WriteUnlockedAsync(state, cancel);
+            _lock.Release();
+            throw;
         }
-        finally { _lock.Release(); }
     }
 
-    private async Task<RemoteManagementState> ReadUnlockedAsync(CancellationToken cancel)
+    private sealed class Held(SemaphoreSlim gate, IAsyncDisposable fileLock) : IAsyncDisposable
+    {
+        public async ValueTask DisposeAsync()
+        {
+            try { await fileLock.DisposeAsync(); }
+            finally { gate.Release(); }
+        }
+    }
+
+    private async Task<RemoteManagementState> ReadUnlocked(CancellationToken cancel)
     {
         if (!File.Exists(_path)) return Empty();
         if (new FileInfo(_path).LinkTarget != null)
@@ -157,7 +156,7 @@ internal sealed class RemoteManagementStore
 
     // A field added after this file format shipped, or a hand-edited sidecar, deserializes as null
     // rather than throwing — unlike RemoteManagementState, which every other caller can rely on being
-    // fully populated once ReadUnlockedAsync has normalized it.
+    // fully populated once ReadUnlocked has normalized it.
     private sealed record PersistedState(
         string? ControllerId,
         List<StoredRemoteTarget>? Targets,
@@ -165,7 +164,7 @@ internal sealed class RemoteManagementStore
         List<StoredPairingCode>? PairingCodes,
         List<StoredReplayNonce>? ReplayNonces);
 
-    private async Task WriteUnlockedAsync(RemoteManagementState state, CancellationToken cancel) =>
+    private async Task WriteUnlocked(RemoteManagementState state, CancellationToken cancel) =>
         await PrivateFile.Write(_path, ManagementJson.Serialize(state), PrivateFile.OwnerOnly, cancel);
 
     private static RemoteManagementState Empty() => new(RemoteManagementCrypto.RandomSecret(18), [], [], [], []);

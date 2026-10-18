@@ -21,7 +21,7 @@ internal static class HydraProcessLauncher
             ?? throw new InvalidOperationException("cannot determine the Hydra executable path");
         var process = Process.Start(CreateDirectStartInfo(executablePath, configPath))
             ?? throw new InvalidOperationException("failed to start Hydra");
-        _ = DrainAsync(process);
+        _ = Drain(process);
     }
 
     // launchd starts the agent with the config it was installed for, which must be the one asked for
@@ -89,7 +89,7 @@ internal static class HydraProcessLauncher
         Environment = { [HydraArgs.ConfigVariable] = configPath }
     };
 
-    private static async Task DrainAsync(Process process)
+    private static async Task Drain(Process process)
     {
         try
         {

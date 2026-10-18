@@ -30,6 +30,8 @@ public class HydraConfigFile
     // optional — defaults to machine hostname without domain
     public string? Name { get; init; }
 
+    public string ResolvedName => Name ?? Environment.MachineName.Split('.')[0];
+
     // optional — if set, this profile is always selected regardless of conditions (useful for debugging)
     public string? Profile { get; init; }
 
@@ -63,13 +65,16 @@ public class HydraConfigFile
         var file = json.FromSaneJson<HydraConfigFile>()
             ?? throw new InvalidOperationException($"Failed to deserialize {path}");
         file.Profiles.ForEach(p => HydraConfig.ExpandMirrors(p.Hosts));
-        HydraConfig.Validate(file.Profiles, file.Name ?? Environment.MachineName.Split('.')[0], file.Profile);
+        HydraConfig.Validate(file.Profiles, file.ResolvedName, file.Profile);
         return file;
     }
 
     // a failure startup waits out and retries rather than exiting into a supervisor's relaunch storm
     internal static bool IsRetryableStartupFailure(Exception ex) =>
         ex is IOException or InvalidOperationException or JsonException or TimeoutException or UnauthorizedAccessException;
+
+    // a path setting resolved against the config's directory, unless already rooted
+    internal static string Beside(string configPath, string setting) => Path.GetFullPath(setting, Path.GetDirectoryName(configPath)!);
 
     private static string? FindConfig(string path) => File.Exists(path) ? path : null;
 

@@ -10,7 +10,7 @@ public class MockManagementClientTests
     {
         var client = new MockManagementClient();
 
-        var status = await client.GetStatusAsync();
+        var status = await client.GetStatus();
 
         using (Assert.EnterMultipleScope())
         {
@@ -26,7 +26,7 @@ public class MockManagementClientTests
     [Test]
     public async Task ThePeersPlatformIsItsDisplayName()
     {
-        var status = await new MockManagementClient().GetStatusAsync();
+        var status = await new MockManagementClient().GetStatus();
 
         Assert.That(status.Peers[0].Platform, Is.EqualTo(PeerPlatform.MacOs.DisplayName()));
     }
@@ -37,7 +37,7 @@ public class MockManagementClientTests
     {
         var before = DateTimeOffset.UtcNow;
 
-        var accepted = await new MockManagementClient().ApplyRemoteConfigAsync(new RemoteApplyRequest("peer", "demo0000", "{}"));
+        var accepted = await new MockManagementClient().ApplyRemoteConfig(new RemoteApplyRequest("peer", "demo0000", "{}"));
 
         Assert.That(accepted.ExpiresAt, Is.InRange(before + RemoteApplyStore.ConfirmationWindow, DateTimeOffset.UtcNow + RemoteApplyStore.ConfirmationWindow));
     }
@@ -54,7 +54,7 @@ public class MockManagementClientTests
         // documentation range (guaranteed to never be a real, reachable host).
         var client = new MockManagementClient();
 
-        var status = await client.GetStatusAsync();
+        var status = await client.GetStatus();
 
         var localAddresses = new List<string> { status.RelayConnection!.LocalAddress };
         localAddresses.AddRange(status.ActiveNetworkAdapters.SelectMany(adapter => adapter.Addresses));
@@ -78,7 +78,7 @@ public class MockManagementClientTests
     {
         var client = new MockManagementClient();
 
-        var status = await client.GetStatusAsync();
+        var status = await client.GetStatus();
 
         var connectedFor = status.CapturedAt - status.RelayConnection!.ConnectedAt;
         Assert.That(connectedFor.TotalMinutes, Is.GreaterThan(1),
@@ -92,9 +92,9 @@ public class MockManagementClientTests
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That((await client.ReconnectRelayAsync()).Accepted, Is.True);
-            Assert.That((await client.RestartHydraAsync()).Accepted, Is.True);
-            Assert.That((await client.ShutdownHydraAsync()).Accepted, Is.True);
+            Assert.That((await client.ReconnectRelay()).Accepted, Is.True);
+            Assert.That((await client.RestartHydra()).Accepted, Is.True);
+            Assert.That((await client.ShutdownHydra()).Accepted, Is.True);
         }
     }
 
@@ -103,8 +103,8 @@ public class MockManagementClientTests
     {
         var client = new MockManagementClient();
 
-        var config = await client.GetConfigAsync();
-        var saved = await client.SaveConfigAsync(new SaveConfigRequest(config.Revision, config.Json, Restart: false));
+        var config = await client.GetConfig();
+        var saved = await client.SaveConfig(new SaveConfigRequest(config.Revision, config.Json, Restart: false));
 
         Assert.That(saved.Json, Is.EqualTo(config.Json));
     }

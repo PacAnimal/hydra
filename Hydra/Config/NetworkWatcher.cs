@@ -1,5 +1,4 @@
 using System.Net.NetworkInformation;
-using Cathedral.Extensions;
 using Cathedral.Utils;
 using Hydra.Platform;
 using Microsoft.Extensions.Logging;
@@ -148,7 +147,8 @@ internal sealed class NetworkWatcher : SimpleHostedService
         _lastScreenCount = screenCount;
         _lastIsPluggedIn = isPluggedIn;
 
-        var resolved = HydraConfig.Resolve(_configs, new ConditionState(ssids, screenCount, isPluggedIn));
+        var state = new ConditionState(ssids, screenCount, isPluggedIn);
+        var resolved = HydraConfig.Resolve(_configs, state);
         if (resolved == _activeConfig)
         {
             if (_dormancy.IsDormant)
@@ -160,7 +160,7 @@ internal sealed class NetworkWatcher : SimpleHostedService
             return;
         }
 
-        var onlyScreensLost = resolved == null && OnlyScreensLost(ssids, screenCount, isPluggedIn);
+        var onlyScreensLost = resolved == null && OnlyScreensLost(state);
         if (onlyScreensLost && !_activeConfig!.AllowSystemSleep)
         {
             if (!_dormancy.IsDormant && _log.IsEnabled(LogLevel.Information))
@@ -185,12 +185,11 @@ internal sealed class NetworkWatcher : SimpleHostedService
     // A changed SSID or a dropped power source means the machine really moved or was unplugged, and MORE
     // screens than the profile wants means someone opened the lid and is standing right there — restart
     // into idle for all of those and let it come up wherever it landed.
-    private bool OnlyScreensLost(List<string> ssids, int screenCount, bool? isPluggedIn)
+    private bool OnlyScreensLost(ConditionState state)
     {
         if (_activeConfig is not { Mode: Mode.Slave } active) return false;
-        if (active.Conditions is not { ScreenCount: { } wanted } conditions || screenCount >= wanted) return false;
-        if (conditions.Ssid is { } ssid && !ssids.Any(s => s.EqualsIgnoreCase(ssid))) return false;
-        return conditions.IsPluggedIn is not { } plugged || plugged == isPluggedIn;
+        if (active.Conditions is not { ScreenCount: { } wanted } conditions || state.ScreenCount >= wanted) return false;
+        return conditions.Matches(state, ignoreScreenCount: true);
     }
 
     private void LogSsidTransition(List<string>? previous, List<string> current)

@@ -162,7 +162,7 @@ public class StalledPeerTests : StyxFixtureBase
     {
         await using var peers = await ConnectedPeers("first", "second", "receiver", "slow");
         await SlowDown(peers, "slow", synchronously: true);
-        var receiver = await ConnectionOf(peers, "receiver");
+        var receiver = ConnectionOf(peers, "receiver");
 
         var first = peers["first"].Server!.Send(["slow", "receiver"], [1]);
         var write = await Writes.ParkedReceive();
@@ -256,13 +256,13 @@ public class StalledPeerTests : StyxFixtureBase
     // a synchronous stall holds the writing thread, as a write that completes inline would until it does
     private async Task SlowDown(PeerClients peers, string hostName, bool synchronously = false)
     {
-        var connectionId = await ConnectionOf(peers, hostName);
+        var connectionId = ConnectionOf(peers, hostName);
         Volatile.Write(ref _slowPeer, connectionId);
         Writes.Stall(connectionId, synchronously);
     }
 
-    private async Task<string> ConnectionOf(PeerClients peers, string hostName) =>
-        (await Factory.Services.GetRequiredService<IClientRegistry>().GetConnectionId(peers.Network, hostName))!;
+    private string ConnectionOf(PeerClients peers, string hostName) =>
+        Factory.Services.GetRequiredService<IClientRegistry>().GetConnectionId(peers.Network, hostName)!;
 
     // a Receive has joined this connection's queue
     private async Task QueuedFor(string connectionId, string what)

@@ -1,3 +1,5 @@
+using ByteSizeLib;
+using Cathedral.Config;
 using Cathedral.Extensions;
 using Cathedral.Logging;
 using Cathedral.Utils;
@@ -7,6 +9,7 @@ using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Styx.Filters;
 using Styx.Services;
+using System.Text.Json.Serialization.Metadata;
 
 namespace Styx;
 
@@ -40,6 +43,36 @@ public static class StyxRelayExtensions
 
         if (behindProxy) services.AddCathedralForwardedHeaders();
         return builder;
+    }
+
+    // hub and protocol wiring: limits and the serializers a client may speak
+    private static void AddStyxSignalR(this IServiceCollection services, int parallelInvocations)
+    {
+        services.AddSingleton<HubLifetimeManager<ParallelStyxHub>, SharedHubLifetimeManager<ParallelStyxHub>>();
+
+        services.AddSignalR(options =>
+        {
+            options.KeepAliveInterval = TimeSpan.FromSeconds(Constants.KeepAliveSeconds);
+            options.ClientTimeoutInterval = TimeSpan.FromSeconds(Constants.ClientTimeoutSeconds);
+            options.EnableDetailedErrors = true;
+            options.MaximumReceiveMessageSize = (long)ByteSize.FromMebiBytes(Constants.MaxMessageMebiBytes).Bytes;
+            options.MaximumParallelInvocationsPerClient = Constants.MaxParallelInvocations;
+        }).AddJsonProtocol(options =>
+        {
+            // "required" is a C# construction guarantee, not a wire contract: a client that omits a member
+            // should get a refusal it can read from the hub, not an argument-binding error from the parser
+            options.PayloadSerializerOptions.TypeInfoResolver =
+                (options.PayloadSerializerOptions.TypeInfoResolver ?? new DefaultJsonTypeInfoResolver())
+                .WithAddedModifier(static typeInfo =>
+                {
+                    foreach (var property in typeInfo.Properties)
+                        property.IsRequired = false;
+                });
+        }).AddMessagePackProtocol(options =>
+        {
+            // members match in any casing; StyxWireFormatTests pins the encoding
+            options.SerializerOptions = SaneMessagePack.InteropOptions;
+        }).AddHubOptions<ParallelStyxHub>(hub => hub.MaximumParallelInvocationsPerClient = parallelInvocations);
     }
 
     // both relay paths, on every host, so one cannot exist without the other

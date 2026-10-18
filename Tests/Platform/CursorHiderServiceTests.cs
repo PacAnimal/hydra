@@ -35,10 +35,14 @@ public class CursorHiderServiceTests
         Action showCursor = hider.Show;
         Thread? show = null;
         var showFinishedDuringThePin = false;
+        var atTheLock = new TaskCompletionSource();
+        hider.BeforeShowLocks = () => atTheLock.TrySetResult();
         platform.OnWarp = () =>
         {
             show = new Thread(() => showCursor());
             show.Start();
+            atTheLock.Task.Wait(Bound);
+            // past the seam, only the state lock can block it
             SpinWait.SpinUntil(() => !show.IsAlive || show.ThreadState.HasFlag(ThreadState.WaitSleepJoin));
             showFinishedDuringThePin = !show.IsAlive;
         };

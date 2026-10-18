@@ -32,11 +32,15 @@ public sealed class SentSignals
         lock (_awaited) return [.. _sent];
     }
 
-    // the messages of one kind sent so far, decoded, optionally only those sent to a host
-    public List<T> Sent<T>(MessageKind kind, string? host = null) =>
-        [.. Snapshot()
-            .Where(s => s.Kind == kind && (host is null || s.Targets.Contains(host)))
-            .Select(s => JsonSerializer.Deserialize<T>(s.Json, SaneJson.Options)!)];
+    // the messages of one kind sent so far, optionally only those sent to a host
+    public List<SentMessage> Of(MessageKind kind, string? host = null) =>
+        [.. Snapshot().Where(s => s.Kind == kind && (host is null || s.Targets.Contains(host)))];
+
+    // as above, decoded
+    public List<T> Of<T>(MessageKind kind, string? host = null) => [.. Of(kind, host).Select(s => JsonSerializer.Deserialize<T>(s.Json, SaneJson.Options)!)];
+
+    // every host a message of this kind went to, in send order
+    public List<string> TargetsOf(MessageKind kind) => [.. Of(kind).SelectMany(s => s.Targets)];
 
     // everything sent so far, cleared in the same step so nothing sent in between is lost
     public List<SentMessage> TakeAll()

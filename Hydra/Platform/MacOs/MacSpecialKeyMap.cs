@@ -88,8 +88,6 @@ internal sealed class MacSpecialKeyMap : SpecialKeyMap
         { MacVirtualKey.CapsLock, SpecialKey.CapsLock },
     };
 
-    internal IReadOnlyDictionary<ulong, SpecialKey> All => Map;
-
     // output-only overrides: keys that need a different VK (and optional extra flags) when synthesizing output.
     // MoveToBeginningOfLine/MoveToEndOfLine are sent by Win/Linux masters in place of Home/End.
     // on Mac, line start/end is Command+Left/Right, not the native Home/End keys (Fn+Left/Right = document nav).

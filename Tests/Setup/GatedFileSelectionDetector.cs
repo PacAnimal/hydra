@@ -22,10 +22,8 @@ public sealed class GatedFileSelectionDetector(bool ignoresCancellation = false)
 
     public void Release(int index, FileSelectionResult result) => GateAt(index).Answer.TrySetResult(result);
 
-    public Task Cancelled => CancelledAt(0);
-
-    // the nth query (zero-based) saw its token cancelled while it waited
-    public Task CancelledAt(int index) => GateAt(index).Cancelled.Task;
+    // the first query saw its token cancelled while it waited
+    public Task Cancelled => GateAt(0).Cancelled.Task;
 
     public FileSelectionResult GetSelectedPaths(CancellationToken cancel)
     {

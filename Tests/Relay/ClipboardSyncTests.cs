@@ -7,13 +7,8 @@ using Tests.Setup;
 namespace Tests.Relay;
 
 [TestFixture]
-public class ClipboardSyncTests
+public class ClipboardSyncTests : ServicesFixture
 {
-    private readonly StartedServices _services = new();
-
-    [TearDown]
-    public Task TearDown() => _services.StopAll();
-
     // -- master pushes clipboard on screen enter --
 
     [Test]
@@ -24,7 +19,7 @@ public class ClipboardSyncTests
         var (platform, relay, _) = await StartMaster(clipboard);
 
         TransitionTestHelper.EnterRemote(platform); // cross right edge → sends clipboard hash
-        Assert.That(relay.Snapshot().Any(s => s.Kind == MessageKind.ClipboardHash), Is.True);
+        Assert.That(relay.Sent.Of(MessageKind.ClipboardHash), Is.Not.Empty);
 
         await SimulatePullRequest(relay);
 
@@ -42,7 +37,7 @@ public class ClipboardSyncTests
 
         VisitAndLeaveRemote(platform);
 
-        Assert.That(relay.Snapshot().Where(s => s.Kind is MessageKind.ClipboardHash or MessageKind.ClipboardPush or MessageKind.ClipboardPull), Is.Empty);
+        Assert.That(relay.Sent.Snapshot().Where(s => s.Kind is MessageKind.ClipboardHash or MessageKind.ClipboardPush or MessageKind.ClipboardPull), Is.Empty);
     }
 
     [TestCase(PeerPlatform.Windows)]
@@ -55,7 +50,7 @@ public class ClipboardSyncTests
 
         TransitionTestHelper.EnterRemote(platform);
 
-        Assert.That(relay.Snapshot().Any(s => s.Kind == MessageKind.ClipboardHash), Is.True);
+        Assert.That(relay.Sent.Of(MessageKind.ClipboardHash), Is.Not.Empty);
     }
 
     [Test]
@@ -69,8 +64,8 @@ public class ClipboardSyncTests
         using (Assert.EnterMultipleScope())
         {
             // empty clipboard → no hash query and no push
-            Assert.That(relay.Snapshot().Where(s => s.Kind == MessageKind.ClipboardHash), Is.Empty);
-            Assert.That(relay.Snapshot().Where(s => s.Kind == MessageKind.ClipboardPush), Is.Empty);
+            Assert.That(relay.Sent.Of(MessageKind.ClipboardHash), Is.Empty);
+            Assert.That(relay.Sent.Of(MessageKind.ClipboardPush), Is.Empty);
         }
     }
 
@@ -83,7 +78,7 @@ public class ClipboardSyncTests
 
         TransitionTestHelper.EnterRemote(platform);
 
-        Assert.That(relay.Snapshot().Where(s => s.Kind == MessageKind.ClipboardPush), Is.Empty);
+        Assert.That(relay.Sent.Of(MessageKind.ClipboardPush), Is.Empty);
     }
 
     // -- master pulls clipboard on screen leave (return to local) --
@@ -96,13 +91,13 @@ public class ClipboardSyncTests
         var (platform, relay, _) = await StartMaster(clipboard);
 
         TransitionTestHelper.EnterRemote(platform);
-        relay.ClearSent();
+        relay.Sent.Clear();
 
         // simulate post-warp artifact (big jump dropped by bogus filter), then a real small move back
         platform.FireMouseMove(1280, 720); // warp artifact — dropped
         platform.FireMouseMove(1275, 720); // dx=-5 → cursor exits left edge of remote → return to local
 
-        Assert.That(relay.Snapshot().Any(s => s.Kind == MessageKind.ClipboardPull), Is.True);
+        Assert.That(relay.Sent.Of(MessageKind.ClipboardPull), Is.Not.Empty);
     }
 
     // -- master handles pull response --
@@ -146,7 +141,7 @@ public class ClipboardSyncTests
         // pull response arrives while cursor is still on remote → forwards via hash query
         await AnswerPull(bundle.Relay, new ClipboardPullResponseMessage(pullId, "slave had this"));
 
-        Assert.That(bundle.Relay.Snapshot().Any(s => s.Kind == MessageKind.ClipboardHash), Is.True);
+        Assert.That(bundle.Relay.Sent.Of(MessageKind.ClipboardHash), Is.Not.Empty);
         await SimulatePullRequest(bundle.Relay);
 
         var push = Pushes(bundle.Relay);
@@ -306,8 +301,8 @@ public class ClipboardSyncTests
         using (Assert.EnterMultipleScope())
         {
             // oversized image dropped during trim → nothing to push, no hash query sent
-            Assert.That(relay.Snapshot().Where(s => s.Kind == MessageKind.ClipboardHash), Is.Empty);
-            Assert.That(relay.Snapshot().Where(s => s.Kind == MessageKind.ClipboardPush), Is.Empty);
+            Assert.That(relay.Sent.Of(MessageKind.ClipboardHash), Is.Empty);
+            Assert.That(relay.Sent.Of(MessageKind.ClipboardPush), Is.Empty);
         }
     }
 
@@ -388,8 +383,8 @@ public class ClipboardSyncTests
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(relay.Snapshot().Any(s => s.Kind == MessageKind.ClipboardHash), Is.True);
-            Assert.That(relay.Snapshot().Where(s => s.Kind == MessageKind.ClipboardPush), Is.Empty);
+            Assert.That(relay.Sent.Of(MessageKind.ClipboardHash), Is.Not.Empty);
+            Assert.That(relay.Sent.Of(MessageKind.ClipboardPush), Is.Empty);
         }
     }
 
@@ -402,7 +397,7 @@ public class ClipboardSyncTests
 
         TransitionTestHelper.EnterRemote(platform);
 
-        var hashes = relay.Sent<ClipboardHashMessage>(MessageKind.ClipboardHash);
+        var hashes = relay.Sent.Of<ClipboardHashMessage>(MessageKind.ClipboardHash);
         Assert.That(hashes, Has.Count.EqualTo(1));
         var expected = ClipboardUtils.ClipboardHash(new ClipboardSnapshot("master content", null, null));
         Assert.That(hashes[0].Hash, Is.EqualTo(expected));
@@ -419,7 +414,7 @@ public class ClipboardSyncTests
         var hashMsg = new ClipboardHashMessage(0UL);
         await slave.SimulateReceive("master-pc", MessageKind.ClipboardHash, hashMsg.ToSaneJson());
 
-        Assert.That(slave.Snapshot().Any(s => s.Kind == MessageKind.ClipboardPullRequest), Is.True);
+        Assert.That(slave.Sent.Of(MessageKind.ClipboardPullRequest), Is.Not.Empty);
     }
 
     [Test]
@@ -433,7 +428,7 @@ public class ClipboardSyncTests
         var hashMsg = new ClipboardHashMessage(matchingHash);
         await slave.SimulateReceive("master-pc", MessageKind.ClipboardHash, hashMsg.ToSaneJson());
 
-        Assert.That(slave.Snapshot().Where(s => s.Kind == MessageKind.ClipboardPullRequest), Is.Empty);
+        Assert.That(slave.Sent.Of(MessageKind.ClipboardPullRequest), Is.Empty);
     }
 
     [Test]
@@ -450,7 +445,7 @@ public class ClipboardSyncTests
         {
             Assert.That(clipboard.PrimaryText, Is.EqualTo("master selection"));
             Assert.That(clipboard.SetClipboardCallCount, Is.Zero);
-            Assert.That(slave.Snapshot().Where(s => s.Kind == MessageKind.ClipboardPullRequest), Is.Empty);
+            Assert.That(slave.Sent.Of(MessageKind.ClipboardPullRequest), Is.Empty);
         }
     }
 
@@ -495,7 +490,7 @@ public class ClipboardSyncTests
         var pull = new ClipboardPullMessage(1, slaveHash); // master sends slave's own hash
         await slave.SimulateReceive("master-pc", MessageKind.ClipboardPull, pull.ToSaneJson());
 
-        var msg = slave.Sent<ClipboardPullResponseMessage>(MessageKind.ClipboardPullResponse).Single();
+        var msg = slave.Sent.Of<ClipboardPullResponseMessage>(MessageKind.ClipboardPullResponse).Single();
         Assert.That(msg.Unchanged, Is.True);
     }
 
@@ -510,7 +505,7 @@ public class ClipboardSyncTests
         var pull = new ClipboardPullMessage(1, ClipboardUtils.ClipboardHash(new ClipboardSnapshot("same text", null, null)));
         await slave.SimulateReceive("master-pc", MessageKind.ClipboardPull, pull.ToSaneJson());
 
-        var msg = slave.Sent<ClipboardPullResponseMessage>(MessageKind.ClipboardPullResponse).Single();
+        var msg = slave.Sent.Of<ClipboardPullResponseMessage>(MessageKind.ClipboardPullResponse).Single();
         using (Assert.EnterMultipleScope())
         {
             Assert.That(msg.Unchanged, Is.True);
@@ -529,7 +524,7 @@ public class ClipboardSyncTests
         var pull = new ClipboardPullMessage(1, 0UL); // hash won't match
         await slave.SimulateReceive("master-pc", MessageKind.ClipboardPull, pull.ToSaneJson());
 
-        var msg = slave.Sent<ClipboardPullResponseMessage>(MessageKind.ClipboardPullResponse).Single();
+        var msg = slave.Sent.Of<ClipboardPullResponseMessage>(MessageKind.ClipboardPullResponse).Single();
         using (Assert.EnterMultipleScope())
         {
             Assert.That(msg.Text, Is.EqualTo("slave has this"));
@@ -549,7 +544,7 @@ public class ClipboardSyncTests
         // cursor never moved to remote — guard should block the push
         await SimulatePullRequest(relay);
 
-        Assert.That(relay.Snapshot().Where(s => s.Kind == MessageKind.ClipboardPush), Is.Empty);
+        Assert.That(relay.Sent.Of(MessageKind.ClipboardPush), Is.Empty);
     }
 
     [Test]
@@ -651,7 +646,7 @@ public class ClipboardSyncTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(hashMsg.PrimaryText, Is.Null, "a large selection crosses as its hash");
-            Assert.That(slave.Snapshot().Any(s => s.Kind == MessageKind.ClipboardPullRequest), Is.True);
+            Assert.That(slave.Sent.Of(MessageKind.ClipboardPullRequest), Is.Not.Empty);
         }
     }
 
@@ -686,7 +681,7 @@ public class ClipboardSyncTests
         var pull = ClipboardWire.ToPull(ClipboardBaseline.Of(new ClipboardSnapshot("same text", null, null)), 1);
         await slave.SimulateReceive("master-pc", MessageKind.ClipboardPull, pull.ToSaneJson());
 
-        var msg = slave.Sent<ClipboardPullResponseMessage>(MessageKind.ClipboardPullResponse).Single();
+        var msg = slave.Sent.Of<ClipboardPullResponseMessage>(MessageKind.ClipboardPullResponse).Single();
         using (Assert.EnterMultipleScope())
         {
             Assert.That(msg.Unchanged, Is.True, "the clipboard matched, so it is not sent again");
@@ -706,7 +701,7 @@ public class ClipboardSyncTests
         var pull = ClipboardWire.ToPull(ClipboardBaseline.Of(new ClipboardSnapshot("same text", new string('s', 5000), null)), 1);
         await slave.SimulateReceive("master-pc", MessageKind.ClipboardPull, pull.ToSaneJson());
 
-        var msg = slave.Sent<ClipboardPullResponseMessage>(MessageKind.ClipboardPullResponse).Single();
+        var msg = slave.Sent.Of<ClipboardPullResponseMessage>(MessageKind.ClipboardPullResponse).Single();
         using (Assert.EnterMultipleScope())
         {
             Assert.That(msg.Unchanged, Is.True);
@@ -742,7 +737,7 @@ public class ClipboardSyncTests
     private async Task<TestServiceBundle> StartMaster(IClipboardSync clipboard, PeerPlatform remotePlatform = PeerPlatform.Linux, IHydraProfile? profile = null,
         PeerPlatform? localPlatform = null)
     {
-        return await _services.StartOnline(TransitionTestHelper.CreateService(profile: profile, clipboard: clipboard, localPlatform: localPlatform), remotePlatform);
+        return await Services.StartOnline(TransitionTestHelper.CreateService(profile: profile, clipboard: clipboard, localPlatform: localPlatform), remotePlatform);
     }
 
     // onto the remote and back off its left edge, which pulls from it; the middle move is the warp artifact, dropped
@@ -759,13 +754,13 @@ public class ClipboardSyncTests
         VisitAndLeaveRemote(bundle.Platform);
         var pullId = LatestPullId(bundle.Relay);
         TransitionTestHelper.EnterRemote(bundle.Platform);
-        bundle.Relay.ClearSent();
+        bundle.Relay.Sent.Clear();
         return pullId;
     }
 
-    private static List<ClipboardPushMessage> Pushes(FakeRelay relay) => relay.Sent<ClipboardPushMessage>(MessageKind.ClipboardPush);
+    private static List<ClipboardPushMessage> Pushes(FakeRelay relay) => relay.Sent.Of<ClipboardPushMessage>(MessageKind.ClipboardPush);
 
-    private static int LatestPullId(FakeRelay relay) => relay.Sent<ClipboardPullMessage>(MessageKind.ClipboardPull).Last().PullId;
+    private static int LatestPullId(FakeRelay relay) => relay.Sent.Of<ClipboardPullMessage>(MessageKind.ClipboardPull).Last().PullId;
 
     private static Task AnswerPull(FakeRelay relay, ClipboardPullResponseMessage response, string host = "remote") =>
         relay.FireMessageReceived(host, MessageKind.ClipboardPullResponse, response.ToSaneJson());

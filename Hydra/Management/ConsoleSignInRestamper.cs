@@ -14,7 +14,7 @@ internal sealed class ConsoleSignInRestamper(Func<string?> consoleUser, Func<boo
     private string? _observed;
     private string? _failed;
     private Task<bool>? _stamp;
-    private int _backoff = FirstRetryPolls;
+    private readonly DoublingBackoff _backoff = new(FirstRetryPolls, MaxRetryPolls);
     private int _waiting;
 
     // call from one thread, once a poll; returns the stamp in flight, which never faults
@@ -48,15 +48,14 @@ internal sealed class ConsoleSignInRestamper(Func<string?> consoleUser, Func<boo
         // forgotten, so the next poll after the wait stamps them again
         _failed = _observed;
         _observed = null;
-        _waiting = _backoff;
-        _backoff = Math.Min(_backoff * 2, MaxRetryPolls);
+        _waiting = _backoff.Next();
     }
 
     private void EndStreak()
     {
         _failed = null;
         _waiting = 0;
-        _backoff = FirstRetryPolls;
+        _backoff.Reset();
     }
 
     // the caller logs its own failures; here a fault only means try again

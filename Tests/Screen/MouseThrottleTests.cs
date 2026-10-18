@@ -1,6 +1,5 @@
 using Cathedral.Utils;
 using Hydra.Config;
-using Hydra.Keyboard;
 using Hydra.Relay;
 using Microsoft.Extensions.Time.Testing;
 using Tests.Setup;
@@ -8,7 +7,7 @@ using Tests.Setup;
 namespace Tests.Screen;
 
 [TestFixture]
-public class MouseThrottleTests
+public class MouseThrottleTests : ServicesFixture
 {
     // beyond any mouse-batch flush interval, so stepping a FakeTimeProvider this far fires an armed flush
     private static readonly TimeSpan PastAnyFlush = TimeSpan.FromSeconds(1);
@@ -16,26 +15,19 @@ public class MouseThrottleTests
     private FakePlatform _platform = null!;
     private FakeRelay _relay = null!;
     private readonly SteppableTicks _ticks = new();
-    private readonly StartedServices _services = new();
 
     [SetUp]
     public async Task SetUp()
     {
-        (_platform, _relay, _) = await _services.StartOnline(TransitionTestHelper.CreateService(getTickCount: _ticks.Now));
+        (_platform, _relay, _) = await Services.StartOnline(TransitionTestHelper.CreateService(getTickCount: _ticks.Now));
     }
-
-    [TearDown]
-    public Task TearDown() => _services.StopAll();
 
     [Test]
     public async Task MouseMoves_AreThrottled_ToMaxHz()
     {
         // frozen clock: all 50 events share the same tick so only the first send fires
-        var (platform, relay, _) = await _services.StartOnline(TransitionTestHelper.CreateService(getTickCount: () => 1000L));
-
-        platform.FireMouseMove(2559, 720);
-        Assert.That(platform.IsOnVirtualScreen, Is.True);
-        relay.ClearSent();
+        var (platform, relay, _) = await Services.Visiting(TransitionTestHelper.CreateService(getTickCount: () => 1000L));
+        relay.Sent.Clear();
 
         var warpX = platform.WarpX;
         var warpY = platform.WarpY;
@@ -43,7 +35,7 @@ public class MouseThrottleTests
         for (var i = 0; i < 50; i++)
             platform.FireMouseMove(warpX + 5, warpY);
 
-        var mouseMoves = relay.Snapshot().Count(s => s.Kind == MessageKind.MouseMove);
+        var mouseMoves = relay.Sent.Of(MessageKind.MouseMove).Count;
         Assert.That(mouseMoves, Is.LessThan(15),
             $"Expected throttling but got {mouseMoves} MouseMove sends for 50 events");
     }
@@ -54,10 +46,8 @@ public class MouseThrottleTests
         // frozen clock: every sample after the first lands inside one send interval
         var tracker = new HeldActivityTracker();
         var timers = new FakeTimeProvider();
-        var (platform, _, service) = await _services.StartOnline(TransitionTestHelper.CreateService(
+        var (platform, _, service) = await Services.Visiting(TransitionTestHelper.CreateService(
             getTickCount: () => 1000L, activityTracker: tracker, timeProvider: timers));
-        platform.FireMouseMove(2559, 720);
-        Assert.That(platform.IsOnVirtualScreen, Is.True);
 
         platform.AfterFireCallback = null;
         tracker.Hold();
@@ -83,7 +73,7 @@ public class MouseThrottleTests
             // a blocked consumer would hang the teardown's stop
             tracker.Release();
         }
-        await service.FlushAsync();
+        await service.Flush();
     }
 
     [Test]
@@ -91,10 +81,8 @@ public class MouseThrottleTests
     {
         // frozen clock: the interval never elapses, so nothing but the first sample may post
         var timers = new FakeTimeProvider();
-        var (platform, _, service) = await _services.StartOnline(TransitionTestHelper.CreateService(
+        var (platform, _, service) = await Services.Visiting(TransitionTestHelper.CreateService(
             getTickCount: () => 1000L, timeProvider: timers));
-        platform.FireMouseMove(2559, 720);
-        Assert.That(platform.IsOnVirtualScreen, Is.True);
 
         platform.AfterFireCallback = null;
         var before = service.PostedMouseBatchCount;
@@ -126,10 +114,9 @@ public class MouseThrottleTests
     private async Task<int> SendsOverSixtyMillisecondsOfMotion(int? maxMouseHz)
     {
         var now = new Boxed<long>(1000L);
-        var (platform, relay, _) = await _services.StartOnline(TransitionTestHelper.CreateService(
+        var (platform, relay, _) = await Services.Visiting(TransitionTestHelper.CreateService(
             getTickCount: () => now.Value, profile: TransitionTestHelper.ProfileWith(maxMouseHz)));
-        platform.FireMouseMove(2559, 720);
-        relay.ClearSent();
+        relay.Sent.Clear();
 
         // one sample per millisecond, so the send count is exactly the number of intervals elapsed
         for (var ms = 0; ms < 60; ms++)
@@ -138,8 +125,7 @@ public class MouseThrottleTests
             platform.FireMouseMove(platform.WarpX + (ms % 2 == 0 ? 1 : 2), platform.WarpY);
         }
 
-        var sends = relay.Snapshot().Count(s => s.Kind == MessageKind.MouseMove);
-        return sends;
+        return relay.Sent.Of(MessageKind.MouseMove).Count;
     }
 
     [Test]
@@ -152,9 +138,7 @@ public class MouseThrottleTests
         // So unlike the delta-reporting path below, this one recentres on every sample, however
         // small — sample batching upstream already keeps the resulting warp rate to at most
         // MaxMouseHz, so this is not the ~900/s a raw mouse would otherwise produce.
-        var (platform, _, _) = await _services.StartOnline(TransitionTestHelper.CreateService());
-        platform.FireMouseMove(2559, 720);
-        Assert.That(platform.IsOnVirtualScreen, Is.True);
+        var (platform, _, _) = await Services.Visiting(TransitionTestHelper.CreateService());
 
         var warpX = platform.WarpX;
         var warpY = platform.WarpY;
@@ -173,9 +157,7 @@ public class MouseThrottleTests
         // an on-screen position, so it can never run into a real screen edge no matter how long it
         // goes between warps — recentring less often than every sample costs nothing here but an X
         // warp + socket flush.
-        var (platform, _, _) = await _services.StartOnline(TransitionTestHelper.CreateService());
-        platform.FireMouseMove(2559, 720);
-        Assert.That(platform.IsOnVirtualScreen, Is.True);
+        var (platform, _, _) = await Services.Visiting(TransitionTestHelper.CreateService());
 
         // dead zone is 10% of the half-screen, so 128px on a 2560-wide local screen
         var before = platform.WarpCount;
@@ -195,11 +177,10 @@ public class MouseThrottleTests
     public async Task WindowsDeltaCapture_TheRouterNeverRecentres()
     {
         // WindowsInputHandler recentres per sample itself; a router warp on top would be an extra reset jump
-        var (platform, relay, _) = await _services.Start(TransitionTestHelper.CreateService());
+        var (platform, relay, _) = await Services.Start(TransitionTestHelper.CreateService());
         platform.RecentresItself = true;
         await TransitionTestHelper.BringRemoteOnline(relay);
-        platform.FireMouseMove(2559, 720);
-        Assert.That(platform.IsOnVirtualScreen, Is.True);
+        TransitionTestHelper.EnterRemote(platform);
 
         var before = platform.WarpCount;
 
@@ -214,11 +195,10 @@ public class MouseThrottleTests
     [Test]
     public async Task WindowsAbsoluteSample_TheRouterNeverRecentres()
     {
-        var (platform, relay, _) = await _services.Start(TransitionTestHelper.CreateService());
+        var (platform, relay, _) = await Services.Start(TransitionTestHelper.CreateService());
         platform.RecentresItself = true;
         await TransitionTestHelper.BringRemoteOnline(relay);
-        platform.FireMouseMove(2559, 720);
-        Assert.That(platform.IsOnVirtualScreen, Is.True);
+        TransitionTestHelper.EnterRemote(platform);
 
         var before = platform.WarpCount;
         for (var i = 0; i < 10; i++)
@@ -229,15 +209,12 @@ public class MouseThrottleTests
     [Test]
     public void RelativeMouseToggle_Hotkey_SendsDeltaMessages()
     {
-        // enter virtual screen
-        _platform.FireMouseMove(2559, 720);
-        Assert.That(_platform.IsOnVirtualScreen, Is.True);
+        TransitionTestHelper.EnterRemote(_platform);
 
         // toggle to relative mode with Ctrl+Alt+Super+M
-        _platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyDown, 'm',
-            KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Super));
+        _platform.PressHotkey('m');
 
-        _relay.ClearSent();
+        _relay.Sent.Clear();
         var warpX = _platform.WarpX;
         var warpY = _platform.WarpY;
 
@@ -247,8 +224,8 @@ public class MouseThrottleTests
         _ticks.Advance(20);
         _platform.FireMouseMove(warpX + 5, warpY);
 
-        var deltaMessages = _relay.Snapshot().Where(s => s.Kind == MessageKind.MouseMoveDelta).ToList();
-        var absoluteMessages = _relay.Snapshot().Where(s => s.Kind == MessageKind.MouseMove).ToList();
+        var deltaMessages = _relay.Sent.Of(MessageKind.MouseMoveDelta);
+        var absoluteMessages = _relay.Sent.Of(MessageKind.MouseMove);
 
         using (Assert.EnterMultipleScope())
         {
@@ -260,26 +237,22 @@ public class MouseThrottleTests
     [Test]
     public void RelativeMouseToggle_TogglesBackToAbsolute()
     {
-        // enter virtual screen
-        _platform.FireMouseMove(2559, 720);
-        Assert.That(_platform.IsOnVirtualScreen, Is.True);
+        TransitionTestHelper.EnterRemote(_platform);
 
         // toggle to relative
-        _platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyDown, 'm',
-            KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Super));
+        _platform.PressHotkey('m');
 
         // toggle back to absolute
-        _platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyDown, 'm',
-            KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Super));
+        _platform.PressHotkey('m');
 
-        _relay.ClearSent();
+        _relay.Sent.Clear();
         var warpX = _platform.WarpX;
         var warpY = _platform.WarpY;
 
         _ticks.Advance(20);
         _platform.FireMouseMove(warpX + 10, warpY);
 
-        var absoluteMessages = _relay.Snapshot().Where(s => s.Kind == MessageKind.MouseMove).ToList();
+        var absoluteMessages = _relay.Sent.Of(MessageKind.MouseMove);
         Assert.That(absoluteMessages, Is.Not.Empty, "expected MouseMove (absolute) after toggling back");
     }
 
@@ -290,10 +263,6 @@ public class MouseThrottleTests
 
         // toggle while not on virtual screen — should silently do nothing
         Assert.DoesNotThrow(() =>
-            _platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyDown, 'm',
-                KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Super)));
+            _platform.PressHotkey('m'));
     }
-
-    // -- helpers --
-
 }

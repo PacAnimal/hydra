@@ -28,7 +28,7 @@ internal sealed partial record ManagementEndpoint(string InstanceId, string Addr
         return new ManagementEndpoint(hash, Path.Combine(directory, $"{hash}.sock"), false);
     }
 
-    internal async Task<bool> RemoveStaleUnixSocketAsync(CancellationToken cancel)
+    internal async Task<bool> RemoveStaleUnixSocket(CancellationToken cancel)
     {
         if (IsNamedPipe || !File.Exists(Address)) return true;
 

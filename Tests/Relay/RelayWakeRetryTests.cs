@@ -84,7 +84,7 @@ public class RelayWakeRetryTests
     {
         var relay = new WakeDelayRelay(TimeSpan.FromHours(1));
 
-        await relay.SuspendForSystemSleepAsync(2);
+        await relay.SuspendForSystemSleep(2);
         relay.CompleteSystemWake(1);
 
         using (Assert.EnterMultipleScope())

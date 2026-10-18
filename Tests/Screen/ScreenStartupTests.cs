@@ -6,13 +6,8 @@ using Tests.Setup;
 namespace Tests.Screen;
 
 [TestFixture]
-public class ScreenStartupTests
+public class ScreenStartupTests : ServicesFixture
 {
-    private readonly StartedServices _services = new();
-
-    [TearDown]
-    public Task TearDown() => _services.StopAll();
-
     [Test]
     public async Task StartAsync_NameNotInScreens_LogsErrorAndDoesNotCrash()
     {
@@ -29,7 +24,7 @@ public class ScreenStartupTests
         var logs = new CapturingLog<InputRouter>(LogLevel.Error);
 
         // must not throw
-        await _services.Start(TransitionTestHelper.CreateService(profile: profile, log: logs));
+        await Services.Start(TransitionTestHelper.CreateService(profile: profile, log: logs));
 
         Assert.That(logs.Entries, Is.Not.Empty, "should log an error when hostname is not in screens");
     }

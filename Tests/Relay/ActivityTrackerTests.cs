@@ -36,11 +36,11 @@ public class ActivityTrackerTests
 
         await tracker.LocalActivity();
 
-        Assert.That(spy.Snapshot(), Has.Count.EqualTo(1));
+        Assert.That(spy.Sent.Snapshot(), Has.Count.EqualTo(1));
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(spy.Snapshot()[0].Targets, Is.EqualTo(["master-pc"]));
-            Assert.That(spy.Snapshot()[0].Kind, Is.EqualTo(MessageKind.ActivityPing));
+            Assert.That(spy.Sent.Snapshot()[0].Targets, Is.EqualTo(["master-pc"]));
+            Assert.That(spy.Sent.Snapshot()[0].Kind, Is.EqualTo(MessageKind.ActivityPing));
         }
     }
 
@@ -54,8 +54,8 @@ public class ActivityTrackerTests
 
         await tracker.LocalActivity();
 
-        Assert.That(spy.Snapshot(), Has.Count.EqualTo(1));
-        Assert.That(spy.Snapshot()[0].Targets, Is.EqualTo(["slave-pc"]));
+        Assert.That(spy.Sent.Snapshot(), Has.Count.EqualTo(1));
+        Assert.That(spy.Sent.Snapshot()[0].Targets, Is.EqualTo(["slave-pc"]));
     }
 
     [Test]
@@ -68,7 +68,7 @@ public class ActivityTrackerTests
 
         await tracker.LocalActivity();
 
-        Assert.That(spy.Snapshot(), Is.Empty);
+        Assert.That(spy.Sent.Snapshot(), Is.Empty);
     }
 
     [Test]
@@ -83,7 +83,7 @@ public class ActivityTrackerTests
         await tracker.LocalActivity();
         await tracker.LocalActivity();
 
-        Assert.That(spy.Snapshot(), Has.Count.EqualTo(1));
+        Assert.That(spy.Sent.Snapshot(), Has.Count.EqualTo(1));
     }
 
     [Test]
@@ -99,7 +99,7 @@ public class ActivityTrackerTests
         clock[0] += 6_000;
         await tracker.LocalActivity();
 
-        Assert.That(spy.Snapshot(), Has.Count.EqualTo(2));
+        Assert.That(spy.Sent.Snapshot(), Has.Count.EqualTo(2));
     }
 
     [Test]
@@ -113,7 +113,7 @@ public class ActivityTrackerTests
 
         await tracker.RemoteActivity("slave1");
 
-        Assert.That(spy.Snapshot(), Is.Empty);
+        Assert.That(spy.Sent.Snapshot(), Is.Empty);
     }
 
     [Test]
@@ -127,8 +127,8 @@ public class ActivityTrackerTests
 
         await tracker.RemoteActivity("slave1");
 
-        Assert.That(spy.Snapshot(), Has.Count.EqualTo(1));
-        Assert.That(spy.Snapshot()[0].Targets, Is.EqualTo(["slave2"]));
+        Assert.That(spy.Sent.Snapshot(), Has.Count.EqualTo(1));
+        Assert.That(spy.Sent.Snapshot()[0].Targets, Is.EqualTo(["slave2"]));
     }
 
     [Test]

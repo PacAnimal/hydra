@@ -229,7 +229,7 @@ public class InputRouter(
     // posts a fence command and awaits it — all previously queued commands will have been processed on return.
     // used by tests to synchronize after firing platform events. Seals first, so input captured into a
     // batch still waiting out its interval is part of what the fence covers.
-    internal Task FlushAsync()
+    internal Task Flush()
     {
         if (_consumerTask == null) return Task.CompletedTask;
         SealMouseBatch();
@@ -239,7 +239,7 @@ public class InputRouter(
         return tcs.Task;
     }
 
-    internal Task<RouterStatus?> GetManagementStatusAsync() => RunFence(st =>
+    internal Task<RouterStatus?> GetManagementStatus() => RunFence(st =>
     {
         var current = st.Mouse.CurrentScreen;
         return new RouterStatus(
@@ -308,8 +308,7 @@ public class InputRouter(
                 log.LogInformation("Remote peer '{Name}' disconnected — returned to local screen", disconnectedHost);
         }
 
-        // abort a transfer only if ITS peer actually left — not merely because the cursor's current screen
-        // peer did (Abort tears down ANY transfer, so the old cursor-screen-coupled call aborted unrelated ones)
+        // abort a transfer only if its own peer left, not the cursor's
         _fileTransfer.AbortIfPeerGone(current, relay);
 
         // send MasterConfig only to newly appeared peers that are configured as slaves
@@ -362,7 +361,7 @@ public class InputRouter(
                 }
             }
 
-            await BroadcastScreensaverSync(true);
+            await BroadcastToPeers(MessageKind.ScreensaverSync, new ScreensaverSyncMessage(true));
             log.LogInformation("Screensaver activated — synced to slaves");
         });
     }
@@ -374,7 +373,7 @@ public class InputRouter(
             if (!st.ScreensaverActive) return;
             st.ScreensaverActive = false;
 
-            await BroadcastScreensaverSync(false);
+            await BroadcastToPeers(MessageKind.ScreensaverSync, new ScreensaverSyncMessage(false));
             log.LogInformation("Screensaver deactivated — synced to slaves");
 
             // a remote-only master whose visit cannot be restored goes back to a remote now, keyboard-only use included
@@ -400,12 +399,12 @@ public class InputRouter(
         return true;
     }
 
-    private async ValueTask BroadcastScreensaverSync(bool active)
+    private async ValueTask BroadcastToPeers<T>(MessageKind kind, T message)
     {
         var peerScreens = await _peerState.GetPeerScreensSnapshot();
         var hosts = peerScreens.Keys.ToArray();
         if (hosts.Length == 0) return;
-        relay.Send(hosts, MessageKind.ScreensaverSync, new ScreensaverSyncMessage(active));
+        relay.Send(hosts, kind, message);
     }
 
     private void OnLockDetected()
@@ -427,14 +426,8 @@ public class InputRouter(
         });
     }
 
-    private async ValueTask BroadcastLockScreen(LocalMasterState st)
-    {
-        var peerScreens = await _peerState.GetPeerScreensSnapshot();
-        var hosts = peerScreens.Keys.ToArray();
-        if (hosts.Length == 0) return;
-        var msSinceInput = _getTickCount() - st.LastInputTick;
-        relay.Send(hosts, MessageKind.LockScreen, new LockScreenMessage(msSinceInput));
-    }
+    private ValueTask BroadcastLockScreen(LocalMasterState st) =>
+        BroadcastToPeers(MessageKind.LockScreen, new LockScreenMessage(_getTickCount() - st.LastInputTick));
 
     // sends master's clipboard hash to slave; slave decides whether to request the full push
     private void PushClipboardToHost(string host)
@@ -559,7 +552,7 @@ public class InputRouter(
                     _ = _commands.Writer.TryWrite(st =>
                     {
                         if (IsAwaitedRemoteCopy(st, sourceHost)) AbandonRemoteCopy(st, "it is busy with a transfer");
-                        ShowOsd(st, "Transfer in progress");
+                        ShowOsd(st, FileTransferService.InProgressOsd);
                         return ValueTask.CompletedTask;
                     });
                     break;
@@ -576,10 +569,10 @@ public class InputRouter(
                         {
                             var abort = body.TryDecodeBody<FileTransferAbortMessage>();
                             if (abort?.Reason == FileTransferService.ReasonNoFolder)
-                                SendOsd(sourceHost, "Invalid paste target");
+                                SendOsd(sourceHost, FileTransferService.InvalidTargetOsd);
                         }
                     }
-                    if (await _fileTransfer.OnMessageAsync(sourceHost, kind, body, relay))
+                    if (await _fileTransfer.OnMessage(sourceHost, kind, body, relay))
                         osd.Show(FileTransferService.PastedOsd);
                     break;
                 }
@@ -801,11 +794,8 @@ public class InputRouter(
                 {
                     // an explicit lock or unlock says where the cursor belongs, so a pending screensaver restore is off
                     st.SavedScreenName = null;
-                    // A remote-only master with no local screen has nowhere to pass input to: the
-                    // old behaviour left the remote screen and OnMouseDelta then dropped every
-                    // delta, so keyboard and mouse appeared dead until the hotkey was pressed
-                    // again. Confine the cursor to the current remote screen instead, which is what
-                    // the hotkey does in every other mode.
+                    // a remote-only master with no local screen has nowhere to return to, so confine the
+                    // cursor to the current remote screen instead
                     if (profile.RemoteOnly && !st.Screens.Any(sc => sc.IsLocal))
                     {
                         st.ConfinedToScreen = !st.ConfinedToScreen;
@@ -819,11 +809,9 @@ public class InputRouter(
                         st.LockedToScreen = !st.LockedToScreen;
                         if (profile.RemoteOnly)
                         {
-                            // ShowOsd falls back to a LOCAL osd when the cursor is not on a remote
-                            // screen, and a remote-only master often has no display to show it on. So
-                            // each branch shows its OSD at the only moment a remote screen is current:
-                            // after entering when locking, before leaving when unlocking. Announcing it
-                            // up front instead made re-locking silent.
+                            // ShowOsd falls back to a local osd off a remote screen, and a remote-only master
+                            // often has no display, so each branch shows its OSD while a remote screen is
+                            // current: after entering when locking, before leaving when unlocking
                             if (st.LockedToScreen)
                             {
                                 log.LogInformation("Remote lock: locked to remote");
@@ -871,14 +859,14 @@ public class InputRouter(
                 {
                     if (_fileTransfer.FileTransferOngoing)
                     {
-                        ShowOsd(st, "Transfer in progress");
+                        ShowOsd(st, FileTransferService.InProgressOsd);
                     }
                     else if (!st.Mouse.IsOnVirtualScreen)
                     {
                         if (!_selectionDetector.IsFileTransferSupported)
                         {
                             log.LogInformation("Copy hotkey: file transfer not supported on this platform");
-                            ShowOsd(st, "Action not supported");
+                            ShowOsd(st, FileTransferService.NotSupportedOsd);
                         }
                         else
                         {
@@ -905,12 +893,12 @@ public class InputRouter(
                 {
                     if (_fileTransfer.FileTransferOngoing)
                     {
-                        ShowOsd(st, "Transfer in progress");
+                        ShowOsd(st, FileTransferService.InProgressOsd);
                     }
                     else if (!_selectionDetector.IsFileTransferSupported)
                     {
                         log.LogInformation("Paste hotkey: file transfer not supported on this platform");
-                        ShowOsd(st, "Action not supported");
+                        ShowOsd(st, FileTransferService.NotSupportedOsd);
                     }
                     else if (st.CopyPending)
                     {
@@ -926,7 +914,7 @@ public class InputRouter(
                         {
                             if (log.IsEnabled(LogLevel.Information))
                                 log.LogInformation("Paste hotkey: source and target are the same host ({Host}), nothing to do", targetHost);
-                            ShowOsd(st, "Invalid paste target");
+                            ShowOsd(st, FileTransferService.InvalidTargetOsd);
                         }
                         else
                         {
@@ -934,7 +922,7 @@ public class InputRouter(
                                 log.LogInformation("Paste hotkey: {Count} {Files} from {Source} → {Target}",
                                     copyBuffer.Paths.Length, Pluralize.Of(copyBuffer.Paths.Length, "file"), copyBuffer.SourceHost, targetHost);
                             if (!_fileTransfer.InitiatePaste(copyBuffer, targetHost, profile.Name, relay))
-                                SendOsd(targetHost, "Invalid paste target");
+                                SendOsd(targetHost, FileTransferService.InvalidTargetOsd);
                         }
                     }
                     else
@@ -1252,7 +1240,7 @@ public class InputRouter(
             _openMouseBatch ??= new CoalescingBatch<MouseInputKind, double>(kind, accumulate: kind == MouseInputKind.Delta);
             _openMouseBatch.Add(x, y);
 
-            // Raw samples arrive at the mouse's polling rate — ~900/s on an ordinary one — and posting
+            // Raw samples arrive at the mouse's polling rate, commonly up to 1000/s, and posting
             // an actor command each costs a thread-pool wake per sample while buying nothing, since
             // sends are throttled to the configured rate anyway. Holding the batch for the rest of the interval
             // loses no movement: deltas accumulate and absolute samples keep the latest.
@@ -1583,7 +1571,7 @@ public class InputRouter(
         public string? SavedScreenName;
         public int SavedCursorX, SavedCursorY;
 
-        // 120Hz throttle: accumulated deltas and last send time
+        // send throttle: accumulated deltas and last send time
         public long LastMouseSendTick;
         public double PendingDx;
         public double PendingDy;

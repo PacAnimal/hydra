@@ -30,7 +30,7 @@ public sealed class ExpiryScheduler(
     {
         lock (_lock)
         {
-            if (_armed.Remove(connectionId, out var previous)) previous.Timer.Dispose();
+            Cancel(connectionId);
             _armed[connectionId] = Arm(connectionId, generation, expires);
         }
     }
@@ -57,14 +57,12 @@ public sealed class ExpiryScheduler(
         var due = expires - clock.GetUtcNow();
         if (due < TimeSpan.Zero) due = TimeSpan.Zero;
         if (due > MaxStep) due = MaxStep;
-        var timer = clock.CreateTimer(_ => FireUnobserved(connectionId, generation, expires), null, due, Timeout.InfiniteTimeSpan);
+        var timer = clock.CreateTimer(_ => Fire(connectionId, generation, expires), null, due, Timeout.InfiniteTimeSpan);
         return new Armed(generation, timer);
     }
 
-    // a timer callback cannot await; Fire catches and logs everything itself
-    private void FireUnobserved(string connectionId, long generation, DateTimeOffset expires) => _ = Fire(connectionId, generation, expires);
-
-    private async Task Fire(string connectionId, long generation, DateTimeOffset expires)
+    // a timer callback, so it catches and logs everything itself
+    private void Fire(string connectionId, long generation, DateTimeOffset expires)
     {
         lock (_lock)
         {
@@ -80,7 +78,7 @@ public sealed class ExpiryScheduler(
 
         try
         {
-            var identity = await registry.UnregisterIfCurrent(connectionId, generation);
+            var identity = registry.UnregisterIfCurrent(connectionId, generation);
             if (identity is null) return;
             if (log.IsEnabled(LogLevel.Information))
                 log.LogInformation("Authorization of \"{HostName}\" on network {Network} expired", identity.HostName, identity.Network);

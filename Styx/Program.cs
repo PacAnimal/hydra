@@ -73,7 +73,7 @@ app.MapGet("/api/status", async (HttpContext http, ITokenVerifier verifier, ICli
     if (verdict.Network is not { } network) return await ResponseThrottle.After(throttle, Results.Unauthorized());
 
     // a valid token's holder is answered at once; the throttle only slows guessing
-    var clients = await registry.GetNetworkClients(network);
+    var clients = registry.GetNetworkClients(network);
     return Results.Ok(new StatusResponse([.. clients.Select(c => c.HostName)]));
 });
 
@@ -81,20 +81,21 @@ app.MapPost("/api/network-config", async (HttpContext http, NetworkConfigRequest
     ResponseThrottle throttler, CancellationToken ct) =>
 {
     var throttle = throttler.Start(Constants.NetworkConfigThrottleSeconds, ct);
+    Task<IResult> Answer(IResult result) => ResponseThrottle.After(throttle, result);
 
     // nothing ever issues a v1 token, so without a key, or without the password to guard it, there is nothing here
-    if (!relayAuth.CreatesNetworks || relayAuth.V1Password is not { } password) return await ResponseThrottle.After(throttle, Results.NotFound());
+    if (!relayAuth.CreatesNetworks || relayAuth.V1Password is not { } password) return await Answer(Results.NotFound());
 
     var remoteIp = ClientRegistry.RemoteIpOf(http);
-    if (limiter.IsBlocked(remoteIp)) return await ResponseThrottle.After(throttle, Results.Unauthorized());
+    if (limiter.IsBlocked(remoteIp)) return await Answer(Results.Unauthorized());
     if (!SecretMatches(request.Password, password))
     {
         limiter.RecordFailure(remoteIp);
-        return await ResponseThrottle.After(throttle, Results.Unauthorized());
+        return await Answer(Results.Unauthorized());
     }
 
     var authorization = StyxToken.Mint(relayAuth.Keys[0], StyxToken.NewNetworkId()).ToString();
-    return await ResponseThrottle.After(throttle, Results.Ok(new NetworkConfigResponse(authorization)));
+    return await Answer(Results.Ok(new NetworkConfigResponse(authorization)));
 });
 
 if (app.Logger.IsEnabled(LogLevel.Information))

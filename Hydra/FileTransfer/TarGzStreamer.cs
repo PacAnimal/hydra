@@ -9,7 +9,7 @@ public static class TarGzStreamer
     // Keep each queued/encrypted SignalR invocation small enough that bulk transfer cannot monopolize the
     // same ordered connection used by keyboard and mouse input. FileTransferService awaits each send.
     public static readonly int ChunkSize = 256 * 1024;
-    public const int ProgressBufferSize = 256 * 1024; // shared by sender (ByteCountingStream) and receiver (ExtractFileEntryAsync)
+    public const int ProgressBufferSize = 256 * 1024; // shared by sender (ByteCountingStream) and receiver (ExtractFileEntry)
 
     // estimates total uncompressed bytes across all files and directories
     public static long ComputeTotalBytes(List<string> paths)
@@ -39,7 +39,7 @@ public static class TarGzStreamer
     // creates a tar.gz stream from paths, calls onChunk for each bounded chunk of compressed output.
     // onChunk receives (compressedData, sequenceNumber, uncompressedBytesWrittenSoFar).
     // returns SHA-256 hash of all compressed bytes (same data the receiver will hash).
-    public static async Task<byte[]> StreamAsync(List<string> paths, Func<byte[], int, long, ValueTask> onChunk, Action<string> onFileStart, CancellationToken cancel)
+    public static async Task<byte[]> Compress(List<string> paths, Func<byte[], int, long, ValueTask> onChunk, Action<string> onFileStart, CancellationToken cancel)
     {
         var progress = new StreamProgress();
         await using var chunker = new ChunkingWriteStream(ChunkSize, data => onChunk(data, progress.Sequence++, progress.UncompressedWritten));
@@ -54,11 +54,11 @@ public static class TarGzStreamer
             {
                 cancel.ThrowIfCancellationRequested();
                 if (Directory.Exists(path))
-                    await AddDirectoryAsync(tar, path, onFileStart, cancel);
+                    await AddDirectory(tar, path, onFileStart, cancel);
                 else if (File.Exists(path))
                 {
                     onFileStart(Path.GetFileName(path));
-                    await AddFileAsync(tar, path, Path.GetFileName(path), cancel);
+                    await AddFile(tar, path, Path.GetFileName(path), cancel);
                 }
             }
             // dispose tar first to flush trailing blocks into gzip
@@ -66,7 +66,7 @@ public static class TarGzStreamer
         // gzip is now disposed — all compressed bytes have been written to chunker
 
         // flush any remaining partial chunk
-        await chunker.FlushFinalAsync();
+        await chunker.FlushFinal();
 
         return chunker.GetHashAndReset();
     }
@@ -78,7 +78,7 @@ public static class TarGzStreamer
         public long UncompressedWritten { get; set; }
     }
 
-    private static async Task AddDirectoryAsync(TarWriter tar, string dirPath, Action<string> onFileStart, CancellationToken cancel)
+    private static async Task AddDirectory(TarWriter tar, string dirPath, Action<string> onFileStart, CancellationToken cancel)
     {
         var parent = Path.GetDirectoryName(dirPath) ?? dirPath;
 
@@ -99,7 +99,7 @@ public static class TarGzStreamer
             cancel.ThrowIfCancellationRequested();
             var entryName = Path.GetRelativePath(parent, file).Replace('\\', '/');
             onFileStart(Path.GetFileName(file));
-            await AddFileAsync(tar, file, entryName, cancel);
+            await AddFile(tar, file, entryName, cancel);
         }
     }
 
@@ -108,7 +108,7 @@ public static class TarGzStreamer
     // the stream leaks. Windows locks are strict enough that a leaked read handle blocks deleting the
     // file afterward; POSIX tolerates it silently. Own the stream ourselves so a cancelled write can't
     // leak it, regardless of how the write completes.
-    private static async Task AddFileAsync(TarWriter tar, string filePath, string entryName, CancellationToken cancel)
+    private static async Task AddFile(TarWriter tar, string filePath, string entryName, CancellationToken cancel)
     {
         FileStream? stream = null;
         try
@@ -222,15 +222,15 @@ public static class TarGzStreamer
         public override void SetLength(long value) => throw new NotSupportedException();
 
         public override void Write(byte[] buffer, int offset, int count) =>
-            WriteMemoryAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
+            WriteMemory(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
 
         public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default) =>
-            WriteMemoryAsync(buffer);
+            WriteMemory(buffer);
 
         public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
-            WriteMemoryAsync(buffer.AsMemory(offset, count)).AsTask();
+            WriteMemory(buffer.AsMemory(offset, count)).AsTask();
 
-        private async ValueTask WriteMemoryAsync(ReadOnlyMemory<byte> buffer)
+        private async ValueTask WriteMemory(ReadOnlyMemory<byte> buffer)
         {
             var remaining = buffer.Length;
             var srcOffset = 0;
@@ -243,31 +243,31 @@ public static class TarGzStreamer
                 srcOffset += toCopy;
                 remaining -= toCopy;
                 if (_pos == chunkSize)
-                    await FlushChunkAsync();
+                    await FlushChunk();
             }
         }
 
         // flush any remaining bytes as a final (possibly partial) chunk
-        public async Task FlushFinalAsync()
+        public async Task FlushFinal()
         {
             if (_pos > 0)
             {
                 var chunk = new byte[_pos];
                 Array.Copy(_buffer, chunk, _pos);
                 _pos = 0;
-                await EmitAsync(chunk);
+                await Emit(chunk);
             }
         }
 
-        private async Task FlushChunkAsync()
+        private async Task FlushChunk()
         {
             var chunk = _buffer;
             _buffer = new byte[chunkSize];
             _pos = 0;
-            await EmitAsync(chunk);
+            await Emit(chunk);
         }
 
-        private ValueTask EmitAsync(byte[] chunk)
+        private ValueTask Emit(byte[] chunk)
         {
             _sha.AppendData(chunk);
             return onChunk(chunk);

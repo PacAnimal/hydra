@@ -73,12 +73,12 @@ public class ManagementEndpointTests
         {
             listener.Bind(new UnixDomainSocketEndPoint(endpoint.Address));
             listener.Listen(1);
-            Assert.That(await endpoint.RemoveStaleUnixSocketAsync(CancellationToken.None), Is.False);
+            Assert.That(await endpoint.RemoveStaleUnixSocket(CancellationToken.None), Is.False);
         }
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(await endpoint.RemoveStaleUnixSocketAsync(CancellationToken.None), Is.True);
+            Assert.That(await endpoint.RemoveStaleUnixSocket(CancellationToken.None), Is.True);
             Assert.That(File.Exists(endpoint.Address), Is.False);
         }
     }

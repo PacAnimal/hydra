@@ -133,4 +133,47 @@ public class DeadKeyTests
         var result = KeyResolver.ComposeOrSpacing(' ', '\u0309', '\0');
         Assert.That(result, Is.EqualTo(' '));
     }
+
+    // -- TakeDeadKeySpacing --
+
+    [Test]
+    public void TakeDeadKeySpacing_WithPendingAndSpacingForm_EmitsSpacingEvent()
+    {
+        var dead = '\u0300';      // combining grave
+        var spacing = '\u0060';   // `
+        var ev = KeyResolver.TakeDeadKeySpacing(ref dead, ref spacing);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(ev, Is.Not.Null);
+            Assert.That(ev![0].Character, Is.EqualTo('`'));
+            Assert.That(ev[0].Modifiers, Is.EqualTo(KeyModifiers.None));
+            Assert.That(ev[0].Type, Is.EqualTo(KeyEventType.KeyDown));
+            Assert.That(ev[1].Type, Is.EqualTo(KeyEventType.KeyUp));
+            Assert.That(dead, Is.EqualTo('\0'));
+            Assert.That(spacing, Is.EqualTo('\0'));
+        }
+    }
+
+    [Test]
+    public void TakeDeadKeySpacing_WithNoPendingDead_ReturnsNull()
+    {
+        var dead = '\0';
+        var spacing = '`';
+        var ev = KeyResolver.TakeDeadKeySpacing(ref dead, ref spacing);
+        Assert.That(ev, Is.Null);
+    }
+
+    [Test]
+    public void TakeDeadKeySpacing_WithNoSpacingForm_ReturnsNullAndClearsState()
+    {
+        // dead_belowdot has no spacing form; state must still be cleared
+        var dead = '\u0323';
+        var spacing = '\0';
+        var ev = KeyResolver.TakeDeadKeySpacing(ref dead, ref spacing);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(ev, Is.Null);
+            Assert.That(dead, Is.EqualTo('\0'));
+        }
+    }
 }

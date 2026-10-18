@@ -1,3 +1,5 @@
+using System.ComponentModel;
+using System.Runtime.Versioning;
 using Cathedral.Extensions;
 using Cathedral.Utils;
 using Hydra.Config;
@@ -15,8 +17,7 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
     private HookProc? _keyboardHookProc;
     private nint _mouseHook;
     private nint _keyboardHook;
-    private Thread? _hookThread;
-    private uint _hookThreadId;
+    private StaMessageLoop? _hookLoop;
     private readonly WinKeyResolver _keyResolver = new();
     private readonly KeyFates _keyFates = new(strayUpsPass: false);
     // never cleared: a record a lost up left is overwritten by that button's next down
@@ -85,15 +86,6 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
     private const int HookIdleMs = 5000;
     private int _lastMouseCallbackTick; // hook thread only
     private int _lastKeyboardCallbackTick; // hook thread only
-
-    // posted to the hook thread to reinstall a hook gone quiet
-    private const uint WmCheckHealth = NativeMethods.WM_USER + 1;
-    private const uint WmShieldShow = NativeMethods.WM_USER + 2;
-    private const uint WmShieldHide = NativeMethods.WM_USER + 3;
-
-
-    // low-level hooks work without elevation for non-elevated processes
-    public bool IsAccessibilityTrusted() => true;
 
     public void WarpCursor(int x, int y)
     {
@@ -211,21 +203,23 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
 
     public ScreenPoint? GetCursorPosition() => WindowsDisplayHelper.CursorPosition();
 
+    [SupportedOSPlatform("windows")]
     public ValueTask HideCursor()
     {
         // hide cursor immediately — fast counter op, safe inside hook callback
         _shield.HideCursorNow();
         // window management (SetWindowPos, SetForegroundWindow) is slow; post to hook thread
         // so it runs outside the hook callback and doesn't trigger the LL hook timeout
-        NativeMethods.PostThreadMessage(_hookThreadId, WmShieldShow, nint.Zero, nint.Zero);
+        _hookLoop?.Post(_shield.Show);
         return ValueTask.CompletedTask;
     }
 
+    [SupportedOSPlatform("windows")]
     public ValueTask ShowCursor()
     {
         // restore cursor synchronously, same as HideCursor hides it — then post shield teardown
         _shield.ShowCursorNow();
-        NativeMethods.PostThreadMessage(_hookThreadId, WmShieldHide, nint.Zero, nint.Zero);
+        _hookLoop?.Post(_shield.Hide);
         return ValueTask.CompletedTask;
     }
 
@@ -243,6 +237,7 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
         _onMouseScroll = onMouseScroll;
     }
 
+    [SupportedOSPlatform("windows")]
     public async Task StartEventTap(
         Action<double, double> onMouseMove,
         Action<double, double>? onMouseDelta,
@@ -257,68 +252,38 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
         _mouseHookProc = MouseHookCallback;
         _keyboardHookProc = KeyboardHookCallback;
 
-        var ready = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        _hookThread = new Thread(() =>
+        // InstallHooks runs on the loop's thread before this returns; the hooks fire during its GetMessage
+        var loop = _hookLoop = new StaMessageLoop("HydraHookPump", init: InstallHooks, onExit: () =>
         {
-            _hookThreadId = NativeMethods.GetCurrentThreadId();
-            _lastMouseCallbackTick = _lastKeyboardCallbackTick = TickCount();
-            _mouseHook = InstallHook(NativeMethods.WH_MOUSE_LL, _mouseHookProc);
-            _keyboardHook = InstallHook(NativeMethods.WH_KEYBOARD_LL, _keyboardHookProc);
-            if (_mouseHook == nint.Zero || _keyboardHook == nint.Zero)
-            {
-                log.LogError("SetWindowsHookEx failed -- could not install input hooks");
-                ready.TrySetResult(false);
-                return;
-            }
-
-            WarnIfNotOnInputDesktop(NativeMethods.GetThreadDesktop(_hookThreadId));
-            _shield.Create(profile.DebugShield);
-            ready.TrySetResult(true);
-
-            // message pump — hooks fire during GetMessage
-            while (NativeMethods.GetMessage(out var msg, nint.Zero, 0, 0) > 0)
-            {
-                if (msg.message == WmCheckHealth)
-                {
-                    ReinstallHooksIfIdle();
-                    continue;
-                }
-                if (msg.message == WmShieldShow)
-                {
-                    _shield.Show();
-                    continue;
-                }
-                if (msg.message == WmShieldHide)
-                {
-                    _shield.Hide();
-                    continue;
-                }
-                NativeMethods.TranslateMessage(in msg);
-                NativeMethods.DispatchMessage(in msg);
-            }
-
             _shield.Destroy();
             UninstallHook(ref _mouseHook);
             UninstallHook(ref _keyboardHook);
-        })
-        { IsBackground = true, Name = "HydraHookPump" };
-
-        _hookThread.Start();
-        await ready.Task;
-
-        _healthTimer = new Timer(_ =>
-            NativeMethods.PostThreadMessage(_hookThreadId, WmCheckHealth, nint.Zero, nint.Zero),
-            null, 200, 200);
+        });
+        _healthTimer = new Timer(_ => loop.Post(ReinstallHooksIfIdle), null, 200, 200);
+        await Task.CompletedTask;
     }
 
+    // hook thread; a hook that failed to go in is retried by the health check, as one gone quiet is
+    private void InstallHooks()
+    {
+        _lastMouseCallbackTick = _lastKeyboardCallbackTick = TickCount();
+        _mouseHook = InstallHook(NativeMethods.WH_MOUSE_LL, _mouseHookProc!);
+        _keyboardHook = InstallHook(NativeMethods.WH_KEYBOARD_LL, _keyboardHookProc!);
+        if (_mouseHook == nint.Zero || _keyboardHook == nint.Zero)
+            log.LogError("SetWindowsHookEx failed -- could not install input hooks");
+
+        WarnIfNotOnInputDesktop(NativeMethods.GetThreadDesktop(NativeMethods.GetCurrentThreadId()));
+        try { _shield.Create(profile.DebugShield); }
+        catch (Win32Exception ex) { log.LogWarning(ex, "Could not create the shield window"); }
+    }
+
+    [SupportedOSPlatform("windows")]
     public void StopEventTap()
     {
         _healthTimer?.Dispose();
         _healthTimer = null;
-        if (_hookThreadId != 0)
-            NativeMethods.PostThreadMessage(_hookThreadId, NativeMethods.WM_QUIT, nint.Zero, nint.Zero);
-        _hookThread?.Join(TimeSpan.FromSeconds(2));
+        _hookLoop?.Dispose();
+        _hookLoop = null;
     }
 
     public bool RecentresItself => true;
@@ -342,6 +307,7 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
         _ => IsKeyDown(WinVirtualKey.XButton2),
     };
 
+    [SupportedOSPlatform("windows")]
     public ValueTask DisposeAsync() { StopEventTap(); return ValueTask.CompletedTask; }
 
     // SetWindowsHookEx is desktop-scoped, and it reports success whichever desktop we are on. Started

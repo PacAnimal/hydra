@@ -77,7 +77,7 @@ public static class TransitionTestHelper
         var service = new InputRouter(platform, platform, config, relay, screens, loggerFactory ?? NullLoggerFactory.Instance, log ?? NullLogger<InputRouter>.Instance, screenSaverSync ?? new NullScreenSaverSync(), clipboard ?? new NullClipboardSync(),
             fileTransfer ?? FileTransferService.Null(), selectionDetector ?? new NullFileSelectionDetector(), osd ?? new NullOsdNotification(), tracker, peerState: world,
             getTickCount: getTickCount, timeProvider: timeProvider, localPlatform: localPlatform);
-        platform.AfterFireCallback = service.FlushAsync;
+        platform.AfterFireCallback = service.Flush;
         return new TestServiceBundle(platform, relay, service);
     }
 

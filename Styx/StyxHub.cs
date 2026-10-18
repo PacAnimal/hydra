@@ -67,7 +67,7 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, ITokenVer
             return await Refuse(RelayReasons.HostNameNotAllowed);
         }
 
-        var registration = await registry.Register(Context.ConnectionId, network, hostName, remoteIp, LocalIp);
+        var registration = registry.Register(Context.ConnectionId, network, hostName, remoteIp, LocalIp);
         if (registration.Kicked is { } kicked)
         {
             expiry.Cancel(kicked);
@@ -82,7 +82,7 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, ITokenVer
         // (before we registered above) — clean up so we don't leave a stale entry for a dead connection
         if (Context.ConnectionAborted.IsCancellationRequested)
         {
-            await registry.Unregister(Context.ConnectionId);
+            registry.Unregister(Context.ConnectionId);
             expiry.Cancel(Context.ConnectionId);
             // we displaced someone and then died before announcing either half, so nothing has told the
             // other peers the host is gone — converge them on what the registry actually holds now
@@ -121,7 +121,7 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, ITokenVer
             return;
         }
 
-        var identity = await registry.GetIdentity(Context.ConnectionId);
+        var identity = registry.GetIdentity(Context.ConnectionId);
         if (identity == null) return;
 
         if (options.DebugMessages && log.IsEnabled(LogLevel.Information))
@@ -137,7 +137,7 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, ITokenVer
                 continue;
             }
 
-            var targetConnectionId = await registry.GetConnectionId(identity.Network, targetHost);
+            var targetConnectionId = registry.GetConnectionId(identity.Network, targetHost);
             if (targetConnectionId == null)
             {
                 if (log.IsEnabled(LogLevel.Debug)) log.LogDebug("Target {TargetHost} not found on network {Network}", targetHost, identity.Network);
@@ -156,7 +156,7 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, ITokenVer
     {
         expiry.Cancel(Context.ConnectionId);
         writer.Forget(Context.ConnectionId);
-        var identity = await registry.Unregister(Context.ConnectionId);
+        var identity = registry.Unregister(Context.ConnectionId);
         if (identity != null)
             peers.QueueBroadcast(identity.Network);
         await base.OnDisconnectedAsync(exception);

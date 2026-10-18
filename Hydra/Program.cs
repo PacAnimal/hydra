@@ -99,7 +99,7 @@ while (true)
     try
     {
         var recoveryConfigPath = HydraConfigFile.ResolvePath(hydraArgs.ConfigPath);
-        if (await RemoteApplyStore.RestoreExpiredBeforeStartupAsync(recoveryConfigPath))
+        if (await RemoteApplyStore.RestoreExpiredBeforeStartup(recoveryConfigPath))
             Console.Error.WriteLine("Remote configuration was not confirmed; restored the last-known-good config.");
         var loaded = HydraConfigFile.LoadAll(hydraArgs.ConfigPath);
         configFile = loaded.File;
@@ -125,12 +125,9 @@ while (true)
 ProcessLock? processLock = null;
 if (configFile.LockFile is { } lockFileSetting)
 {
-    var lockPath = Path.IsPathRooted(lockFileSetting)
-        ? lockFileSetting
-        : Path.GetFullPath(lockFileSetting, Path.GetDirectoryName(configPath)!);
     try
     {
-        processLock = ProcessLock.Acquire(lockPath);
+        processLock = ProcessLock.Acquire(HydraConfigFile.Beside(configPath, lockFileSetting));
     }
     catch (InvalidOperationException ex)
     {
@@ -195,9 +192,7 @@ var logFileSetting = RunMode.IsSessionChild
     : configFile.LogFile;
 if (logFileSetting is { } logFile)
 {
-    var logPath = Path.IsPathRooted(logFile)
-        ? logFile
-        : Path.GetFullPath(logFile, Path.GetDirectoryName(configPath)!);
+    var logPath = HydraConfigFile.Beside(configPath, logFile);
     if (configFile.LogTruncate && File.Exists(logPath))
         new FileStream(logPath, FileMode.Truncate).Dispose();
     services.AddSereneFileLogging(logPath, c => c.MinLogLevel = profile.LogLevel);
@@ -325,7 +320,7 @@ if (config != null)
         // forwarder buffers log entries; SlaveLogSender drains them to masters
         var forwarder = new SlaveLogForwarder();
         services.AddSingleton(forwarder);
-        services.AddSereneCustomLogging(e => forwarder.ForwardAsync(e).AsTask(), c => c.MinLogLevel = LogLevel.Debug);
+        services.AddSereneCustomLogging(e => forwarder.Forward(e).AsTask(), c => c.MinLogLevel = LogLevel.Debug);
         services.AddHostedService<SlaveLogSender>();
 
     }
@@ -426,7 +421,7 @@ if (macShield != null)
     macShield.Log = shieldLog;
     if (shieldLog.IsEnabled(LogLevel.Information))
         shieldLog.LogInformation("auth={Auth} ssid={Ssid}",
-            macNetworkState!.WifiAuthStatus switch { 0 => "notDetermined", 1 => "restricted", 2 => "denied", 3 or 4 => "authorized", _ => "none" },
+            MacNetworkState.AuthLabel(macNetworkState!.WifiAuthStatus),
             macNetworkState.Ssid ?? "(none)");
 
     // wire shield state changes to immediate network re-check

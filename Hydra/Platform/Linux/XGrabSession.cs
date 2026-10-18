@@ -30,7 +30,7 @@ internal sealed class XGrabSession(
             _retryCts?.Dispose();
             cts = _retryCts = new CancellationTokenSource();
         }
-        _ = Task.Run(() => RetryAsync(cts.Token));
+        _ = Task.Run(() => Retry(cts.Token));
     }
 
     public void Ungrab()
@@ -50,7 +50,7 @@ internal sealed class XGrabSession(
         ungrab();
     }
 
-    private async Task RetryAsync(CancellationToken ct)
+    private async Task Retry(CancellationToken ct)
     {
         const int maxAttempts = 20;
         for (var i = 0; i < maxAttempts; i++)

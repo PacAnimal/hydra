@@ -22,7 +22,7 @@ public class HydraStatusServiceTests
         var status = new HydraStatusService(services, TransitionTestHelper.TestConfig, world,
             new DormancyState(NullLogger<DormancyState>.Instance), runtime, new TransactionalConfigStore(runtime));
 
-        var snapshot = await status.GetAsync(CancellationToken.None);
+        var snapshot = await status.Get(CancellationToken.None);
 
         Assert.That(snapshot.Peers.Single().Platform, Is.EqualTo("macOS"));
     }

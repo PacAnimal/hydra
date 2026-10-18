@@ -20,9 +20,9 @@ public class ClipboardWireTests
         {
             Assert.That(push.PrimaryText, Is.Null);
             Assert.That(push.PrimaryIsText, Is.True);
-            Assert.That(ClipboardWire.From(push, Log, "push", "peer").PrimaryText, Is.EqualTo("copied"));
+            Assert.That(ClipboardWire.From(push, Log, "push from peer").PrimaryText, Is.EqualTo("copied"));
             Assert.That(response.PrimaryText, Is.Null);
-            Assert.That(ClipboardWire.From(response, Log, "pull response", "peer").PrimaryText, Is.EqualTo("copied"));
+            Assert.That(ClipboardWire.From(response, Log, "pull response from peer").PrimaryText, Is.EqualTo("copied"));
         }
     }
 

@@ -6,8 +6,8 @@ public interface IRelaySender
     RelayTransportSnapshot? Transport { get; }
     void Send(string[] targetHosts, byte[] payload);
     bool RequestReconnect();
-    ValueTask SuspendConnectionAsync(CancellationToken cancel = default);
-    ValueTask SuspendForSystemSleepAsync(long generation, CancellationToken cancel = default);
+    ValueTask SuspendConnection(CancellationToken cancel = default);
+    ValueTask SuspendForSystemSleep(long generation, CancellationToken cancel = default);
     void ResumeConnection();
     void BeginSystemWake(long generation);
     void CompleteSystemWake(long generation);
@@ -45,8 +45,8 @@ public class NullRelaySender : IRelaySender
     public virtual RelayTransportSnapshot? Transport => null;
     public virtual void Send(string[] targetHosts, byte[] payload) { }
     public virtual bool RequestReconnect() => false;
-    public virtual ValueTask SuspendConnectionAsync(CancellationToken cancel = default) => ValueTask.CompletedTask;
-    public virtual ValueTask SuspendForSystemSleepAsync(long generation, CancellationToken cancel = default) => SuspendConnectionAsync(cancel);
+    public virtual ValueTask SuspendConnection(CancellationToken cancel = default) => ValueTask.CompletedTask;
+    public virtual ValueTask SuspendForSystemSleep(long generation, CancellationToken cancel = default) => SuspendConnection(cancel);
     public virtual void ResumeConnection() { }
     public virtual void BeginSystemWake(long generation) => ResumeConnection();
     public virtual void CompleteSystemWake(long generation) => ResumeConnection();

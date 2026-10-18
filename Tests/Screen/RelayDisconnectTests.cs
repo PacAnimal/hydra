@@ -4,24 +4,18 @@ using Tests.Setup;
 namespace Tests.Screen;
 
 [TestFixture]
-public class RelayDisconnectTests
+public class RelayDisconnectTests : ServicesFixture
 {
     private FakePlatform _platform = null!;
     private FakeRelay _relay = null!;
-    private readonly StartedServices _services = new();
 
     [SetUp]
-    public async Task SetUp() => (_platform, _relay, _) = await _services.StartOnline(TransitionTestHelper.CreateService());
-
-    [TearDown]
-    public Task TearDown() => _services.StopAll();
+    public async Task SetUp() => (_platform, _relay, _) = await Services.StartOnline(TransitionTestHelper.CreateService());
 
     [Test]
     public async Task RelayDisconnect_WhileOnVirtualScreen_SnapsBackAndShowsCursor()
     {
-        // enter virtual screen
-        _platform.FireMouseMove(2559, 720);
-        Assert.That(_platform.IsOnVirtualScreen, Is.True, "should be on virtual screen");
+        TransitionTestHelper.EnterRemote(_platform);
 
         _platform.ShowCursorCalled = false;
 
@@ -68,8 +62,7 @@ public class RelayDisconnectTests
     public void ReturnToLocal_ShowsCursorImmediately_WithoutExtraMouseMove()
     {
         // enter virtual screen via right edge
-        _platform.FireMouseMove(2559, 720);
-        Assert.That(_platform.IsOnVirtualScreen, Is.True, "pre-condition: should be on virtual screen");
+        TransitionTestHelper.EnterRemote(_platform);
 
         _platform.ShowCursorCalled = false;
 
@@ -113,9 +106,7 @@ public class RelayDisconnectTests
 
     private async Task AssertCrossingWaitsForRelay(Action<FakePlatform> pushRight)
     {
-        var (platform, relay, _) = await _services.StartOnline(TransitionTestHelper.CreateService(profile: TransitionTestHelper.ChainConfig), "remote", "remote2");
-        platform.FireMouseMove(2559, 720);
-        Assert.That(platform.IsOnVirtualScreen, Is.True, "pre-condition: on remote");
+        var (platform, relay, _) = await Services.Visiting(TransitionTestHelper.CreateService(profile: TransitionTestHelper.ChainConfig), "remote", "remote2");
 
         relay.Connected = false;
         for (var i = 0; i < 30; i++)
@@ -123,10 +114,10 @@ public class RelayDisconnectTests
 
         // still parked against remote's edge, so the first push after reconnecting is what crosses
         relay.Connected = true;
-        relay.ClearSent();
+        relay.Sent.Clear();
         pushRight(platform);
 
-        Assert.That(relay.Sent<EnterScreenMessage>(MessageKind.EnterScreen, "remote2"), Is.Not.Empty,
+        Assert.That(relay.Sent.Of<EnterScreenMessage>(MessageKind.EnterScreen, "remote2"), Is.Not.Empty,
             "should only cross to remote2 once the relay is back");
     }
 }

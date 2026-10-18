@@ -25,8 +25,7 @@ public class EmbeddedStyxServer(EmbeddedStyxServerConfig config, ILogger<Embedde
 
     // completes when the relay is listening and faults when it could not start; always one or the other
     public Task WaitForReady() => _ready.Task;
-    internal ValueTask<IReadOnlyList<ClientIdentity>> GetClients() => _registry?.GetAllIdentities()
-        ?? ValueTask.FromResult<IReadOnlyList<ClientIdentity>>([]);
+    internal IReadOnlyList<ClientIdentity> GetClients() => _registry?.GetAllIdentities() ?? [];
 
     protected override async Task Execute(CancellationToken cancel)
     {

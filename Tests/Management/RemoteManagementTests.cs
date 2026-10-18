@@ -7,16 +7,12 @@ using Tests.Setup;
 namespace Tests.Management;
 
 [TestFixture]
-public class RemoteManagementTests
+public class RemoteManagementTests : ServicesFixture
 {
     private string _root = null!;
-    private readonly StartedServices _services = new();
 
     [SetUp]
     public void SetUp() => _root = TestPaths.FreshFixtureRoot(nameof(RemoteManagementTests));
-
-    [TearDown]
-    public Task TearDown() => _services.StopAll();
 
     // stored hashes in .hydra-management.json must still match after an upgrade
     [Test]
@@ -57,10 +53,10 @@ public class RemoteManagementTests
     {
         var configPath = ConfigPath("store");
         var store = new RemoteManagementStore(configPath);
-        var code = await store.CreatePairingCodeAsync();
+        var code = await store.CreatePairingCode();
 
-        Assert.That(await store.ConsumePairingCodeAsync(code, CancellationToken.None), Is.True);
-        Assert.That(await store.ConsumePairingCodeAsync(code, CancellationToken.None), Is.False);
+        Assert.That(await store.ConsumePairingCode(code, CancellationToken.None), Is.True);
+        Assert.That(await store.ConsumePairingCode(code, CancellationToken.None), Is.False);
 
         var stateJson = await File.ReadAllTextAsync(Path.Combine(Path.GetDirectoryName(configPath)!, ".hydra-management.json"));
         Assert.That(stateJson, Does.Not.Contain(code));
@@ -75,7 +71,7 @@ public class RemoteManagementTests
     {
         var configPath = ConfigPath("restamp");
         var store = new RemoteManagementStore(configPath);
-        var code = await store.CreatePairingCodeAsync();
+        var code = await store.CreatePairingCode();
         var sidecar = new ConfigDir(configPath).ManagementState;
         var json = await File.ReadAllTextAsync(sidecar);
         // replaced by a plain write, which takes the directory's ACL or the umask's mode
@@ -92,7 +88,7 @@ public class RemoteManagementTests
                 Assert.That(new FileInfo(sidecar).GetAccessControl().AreAccessRulesProtected, Is.True, "the sidecar still inherits the directory's ACL");
             else
                 Assert.That(File.GetUnixFileMode(sidecar), Is.EqualTo(UnixFileMode.UserRead | UnixFileMode.UserWrite));
-            Assert.That(await store.ConsumePairingCodeAsync(code, CancellationToken.None), Is.True);
+            Assert.That(await store.ConsumePairingCode(code, CancellationToken.None), Is.True);
         }
     }
 
@@ -114,12 +110,12 @@ public class RemoteManagementTests
         var second = new RemoteManagementStore(configPath);
         var codes = await Task.WhenAll(Enumerable.Range(0, 20)
             .Select(index => (index & 1) == 0
-                ? first.CreatePairingCodeAsync()
-                : second.CreatePairingCodeAsync()));
+                ? first.CreatePairingCode()
+                : second.CreatePairingCode()));
         var reader = new RemoteManagementStore(configPath);
 
         foreach (var code in codes)
-            Assert.That(await reader.ConsumePairingCodeAsync(code, CancellationToken.None), Is.True);
+            Assert.That(await reader.ConsumePairingCode(code, CancellationToken.None), Is.True);
 
         if (!OperatingSystem.IsWindows())
             Assert.That(File.GetUnixFileMode(Path.Combine(Path.GetDirectoryName(configPath)!, ".hydra-management.lock")),
@@ -133,10 +129,10 @@ public class RemoteManagementTests
         var first = new RemoteManagementStore(configPath);
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
-        Assert.That(await first.RememberRequestAsync("controller", "nonce", now, CancellationToken.None), Is.True);
+        Assert.That(await first.RememberRequest("controller", "nonce", now, CancellationToken.None), Is.True);
 
         var reloaded = new RemoteManagementStore(configPath);
-        Assert.That(await reloaded.RememberRequestAsync("controller", "nonce", now, CancellationToken.None), Is.False);
+        Assert.That(await reloaded.RememberRequest("controller", "nonce", now, CancellationToken.None), Is.False);
     }
 
     [Test]
@@ -163,13 +159,13 @@ public class RemoteManagementTests
         var (localRelay, remoteRelay) = LinkedRelay.Create("local", "remote");
         var localStore = new RemoteManagementStore(localPath);
         var remoteStore = new RemoteManagementStore(remotePath);
-        var local = await _services.Start(Service(localRelay, localStore, localPath));
-        await _services.Start(Service(remoteRelay, remoteStore, remotePath));
+        var local = await Services.Start(Service(localRelay, localStore, localPath));
+        await Services.Start(Service(remoteRelay, remoteStore, remotePath));
 
-        var code = await remoteStore.CreatePairingCodeAsync();
-        var paired = await local.PairAsync(new RemotePairRequest("remote", code), CancellationToken.None);
-        var document = await local.GetConfigAsync("remote", CancellationToken.None);
-        var validation = await local.ValidateConfigAsync(new RemoteValidateRequest("remote", document.Json), CancellationToken.None);
+        var code = await remoteStore.CreatePairingCode();
+        var paired = await local.Pair(new RemotePairRequest("remote", code), CancellationToken.None);
+        var document = await local.GetConfig("remote", CancellationToken.None);
+        var validation = await local.ValidateConfig(new RemoteValidateRequest("remote", document.Json), CancellationToken.None);
 
         using (Assert.EnterMultipleScope())
         {
@@ -188,7 +184,7 @@ public class RemoteManagementTests
         var relay = new LinkedRelay("local");
         var service = Service(relay, new RemoteManagementStore(path), path);
 
-        Assert.That(async () => await service.GetConfigAsync("remote", CancellationToken.None),
+        Assert.That(async () => await service.GetConfig("remote", CancellationToken.None),
             Throws.TypeOf<InvalidOperationException>().With.Message.Contains("not paired"));
     }
 
@@ -198,10 +194,10 @@ public class RemoteManagementTests
         var localPath = ConfigPath("invalid-pair-local");
         var remotePath = ConfigPath("invalid-pair-remote");
         var (localRelay, remoteRelay) = LinkedRelay.Create("local", "remote");
-        var local = await _services.Start(Service(localRelay, new RemoteManagementStore(localPath), localPath));
-        await _services.Start(Service(remoteRelay, new RemoteManagementStore(remotePath), remotePath));
+        var local = await Services.Start(Service(localRelay, new RemoteManagementStore(localPath), localPath));
+        await Services.Start(Service(remoteRelay, new RemoteManagementStore(remotePath), remotePath));
 
-        var result = await local.PairAsync(new RemotePairRequest("remote", RemoteManagementCrypto.RandomSecret()),
+        var result = await local.Pair(new RemotePairRequest("remote", RemoteManagementCrypto.RandomSecret()),
             CancellationToken.None);
 
         using (Assert.EnterMultipleScope())
@@ -220,16 +216,16 @@ public class RemoteManagementTests
         var localStore = new RemoteManagementStore(localPath);
         var remoteStore = new RemoteManagementStore(remotePath);
         var remoteLifetime = new FakeLifetimeController();
-        var local = await _services.Start(Service(localRelay, localStore, localPath));
-        await _services.Start(Service(remoteRelay, remoteStore, remotePath, remoteLifetime));
+        var local = await Services.Start(Service(localRelay, localStore, localPath));
+        await Services.Start(Service(remoteRelay, remoteStore, remotePath, remoteLifetime));
 
-        var code = await remoteStore.CreatePairingCodeAsync();
-        _ = await local.PairAsync(new RemotePairRequest("remote", code), CancellationToken.None);
-        var document = await local.GetConfigAsync("remote", CancellationToken.None);
+        var code = await remoteStore.CreatePairingCode();
+        _ = await local.Pair(new RemotePairRequest("remote", code), CancellationToken.None);
+        var document = await local.GetConfig("remote", CancellationToken.None);
         var edited = document.Json.Replace("\"mode\": \"Slave\"", "\"mode\": \"Slave\",\n      \"mouseScale\": 1.5");
 
-        var accepted = await local.ApplyConfigAsync(new RemoteApplyRequest("remote", document.Revision, edited), CancellationToken.None);
-        await local.ConfirmConfigAsync(new RemoteConfirmRequest("remote", accepted.TransactionId, accepted.CandidateRevision), CancellationToken.None);
+        var accepted = await local.ApplyConfig(new RemoteApplyRequest("remote", document.Revision, edited), CancellationToken.None);
+        await local.ConfirmConfig(new RemoteConfirmRequest("remote", accepted.TransactionId, accepted.CandidateRevision), CancellationToken.None);
 
         using (Assert.EnterMultipleScope())
         {
@@ -313,17 +309,17 @@ public class RemoteManagementTests
         var writer = new RemoteManagementStore(configPath);
         var reader = new RemoteManagementStore(configPath);
 
-        await writer.CreatePairingCodeAsync();
+        await writer.CreatePairingCode();
 
         var codes = new List<string>();
-        await using (ConcurrentReader.Start(async () => await reader.GetTargetAsync("anything", CancellationToken.None)))
+        await using (ConcurrentReader.Start(async () => await reader.GetTarget("anything", CancellationToken.None)))
         {
-            for (var i = 0; i < 20; i++) codes.Add(await writer.CreatePairingCodeAsync());
+            for (var i = 0; i < 20; i++) codes.Add(await writer.CreatePairingCode());
         }
 
         var checker = new RemoteManagementStore(configPath);
         foreach (var code in codes)
-            Assert.That(await checker.ConsumePairingCodeAsync(code, CancellationToken.None), Is.True,
+            Assert.That(await checker.ConsumePairingCode(code, CancellationToken.None), Is.True,
                 "a write was lost while another instance was reading — on Windows the reader's handle refuses the replace");
     }
 }

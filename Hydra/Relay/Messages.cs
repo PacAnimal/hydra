@@ -110,8 +110,8 @@ public static class PeerPlatforms
 public record ScreenInfoMessage(List<ScreenInfoEntry> Screens, PeerPlatform Platform);
 public record MasterConfigMessage(LogLevel? LogLevel);
 public record SlaveLogMessage(int Level, string Category, string Message, string? Exception);
-// IsRepeat marks an OS auto-repeat the master re-resolved (with live modifier/dead-key state) and forwarded;
-// the slave injects it without tracking a new held key.
+// IsRepeat marks an OS auto-repeat the master re-resolved (with live modifier/dead-key state) and forwarded, only for a
+// key whose down it forwarded; the slave injects it as a repeat of that held key.
 public record KeyEventMessage(KeyEventType Type, KeyModifiers Modifiers, char? Character, SpecialKey? Key, bool IsRepeat = false);
 
 /// <summary>

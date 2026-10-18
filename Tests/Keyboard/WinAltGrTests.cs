@@ -1,21 +1,12 @@
 using Hydra.Keyboard;
 using Hydra.Platform.Windows;
+using static Tests.Setup.WinHook;
 
 namespace Tests.Keyboard;
 
 [TestFixture]
 public class WinAltGrTests
 {
-    // helper to build a KBDLLHOOKSTRUCT for a given vk/flags/time
-    private static KBDLLHOOKSTRUCT Hook(uint vk, uint flags = 0, uint time = 1) =>
-        new() { vkCode = vk, scanCode = 0, flags = flags, time = time, dwExtraInfo = 0 };
-
-    private static KeyEvent[]? Down(WinKeyResolver r, uint vk, uint flags = 0, uint time = 1) =>
-        r.Resolve(NativeMethods.WM_KEYDOWN, Hook(vk, flags, time));
-
-    private static KeyEvent[]? Up(WinKeyResolver r, uint vk, uint flags = 0, uint time = 1) =>
-        r.Resolve(NativeMethods.WM_KEYUP, Hook(vk, flags, time));
-
     // AltGr on Windows: synthetic LCtrl (same timestamp as RMenu) should produce a single AltGr event
     [Test]
     public void AltGr_SameTimestamp_EmitsAltGrNotControl()

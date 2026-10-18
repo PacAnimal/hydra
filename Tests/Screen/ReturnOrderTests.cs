@@ -8,19 +8,14 @@ namespace Tests.Screen;
 // pin land after the warp and leave the cursor mid-screen.
 // The flag and warp are one ReturnTo, which on Windows marks the park point as the flag clears.
 [TestFixture]
-public class ReturnOrderTests
+public class ReturnOrderTests : ServicesFixture
 {
-    private readonly StartedServices _services = new();
-
-    [TearDown]
-    public Task StopServices() => _services.StopAll();
-
     private static readonly string[] Showing = ["show", "return", "flag:False", "warp"];
     private static readonly string[] Hiding = ["hide", "return", "flag:False", "warp"];
 
     private async Task<TestServiceBundle> OnTheRemoteScreen(IHydraProfile? profile = null, FakeScreenSaverSync? screenSaverSync = null)
     {
-        var bundle = await _services.Visiting(TransitionTestHelper.CreateService(profile: profile, screenSaverSync: screenSaverSync));
+        var bundle = await Services.Visiting(TransitionTestHelper.CreateService(profile: profile, screenSaverSync: screenSaverSync));
         bundle.Platform.Calls.Clear();
         return bundle;
     }
@@ -54,7 +49,7 @@ public class ReturnOrderTests
         var bundle = await OnTheRemoteScreen();
 
         await bundle.Relay.FirePeersChanged();
-        await bundle.Service.FlushAsync();
+        await bundle.Service.Flush();
 
         AssertReturned(bundle, Showing);
     }
@@ -65,7 +60,7 @@ public class ReturnOrderTests
         var bundle = await OnTheRemoteScreen();
 
         await bundle.Relay.FireDisconnected();
-        await bundle.Service.FlushAsync();
+        await bundle.Service.Flush();
 
         AssertReturned(bundle, Showing);
     }
@@ -77,7 +72,7 @@ public class ReturnOrderTests
         var bundle = await OnTheRemoteScreen(screenSaverSync: screenSaverSync);
 
         screenSaverSync.FireActivated();
-        await bundle.Service.FlushAsync();
+        await bundle.Service.Flush();
 
         AssertReturned(bundle, Showing);
     }

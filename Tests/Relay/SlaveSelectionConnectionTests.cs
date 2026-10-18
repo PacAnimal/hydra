@@ -62,8 +62,7 @@ public class SlaveSelectionConnectionTests : StyxFixtureBase
         var finder = new GatedFileSelectionDetector();
         finder.Release(new FileSelectionResult(true, ["/Users/me/report.pdf"]));
         var cfg = await StyxTestServer.BuildNetworkConfig(Factory, Guid.NewGuid(), Key);
-        await using var master = HydraTestClient.Master(Factory, Master, cfg);
-        await master.StartReady();
+        await using var master = await HydraTestClient.Started(HydraTestClient.Master(Factory, Master, cfg));
         var slave = await StartSlave(cfg, finder);
         await slave.NextAuthentication();
         Assert.That(slave.RequestReconnect(), Is.True);
@@ -123,7 +122,7 @@ public class SlaveSelectionConnectionTests : StyxFixtureBase
 
         await slave.SimulateReceive(Master, MessageKind.FileSelectionQuery, "{}").WaitAsync(Bound);
 
-        var (targets, _, json) = slave.Snapshot().Single(s => s.Kind == MessageKind.FileSelectionResponse);
+        var (targets, _, json) = slave.Sent.Of(MessageKind.FileSelectionResponse).Single();
         using (Assert.EnterMultipleScope())
         {
             Assert.That(targets, Is.EqualTo([Master]));

@@ -61,11 +61,8 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     private long _bytesSent;
     private long _bytesReceived;
 
-    // Two ordered lanes, each drained by its own loop (see MessageLane), so a file chunk never sits in front of a
-    // keystroke. Order within a lane comes from /relay running a client's invocations one at a time: the input lane
-    // never waits for a Send to return, while the bulk lane does, keeping one chunk in flight. Bulk producers wait in
-    // SendReliableAsync until their item leaves the queue; the rest are small, so both stay unbounded rather than drop a
-    // KeyUp or LeaveScreen.
+    // the two lanes (see MessageLane), each drained by its own loop; unbounded rather than drop a KeyUp or LeaveScreen,
+    // since bulk producers wait in SendReliableAsync until their item leaves and the rest are small
     private readonly Channel<OutboundMessage> _inputQueue = NewLane();
     private readonly Channel<OutboundMessage> _bulkQueue = NewLane();
 
@@ -77,7 +74,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         MessageLane.Of(payload) == RelayLane.Bulk ? _bulkQueue : _inputQueue;
 
     protected virtual TimeSpan ReconnectDelay => TimeSpan.FromSeconds(Constants.ReconnectDelaySeconds);
-    protected virtual TimeSpan SystemWakeReconnectDelay => TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan SystemWakeReconnectDelay = TimeSpan.FromSeconds(1);
     protected virtual TimeSpan EarlySystemWakeReconnectWindow => TimeSpan.FromSeconds(30);
     protected virtual TimeSpan SystemWakeReconnectGracePeriod => TimeSpan.FromSeconds(5);
     // drives the auth timeout, so a test can expire it on demand
@@ -201,13 +198,13 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         }
     }
 
-    public ValueTask SuspendConnectionAsync(CancellationToken cancel = default) =>
-        SuspendConnectionCoreAsync(null, cancel);
+    public ValueTask SuspendConnection(CancellationToken cancel = default) =>
+        SuspendConnectionCore(null, cancel);
 
-    public ValueTask SuspendForSystemSleepAsync(long generation, CancellationToken cancel = default) =>
-        SuspendConnectionCoreAsync(generation, cancel);
+    public ValueTask SuspendForSystemSleep(long generation, CancellationToken cancel = default) =>
+        SuspendConnectionCore(generation, cancel);
 
-    private async ValueTask SuspendConnectionCoreAsync(long? generation, CancellationToken cancel)
+    private async ValueTask SuspendConnectionCore(long? generation, CancellationToken cancel)
     {
         Task suspension;
         ConnectionCancellation? connection;
@@ -308,15 +305,12 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     {
         OnSent(targetHosts, payload);
 
-        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var completion = NewSignal();
 
-        // By KIND, never by which method was called: FileTransferService streams chunks through here and
-        // RemoteManagementService sends a control request through here, and those belong on different lanes.
+        // by kind: file chunks and RemoteManagementService's control requests both come through here
         var lane = LaneFor(payload);
         lock (_sendOrderLock)
         {
-            // Under the lock for the reason CanEnqueue states: outside it, this enqueues past a teardown that has
-            // already drained, and the caller waits on a completion nothing will set.
             if (!CanEnqueue)
                 throw new InvalidOperationException("Relay is not connected");
 
@@ -346,7 +340,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         byte[] decrypted;
         try
         {
-            decrypted = await _encryption.Decrypt(sourceHost, payload, log);
+            decrypted = await _encryption.Decrypt(sourceHost, payload);
         }
         catch (Exception ex)
         {
@@ -454,7 +448,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     };
 
     protected virtual Task<Socket> ConnectRelaySocket(DnsEndPoint target, CancellationToken cancel) =>
-        RelaySocketConnector.ConnectAsync(target, cancel);
+        RelaySocketConnector.Connect(target, cancel);
 
     protected override async Task Execute(CancellationToken cancel)
     {
@@ -509,16 +503,12 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
             {
                 var wasLive = EndSession();
                 _transport = null;
-                // BOTH lanes. A caller parked in SendReliableAsync is waiting on a completion that only this
-                // drain will ever set, so a lane left unemptied is a caller hung until the process exits —
-                // and the bulk lane is the one whose callers actually await.
+                // both lanes: a SendReliableAsync caller waits on a completion only this sets
                 FailQueued(_inputQueue.Reader);
                 FailQueued(_bulkQueue.Reader);
                 if (wasLive)
                 {
-                    // guard the disconnect callbacks: a throw here would escape Execute, and because the
-                    // base SimpleHostedService has no exceptionLoopTime it would permanently kill the
-                    // reconnect loop (silent, until process restart). Log and keep reconnecting instead.
+                    // a throw here would escape Execute and end the reconnect loop for good
                     try
                     {
                         await OnDisconnected();
@@ -700,8 +690,6 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         // so _encryption must be ready to decrypt that incoming message
         _encryption = new RelayEncryption(netConfig.EncryptionKey, peerState);
         _server = server;
-        // per-connection, NOT app-lifetime, so awaiters like WaitForAccessibilityTrusted in OnAuthenticated unwind on
-        // a drop; set here, with the server, because a message handled during the login belongs to this connection
         ConnectionToken = disco.Token;
 
         // bounded, so a server that accepts the socket then stalls the handshake cannot hang the connect attempt
@@ -722,9 +710,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
             log.LogInformation("Authenticated on relay as {HostName}", hostName);
         await OnAuthenticated();
 
-        // Both lanes drain concurrently, so a chunk being sent never holds up a keystroke. Encrypting on two lanes is
-        // safe only because the GCM nonce comes from Iv96.Next's process-wide counter: the key is constant for the
-        // connection, so a repeated nonce would be fatal. Either lane exiting ends the connection.
+        // both lanes drain concurrently (RelayEncryption.Encrypt is safe to share); either exiting ends the connection
         await Task.WhenAll(
             Drain(_inputQueue.Reader, disco, InputLaneSend(con, disco)),
             Drain(_bulkQueue.Reader, disco, BulkLaneSend(server)));
@@ -735,12 +721,13 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     ///
     /// <para><b>Everything here runs on the CONNECTION's token, never the app's.</b> Suspending or dropping
     /// a connection cancels <c>disco</c> and then WAITS for this iteration to finish
-    /// (<c>SuspendConnectionCoreAsync</c>), so a drain parked on work that only the app-lifetime token can
+    /// (<c>SuspendConnectionCore</c>), so a drain parked on work that only the app-lifetime token can
     /// cancel deadlocks the suspend — the reconnect, the sleep handler and a clean shutdown all go through
     /// it.</para>
     /// </summary>
     private async Task Drain(ChannelReader<OutboundMessage> reader, ConnectionCancellation disco, Func<string[], byte[], Task> send)
     {
+        // a cancellation is not caught: Execute classifies the drop, and its log line is the only one a master writes
         try
         {
             while (true)
@@ -781,9 +768,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         }
         finally
         {
-            // One lane stopping means this connection is over, so wake the other rather than leaving it
-            // parked in WaitToReadAsync until something else happens to cancel it.
-            // a cancellation is not caught: Execute classifies the drop, and its log line is the only one a master writes
+            // one lane stopping ends the connection, so wake the other
             await disco.CancelAsync();
         }
     }
@@ -823,8 +808,6 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         {
             lock (_sendOrderLock)
             {
-                // BY REFERENCE, and the clear is what stops a later append landing in a bundle that has
-                // already been read — which would lose those keys with nothing to show for it.
                 if (ReferenceEquals(_openKeyBundle, item.Keys)) _openKeyBundle = null;
                 item = item with { Payload = item.Keys.Snapshot(), Keys = null };
             }
@@ -833,11 +816,9 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     }
 
     /// <summary>
-    /// Key events queued for one target while an earlier frame is still in flight, kept in order. Unlike
-    /// <see cref="MovementBatch"/> it appends and never replaces: a dropped KeyUp is a key held down on another machine.
-    /// <para>Appending enqueues nothing, so an append after the drain took its <see cref="Snapshot"/> would be lost;
-    /// <c>_openKeyBundle</c> is cleared under <c>_sendOrderLock</c> by the drain (by reference) and by every other
-    /// enqueue to prevent it.</para>
+    /// Key events queued for one target behind a frame already in flight (see <see cref="KeyEventBatchMessage"/>).
+    /// Appending enqueues nothing, so an append after the drain took its <see cref="Snapshot"/> would be lost;
+    /// <c>_openKeyBundle</c> is cleared under <c>_sendOrderLock</c> by the drain (by reference) and by every other enqueue.
     /// </summary>
     private sealed class KeyBundle
     {
@@ -926,7 +907,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
             0, 0, 0, 0, 0);
     }
 
-    // Lets SuspendConnectionAsync/RequestReconnect cancel whichever Connect() attempt is currently in
+    // Lets SuspendConnection/RequestReconnect cancel whichever Connect() attempt is currently in
     // flight, wherever it is in the connect/authenticate/drain sequence, without tearing down the
     // whole reconnect loop.
     private sealed class ConnectionCancellationScope : IDisposable

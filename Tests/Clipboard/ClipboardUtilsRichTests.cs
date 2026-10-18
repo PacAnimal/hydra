@@ -123,7 +123,7 @@ public class ClipboardUtilsRichTests
     [Test]
     public void ValidateFields_DropsOversizedHtmlAndRtf_KeepsValid()
     {
-        var result = ClipboardWire.From(new ClipboardPushMessage("t", Html: OversizedText(), Rtf: Oversized()), Log, "test", "host");
+        var result = ClipboardWire.From(new ClipboardPushMessage("t", Html: OversizedText(), Rtf: Oversized()), Log, "test from host");
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result.Text, Is.EqualTo("t"));
@@ -135,7 +135,7 @@ public class ClipboardUtilsRichTests
     [Test]
     public void ValidateFields_KeepsValidRich()
     {
-        var result = ClipboardWire.From(new ClipboardPushMessage("t", Html: "<b>x</b>", Rtf: [3]), Log, "test", "host");
+        var result = ClipboardWire.From(new ClipboardPushMessage("t", Html: "<b>x</b>", Rtf: [3]), Log, "test from host");
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result.Html, Is.EqualTo("<b>x</b>"));
