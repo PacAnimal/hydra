@@ -1,6 +1,5 @@
 using Cathedral.Styx;
 using Common.DTO;
-using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Time.Testing;
 using Styx.Services;
@@ -10,25 +9,11 @@ namespace Tests.Styx;
 
 /// <summary>A token's <c>exp</c> evicts the registration it admitted, and only that one, on a clock the test steps.</summary>
 [TestFixture]
-public class StyxExpiryTests
+public class StyxExpiryTests : StyxFixtureBase
 {
     private readonly FakeTimeProvider _clock = new(new DateTimeOffset(2030, 1, 1, 0, 0, 0, TimeSpan.Zero));
-    private WebApplicationFactory<global::Styx.Program>? _factory;
 
-    private WebApplicationFactory<global::Styx.Program> Factory => _factory!;
-
-    [OneTimeSetUp]
-    public void Start()
-    {
-        _factory = StyxTestServer.Create(configure: services => services.AddSingleton<TimeProvider>(_clock));
-        _ = _factory.Server;
-    }
-
-    [OneTimeTearDown]
-    public async Task Stop()
-    {
-        if (_factory != null) await _factory.DisposeAsync();
-    }
+    protected override void ConfigureRelay(IServiceCollection services) => services.AddSingleton<TimeProvider>(_clock);
 
     [Test]
     public async Task AtExpiry_ThePeerIsKicked_AndItsPeersSeeItLeave()
@@ -38,11 +23,11 @@ public class StyxExpiryTests
         await using var expiring = new TestStyxClient();
         await watcher.Connect(Factory, StyxTestServer.MintToken(network).ToString(), "watcher");
         await expiring.Connect(Factory, Expiring(network, TimeSpan.FromHours(1)), "expiring");
-        await WaitForPeers(watcher, ["expiring"]);
+        await watcher.WaitForPeers(["expiring"]);
 
         _clock.Advance(TimeSpan.FromHours(1));
         Assert.That(await expiring.WaitForKick(), Is.EqualTo(ExpiryScheduler.ExpiredReason));
-        await WaitForPeers(watcher, []);
+        await watcher.WaitForPeers([]);
     }
 
     // a peer on the parallel path is evicted as one on /relay is: through the relay's one set of connections
@@ -174,10 +159,5 @@ public class StyxExpiryTests
     {
         await client.Server!.Ping();
         return client.KickReason is not null;
-    }
-
-    private static async Task WaitForPeers(TestStyxClient client, string[] expected)
-    {
-        while (!(await client.WaitForPeers()).SequenceEqual(expected)) { }
     }
 }

@@ -32,24 +32,6 @@ public class KeyEventMessageTests
         Assert.That(decoded.IsRepeat, Is.True);
     }
 
-    [Test]
-    public void KeyEventMessage_IsRepeat_AbsentInJson_DefaultsFalse()
-    {
-        // older wire format without IsRepeat field should deserialize cleanly to false
-        const string json = """{"Type":0,"Modifiers":0,"Character":"w","Key":null}""";
-        var decoded = json.FromSaneJson<KeyEventMessage>();
-        Assert.That(decoded?.IsRepeat, Is.False);
-    }
-
-    [Test]
-    public void KeyEventMessage_FromOlderMasterWithUnicodeKeyRepeat_Decodes()
-    {
-        // older masters still send the retired UnicodeKeyRepeat field
-        const string json = """{"Type":0,"Modifiers":0,"Character":"w","Key":null,"IsRepeat":true,"UnicodeKeyRepeat":true}""";
-        var decoded = json.FromSaneJson<KeyEventMessage>();
-        Assert.That(decoded?.IsRepeat, Is.True);
-    }
-
     [TestCase('\u0439')] // й — Cyrillic, absent from every Latin layout
     [TestCase('€')]
     [TestCase('§')]

@@ -72,11 +72,11 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, ITokenVer
 
         // kick same network+hostname duplicates and register atomically (one lock) so two concurrent
         // authenticates for the same host can't both register (stale phantom peer)
-        var registration = await registry.RegisterKickingDuplicates(Context.ConnectionId, network, hostName, remoteIp, LocalIp);
-        foreach (var connectionId in registration.Kicked)
+        var registration = await registry.Register(Context.ConnectionId, network, hostName, remoteIp, LocalIp);
+        if (registration.Kicked is { } kicked)
         {
-            expiry.Cancel(connectionId);
-            writer.Kick(connectionId, "duplicate hostname");
+            expiry.Cancel(kicked);
+            writer.Kick(kicked, "duplicate hostname");
         }
 
         // armed before the abort check below, whose cleanup then cancels it too
@@ -91,7 +91,7 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, ITokenVer
             expiry.Cancel(Context.ConnectionId);
             // we displaced someone and then died before announcing either half, so nothing has told the
             // other peers the host is gone — converge them on what the registry actually holds now
-            if (registration.Kicked.Count > 0) peers.QueueBroadcast(network);
+            if (registration.Kicked != null) peers.QueueBroadcast(network);
             if (registration.Left is { } abandoned) peers.QueueBroadcast(abandoned);
             return new RelayLoginResponse { Authenticated = false, Message = "Connection aborted" };
         }
@@ -101,17 +101,8 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, ITokenVer
                 hostName, Context.ConnectionId, remoteIp, network);
         await throttle;
 
-        // a reconnecting host has to be seen leaving before it is seen arriving, or the pair is an identical
-        // membership list and reads as no change at all — a master then keeps stale geometry for it and never
-        // re-sends the config it needs. Both halves go through the broadcaster's single-reader queue, in this
-        // order, so every peer observes them that way round.
-        //
-        // Awaited, not fire-and-forget. The displacing client can Send the instant this method returns, so a departure
-        // notice not yet in each peer's queue could arrive *after* the newcomer's first payload, and the recipient would
-        // still be trusting whoever held the name a moment ago. Waiting until it is queued ahead of anything the newcomer
-        // sends is what makes Styx.md 6.2's ordering cover the displacing peer's own traffic, which is what every client
-        // already assumes it does.
-        if (registration.Kicked.Count > 0)
+        // a reconnecting host is seen leaving before it is seen arriving; see IPeerBroadcaster.BroadcastAndWait
+        if (registration.Kicked != null)
             await peers.BroadcastAndWait(network, registration.OtherClients, Context.ConnectionAborted);
 
         // a connection that moved here from another network or path is gone from there
@@ -163,7 +154,7 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, ITokenVer
         await writer.Receive(targets, identity.HostName, identity.RemoteIp, payload);
     }
 
-    private string RemoteIp => Context.GetHttpContext()?.Connection.RemoteIpAddress?.ToString() ?? ClientRegistry.Unknown;
+    private string RemoteIp => ClientRegistry.RemoteIpOf(Context.GetHttpContext());
     private string LocalIp => Context.GetHttpContext()?.Connection.LocalIpAddress?.ToString() ?? ClientRegistry.Unknown;
 
     public override async Task OnDisconnectedAsync(Exception? exception)

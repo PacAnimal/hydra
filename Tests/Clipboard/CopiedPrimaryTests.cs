@@ -95,6 +95,31 @@ public class CopiedPrimaryTests
     }
 
     [Test]
+    public void Owns_OnlyWhileTheClipboardIsHydrasLastWrite()
+    {
+        Assert.That(_primary.Owns(), Is.False, "nothing written yet");
+
+        HydraWrites(null, "written");
+        Assert.That(_primary.Owns(), Is.True);
+
+        UserCopies("written");
+        Assert.That(_primary.Owns(), Is.False, "the same text copied again is the user's");
+    }
+
+    [Test]
+    public void Owns_NotAfterAWriteThatNeverSaidWhereItLeftTheClipboard()
+    {
+        // Windows reports no version when another app owns the clipboard after the write
+        _primary.Write(null, _ =>
+        {
+            _version++;
+            return true;
+        });
+
+        Assert.That(_primary.Owns(), Is.False);
+    }
+
+    [Test]
     public void Read_SameVersion_ReadsTheClipboardOnce()
     {
         UserCopies("copied");

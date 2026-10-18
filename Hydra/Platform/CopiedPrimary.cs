@@ -10,9 +10,10 @@ namespace Hydra.Platform;
 // tried again.
 public sealed class CopiedPrimary(Func<long> version, Func<string?> readTextCopy, ILogger log)
 {
-    private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly Lock _gate = new();
     private string? _current;
     private long _seen = -1;
+    private long _written = -1;
     private int _writing;
 
     public string? Read() => Guarded("read the primary selection", null, () =>
@@ -20,6 +21,9 @@ public sealed class CopiedPrimary(Func<long> version, Func<string?> readTextCopy
         Catch(version());
         return _current;
     });
+
+    // whether the clipboard is still what Hydra's last write left
+    public bool Owns() => Guarded("check clipboard ownership", false, () => _written >= 0 && version() == _written);
 
     // a copy made before the selection arrived is older than it; whether it was kept
     public bool Relay(string incoming) => Guarded("keep the primary selection", false, () =>
@@ -47,11 +51,15 @@ public sealed class CopiedPrimary(Func<long> version, Func<string?> readTextCopy
         }
         finally
         {
-            Gated(() =>
+            lock (_gate)
             {
-                if (left is { } v) _seen = Math.Max(_seen, v); // a selection relayed during the write may have moved it on
+                if (left is { } v)
+                {
+                    _seen = Math.Max(_seen, v); // a selection relayed during the write may have moved it on
+                    _written = v;
+                }
                 _writing--;
-            });
+            }
         }
     }
 
@@ -97,7 +105,7 @@ public sealed class CopiedPrimary(Func<long> version, Func<string?> readTextCopy
     {
         try
         {
-            return Gated(body);
+            lock (_gate) return body();
         }
         catch (Exception ex)
         {
@@ -105,23 +113,4 @@ public sealed class CopiedPrimary(Func<long> version, Func<string?> readTextCopy
             return failed;
         }
     }
-
-    private T Gated<T>(Func<T> body)
-    {
-        _gate.Wait();
-        try
-        {
-            return body();
-        }
-        finally
-        {
-            _gate.Release();
-        }
-    }
-
-    private void Gated(Action body) => Gated(() =>
-    {
-        body();
-        return 0;
-    });
 }

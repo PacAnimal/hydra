@@ -104,29 +104,6 @@ public class MasterSlaveProtocolTests
         await service.StopAsync(CancellationToken.None);
     }
 
-    [Test]
-    public async Task AnOlderSlavesLogNamingFiles_StaysOutOfTheMastersManagementLog()
-    {
-        var config = MakeConfig("slave-pc");
-        var relay = new FakeRelay();
-        using var buffer = new ManagementLogBuffer();
-        using var factory = new LoggerFactory([buffer]);
-        var platform = new FakePlatform();
-        var service = new InputRouter(platform, platform, config, relay, new FakeScreenDetector(), factory, NullLogger<InputRouter>.Instance, new NullScreenSaverSync(), new NullClipboardSync(),
-            FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification(), TransitionTestHelper.TestActivityTracker(config));
-        await service.StartAsync(CancellationToken.None);
-
-        var info = (int)LogLevel.Information;
-        var older = new SlaveLogMessage(info, "Hydra.Relay.RelayConnection", "File selection query from main: 1 file(s) selected: /Users/me/b.pdf", null);
-        var plain = new SlaveLogMessage(info, "Hydra.Relay.RelayConnection", "Connected to relay", null);
-        foreach (var msg in new[] { older, plain })
-            await relay.FireMessageReceived("slave-pc", MessageKind.SlaveLog, JsonSerializer.Serialize(msg, SaneJson.Options));
-        await service.StopAsync(CancellationToken.None);
-
-        var slaveEntries = buffer.Read(0).Entries.Where(e => e.Category.StartsWith("slave:")).Select(e => e.Message);
-        Assert.That(slaveEntries, Is.EqualTo(["Connected to relay"]));
-    }
-
     // -- InputRouter MasterConfig gating --
 
     [Test]

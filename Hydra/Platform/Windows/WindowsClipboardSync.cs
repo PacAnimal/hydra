@@ -24,7 +24,7 @@ public sealed class WindowsClipboardSync : IClipboardSync, IDisposable
     private static readonly uint[] NotTextCopyFormats = [.. ImageFormats, NativeMethods.CF_HDROP];
 
     private readonly ILogger<WindowsClipboardSync> _log;
-    private ClipboardEchoFilter _echo;
+    private readonly ClipboardEchoFilter _echo;
     private readonly CopiedPrimary _primary;
 
     // dedicated owner window for the clipboard — passing NULL to OpenClipboard makes EmptyClipboard
@@ -38,6 +38,7 @@ public sealed class WindowsClipboardSync : IClipboardSync, IDisposable
         _log = log;
         CreateOwnerWindow();
         _primary = new CopiedPrimary(() => NativeMethods.GetClipboardSequenceNumber(), ReadTextCopy, log);
+        _echo = new ClipboardEchoFilter(_primary.Owns);
     }
 
     // message-only window created once on the constructing (main) thread. No message pump is needed:
@@ -88,18 +89,7 @@ public sealed class WindowsClipboardSync : IClipboardSync, IDisposable
         _ownerWndProc = null;
     }
 
-    public string? GetText()
-    {
-        if (!OpenClipboard()) return null;
-        try
-        {
-            return _echo.FilterText(ReadOpenText());
-        }
-        finally
-        {
-            NativeMethods.CloseClipboard();
-        }
-    }
+    public string? GetText() => WithClipboard(() => _echo.FilterText(ReadOpenText()));
 
     private static string? ReadOpenText()
     {
@@ -144,53 +134,41 @@ public sealed class WindowsClipboardSync : IClipboardSync, IDisposable
 
     public bool SetPrimaryText(string text) => _primary.Relay(text);
 
-    public byte[]? GetImagePng()
-    {
-        if (!OpenClipboard()) return null;
-        try
-        {
-            foreach (var format in ImageFormats)
-            {
-                if (!NativeMethods.IsClipboardFormatAvailable(format)) continue;
-                var data = ReadGlobalMemory(NativeMethods.GetClipboardData(format));
-                if (data == null) continue;
-                // raw PNG bytes, else a device-independent bitmap converted to PNG
-                if (format != CfPng) return DibToPng(data);
-                return _echo.IsDuplicateImage(data) ? null : data;
-            }
-            return null;
-        }
-        finally
-        {
-            NativeMethods.CloseClipboard();
-        }
-    }
+    public bool HasFileClipboard() => NativeMethods.IsClipboardFormatAvailable(NativeMethods.CF_HDROP);
 
-    public string? GetHtml()
-    {
-        if (!OpenClipboard()) return null;
-        try
-        {
-            if (!NativeMethods.IsClipboardFormatAvailable(CfHtmlFormat)) return null;
-            var blob = ReadGlobalMemory(NativeMethods.GetClipboardData(CfHtmlFormat));
-            var html = blob != null ? CfHtml.Unwrap(blob) : null; // strip the Windows CF_HTML wrapper → portable HTML
-            return html != null ? _echo.FilterHtml(html) : null;
-        }
-        finally
-        {
-            NativeMethods.CloseClipboard();
-        }
-    }
+    public bool CanUseEchoFallback() => _primary.Owns();
 
-    public byte[]? GetRtf()
+    public byte[]? GetImagePng() => WithClipboard(() =>
+    {
+        foreach (var format in ImageFormats)
+        {
+            if (!NativeMethods.IsClipboardFormatAvailable(format)) continue;
+            var data = ReadGlobalMemory(NativeMethods.GetClipboardData(format));
+            if (data == null) continue;
+            // raw PNG bytes, else a device-independent bitmap converted to PNG
+            if (format != CfPng) return DibToPng(data);
+            return _echo.IsDuplicateImage(data) ? null : data;
+        }
+        return null;
+    });
+
+    public string? GetHtml() => WithClipboard(() =>
+    {
+        if (!NativeMethods.IsClipboardFormatAvailable(CfHtmlFormat)) return null;
+        var blob = ReadGlobalMemory(NativeMethods.GetClipboardData(CfHtmlFormat));
+        return _echo.FilterHtml(blob != null ? CfHtml.Unwrap(blob) : null); // strip the Windows CF_HTML wrapper → portable HTML
+    });
+
+    // RTF is null-terminated ASCII and GlobalSize may over-report; trim trailing padding/null bytes
+    public byte[]? GetRtf() => WithClipboard(() =>
+        NativeMethods.IsClipboardFormatAvailable(CfRtf) ? _echo.FilterRtf(TrimTrailingNulls(ReadGlobalMemory(NativeMethods.GetClipboardData(CfRtf)))) : null);
+
+    private T? WithClipboard<T>(Func<T?> read) where T : class
     {
         if (!OpenClipboard()) return null;
         try
         {
-            if (!NativeMethods.IsClipboardFormatAvailable(CfRtf)) return null;
-            // RTF is null-terminated ASCII and GlobalSize may over-report; trim trailing padding/null bytes
-            var rtf = TrimTrailingNulls(ReadGlobalMemory(NativeMethods.GetClipboardData(CfRtf)));
-            return rtf != null ? _echo.FilterRtf(rtf) : null;
+            return read();
         }
         finally
         {
@@ -220,12 +198,6 @@ public sealed class WindowsClipboardSync : IClipboardSync, IDisposable
 
     private bool WriteOpenClipboard(ClipboardSnapshot contents)
     {
-        // preserve a local file-copy (CF_HDROP) across the wipe: Hydra doesn't sync files, and the
-        // user's Ctrl+C'd files should survive a clipboard sync while they stay on this host.
-        var savedHdrop = NativeMethods.IsClipboardFormatAvailable(NativeMethods.CF_HDROP)
-            ? ReadGlobalMemory(NativeMethods.GetClipboardData(NativeMethods.CF_HDROP))
-            : null;
-
         if (!NativeMethods.EmptyClipboard()) return false;
         _echo.Track(contents);
 
@@ -236,7 +208,6 @@ public sealed class WindowsClipboardSync : IClipboardSync, IDisposable
             contents.Html is { } html ? () => WriteGlobalMemory(CfHtmlFormat, NullTerminated(CfHtml.Wrap(html))) : null,
             contents.Rtf is { } rtf ? () => WriteGlobalMemory(CfRtf, NullTerminated(rtf)) : null,
             contents.Text is { } text ? () => WriteGlobalMemory(NativeMethods.CF_UNICODETEXT, Encoding.Unicode.GetBytes(text + '\0')) : null);
-        if (savedHdrop != null) WriteGlobalMemory(NativeMethods.CF_HDROP, savedHdrop);
         return true; // emptied, so replaced
     }
 

@@ -108,8 +108,7 @@ Restart, shutdown, or start changes must preserve the owning supervisor's semant
 - Unsupported controls are shown honestly rather than emulated with unsafe platform guesses.
 - The TUI must restore the terminal cleanly after normal exit and failures.
 - Colour is unconditional. Terminal.Gui already paints borders, the active tab and the status bar in 24-bit
-  colour, so a switch would only ever hide colour that carries meaning — which is what the retired `--color`
-  flag did, gating the single state-bearing colour while every decorative one stayed on.
+  colour, so a switch would only ever hide colour that carries meaning.
 - On the connection line, only the state marker is tinted: green connected, orange connecting, red stopped.
   The detail beside it — version, host, profile — is equally true whichever state the link is in, so it
   takes the status bar's teal and stays out of the way. That needs two `Label`s, because a `Label` carries

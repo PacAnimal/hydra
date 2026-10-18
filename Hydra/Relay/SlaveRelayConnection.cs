@@ -461,8 +461,7 @@ public class SlaveRelayConnection : RelayConnection
         // repeats are master-driven: each OS auto-repeat is re-resolved with live modifier/dead-key state on
         // the master and injected here as-is. a repeat implies the key is held on the master, so track it too
         // (Add is idempotent) — this covers a master entering the screen mid-hold, where the slave never saw
-        // the initial press and the legacy physical re-press path would otherwise leave the key untracked and
-        // stuck on screen leave. injection runs under the lock so it serialises with release-all.
+        // the initial press and the key would otherwise be left untracked and stuck on screen leave. injection runs under the lock so it serialises with release-all.
         var heldKey = (msg.Character, msg.Key);
         using (await _heldLock.WaitForDisposable())
         {
@@ -595,9 +594,7 @@ public class SlaveRelayConnection : RelayConnection
         if (_log.IsEnabled(LogLevel.Information))
             _log.LogInformation("Sending screen info to {Master}: {Count} {Screens}", masterHost, entries.Count, Pluralize.Of(entries.Count, "screen"));
         var platform = DetectLocalPlatform();
-        // What this build can do. A master that hears nothing assumes nothing, which is what makes a
-        // capability safe to add to one end first — see PeerCapabilities.
-        var payload = MessageSerializer.Encode(MessageKind.ScreenInfo, new ScreenInfoMessage(entries, platform, PeerCapabilities.Advertise()));
+        var payload = MessageSerializer.Encode(MessageKind.ScreenInfo, new ScreenInfoMessage(entries, platform));
         Send([masterHost], payload);
     }
 

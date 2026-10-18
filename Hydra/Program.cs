@@ -174,7 +174,7 @@ else
 // derive network config blob from embeddedStyx (explicit) or embeddedStyxServer (auto-localhost)
 string? embeddedNetworkConfig = null;
 if (config?.EmbeddedStyx != null)
-    embeddedNetworkConfig = await NetworkConfig.ComputeEmbeddedBlob(config.EmbeddedStyx.Server, config.EmbeddedStyx.Password);
+    embeddedNetworkConfig = await NetworkConfig.ComputeEmbeddedBlob(EmbeddedRelayTls.WithHttps(config.EmbeddedStyx.Server), config.EmbeddedStyx.Password);
 else if (config?.EmbeddedStyxServer != null)
     embeddedNetworkConfig = await NetworkConfig.ComputeEmbeddedBlob($"https://localhost:{config.EmbeddedStyxServer.Port}", config.EmbeddedStyxServer.Password);
 

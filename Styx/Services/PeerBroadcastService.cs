@@ -11,9 +11,10 @@ public interface IPeerBroadcaster
     // the hostname, so displacing a duplicate and registering its replacement yields an identical list and
     // reads as no change at all — the snapshot is how a reconnecting host is shown leaving before it arrives.
     void QueueBroadcast(NetworkKey network, IReadOnlyList<NetworkClient> clients);
-    // queues a snapshot and completes when it has joined every peer's queue, which delivers in order. The displacement
-    // half has to be awaited before the displacing client is told it is authenticated, or it can send its first payload
-    // ahead of the notice that the name changed hands — and the recipient still trusts the old holder.
+    // queues a snapshot and completes when it has joined every peer's queue, which delivers in order. A displaced host's
+    // leaving is awaited before the displacing client is told it is authenticated, or its first payload can overtake the
+    // notice that the name changed hands (Styx.md §6.2) — and the recipient still trusts the old holder. Its arrival
+    // follows as a live broadcast; the pair would otherwise be an identical membership list, which reads as no change.
     Task BroadcastAndWait(NetworkKey network, IReadOnlyList<NetworkClient> clients, CancellationToken cancel);
 }
 
@@ -114,21 +115,25 @@ public class PeerBroadcastService(IClientRegistry registry, PeerWriter writer, [
             }).ToArray();
             broadcast.Done?.TrySetResult();
 
-            // a slow peer that keeps taking its queue is not dropped, and must not hold every network's broadcasts for
-            // as long as it takes: its snapshot stays queued, in order, and the next broadcast goes
-            try
-            {
-                await Task.WhenAll(sends).WaitAsync(PeerWriter.Deadline, clock);
-            }
-            catch (TimeoutException)
-            {
-                log.LogWarning("A peer snapshot on network {Network} is still waiting to be taken after {Seconds} s", network,
-                    Constants.PeerWriteDeadlineSeconds);
-            }
+            // every snapshot has its place in each peer's order already, so the next broadcast need not wait on delivery
+            _ = WarnIfStillWaiting(sends, network);
         }
         catch (Exception ex)
         {
             log.LogError(ex, "Failed to broadcast peers for network {Network}", network);
+        }
+    }
+
+    private async Task WarnIfStillWaiting(Task[] sends, NetworkKey network)
+    {
+        try
+        {
+            await Task.WhenAll(sends).WaitAsync(PeerWriter.Deadline, clock);
+        }
+        catch (TimeoutException)
+        {
+            log.LogWarning("A peer snapshot on network {Network} is still waiting to be taken after {Seconds} s", network,
+                Constants.PeerWriteDeadlineSeconds);
         }
     }
 

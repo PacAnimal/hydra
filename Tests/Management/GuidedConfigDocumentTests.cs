@@ -55,7 +55,7 @@ public class GuidedConfigDocumentTests
     [Test]
     public void ClearingOptionalFieldsRemovesTheirObjects()
     {
-        const string json = """{"profiles":[{"mode":"Slave","conditions":{"ssid":"x"},"embeddedStyx":{"server":"http://x","password":"pw"}}]}""";
+        const string json = """{"profiles":[{"mode":"Slave","conditions":{"ssid":"x"},"embeddedStyx":{"server":"https://x","password":"pw"}}]}""";
         var document = GuidedConfigDocument.Parse(json);
         var profile = document.ReadProfile(0);
         profile[GuidedFields.Ssid] = "";
@@ -122,7 +122,7 @@ public class GuidedConfigDocumentTests
     [Test]
     public void DuplicateKeysShowAndKeepTheValueTheLoaderUses()
     {
-        const string relay = """ "embeddedStyx":{"server":"http://x:5000","password":"pw"} """;
+        const string relay = """ "embeddedStyx":{"server":"https://x:5000","password":"pw"} """;
         var document = GuidedConfigDocument.Parse($$"""{"profiles":[{"mode":"Master","hideCursor":false,"HideCursor":true,{{relay}}}]}""");
 
         var shown = document.ReadProfile(0);
@@ -187,7 +187,7 @@ public class GuidedConfigDocumentTests
             "mode": "Slave",
             "conditions": { "ssid": "Home WiFi", "screenCount": 2, "isPluggedIn": true },
             "networkConfig": "secret",
-            "embeddedStyx": { "server": "http://relay:5000", "password": "client-pw" },
+            "embeddedStyx": { "server": "https://relay:5000", "password": "client-pw" },
             "embeddedStyxServer": { "port": 5001, "password": "server-pw" },
             "hideCursor": true,
             "remoteOnly": true,
@@ -237,7 +237,7 @@ public class GuidedConfigDocumentTests
     [Test]
     public void ClearingAnEmbeddedRelayDropsItWhole_SinceItCannotLoadWithoutItsFields()
     {
-        var document = GuidedConfigDocument.Parse("""{"profiles":[{"mode":"Slave","embeddedStyx":{"server":"http://x","password":"pw","note":"x"}}]}""");
+        var document = GuidedConfigDocument.Parse("""{"profiles":[{"mode":"Slave","embeddedStyx":{"server":"https://x","password":"pw","note":"x"}}]}""");
         var profile = document.ReadProfile(0);
         profile[GuidedFields.EmbeddedServer] = "";
         profile[GuidedFields.EmbeddedPassword] = "";
@@ -348,7 +348,7 @@ public class GuidedConfigDocumentTests
             Assert.That(profile.Conditions.ScreenCount, Is.EqualTo(2));
             Assert.That(profile.Conditions.IsPluggedIn, Is.True);
             Assert.That(profile.NetworkConfig, Is.EqualTo("secret"));
-            Assert.That(profile.EmbeddedStyx!.Server, Is.EqualTo("http://relay:5000"));
+            Assert.That(profile.EmbeddedStyx!.Server, Is.EqualTo("https://relay:5000"));
             Assert.That(profile.EmbeddedStyx.Password, Is.EqualTo("client-pw"));
             Assert.That(profile.EmbeddedStyxServer!.Port, Is.EqualTo(5001));
             Assert.That(profile.EmbeddedStyxServer.Password, Is.EqualTo("server-pw"));
@@ -381,7 +381,7 @@ public class GuidedConfigDocumentTests
         [GuidedFields.ScreenCount] = "2",
         [GuidedFields.IsPluggedIn] = "yes",
         [GuidedFields.NetworkConfig] = "secret",
-        [GuidedFields.EmbeddedServer] = "http://relay:5000",
+        [GuidedFields.EmbeddedServer] = "https://relay:5000",
         [GuidedFields.EmbeddedPassword] = "client-pw",
         [GuidedFields.EmbeddedPort] = "5001",
         [GuidedFields.EmbeddedServerPassword] = "server-pw",

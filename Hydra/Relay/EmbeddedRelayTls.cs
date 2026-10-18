@@ -1,7 +1,3 @@
-using Microsoft.AspNetCore.Connections;
-using Microsoft.AspNetCore.Server.Kestrel.Core;
-using Microsoft.Extensions.Logging;
-using Styx.Services;
 using System.Net;
 using System.Net.Security;
 using System.Security.Authentication;
@@ -14,20 +10,16 @@ namespace Hydra.Relay;
 /// <summary>
 /// The embedded relay's TLS: a self-signed cert made on every start, bound to the relay password by a mutual proof.
 /// The client proves first, for the cert it was shown, so a stranger who can reach the port learns nothing to guess
-/// against; the server answers only a valid proof, and only then does the client trust that cert.
+/// against; the server answers only a valid proof, and only then does the client trust that cert. Only an active man in
+/// the middle gets one guessable proof, an accepted gap.
 /// </summary>
 internal static class EmbeddedRelayTls
 {
     public const string BindingPath = "/binding";
     public const int ProofLength = 32;
     private const int Iterations = 100_000;
-    private static readonly TimeSpan PlainHttpWarningInterval = TimeSpan.FromMinutes(10);
     private static readonly byte[] ClientLabel = "hydra-embedded-binding/client"u8.ToArray();
     private static readonly byte[] ServerLabel = "hydra-embedded-binding/server"u8.ToArray();
-
-    // what an older Hydra on plain http reads, as the status of its negotiate request
-    private static readonly byte[] UpgradeRequired = Encoding.ASCII.GetBytes(
-        "HTTP/1.1 426 Upgrade Required\r\nUpgrade: TLS/1.2, HTTP/1.1\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
 
     public static X509Certificate2 CreateCertificate()
     {
@@ -55,59 +47,8 @@ internal static class EmbeddedRelayTls
         return new Proofs(fingerprint, HMACSHA256.HashData(key, ClientLabel), HMACSHA256.HashData(key, ServerLabel));
     }
 
-    public static bool Matches(ReadOnlySpan<byte> given, byte[] expected) => CryptographicOperations.FixedTimeEquals(given, expected);
-
-    // the embedded relay only speaks https, whatever the config says, and an address with no scheme means it too
-    public static string WithHttps(string url)
-    {
-        if (url.StartsWith("http://", StringComparison.OrdinalIgnoreCase)) return "https://" + url["http://".Length..];
-        return url.Contains("://", StringComparison.Ordinal) ? url : "https://" + url;
-    }
-
-    /// <summary>
-    /// Answers a plain-HTTP request with 426 and a warning naming the likely cause, an older Hydra. Kestrel's TLS would
-    /// only log the failed handshake at debug. Registered ahead of <c>UseHttps</c>, it peeks without consuming.
-    /// </summary>
-    public static ListenOptions RefusePlainHttp(this ListenOptions listenOptions, ILogger log)
-    {
-        var warned = new BoundedLru<string, DateTimeOffset>(1000);
-        listenOptions.Use(next => async connection =>
-        {
-            // an http request starts with its method, in capitals; a silent, reset or closed connection is just dropped
-            var first = await PeekFirstByte(connection);
-            if (first == null) return;
-            if (first is < (byte)'A' or > (byte)'Z')
-            {
-                await next(connection);
-                return;
-            }
-
-            // once per address a while, since an old peer retries every few seconds
-            var address = (connection.RemoteEndPoint as IPEndPoint)?.Address.ToString() ?? "an unknown address";
-            var now = DateTimeOffset.UtcNow;
-            if (warned.AddOrUpdate(FailureLimiter.KeyOf(address), last => now - last < PlainHttpWarningInterval ? last : now) == now)
-                log.LogWarning("Plain http from {Address} refused: the embedded relay needs TLS, so that machine probably runs a Hydra older than 0.3. Update it", address);
-
-            try { await connection.Transport.Output.WriteAsync(UpgradeRequired, connection.ConnectionClosed); }
-            catch (Exception) { /* the peer may already be gone */ }
-        });
-        return listenOptions;
-    }
-
-    private static async Task<byte?> PeekFirstByte(ConnectionContext connection)
-    {
-        var input = connection.Transport.Input;
-        using var firstBytes = CancellationTokenSource.CreateLinkedTokenSource(connection.ConnectionClosed);
-        firstBytes.CancelAfter(TimeSpan.FromSeconds(10));
-        try
-        {
-            var read = await input.ReadAsync(firstBytes.Token);
-            byte? first = read.Buffer.IsEmpty ? null : read.Buffer.FirstSpan[0];
-            input.AdvanceTo(read.Buffer.Start);
-            return first;
-        }
-        catch (Exception) { return null; }
-    }
+    // an address with no scheme means https, the only one the embedded relay speaks
+    public static string WithHttps(string url) => url.Contains("://", StringComparison.Ordinal) ? url : "https://" + url;
 
     /// <summary>
     /// Proves the password to the relay for the cert this connection was shown, and returns that cert's fingerprint once
@@ -142,7 +83,7 @@ internal static class EmbeddedRelayTls
         HttpResponseMessage response;
         try
         {
-            response = await http.PostAsync(server.TrimEnd('/') + BindingPath, content, cancel);
+            response = await http.PostAsync(server + BindingPath, content, cancel);
         }
         catch (Exception ex) when (ex is TrustedByCa || (trustedByCa && ex is HttpRequestException { InnerException: TrustedByCa }))
         {
@@ -150,7 +91,7 @@ internal static class EmbeddedRelayTls
         }
         catch (HttpRequestException ex) when (ex.InnerException is AuthenticationException)
         {
-            throw new HttpRequestException($"TLS with the embedded relay failed ({ex.InnerMessage()}). A relay on a Hydra older than 0.3 speaks plain http: update that machine");
+            throw new HttpRequestException($"TLS with the embedded relay failed ({ex.InnerMessage()})");
         }
 
         using (response)
@@ -160,7 +101,7 @@ internal static class EmbeddedRelayTls
             response.EnsureSuccessStatusCode();
 
             var answer = await response.Content.ReadAsByteArrayAsync(cancel);
-            if (proofs == null || !Matches(answer, proofs.Server))
+            if (proofs == null || !CryptographicOperations.FixedTimeEquals(answer, proofs.Server))
                 throw new HttpRequestException("The embedded relay did not prove it knows the password: something may be in between");
             return proofs.Fingerprint;
         }

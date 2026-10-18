@@ -38,7 +38,6 @@ public static class StyxEnvironment
     /// </summary>
     public static IReadOnlyList<byte[]> ReadKeys(Func<string, string?> environment)
     {
-        RefuseRetiredNames(environment);
         var keys = new List<byte[]>();
         var sources = new List<string>();
         if (NullIfEmpty(environment(Constants.RelaySigningPassphraseEnvVar)) is { } passphrase)
@@ -89,21 +88,6 @@ public static class StyxEnvironment
              $"can hold up to {width * Constants.MaxMessageMebiBytes} MiB of messages in flight",
         _ => null,
     };
-
-    // settings an earlier build read: one still set would otherwise be ignored, and the relay start without it
-    internal static readonly (string Name, string Instead)[] RetiredNames =
-    [
-        ("RELAY_KEY", $"set {Constants.RelaySigningKeyEnvVar} instead"),
-        ("RELAY_KEY_PASSPHRASE", $"set {Constants.RelaySigningPassphraseEnvVar} instead"),
-        ("RELAY_ADMIN_PASSWORD", $"network creation checks {Constants.RelayPasswordEnvVar}"),
-    ];
-
-    private static void RefuseRetiredNames(Func<string, string?> environment)
-    {
-        foreach (var (name, instead) in RetiredNames)
-            if (environment(name) is not null)
-                throw new StyxConfigurationException($"{name} is no longer read; {instead}");
-    }
 
     /// <summary>The key a passphrase derives (Styx.md §13.1).</summary>
     public static byte[] KeyFromPassphrase(string passphrase)

@@ -31,12 +31,40 @@ public class WindowsClipboardSyncTests : CopiedPrimaryContract
         Assert.That(Hydra.GetPrimaryText(), Is.EqualTo("copied"));
     }
 
-    // another app's copy, made by another process: its text, and a marker format holding a DWORD beside it
-    private static void WriteForeignCopy(string text, string markerFormat, uint value)
+    [Test]
+    public void FilesCopiedInExplorer_AreLeftOnTheClipboard()
     {
-        var script = "Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.DataObject; " +
-                     $"$d.SetText('{text}'); $d.SetData('{markerFormat}', (New-Object System.IO.MemoryStream(,[BitConverter]::GetBytes([uint32]{value})))); " +
-                     "[System.Windows.Forms.Clipboard]::SetDataObject($d, $true)";
+        var file = Path.GetTempFileName();
+        try
+        {
+            HydraWritesThen(() => RunInOtherProcess("$f = New-Object System.Collections.Specialized.StringCollection; " +
+                                                    $"[void]$f.Add('{file}'); [System.Windows.Forms.Clipboard]::SetFileDropList($f)"));
+
+            var applied = ClipboardUtils.ApplyPreservingFiles(Hydra, new ClipboardSnapshot("pushed", null, null), NullLogger.Instance, "test");
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(applied, Is.Null);
+                Assert.That(Hydra.HasFileClipboard(), Is.True);
+                Assert.That(Hydra.GetText(), Is.Null);
+            }
+        }
+        finally
+        {
+            File.Delete(file);
+        }
+    }
+
+    // another app's copy, made by another process: its text, and a marker format holding a DWORD beside it
+    private static void WriteForeignCopy(string text, string markerFormat, uint value) =>
+        RunInOtherProcess("$d = New-Object System.Windows.Forms.DataObject; " +
+                          $"$d.SetText('{text}'); $d.SetData('{markerFormat}', (New-Object System.IO.MemoryStream(,[BitConverter]::GetBytes([uint32]{value})))); " +
+                          "[System.Windows.Forms.Clipboard]::SetDataObject($d, $true)");
+
+    // a clipboard script run by Windows Forms in another process, as another app's copy would be
+    private static void RunInOtherProcess(string clipboardScript)
+    {
+        var script = "Add-Type -AssemblyName System.Windows.Forms; " + clipboardScript;
         using var process = Process.Start(new ProcessStartInfo("powershell", ["-NoProfile", "-STA", "-Command", script]) { RedirectStandardError = true })!;
         var error = process.StandardError.ReadToEnd();
         process.WaitForExit();

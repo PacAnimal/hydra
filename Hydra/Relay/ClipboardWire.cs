@@ -56,7 +56,7 @@ public static class ClipboardWire
     {
         if (m.Hash is { } hash && hash != local.Hash) return PushNeed.Clipboard;
         if (m.PrimaryHash is { } selectionHash) return selectionHash != SelectionHash(local.PrimaryText) ? PushNeed.Selection : PushNeed.None;
-        TakeSelectionBeside(sync, m.PrimaryText, m.PrimaryIsText, local, log, $"selection from {host}", host);
+        TakeSelectionBeside(sync, m, local, log, $"selection from {host}", host);
         return PushNeed.None;
     }
 
@@ -66,8 +66,10 @@ public static class ClipboardWire
     internal static ClipboardSnapshot? ApplyPush(IClipboardSync sync, ClipboardPushMessage push, ClipboardBaseline? selectionFor, ILogger log, string host)
     {
         var received = From(push, log, "push", host);
-        var beside = selectionFor != null && ClipboardUtils.ClipboardHash(received) == selectionFor.Hash ? selectionFor : null;
-        return Take(sync, push, received, beside, log, $"push from {host}", host);
+        var context = $"push from {host}";
+        return selectionFor != null && ClipboardUtils.ClipboardHash(received) == selectionFor.Hash
+            ? TakeSelectionBeside(sync, push, selectionFor, log, context, host)
+            : ClipboardUtils.ApplyPreservingFiles(sync, received, log, context);
     }
 
     // a slave's answer to a pull: unchanged when its clipboard matches the master's, with its selection beside it only
@@ -83,23 +85,20 @@ public static class ClipboardWire
     // the master's side of that answer, against what it pulled with: the selection alone beside an unchanged
     // clipboard, else the whole clipboard, which differs. What it applied, if anything
     internal static ClipboardSnapshot? TakePullAnswer(IClipboardSync sync, ClipboardPullResponseMessage answer, ClipboardBaseline pulledAgainst, ILogger log,
-        string host) =>
-        Take(sync, answer, null, answer.Unchanged == true ? pulledAgainst : null, log, $"pull response from {host}", host);
-
-    // a clipboard from a peer, whole unless it comes beside one this host already has. What it applied, if anything
-    private static ClipboardSnapshot? Take(IClipboardSync sync, IClipboardPayload m, ClipboardSnapshot? whole, ClipboardBaseline? beside, ILogger log,
-        string context, string host) =>
-        beside == null
-            ? ClipboardUtils.ApplyPreservingFiles(sync, whole ?? From(m, log, context, host), log, context)
-            : TakeSelectionBeside(sync, m.PrimaryText, m.PrimaryIsText, beside, log, context, host);
+        string host)
+    {
+        var context = $"pull response from {host}";
+        return answer.Unchanged == true
+            ? TakeSelectionBeside(sync, answer, pulledAgainst, log, context, host)
+            : ClipboardUtils.ApplyPreservingFiles(sync, From(answer, log, context, host), log, context);
+    }
 
     // the selection beside a clipboard this host already has, set if it differs; a primary repeating the text is the
     // receiver's own text. What it applied, if anything
-    private static ClipboardSnapshot? TakeSelectionBeside(IClipboardSync sync, string? primaryText, bool? primaryIsText, ClipboardBaseline beside,
-        ILogger log, string context, string host)
+    private static ClipboardSnapshot? TakeSelectionBeside(IClipboardSync sync, IClipboardSelection m, ClipboardBaseline beside, ILogger log, string context,
+        string host)
     {
-        var selection = ClipboardUtils.ValidateFields(null, Primary(beside.Text, primaryText, primaryIsText), null, null, null, log, context, host)
-            .PrimaryText;
+        var selection = ClipboardUtils.Fit(Primary(beside.Text, m.PrimaryText, m.PrimaryIsText), "primary text", log, context, host);
         return selection != beside.PrimaryText && ClipboardSnapshot.SelectionOnly(selection) is { } alone
             ? ClipboardUtils.ApplyPreservingFiles(sync, alone, log, context)
             : null;

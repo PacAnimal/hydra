@@ -499,10 +499,6 @@ public class InputRouter(
                 if (info != null && owned.Kept.Count > 0)
                 {
                     await _peerState.SetPeerScreens(sourceHost, owned.Kept);
-                    // Recorded on every ScreenInfo that advertises a screen, REPLACING what came before, so a peer that
-                    // reconnects on an older build takes its capabilities away again. One with no screens of its own
-                    // is broken and changes nothing: the peer keeps its previous screens and capabilities.
-                    _peerState.SetPeerCapabilities(sourceHost, PeerCapabilities.Parse(info.Capabilities));
 
                     if (info.Platform.HasValue)
                     {

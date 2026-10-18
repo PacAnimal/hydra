@@ -5,7 +5,8 @@ using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform;
 
-internal struct ClipboardEchoFilter
+// what reads back as Hydra's own write, while owned says the clipboard is still that write
+internal sealed class ClipboardEchoFilter(Func<bool> owned)
 {
     private string? _lastText;
     private ulong? _lastImageHash;
@@ -20,12 +21,12 @@ internal struct ClipboardEchoFilter
         _lastHtmlHash = Hash(written.Html);
         _lastRtfHash = Hash(written.Rtf);
     }
-    public readonly string? FilterText(string? text) => text == _lastText ? null : text;
-    public readonly bool IsDuplicateImage(byte[] png) => Echoes(_lastImageHash, Hash(png));
-    public readonly string? FilterHtml(string? html) => Echoes(_lastHtmlHash, Hash(html)) ? null : html;
-    public readonly byte[]? FilterRtf(byte[]? rtf) => Echoes(_lastRtfHash, Hash(rtf)) ? null : rtf;
+    public string? FilterText(string? text) => text != null && text == _lastText && owned() ? null : text;
+    public bool IsDuplicateImage(byte[] png) => Echoes(_lastImageHash, Hash(png));
+    public string? FilterHtml(string? html) => Echoes(_lastHtmlHash, Hash(html)) ? null : html;
+    public byte[]? FilterRtf(byte[]? rtf) => Echoes(_lastRtfHash, Hash(rtf)) ? null : rtf;
 
-    private static bool Echoes(ulong? written, ulong? read) => written != null && read == written;
+    private bool Echoes(ulong? written, ulong? read) => written != null && read == written && owned();
     private static ulong? Hash(byte[]? data) => data == null ? null : ClipboardUtils.QuickHash(data);
     private static ulong? Hash(string? text) => text == null ? null : Hash(Encoding.UTF8.GetBytes(text));
 }
@@ -35,49 +36,27 @@ public static class ClipboardUtils
     public static readonly long MaxClipboardBytes = (long)ByteSize.FromMebiBytes(16).Bytes;
 
     // null-out any field that individually exceeds the limit
-    public static ClipboardSnapshot ValidateFields(string? text, string? primaryText, byte[]? image, string? html, byte[]? rtf, ILogger log, string context, string host)
+    public static ClipboardSnapshot ValidateFields(string? text, string? primaryText, byte[]? image, string? html, byte[]? rtf, ILogger log, string context, string host) =>
+        new(Fit(text, "text", log, context, host), Fit(primaryText, "primary text", log, context, host), Fit(image, "image", log, context, host),
+            Fit(html, "html", log, context, host), Fit(rtf, "rtf", log, context, host));
+
+    // the text if it is within the limit, else null and a warning; empty is null
+    internal static string? Fit(string? text, string what, ILogger log, string context, string host) =>
+        string.IsNullOrEmpty(text) ? null : Fits(Encoding.UTF8.GetByteCount(text), what, log, context, host) ? text : null;
+
+    private static byte[]? Fit(byte[]? data, string what, ILogger log, string context, string host) =>
+        data != null && Fits(data.Length, what, log, context, host) ? data : null;
+
+    private static bool Fits(long bytes, string what, ILogger log, string context, string host)
     {
-        var validText = !string.IsNullOrEmpty(text) && Encoding.UTF8.GetByteCount(text) <= MaxClipboardBytes ? text : null;
-        var validPrimary = !string.IsNullOrEmpty(primaryText) && Encoding.UTF8.GetByteCount(primaryText) <= MaxClipboardBytes ? primaryText : null;
-        var validImage = image?.Length <= MaxClipboardBytes ? image : null;
-        var validHtml = !string.IsNullOrEmpty(html) && Encoding.UTF8.GetByteCount(html) <= MaxClipboardBytes ? html : null;
-        var validRtf = rtf?.Length <= MaxClipboardBytes ? rtf : null;
-        if (validText == null && !string.IsNullOrEmpty(text))
-            log.LogWarning("Clipboard {Context} from {Host}: text exceeds {Max} bytes, dropping", context, host, MaxClipboardBytes);
-        if (validPrimary == null && !string.IsNullOrEmpty(primaryText))
-            log.LogWarning("Clipboard {Context} from {Host}: primary text exceeds {Max} bytes, dropping", context, host, MaxClipboardBytes);
-        if (validImage == null && image != null)
-            log.LogWarning("Clipboard {Context} from {Host}: image exceeds {Max} bytes, dropping", context, host, MaxClipboardBytes);
-        if (validHtml == null && !string.IsNullOrEmpty(html))
-            log.LogWarning("Clipboard {Context} from {Host}: html exceeds {Max} bytes, dropping", context, host, MaxClipboardBytes);
-        if (validRtf == null && rtf != null)
-            log.LogWarning("Clipboard {Context} from {Host}: rtf exceeds {Max} bytes, dropping", context, host, MaxClipboardBytes);
-        return new ClipboardSnapshot(validText, validPrimary, validImage, validHtml, validRtf);
+        if (bytes <= MaxClipboardBytes) return true;
+        log.LogWarning("Clipboard {Context} from {Host}: {What} exceeds {Max} bytes, dropping", context, host, what, MaxClipboardBytes);
+        return false;
     }
 
-    // reads from sync, falling back to snapshot fields when Get* returns null (echo suppression).
-    //
-    // Get*() returns null for two distinct reasons:
-    //   (a) the type is genuinely absent from the pasteboard
-    //   (b) the type is present but Hydra wrote it, so it is echo-suppressed
-    //
-    // the fallback exists solely to handle (b). we only apply it when ALL clipboard fields are null and
-    // the platform confirms that an echo fallback is still safe. macOS uses pasteboard ownership
-    // to reject fallback after Finder, Universal Clipboard, or another process takes ownership.
-    // if ANY clipboard field is non-null (fresh user copy), we skip the fallback entirely — mixing a
-    // freshly-copied type with a stale fallback field would resurrect data from an older operation.
-    //
-    // the selection is no part of the clipboard: it is read as it stands, never from the fallback, beside an image or files.
-    //
-    // "which type did the user copy last?" is implicitly encoded in what is ABSENT from the
-    // pasteboard: every copy operation calls clearContents first, so text and image can only
-    // coexist when they came from the exact same copy action. if the user copied text after image,
-    // the image slot is empty and GetImagePng() returns null — no fallback image can sneak in
-    // because text being non-null keeps us out of the fallback block. same logic in reverse.
-    //
-    // when both text and image are genuinely present (written together by one copy action, e.g.
-    // Finder copying an image file), image wins — the text is just a fallback representation the
-    // source app added, not something the user explicitly copied as text.
+    // reads from sync, falling back to the snapshot only when every clipboard field is null and the platform says that can
+    // still mean its own write was echo-suppressed; a fresh copy of any one type keeps stale fields from coming back. The
+    // selection is read as it stands, never from the fallback.
     public static ClipboardSnapshot ReadWithFallback(IClipboardSync sync, ClipboardSnapshot? fallback, ILogger log, string context)
     {
         if (sync.HasFileClipboard())

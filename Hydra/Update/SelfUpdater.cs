@@ -66,9 +66,9 @@ internal sealed class SelfUpdater(IHydraProfile profile, ILogger<SelfUpdater> lo
 
         // edge takes the highest version among recent releases, prereleases included, so it moves on to a
         // stable release once one overtakes the edge builds
-        var url = channel == UpdateChannel.Edge ? $"https://api.github.com/repos/{Repo}/releases?per_page=30" : $"https://api.github.com/repos/{Repo}/releases/latest";
-        using var doc = JsonDocument.Parse(await Http.GetStringAsync(url, cancel));
-        if ((channel == UpdateChannel.Edge ? Newest(doc.RootElement) : doc.RootElement) is not { } root || TagVersion(root) is not { } latest)
+        var edge = channel == UpdateChannel.Edge;
+        using var doc = JsonDocument.Parse(await Http.GetStringAsync($"https://api.github.com/repos/{Repo}/releases{(edge ? "?per_page=30" : "/latest")}", cancel));
+        if ((edge ? Newest(doc.RootElement) : doc.RootElement) is not { } root || TagVersion(root) is not { } latest)
         {
             log.LogWarning("No release found on the {Channel} channel", channel);
             return;

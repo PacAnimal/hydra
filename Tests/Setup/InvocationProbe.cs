@@ -10,8 +10,7 @@ public sealed class InvocationProbe(string method) : IHubFilter
 {
     private TaskCompletionSource? _hold;
     private Func<HubInvocationContext, ValueTask<bool>> _which = Everything;
-    private int _running;
-    private int _mostRunning;
+    private readonly RunningCounter _running = new();
 
     // the arguments of each invocation parked by Hold, in the order they reached it
     public NotificationQueue<object?[]> Held { get; private set; } = new();
@@ -23,7 +22,7 @@ public sealed class InvocationProbe(string method) : IHubFilter
     public NotificationQueue<object?[]> Finished { get; private set; } = new();
 
     // the most invocations of the method ever running at once
-    public int MostRunning => Volatile.Read(ref _mostRunning);
+    public int MostRunning => _running.MostRunning;
 
     // parks the invocations `which` picks, all of them when null
     public void Hold(Func<HubInvocationContext, ValueTask<bool>>? which = null)
@@ -41,7 +40,7 @@ public sealed class InvocationProbe(string method) : IHubFilter
         Held = new NotificationQueue<object?[]>();
         Started = new NotificationQueue<object?[]>();
         Finished = new NotificationQueue<object?[]>();
-        Volatile.Write(ref _mostRunning, 0);
+        _running.Reset();
     }
 
     private static ValueTask<bool> Everything(HubInvocationContext _) => ValueTask.FromResult(true);
@@ -50,9 +49,7 @@ public sealed class InvocationProbe(string method) : IHubFilter
     {
         if (context.HubMethodName != method) return await next(context);
 
-        var running = Interlocked.Increment(ref _running);
-        for (var most = MostRunning; running > most; most = MostRunning)
-            Interlocked.CompareExchange(ref _mostRunning, running, most);
+        _running.Enter();
         var arguments = context.HubMethodArguments.ToArray();
         try
         {
@@ -68,7 +65,7 @@ public sealed class InvocationProbe(string method) : IHubFilter
         }
         finally
         {
-            Interlocked.Decrement(ref _running);
+            _running.Exit();
             Finished.Push(arguments);
         }
     }

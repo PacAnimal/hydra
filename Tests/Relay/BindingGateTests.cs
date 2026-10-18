@@ -13,7 +13,6 @@ public class BindingGateTests
     private const string Peer = "192.168.1.10";
     private const string Stranger = "192.168.1.66";
     private const string OtherStranger = "192.168.1.77";
-    private static readonly TimeSpan Bound = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan Throttle = TimeSpan.FromSeconds(StyxConstants.AuthThrottleSeconds);
 
     private StartedTimers _clock = null!;

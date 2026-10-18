@@ -4,7 +4,6 @@ using Cathedral.Config;
 using Cathedral.Styx;
 using Cathedral.Utils;
 using Common;
-using Hydra.Relay;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Styx;
@@ -23,14 +22,12 @@ public static class StyxTestServer
         // must be set before the factory initializes the host. process-wide, so safe only while fixtures run
         // one at a time — every caller uses the default today. Anything else a test wants differs in code,
         // by replacing StyxAuth through `configure`.
-        Environment.SetEnvironmentVariable(global::Styx.Constants.RelayPasswordEnvVar, password);
-        Environment.SetEnvironmentVariable(global::Styx.Constants.RelaySigningKeyEnvVar, Convert.ToBase64String(TestKey));
-        Environment.SetEnvironmentVariable(global::Styx.Constants.RelaySigningPassphraseEnvVar, null);
-        // a retired name left in the shell would make every relay here refuse to start
-        foreach (var (name, _) in StyxEnvironment.RetiredNames) Environment.SetEnvironmentVariable(name, null);
-        Environment.SetEnvironmentVariable(global::Styx.Constants.RevokedNetworksEnvVar, null);
-        Environment.SetEnvironmentVariable(global::Styx.Constants.RevokedIdsEnvVar, null);
-        Environment.SetEnvironmentVariable(global::Styx.Constants.ParallelInvocationsEnvVar, null);
+        Environment.SetEnvironmentVariable(Constants.RelayPasswordEnvVar, password);
+        Environment.SetEnvironmentVariable(Constants.RelaySigningKeyEnvVar, Convert.ToBase64String(TestKey));
+        Environment.SetEnvironmentVariable(Constants.RelaySigningPassphraseEnvVar, null);
+        Environment.SetEnvironmentVariable(Constants.RevokedNetworksEnvVar, null);
+        Environment.SetEnvironmentVariable(Constants.RevokedIdsEnvVar, null);
+        Environment.SetEnvironmentVariable(Constants.ParallelInvocationsEnvVar, null);
 
         return new WebApplicationFactory<global::Styx.Program>()
             .WithWebHostBuilder(builder =>
@@ -44,22 +41,12 @@ public static class StyxTestServer
             });
     }
 
-    /// <summary>
-    /// A sender and a receiver, both masters on a fresh network, both authenticated.
-    ///
-    /// <para><c>peerTakesBundles</c> is what the sender believes the receiver advertised; null leaves it
-    /// unknown. FALSE is the un-upgraded peer, and it is not a corner case — it is every slave in the field
-    /// until it is updated.</para>
-    /// </summary>
+    /// <summary>A sender and a receiver, both masters on a fresh network, both authenticated.</summary>
     public static async Task<ClientPair> ConnectedPair(
-        WebApplicationFactory<global::Styx.Program> factory, string sender = "sender", string receiver = "receiver", bool? peerTakesBundles = null)
+        WebApplicationFactory<global::Styx.Program> factory, string sender = "sender", string receiver = "receiver")
     {
         var cfg = await BuildNetworkConfig(factory, Guid.NewGuid());
-        var senderClient = HydraTestClient.Master(factory, sender, cfg);
-        if (peerTakesBundles is { } bundles)
-            senderClient.World.SetPeerCapabilities(receiver, PeerCapabilities.Parse(bundles ? PeerCapabilities.Advertise() : null));
-
-        return await ClientPair.Start(senderClient, HydraTestClient.Master(factory, receiver, cfg));
+        return await ClientPair.Start(HydraTestClient.Master(factory, sender, cfg), HydraTestClient.Master(factory, receiver, cfg));
     }
 
     /// <summary>A v2 token from the test key, for a fresh network unless one is given.</summary>

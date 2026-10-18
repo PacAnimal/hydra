@@ -66,7 +66,7 @@ public class StyxV2Tests : StyxFixtureBase
 
         var root = StyxToken.Parse(token).Network;
         await watcher.Connect(Factory, StyxTestServer.MintToken(root).ToString(), "watcher");
-        Assert.That(await WaitForPeers(watcher, ["player-1"]), Is.EqualTo(["player-1"]));
+        Assert.That(await watcher.WaitForPeers(["player-1"]), Is.EqualTo(["player-1"]));
     }
 
     [Test]
@@ -119,7 +119,7 @@ public class StyxV2Tests : StyxFixtureBase
         await roomA.Connect(Factory, StyxTestServer.MintToken(network, StyxCaveat.Sub("game"), StyxCaveat.Sub("a")).ToString(), "ay");
         await roomA2.Connect(Factory, StyxTestServer.MintToken(network, StyxCaveat.Sub("game"), StyxCaveat.Sub("a")).ToString(), "ay2");
 
-        Assert.That(await WaitForPeers(roomA, ["ay2"]), Is.EqualTo(["ay2"]));
+        Assert.That(await roomA.WaitForPeers(["ay2"]), Is.EqualTo(["ay2"]));
         await roomA.Server!.Send(["bee", "ay2"], [1, 2, 3]);
         var (source, _, _) = await roomA2.WaitForReceive();
         using (Assert.EnterMultipleScope())
@@ -161,7 +161,7 @@ public class StyxV2Tests : StyxFixtureBase
         await using var mover = new TestStyxClient();
         await stayer.Connect(Factory, lobby, "stayer");
         await mover.Connect(Factory, lobby, "mover");
-        Assert.That(await WaitForPeers(stayer, ["mover"]), Is.EqualTo(["mover"]));
+        Assert.That(await stayer.WaitForPeers(["mover"]), Is.EqualTo(["mover"]));
 
         var moved = await mover.Server!.Authenticate(new Common.DTO.RelayLogin
         {
@@ -171,7 +171,7 @@ public class StyxV2Tests : StyxFixtureBase
         using (Assert.EnterMultipleScope())
         {
             Assert.That(moved.Authenticated, Is.True);
-            Assert.That(await WaitForPeers(stayer, []), Is.Empty);
+            Assert.That(await stayer.WaitForPeers([]), Is.Empty);
         }
     }
 
@@ -194,16 +194,6 @@ public class StyxV2Tests : StyxFixtureBase
         {
             Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
             Assert.That(body.GetProperty("peers").EnumerateArray().Select(e => e.GetString()), Is.EqualTo(["in-room"]));
-        }
-    }
-
-    // the next snapshot equal to the expected one, ignoring the ones before it
-    private static async Task<string[]> WaitForPeers(TestStyxClient client, string[] expected)
-    {
-        while (true)
-        {
-            var peers = await client.WaitForPeers();
-            if (peers.SequenceEqual(expected)) return peers;
         }
     }
 }

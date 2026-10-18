@@ -17,13 +17,12 @@ public sealed class TestStyxClient : IStyxClient, IAsyncDisposable
     private IDisposable? _registration;
 
     private readonly NotificationQueue<string[]> _peers = new();
-    private readonly NotificationQueue<byte[]> _received = new();
+    private readonly NotificationQueue<StyxReceived> _received = new();
+    private readonly NotificationQueue<string> _kicks = new();
     private readonly NotificationQueue<Exception?> _closed = new();
-    private readonly SemaphoreSlim _receiveSignal = new(0);
-    private readonly SemaphoreSlim _kickSignal = new(0);
 
     public IStyxServer? Server { get; private set; }
-    public (string Source, string SourceIp, byte[] Payload)? LastReceived { get; private set; }
+    public StyxReceived? LastReceived { get; private set; }
     public string? KickReason { get; private set; }
 
     // connect and authenticate — returns the auth response for the caller to inspect
@@ -65,15 +64,24 @@ public sealed class TestStyxClient : IStyxClient, IAsyncDisposable
 
     public Task<string[]> WaitForPeers(int timeoutMs = 5000) => _peers.Next(timeoutMs, "peers update");
 
-    public async Task<(string Source, string SourceIp, byte[] Payload)> WaitForReceive(int timeoutMs = 5000)
+    // peers updates already received and not yet read; handlers run in arrival order, so this orders them against payloads
+    public int PeersWaiting => _peers.Count;
+
+    // the first snapshot equal to the expected one, since the relay may announce intermediate memberships first
+    public async Task<string[]> WaitForPeers(string[] expected, bool anyOrder = false)
     {
-        if (!await _receiveSignal.WaitAsync(timeoutMs))
-            throw new TimeoutException("Timed out waiting for message");
-        return LastReceived!.Value;
+        while (true)
+        {
+            var peers = await WaitForPeers();
+            if (anyOrder ? peers.Order().SequenceEqual(expected.Order()) : peers.SequenceEqual(expected)) return peers;
+        }
     }
 
-    // every payload received, in arrival order
-    public Task<byte[]> NextReceived(int timeoutMs = 5000) => _received.Next(timeoutMs, "a received payload");
+    // every message received, in arrival order
+    public Task<StyxReceived> WaitForReceive(int timeoutMs = 5000) => _received.Next(timeoutMs, "a received message");
+
+    // the payload of the next message received
+    public async Task<byte[]> NextReceived(int timeoutMs = 5000) => (await WaitForReceive(timeoutMs)).Payload;
 
     // a non-blocking invocation, as Hydra's input lane sends: nothing comes back, and the next may go at once
     public Task SendWithoutWaiting(string[] targetHosts, byte[] payload) => _hub!.SendAsync(nameof(IStyxServer.Send), targetHosts, payload);
@@ -83,26 +91,21 @@ public sealed class TestStyxClient : IStyxClient, IAsyncDisposable
 
     public HubConnectionState State => _hub?.State ?? HubConnectionState.Disconnected;
 
-    public async Task<string> WaitForKick(int timeoutMs = 5000)
-    {
-        if (!await _kickSignal.WaitAsync(timeoutMs))
-            throw new TimeoutException("Timed out waiting for kick");
-        return KickReason!;
-    }
+    public Task<string> WaitForKick(int timeoutMs = 5000) => _kicks.Next(timeoutMs, "a kick");
 
     // IStyxClient
     public Task Receive(string sourceHost, string sourceIp, byte[] payload)
     {
-        LastReceived = (sourceHost, sourceIp, payload);
-        _received.Push(payload);
-        _receiveSignal.Release();
+        var received = new StyxReceived(sourceHost, sourceIp, payload);
+        LastReceived = received;
+        _received.Push(received);
         return Task.CompletedTask;
     }
 
     public Task Kicked(string reason)
     {
         KickReason = reason;
-        _kickSignal.Release();
+        _kicks.Push(reason);
         return Task.CompletedTask;
     }
 
@@ -122,3 +125,5 @@ public sealed class TestStyxClient : IStyxClient, IAsyncDisposable
         }
     }
 }
+
+public sealed record StyxReceived(string Source, string SourceIp, byte[] Payload);

@@ -9,11 +9,8 @@ public sealed class FakeClipboardSync : IClipboardSync
     public byte[]? ImagePng { get; private set; }
     public string? Html { get; private set; }
     public byte[]? Rtf { get; private set; }
-    public int GetHtmlCallCount { get; private set; }
-    public int GetRtfCallCount { get; private set; }
     public int GetTextCallCount { get; private set; }
     public int GetPrimaryTextCallCount { get; private set; }
-    public int SetPrimaryTextCallCount { get; private set; }
     public int GetImagePngCallCount { get; private set; }
     public int SetClipboardCallCount { get; private set; }
     public bool HasFileClipboardValue { get; set; }
@@ -27,8 +24,6 @@ public sealed class FakeClipboardSync : IClipboardSync
         return Text;
     }
 
-    public void SetText(string text) => Text = text;
-
     public string? GetPrimaryText()
     {
         GetPrimaryTextCallCount++;
@@ -37,7 +32,6 @@ public sealed class FakeClipboardSync : IClipboardSync
 
     public bool SetPrimaryText(string text)
     {
-        SetPrimaryTextCallCount++;
         if (!KeepsSelectionValue) return false;
         PrimaryText = text;
         return true;
@@ -49,17 +43,9 @@ public sealed class FakeClipboardSync : IClipboardSync
         return ImagePng;
     }
 
-    public string? GetHtml()
-    {
-        GetHtmlCallCount++;
-        return Html;
-    }
+    public string? GetHtml() => Html;
 
-    public byte[]? GetRtf()
-    {
-        GetRtfCallCount++;
-        return Rtf;
-    }
+    public byte[]? GetRtf() => Rtf;
 
     public bool HasFileClipboard() => HasFileClipboardValue;
 
@@ -78,8 +64,7 @@ public sealed class FakeClipboardSync : IClipboardSync
         return true;
     }
 
-    // helper for test setup (bypasses call counter)
+    // helpers for test setup (bypass the call counters)
+    public void SetupText(string text) => Text = text;
     public void SetupImage(byte[]? png) => ImagePng = png;
-    public void SetupHtml(string? html) => Html = html;
-    public void SetupRtf(byte[]? rtf) => Rtf = rtf;
 }

@@ -6,9 +6,9 @@ namespace Tests.Setup;
 
 public enum ClipboardOs { Linux, MacOs, Windows }
 
-// An OS clipboard as Hydra's platform code sees it. What Hydra wrote reads back as an echo: by ownership on macOS
-// and X11, by content on Windows. X11 has a PRIMARY selection; the others keep the real CopiedPrimary, versioned by
-// a change counter as the OS keeps one.
+// An OS clipboard as Hydra's platform code sees it. What Hydra wrote reads back as an echo while it still holds the
+// clipboard. X11 has a PRIMARY selection; the others keep the real CopiedPrimary, versioned by a change counter as the
+// OS keeps one.
 public sealed class SimulatedClipboard : IClipboardSync
 {
     private static readonly NullLogger Log = NullLogger.Instance;
@@ -20,8 +20,6 @@ public sealed class SimulatedClipboard : IClipboardSync
     private long _version;
     private bool _owned;
     private string? _x11Primary;
-    private string? _writtenText;
-    private byte[]? _writtenImage;
 
     public SimulatedClipboard(ClipboardOs os)
     {
@@ -64,11 +62,11 @@ public sealed class SimulatedClipboard : IClipboardSync
 
     private static T RoundTrip<T>(MessageKind kind, T message) => MessageSerializer.Decode(MessageSerializer.Encode(kind, message)).Deserialize<T>();
 
-    public string? GetText() => _os == ClipboardOs.Windows ? (Text == _writtenText ? null : Text) : _owned ? null : Text;
+    public string? GetText() => _owned ? null : Text;
 
-    public byte[]? GetImagePng() => _os == ClipboardOs.Windows ? (ImagePng == _writtenImage ? null : ImagePng) : _owned ? null : ImagePng;
+    public byte[]? GetImagePng() => _owned ? null : ImagePng;
 
-    public bool CanUseEchoFallback() => _os != ClipboardOs.MacOs || _owned;
+    public bool CanUseEchoFallback() => _os == ClipboardOs.Linux || _owned;
 
     public string? GetPrimaryText() => _os == ClipboardOs.Linux ? _x11Primary : _copied.Read();
 
@@ -96,8 +94,8 @@ public sealed class SimulatedClipboard : IClipboardSync
 
     private bool WriteClipboard(ClipboardSnapshot contents)
     {
-        Text = _writtenText = contents.Text;
-        ImagePng = _writtenImage = contents.ImagePng;
+        Text = contents.Text;
+        ImagePng = contents.ImagePng;
         ClipboardWrites++;
         _version++;
         _owned = true;

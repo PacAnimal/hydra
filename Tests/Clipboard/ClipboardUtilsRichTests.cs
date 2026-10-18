@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using Hydra.Platform;
 using Hydra.Relay;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -19,11 +20,29 @@ public class ClipboardUtilsRichTests
     public void EchoFilter_ForgetsWhatALaterWriteReplaced()
     {
         // a write replaces every format, so an image Hydra wrote before a text is no echo once the user copies it again
-        var echo = new ClipboardEchoFilter();
+        var echo = new ClipboardEchoFilter(() => true);
         echo.Track(new ClipboardSnapshot(null, null, [9, 9]));
         echo.Track(new ClipboardSnapshot("written", null, null));
 
         Assert.That(echo.IsDuplicateImage([9, 9]), Is.False);
+    }
+
+    [Test]
+    public void EchoFilter_PassesWhatItWroteOnceTheClipboardIsNoLongerItsWrite()
+    {
+        var owned = new StrongBox<bool>(true);
+        var echo = new ClipboardEchoFilter(() => owned.Value);
+        echo.Track(new ClipboardSnapshot("written", null, [9, 9], "<b>written</b>", [7]));
+        Assert.That(echo.FilterText("written"), Is.Null, "an echo while the clipboard is still the write");
+        owned.Value = false; // the user copied the same contents again
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(echo.FilterText("written"), Is.EqualTo("written"));
+            Assert.That(echo.IsDuplicateImage([9, 9]), Is.False);
+            Assert.That(echo.FilterHtml("<b>written</b>"), Is.EqualTo("<b>written</b>"));
+            Assert.That(echo.FilterRtf([7]), Is.EqualTo(new byte[] { 7 }));
+        }
     }
 
     [Test]
@@ -313,7 +332,7 @@ public class ClipboardUtilsRichTests
     public void ApplyPreservingFiles_SelectionOnly_LeavesTheClipboardAlone()
     {
         var sync = new FakeClipboardSync();
-        sync.SetText("local copy");
+        sync.SetupText("local copy");
 
         var applied = ClipboardUtils.ApplyPreservingFiles(sync, new ClipboardSnapshot(null, "selection", null), Log, "test");
 

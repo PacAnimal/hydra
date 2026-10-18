@@ -2,7 +2,6 @@ using System.Diagnostics;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Cathedral.Styx;
-using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Styx;
 using Tests.Setup;
@@ -15,29 +14,16 @@ namespace Tests.Styx;
 /// implementations are run against the same vectors. A guide that is wrong, incomplete or stale fails the build.
 /// </summary>
 [TestFixture]
-public class StyxDocumentationTests
+public class StyxDocumentationTests : StyxFixtureBase
 {
     private static readonly string Document = File.ReadAllText(Path.Combine(TestLog.SolutionRoot, "Styx.md")).ReplaceLineEndings("\n");
     private static readonly JsonSerializerOptions Json = new() { PropertyNameCaseInsensitive = true };
 
-    private Vectors _vectors = null!;
+    private readonly Vectors _vectors = JsonSerializer.Deserialize<Vectors>(Block("vectors"), Json)!;
     private string _directory = null!;
-    private WebApplicationFactory<global::Styx.Program>? _relay;
 
-    [OneTimeSetUp]
-    public void Load()
-    {
-        _vectors = JsonSerializer.Deserialize<Vectors>(Block("vectors"), Json)!;
-        _relay = StyxTestServer.Create(configure: services =>
-            services.AddSingleton(new StyxAuth([Key], null, new HashSet<Guid>(), new HashSet<string>())));
-        _ = _relay.Server;
-    }
-
-    [OneTimeTearDown]
-    public async Task Stop()
-    {
-        if (_relay != null) await _relay.DisposeAsync();
-    }
+    protected override void ConfigureRelay(IServiceCollection services) =>
+        services.AddSingleton(new StyxAuth([Key], null, new HashSet<Guid>(), new HashSet<string>()));
 
     [SetUp]
     public void FreshDirectory() => _directory = TestPaths.FreshFixtureRoot(nameof(StyxDocumentationTests));
@@ -109,14 +95,14 @@ public class StyxDocumentationTests
     public async Task ARelay_AcceptsTheVectorTokens_AndRefusesEveryRejectedOne()
     {
         await using (var root = new TestStyxClient())
-            Assert.That((await root.Connect(_relay!, _vectors.Root, "anyone")).Authenticated, Is.True);
+            Assert.That((await root.Connect(Factory, _vectors.Root, "anyone")).Authenticated, Is.True);
         await using (var last = new TestStyxClient())
-            Assert.That((await last.Connect(_relay!, _vectors.Steps[^1].Token, "player-1")).Authenticated, Is.True);
+            Assert.That((await last.Connect(Factory, _vectors.Steps[^1].Token, "player-1")).Authenticated, Is.True);
 
         foreach (var rejected in _vectors.Rejected)
         {
             await using var client = new TestStyxClient();
-            var response = await client.Connect(_relay!, rejected.Token, "player-1");
+            var response = await client.Connect(Factory, rejected.Token, "player-1");
             Assert.That(response.Authenticated, Is.False, rejected.Why);
         }
     }
@@ -142,7 +128,7 @@ public class StyxDocumentationTests
         File.WriteAllText(Path.Combine(_directory, "Driver.csproj"), CSharpProject);
         File.WriteAllText(Path.Combine(_directory, "StyxIssue.cs"), Block("csharp"));
         File.WriteAllText(Path.Combine(_directory, "Program.cs"), CSharpDriver);
-        await AssertMatches(await Run(Tool("dotnet"), ["run", "--project", Path.Combine(_directory, "Driver.csproj"), "--"], CompileTimeout));
+        await AssertMatches(await Run(Tool("dotnet"), ["run", "--disable-build-servers", "--project", Path.Combine(_directory, "Driver.csproj"), "--"], CompileTimeout));
     }
 
     [Test]
@@ -175,7 +161,7 @@ public class StyxDocumentationTests
         }
 
         await using var client = new TestStyxClient();
-        var response = await client.Connect(_relay!, results.Extra, "from-docs");
+        var response = await client.Connect(Factory, results.Extra, "from-docs");
         Assert.That(response.Authenticated, Is.True, "a token the reference code narrowed verifies at a relay");
     }
 

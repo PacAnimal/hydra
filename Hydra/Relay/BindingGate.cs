@@ -1,3 +1,4 @@
+using Common;
 using Styx;
 using Styx.Services;
 using StyxConstants = Styx.Constants;
@@ -11,6 +12,10 @@ namespace Hydra.Relay;
 /// however many addresses it comes from; an address that has proven itself gets a lane of its own, so a guesser can
 /// delay a first join but never a peer already in. Blocked addresses are refused before any lane, so they never hold
 /// one, and a lane past <see cref="MaxWaiting"/> turns newcomers away.
+///
+/// <para>Accepted costs of the bound: known peers live here, so a relay restart forgets them; an attacker with many
+/// addresses can keep the strangers' lane busy and delay first joins; and the limiter keys IPv6 by /64, so a device on a
+/// peer's /64 can lock that peer out by guessing.</para>
 /// </summary>
 internal sealed class BindingGate(ResponseThrottle throttle, FailureLimiter limiter)
 {

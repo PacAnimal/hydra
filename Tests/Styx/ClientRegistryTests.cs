@@ -57,17 +57,17 @@ public class ClientRegistryTests
     }
 
     [Test]
-    public async Task RegisterKickingDuplicates_MatchesExistingHostNameCaseInsensitively()
+    public async Task Register_MatchesExistingHostNameCaseInsensitively()
     {
         var registry = new ClientRegistry(NullLogger<ClientRegistry>.Instance);
         var network = Guid.NewGuid();
         await registry.Register("a", network, "Laptop", "10.0.0.1");
 
-        var result = await registry.RegisterKickingDuplicates("b", network, "LAPTOP", "10.0.0.2");
+        var result = await registry.Register("b", network, "LAPTOP", "10.0.0.2");
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(result.Kicked, Is.EqualTo(["a"]),
+            Assert.That(result.Kicked, Is.EqualTo("a"),
                 "the displaced connection must be reported as kicked, not silently dropped");
             Assert.That(await registry.GetIdentity("a"), Is.Null);
             Assert.That(await registry.GetConnectionId(network, "laptop"), Is.EqualTo("b"));
@@ -81,7 +81,7 @@ public class ClientRegistryTests
         var network = Guid.NewGuid();
 
         await Task.WhenAll(Enumerable.Range(0, 64).Select(i => Task.Run(async () =>
-            await registry.RegisterKickingDuplicates($"connection-{i}", network, "shared-host", $"10.0.0.{i}"))));
+            await registry.Register($"connection-{i}", network, "shared-host", $"10.0.0.{i}"))));
 
         var clients = await registry.GetNetworkClients(network);
         using (Assert.EnterMultipleScope())
@@ -97,8 +97,8 @@ public class ClientRegistryTests
     {
         var registry = new ClientRegistry(NullLogger<ClientRegistry>.Instance);
         var network = Guid.NewGuid();
-        var first = await registry.RegisterKickingDuplicates("connection", network, "host", "10.0.0.1");
-        var second = await registry.RegisterKickingDuplicates("connection", network, "host", "10.0.0.1");
+        var first = await registry.Register("connection", network, "host", "10.0.0.1");
+        var second = await registry.Register("connection", network, "host", "10.0.0.1");
         Assert.That(second.Generation, Is.GreaterThan(first.Generation));
     }
 
@@ -107,8 +107,8 @@ public class ClientRegistryTests
     {
         var registry = new ClientRegistry(NullLogger<ClientRegistry>.Instance);
         var network = Guid.NewGuid();
-        var stale = await registry.RegisterKickingDuplicates("connection", network, "host", "10.0.0.1");
-        var current = await registry.RegisterKickingDuplicates("connection", network, "host", "10.0.0.1");
+        var stale = await registry.Register("connection", network, "host", "10.0.0.1");
+        var current = await registry.Register("connection", network, "host", "10.0.0.1");
 
         using (Assert.EnterMultipleScope())
         {
@@ -126,9 +126,9 @@ public class ClientRegistryTests
         var network = Guid.NewGuid();
         var lobby = new NetworkKey(network, "");
         var room = new NetworkKey(network, "room");
-        var first = await registry.RegisterKickingDuplicates("connection", lobby, "host", "10.0.0.1");
-        var moved = await registry.RegisterKickingDuplicates("connection", room, "host", "10.0.0.1");
-        var stayed = await registry.RegisterKickingDuplicates("connection", room, "renamed", "10.0.0.1");
+        var first = await registry.Register("connection", lobby, "host", "10.0.0.1");
+        var moved = await registry.Register("connection", room, "host", "10.0.0.1");
+        var stayed = await registry.Register("connection", room, "renamed", "10.0.0.1");
 
         using (Assert.EnterMultipleScope())
         {

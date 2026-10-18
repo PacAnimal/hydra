@@ -13,12 +13,6 @@ public class MacClipboardSyncTests : CopiedPrimaryContract
     // one name, since a named pasteboard outlives the run
     private const string PasteboardName = "org.c-net.hydra.tests";
 
-    [OneTimeSetUp]
-    public void RequireMacOs()
-    {
-        if (!OperatingSystem.IsMacOS()) Assert.Ignore("macOS-only: NSPasteboard");
-    }
-
     protected override IClipboardSync Create() => new MacClipboardSync(NullLogger<MacClipboardSync>.Instance, PasteboardName);
 
     [TestCase("org.nspasteboard.ConcealedType")]

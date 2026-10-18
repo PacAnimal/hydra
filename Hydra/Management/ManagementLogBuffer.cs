@@ -6,7 +6,7 @@ internal sealed class ManagementLogBuffer : ILoggerProvider
 {
     internal const int Capacity = 2000;
 
-    /// <summary>Marks a message naming the user's files, which this log never shows, however it is worded.</summary>
+    // marks a message naming the user's files, which this log never shows
     internal static readonly EventId FilePaths = new(7001, nameof(FilePaths));
     private readonly Lock _lock = new();
     private readonly Queue<ManagementLogEntry> _entries = new(Capacity);
@@ -26,9 +26,7 @@ internal sealed class ManagementLogBuffer : ILoggerProvider
     {
         if (category.Contains("FileTransfer", StringComparison.OrdinalIgnoreCase)
             || category.Contains("Clipboard", StringComparison.OrdinalIgnoreCase)
-            || eventId == FilePaths
-            // a slave keeps marked messages to itself, but one from before the marker forwards them, always worded so
-            || (category.StartsWith("slave:", StringComparison.Ordinal) && message.Contains("file(s) selected", StringComparison.OrdinalIgnoreCase)))
+            || eventId == FilePaths)
             return;
 
         lock (_lock)

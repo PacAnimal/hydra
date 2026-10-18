@@ -144,7 +144,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
             {
                 // not in Reverse (e.g. ScrollLock) — check OutputOverrides (ScrollLock → F14)
                 if (MacSpecialKeyMap.OutputOverrides.TryGetValue(key, out var ovr))
-                    PostCgKey(ovr.Vk, isDown, flags | ovr.ExtraFlags);
+                    PostCgKey(ovr.Vk, isDown, flags | ovr.ExtraFlags, isRepeat: false);
                 return;
             }
 
@@ -152,8 +152,8 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
             if (generic == 0 && device == 0)
             {
                 // NumLock (KeypadClear) has no modifier mask — inject as a regular toggle key, not a flags change
-                if (!PostHidKey((ushort)modVk, isDown))
-                    PostCgKey((ushort)modVk, isDown, flags);
+                if (!PostHidKey((ushort)modVk, isDown, isRepeat: false))
+                    PostCgKey((ushort)modVk, isDown, flags, isRepeat: false);
                 return;
             }
 
@@ -317,7 +317,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
     }
 
     // post a CG keyboard event — used for non-modifier special keys and as fallback for modifiers.
-    private static void PostCgKey(ushort vk, bool isDown, ulong flags, bool isRepeat = false)
+    private static void PostCgKey(ushort vk, bool isDown, ulong flags, bool isRepeat)
     {
         var eventRef = NativeMethods.CGEventCreateKeyboardEvent(EventSource, vk, isDown);
         if (eventRef == nint.Zero) return;
@@ -347,7 +347,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
     // eventFlags carries only the Fn flag (where applicable); modifier context comes from the global
     // HID state set by NX_FLAGSCHANGED — adding modifiers inline causes character translation
     // (e.g. VK_4 + Shift → '¤' on Norwegian) to happen before the shortcut handler fires.
-    private bool PostHidKey(ushort vk, bool isDown, bool isRepeat = false)
+    private bool PostHidKey(ushort vk, bool isDown, bool isRepeat)
     {
         var conn = GetHidConnection();
         if (conn == 0) return false;

@@ -18,7 +18,7 @@ public class HydraConfigTests
         new(ssids ?? [], screenCount, isPluggedIn);
 
     // minimum relay config — injected into profile JSON objects that need it
-    private const string Relay = ",\"embeddedStyx\":{\"server\":\"http://localhost:5000\",\"password\":\"test\"}";
+    private const string Relay = ",\"embeddedStyx\":{\"server\":\"https://localhost:5000\",\"password\":\"test\"}";
 
     private static string AsFile(string profilesJson) => $$"""{"profiles":{{profilesJson}}}""";
 
@@ -68,12 +68,11 @@ public class HydraConfigTests
     }
 
     [Test]
-    public void RetiredUnicodeKeyRepeat_StillParses()
+    public void EmbeddedStyx_RejectsPlainHttp()
     {
-        // configs written before the setting was retired keep loading
-        var json = AsFile($$"""[{"mode":"Master","unicodeKeyRepeat":false{{Relay}}}]""");
+        var json = AsFile("""[{"mode":"Master","embeddedStyx":{"server":"HTTP://localhost:5000","password":"test"}}]""");
 
-        Assert.That(HydraConfig.ParseAndValidate(json), Has.Count.EqualTo(1));
+        Assert.That(() => HydraConfig.ParseAndValidate(json), Throws.InvalidOperationException.With.Message.Contains("https://"));
     }
 
     [Test]

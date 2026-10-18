@@ -9,6 +9,7 @@ using Microsoft.Extensions.Logging;
 using Styx;
 using Styx.Services;
 using System.Net;
+using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 
 namespace Hydra.Relay;
@@ -19,24 +20,14 @@ public class EmbeddedStyxServer(EmbeddedStyxServerConfig config, ILogger<Embedde
     private readonly TaskCompletionSource _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private IClientRegistry? _registry;
 
-    /// <summary>
-    /// Completes when the relay is listening, and FAULTS when it could not start.
-    ///
-    /// <para><b>It must do one or the other, always.</b> This used to be set on success alone, so a start
-    /// that threw — a port taken between being probed and being bound is the easy way — left every caller
-    /// waiting on a task nothing would ever complete. That is not a slow start, it is a permanent one: the
-    /// failure was logged by the hosted service and the awaiting test hung until the run was killed. Thirty
-    /// four minutes of a CI lane, once.</para>
-    /// </summary>
+    // completes when the relay is listening and faults when it could not start; always one or the other
     public Task WaitForReady() => _ready.Task;
     internal ValueTask<IReadOnlyList<ClientIdentity>> GetClients() => _registry?.GetAllIdentities()
         ?? ValueTask.FromResult<IReadOnlyList<ClientIdentity>>([]);
 
     protected override async Task Execute(CancellationToken cancel)
     {
-        // INSIDE the try, because building the app can fail on its own — an out-of-range port throws while
-        // Kestrel's listener is being described, before anything is started. Left outside, that failure
-        // skipped the catch below and put readiness right back where it was: waiting for ever.
+        // built inside the try, since an out-of-range port throws while the listener is described
         WebApplication? app = null;
         var started = false;
         try
@@ -54,16 +45,12 @@ public class EmbeddedStyxServer(EmbeddedStyxServerConfig config, ILogger<Embedde
         }
         catch (OperationCanceledException) when (cancel.IsCancellationRequested)
         {
-            // Shutting down before we ever listened. Nobody is owed a listening relay, but they are owed an
-            // answer — a caller parked in WaitForReady must come back rather than outlive the service.
+            // stopped before listening: a WaitForReady caller is still owed an answer
             _ready.TrySetCanceled(cancel);
             throw;
         }
         catch (Exception ex)
         {
-            // THE ANSWER IS THE POINT. Whatever went wrong, every WaitForReady caller learns it here; the
-            // alternative is the hang this replaced, where the failure was logged and the waiter simply
-            // never returned.
             _ready.TrySetException(ex);
             throw;
         }
@@ -81,9 +68,7 @@ public class EmbeddedStyxServer(EmbeddedStyxServerConfig config, ILogger<Embedde
             catch (Exception ex) { log.LogWarning(ex, "Embedded Styx stop failed"); }
             finally { if (app != null) await app.DisposeAsync(); }
 
-            // A last resort for a path that reached neither success nor a catch — a return this method does
-            // not have today, or one added later. Cheap, and it makes "WaitForReady always completes" a
-            // property of the method rather than of its current shape.
+            // any path that reached neither success nor a catch
             _ready.TrySetException(new InvalidOperationException("Embedded Styx relay stopped before it was ready"));
         }
     }
@@ -105,7 +90,7 @@ public class EmbeddedStyxServer(EmbeddedStyxServerConfig config, ILogger<Embedde
         // the container makes the cert, so the app owns and disposes it, started or not; on Windows it holds a key container
         builder.Services.AddSingleton(_ => EmbeddedRelayTls.CreateCertificate());
         builder.WebHost.ConfigureKestrel(options => options.Listen(IPAddress.IPv6Any, config.Port, listenOptions =>
-            listenOptions.UseTcpNoDelay().RefusePlainHttp(log).UseHttps(options.ApplicationServices.GetRequiredService<X509Certificate2>())));
+            listenOptions.UseTcpNoDelay().UseHttps(options.ApplicationServices.GetRequiredService<X509Certificate2>())));
 
         var app = builder.Build();
         var proofs = EmbeddedRelayTls.ProofsFor(config.Password, EmbeddedRelayTls.FingerprintOf(app.Services.GetRequiredService<X509Certificate2>()));
@@ -120,12 +105,12 @@ public class EmbeddedStyxServer(EmbeddedStyxServerConfig config, ILogger<Embedde
     // against; the gate decides how fast anyone may try
     private static async Task<IResult> AnswerBinding(EmbeddedRelayTls.Proofs proofs, BindingGate gate, HttpContext http, CancellationToken cancel)
     {
-        var remoteIp = http.Connection.RemoteIpAddress?.ToString() ?? ClientRegistry.Unknown;
+        var remoteIp = ClientRegistry.RemoteIpOf(http);
         var given = new byte[EmbeddedRelayTls.ProofLength + 1];
         var length = await http.Request.Body.ReadAtLeastAsync(given, given.Length, throwOnEndOfStream: false, cancel);
 
         var verdict = await gate.Check(remoteIp,
-            () => length == EmbeddedRelayTls.ProofLength && EmbeddedRelayTls.Matches(given.AsSpan(0, length), proofs.Client), cancel);
+            () => length == EmbeddedRelayTls.ProofLength && CryptographicOperations.FixedTimeEquals(given.AsSpan(0, length), proofs.Client), cancel);
         return verdict switch
         {
             BindingVerdict.Proven => Results.Bytes(proofs.Server),

@@ -27,7 +27,7 @@ public class MessageDeserializerTests
     public void TryDecodeBody_ReadsTheMessage() =>
         Assert.That(Body("""{"dx":3,"dy":-4}""").TryDecodeBody<MouseMoveDeltaMessage>(), Is.EqualTo(new MouseMoveDeltaMessage(3, -4)));
 
-    // enums cross the relay by name, and a peer on an older build still spells this one "MacOS"
+    // enums cross the relay by name, in any casing
     [Test]
     public void DecodeBody_ReadsAPeerPlatform_InAnyCasing() =>
         Assert.That(Body("""{"screens":[],"platform":"MacOS"}""").DecodeBody<ScreenInfoMessage>()!.Platform, Is.EqualTo(PeerPlatform.MacOs));

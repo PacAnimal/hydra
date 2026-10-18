@@ -138,7 +138,7 @@ public class KeyBundleTests : StyxFixtureBase
     [TestCase(true)]
     public async Task ABurstOfKeysArrivesCompleteAndInOrder(bool typed)
     {
-        await using var pair = await ConnectedPair(peerTakesBundles: true);
+        await using var pair = await ConnectedPair();
         var (sender, receiver) = pair;
 
         const int count = 40;
@@ -174,7 +174,7 @@ public class KeyBundleTests : StyxFixtureBase
     [TestCase(true)]
     public async Task ADownAndItsUpInOneBundleBothArriveInOrder(bool typed)
     {
-        await using var pair = await ConnectedPair(peerTakesBundles: true);
+        await using var pair = await ConnectedPair();
         var (sender, receiver) = pair;
 
         sender.HoldLane(RelayLane.Input);
@@ -215,7 +215,7 @@ public class KeyBundleTests : StyxFixtureBase
     [TestCase(true)]
     public async Task MoreKeysThanOneBundleHoldsSpillIntoTheNextWithoutLoss(bool typed)
     {
-        await using var pair = await ConnectedPair(peerTakesBundles: true);
+        await using var pair = await ConnectedPair();
         var (sender, receiver) = pair;
 
         // Comfortably over the cap, so at least three frames are needed.
@@ -266,7 +266,7 @@ public class KeyBundleTests : StyxFixtureBase
     [Test]
     public async Task AMoveBetweenKeysKeepsEverythingInOrder()
     {
-        await using var pair = await ConnectedPair(peerTakesBundles: true);
+        await using var pair = await ConnectedPair();
         var (sender, receiver) = pair;
 
         sender.HoldLane(RelayLane.Input);
@@ -310,7 +310,7 @@ public class KeyBundleTests : StyxFixtureBase
     [TestCase(true)]
     public async Task AKeySentAfterTheDrainTookTheBundleStillArrives(bool typed)
     {
-        await using var pair = await ConnectedPair(peerTakesBundles: true);
+        await using var pair = await ConnectedPair();
         var (sender, receiver) = pair;
 
         sender.HoldLane(RelayLane.Input);
@@ -346,7 +346,7 @@ public class KeyBundleTests : StyxFixtureBase
     [Test]
     public async Task AMouseDeltaBetweenKeysKeepsEverythingInOrder()
     {
-        await using var pair = await ConnectedPair(peerTakesBundles: true);
+        await using var pair = await ConnectedPair();
         var (sender, receiver) = pair;
 
         sender.HoldLane(RelayLane.Input);
@@ -381,7 +381,7 @@ public class KeyBundleTests : StyxFixtureBase
     [Test]
     public async Task AReliableMessageBetweenKeysKeepsEverythingInOrder()
     {
-        await using var pair = await ConnectedPair(peerTakesBundles: true);
+        await using var pair = await ConnectedPair();
         var (sender, receiver) = pair;
 
         sender.HoldLane(RelayLane.Input);
@@ -408,87 +408,6 @@ public class KeyBundleTests : StyxFixtureBase
         }
     }
 
-    // ── and nothing is bundled where it would be discarded ───────────────────────────────────────
-
-    /// <summary>
-    /// A peer that has NOT advertised support is sent one <c>KeyEvent</c> per frame, never a batch.
-    ///
-    /// <para><b>This is the safety property the whole design turns on.</b> An unrecognised message kind
-    /// reaches <c>RelayConnection.OnReceive</c>'s base implementation, which does nothing whatsoever — so a
-    /// batch sent to a slave that predates this feature would not fail, or warn, or retry. Every key in it
-    /// would simply never be typed.</para>
-    ///
-    /// <para><b>REMOVE AFTER 2026-10-30, with the negotiation itself.</b> This is the one test here about
-    /// asking rather than about bundling, so it is the one that goes. Everything else in this fixture is
-    /// about not losing keys and outlives the upgrade window — see <see cref="PeerCapabilities.Mine"/> for
-    /// the full removal list.</para>
-    /// </summary>
-    [TestCase(false)]
-    [TestCase(true)]
-    public async Task APeerThatNeverAdvertisedSupportIsNeverSentABatch(bool typed)
-    {
-        await using var pair = await ConnectedPair(peerTakesBundles: false);
-        var (sender, receiver) = pair;
-
-        const int count = 20;
-
-        sender.HoldLane(RelayLane.Input);
-        var blocker = sender.SendReliableAsync([Receiver], TestMessages.Move(1)).AsTask();
-        await sender.WaitUntilLaneHeld();
-
-        for (var i = 0; i < count; i++) SendKey(typed, sender, [Receiver], i);
-
-        sender.Send([Receiver], Sentinel());
-        sender.ReleaseLane();
-        await blocker.WaitAsync(Bound);
-
-        var frames = await ReadUntilSentinel(receiver);
-        var expected = Enumerable.Range(0, count).Select(i => (KeyEventType.KeyDown, (char)('a' + i % 26))).ToList();
-
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(frames.Any(f => f.Kind == MessageKind.KeyEventBatch), Is.False,
-                "a batch was sent to a peer that never said it understands one — it would discard every key in it silently");
-            Assert.That(KeysIn(frames), Is.EqualTo(expected), "and the keys must still all arrive, one frame each");
-            Assert.That(KeyFrames(frames), Has.Count.EqualTo(count), "one frame per key is what an un-advertising peer must get");
-        }
-    }
-
-    /// <summary>
-    /// The positive control for <see cref="APeerThatNeverAdvertisedSupportIsNeverSentABatch"/>: a peer that
-    /// DID advertise is sent one.
-    ///
-    /// <para><b>A negative assertion with no positive counterpart is satisfied by the feature not
-    /// existing.</b> "No batch appears" is trivially true of a build that never bundles, so on its own it
-    /// proves the gate works only in the sense that nothing works.</para>
-    /// </summary>
-    [TestCase(false)]
-    [TestCase(true)]
-    public async Task APeerThatAdvertisedSupportIsSentOne(bool typed)
-    {
-        await using var pair = await ConnectedPair(peerTakesBundles: true);
-        var (sender, receiver) = pair;
-
-        sender.HoldLane(RelayLane.Input);
-        var blocker = sender.SendReliableAsync([Receiver], TestMessages.Move(1)).AsTask();
-        await sender.WaitUntilLaneHeld();
-
-        for (var i = 0; i < 20; i++) SendKey(typed, sender, [Receiver], i);
-
-        sender.Send([Receiver], Sentinel());
-        sender.ReleaseLane();
-        await blocker.WaitAsync(Bound);
-
-        var frames = await ReadUntilSentinel(receiver);
-
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(frames.Any(f => f.Kind == MessageKind.KeyEventBatch), Is.True,
-                "an advertising peer was sent no batch at all — the gate is refusing everyone, or nothing bundles");
-            Assert.That(KeyFrames(frames), Has.Count.LessThan(20), "and the keys were actually packed together");
-        }
-    }
-
     /// <summary>
     /// Randomised, because a fixed sequence only ever proves the fixed sequence.
     ///
@@ -498,7 +417,7 @@ public class KeyBundleTests : StyxFixtureBase
     [TestCase(true)]
     public async Task ARandomisedStreamOfKeysRoundTripsExactly(bool typed)
     {
-        await using var pair = await ConnectedPair(peerTakesBundles: true);
+        await using var pair = await ConnectedPair();
         var (sender, receiver) = pair;
 
         var random = new Random(20260921);
@@ -537,7 +456,7 @@ public class KeyBundleTests : StyxFixtureBase
     [Test]
     public async Task AMoveMadeAfterAKeyIsNeverDeliveredBeforeIt()
     {
-        await using var pair = await ConnectedPair(peerTakesBundles: true);
+        await using var pair = await ConnectedPair();
         var (sender, receiver) = pair;
 
         sender.HoldLane(RelayLane.Input);
@@ -563,7 +482,7 @@ public class KeyBundleTests : StyxFixtureBase
     /// One key travels as an ordinary <c>KeyEvent</c>, never as a batch of one.
     ///
     /// <para>The common case by far — nobody types fast enough to queue two keys behind one frame most of
-    /// the time — and the wire shape a peer that predates batching depends on. The lane is parked so the
+    /// the time. The lane is parked so the
     /// event provably goes through the bundling path rather than round it: this is <c>Snapshot</c>'s rule,
     /// not an accident of the drain being quick.</para>
     /// </summary>
@@ -571,7 +490,7 @@ public class KeyBundleTests : StyxFixtureBase
     [TestCase(true)]
     public async Task ALoneKeyTravelsAsAPlainKeyEventNotABatchOfOne(bool typed)
     {
-        await using var pair = await ConnectedPair(peerTakesBundles: true);
+        await using var pair = await ConnectedPair();
         var (sender, receiver) = pair;
 
         sender.HoldLane(RelayLane.Input);
@@ -591,7 +510,7 @@ public class KeyBundleTests : StyxFixtureBase
         {
             Assert.That(KeysIn(frames), Is.EqualTo([(KeyEventType.KeyDown, 'a')]));
             Assert.That(carrying.Select(f => f.Kind), Is.EqualTo([MessageKind.KeyEvent]),
-                "a single event was wrapped in a batch — an older peer discards that kind in silence, so the keystroke is simply lost");
+                "a single event was wrapped in a batch");
         }
     }
 
@@ -604,18 +523,15 @@ public class KeyBundleTests : StyxFixtureBase
     /// anyway — but nothing tested it, and "defended twice" is only true while both defences exist.</para>
     ///
     /// <para>The other host never connects, which is the point: its frame goes nowhere, so anything of its
-    /// arriving HERE could only have come out of this receiver's bundle. It is given the capability by hand
-    /// because otherwise the batch gate refuses it first and the guard under test is never reached.</para>
+    /// arriving HERE could only have come out of this receiver's bundle.</para>
     /// </summary>
     [Test]
     public async Task AKeyForAnotherTargetNeverJoinsThisOnesFrame()
     {
-        await using var pair = await ConnectedPair(peerTakesBundles: true);
+        await using var pair = await ConnectedPair();
         var (sender, receiver) = pair;
 
         const string other = "somebody-else";
-        sender.World.SetPeerCapabilities(other, PeerCapabilities.Parse(PeerCapabilities.Advertise()));
-
         sender.HoldLane(RelayLane.Input);
         var blocker = sender.SendReliableAsync([Receiver], TestMessages.Move(1)).AsTask();
         await sender.WaitUntilLaneHeld();

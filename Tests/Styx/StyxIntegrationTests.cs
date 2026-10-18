@@ -27,21 +27,23 @@ public class StyxIntegrationTests : StyxFixtureBase
         Assert.That(response.Authenticated, Is.True);
     }
 
-    [Test]
-    public async Task Ping_WithoutAuth_ReturnsPong()
+    [TestCase(global::Styx.Constants.RelayPath)]
+    [TestCase(global::Styx.Constants.ParallelRelayPath)]
+    public async Task Ping_WithoutAuth_ReturnsPong(string path)
     {
         await using var client = new TestStyxClient();
-        await client.ConnectRaw(Factory);
+        await client.ConnectRaw(Factory, path);
         var result = await client.Server!.Ping();
         Assert.That(result, Is.True);
     }
 
-    [Test]
-    public async Task Send_WithoutAuth_FailsWithException()
+    [TestCase(global::Styx.Constants.RelayPath)]
+    [TestCase(global::Styx.Constants.ParallelRelayPath)]
+    public async Task Send_WithoutAuth_FailsWithException(string path)
     {
         // hub filter calls Context.Abort() on unauthenticated calls — client sees a cancellation or error
         await using var client = new TestStyxClient();
-        await client.ConnectRaw(Factory);
+        await client.ConnectRaw(Factory, path);
         Exception? ex = null;
         try { await client.Server!.Send(["any-host"], [1, 2, 3]); } catch (Exception e) { ex = e; }
         Assert.That(ex, Is.Not.Null);

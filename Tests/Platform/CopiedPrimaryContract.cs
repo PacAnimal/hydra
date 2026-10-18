@@ -39,6 +39,30 @@ public abstract class CopiedPrimaryContract
     protected void OtherAppCopies(string? text, byte[]? png = null) => _otherApp.SetClipboard(new ClipboardSnapshot(text, null, png));
 
     [Test]
+    public void OwnWrite_ReadsBackAsAnEcho()
+    {
+        HydraWritesThen(() => { });
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(Hydra.GetText(), Is.Null);
+            Assert.That(Hydra.CanUseEchoFallback(), Is.True);
+        }
+    }
+
+    [Test]
+    public void SameTextCopiedAgain_IsNoEcho()
+    {
+        HydraWritesThen(() => OtherAppCopies("written"));
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(Hydra.GetText(), Is.EqualTo("written"));
+            Assert.That(Hydra.CanUseEchoFallback(), Is.False);
+        }
+    }
+
+    [Test]
     public void OwnWrite_LeavesTheRelayedSelection()
     {
         HydraWritesThen(() => _otherApp.GetText()); // another app pasting it is no copy

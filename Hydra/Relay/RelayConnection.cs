@@ -65,26 +65,11 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     private long _bytesSent;
     private long _bytesReceived;
 
-    // TWO ordered lanes, each drained by its own loop — see MessageLane. Within a lane the order is exactly
-    // what it always was; across lanes there is nothing to order, because a file chunk and a keypress are
-    // unrelated.
-    //
-    // A lane's order is absolute because the relay's /relay path runs a client's invocations one at a time, in
-    // the order they arrived. So the input lane does not wait for one Send to finish before the next: it sends
-    // non-blocking invocations (InputLaneSend), and the next frame leaves as soon as the last is written. The
-    // bulk lane DOES wait (BulkLaneSend, an invocation that completes when the hub method returns), which
-    // keeps one file chunk in flight; without the wait, chunks would pile up in the transport ahead of every
-    // keystroke the input lane writes after them.
-    //
-    // What the split buys is that a 256 KiB chunk no longer sits in front of every keystroke behind it,
-    // which on a KVM is the product.
-    //
-    // Bulk producers use SendReliableAsync and wait until their item has actually left the queue, so a file
-    // compressor cannot retain thousands of large payloads. Mouse traffic is capped by InputRouter and
-    // coalesced again at write time below.
-    //
-    // Both are deliberately unbounded: after bulk traffic gained backpressure, the remaining producers are
-    // small control/input messages and dropping an arbitrary oldest item could lose KeyUp/LeaveScreen.
+    // Two ordered lanes, each drained by its own loop (see MessageLane), so a file chunk never sits in front of a
+    // keystroke. Order within a lane comes from /relay running a client's invocations one at a time: the input lane
+    // never waits for a Send to return, while the bulk lane does, keeping one chunk in flight. Bulk producers wait in
+    // SendReliableAsync until their item leaves the queue; the rest are small, so both stay unbounded rather than drop a
+    // KeyUp or LeaveScreen.
     private readonly Channel<OutboundMessage> _inputQueue = NewLane();
     private readonly Channel<OutboundMessage> _bulkQueue = NewLane();
 
@@ -146,7 +131,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
             if (payload.Length > 0 && payload[0] == (byte)MessageKind.KeyEvent
                 && MessageSerializer.Decode(payload).Deserialize<KeyEventMessage>() is { } keyEvent)
             {
-                EnqueueKey(targetHosts, keyEvent, payload);
+                EnqueueKey(targetHosts, keyEvent);
                 return;
             }
 
@@ -175,14 +160,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         }
     }
 
-    /// <summary>
-    /// One key event, typed, so the open bundle can absorb it without a JSON round trip.
-    ///
-    /// <para>The bytes are still built — <c>OnSent</c> takes them, and a LONE event travels as exactly this
-    /// payload — but they are built ONCE. The same event routed through <c>Send</c> was encoded by the
-    /// caller, decoded again inside the send-order lock to become appendable, and encoded a third time by
-    /// the drain; the middle pass held the lock that also serialises every mouse move.</para>
-    /// </summary>
+    // one key event, typed, so the open bundle absorbs it without decoding it inside the send-order lock
     public void SendKeyEvent(string[] targetHosts, KeyEventMessage message)
     {
         var payload = MessageSerializer.Encode(MessageKind.KeyEvent, message);
@@ -190,38 +168,24 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         lock (_sendOrderLock)
         {
             if (!CanEnqueue) return;
-            EnqueueKey(targetHosts, message, payload);
+            EnqueueKey(targetHosts, message);
         }
     }
 
     /// <summary>
-    /// Queues one key event, joining the bundle already open for these targets where every one of them has
-    /// said it understands a batch. Call with <c>_sendOrderLock</c> HELD.
-    ///
-    /// <para>The capability decides because an unrecognised kind is discarded in SILENCE by the receiver:
-    /// bundling toward a peer that never advertised would lose the keys rather than fail. A lone event goes
-    /// as an ordinary KeyEvent regardless, so nothing changes for the common case either way.</para>
-    ///
-    /// <para>REMOVE AFTER 2026-10-30: the <c>EveryTargetSupports</c> call goes and every key bundles.</para>
+    /// Queues one key event, joining the bundle already open for these targets. Call with <c>_sendOrderLock</c> HELD.
     /// </summary>
-    private void EnqueueKey(string[] targetHosts, KeyEventMessage keyEvent, byte[] payload)
+    private void EnqueueKey(string[] targetHosts, KeyEventMessage keyEvent)
     {
-        if (EveryTargetSupports(targetHosts, PeerCapability.KeyEventBatch))
-        {
-            // The MOVEMENT batch only — this is about to open or extend the key bundle. A batch queued
-            // ahead of this key must stop absorbing, or a move made AFTER the keystroke merges into a frame
-            // that sits in front of it and is delivered first, at a coalesced position.
-            _openMovementBatch = null;
-            if (_openKeyBundle?.TryAppend(targetHosts, keyEvent) == true) return;
+        // The MOVEMENT batch only — this is about to open or extend the key bundle. A batch queued
+        // ahead of this key must stop absorbing, or a move made AFTER the keystroke merges into a frame
+        // that sits in front of it and is delivered first, at a coalesced position.
+        _openMovementBatch = null;
+        if (_openKeyBundle?.TryAppend(targetHosts, keyEvent) == true) return;
 
-            var bundle = KeyBundle.Create(targetHosts, keyEvent);
-            _openKeyBundle = bundle;
-            _inputQueue.Writer.TryWrite(OutboundMessage.ForKeys(targetHosts, bundle));
-            return;
-        }
-
-        CloseOpenBatches();
-        _inputQueue.Writer.TryWrite(OutboundMessage.Plain(targetHosts, payload));
+        var bundle = KeyBundle.Create(targetHosts, keyEvent);
+        _openKeyBundle = bundle;
+        _inputQueue.Writer.TryWrite(OutboundMessage.ForKeys(targetHosts, bundle));
     }
 
     /// <summary>
@@ -284,24 +248,9 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     /// Whether a connection is up to send on. Check it INSIDE <c>_sendOrderLock</c>, because teardown clears
     /// both under the same lock before it drains. Checked outside, a send preempted between the check and the
     /// lock enqueues AFTER <c>FailQueued</c> has run — stranding the item, and with it an open bundle, into the
-    /// next connection, where later keys append to a frame from before the drop and the batch/plain decision
-    /// was made against a capability map that has since been cleared. Silent key loss, reachable only by that
-    /// race.
+    /// next connection, where later keys append to a frame from before the drop.
     /// </summary>
     private bool CanEnqueue => _server != null && _encryption != null;
-
-    /// <summary>
-    /// Whether EVERY target has advertised a capability. All of them, because one frame goes to all of them,
-    /// and a peer that never said is a peer that would drop it without a word.
-    /// </summary>
-    private bool EveryTargetSupports(string[] targetHosts, PeerCapability capability)
-    {
-        if (targetHosts.Length == 0) return false;
-        foreach (var host in targetHosts)
-            if (!peerState.PeerSupports(host, capability))
-                return false;
-        return true;
-    }
 
     // The caller already has dx/dy as ints (see IRelaySender.SendMouseDelta) — accumulating them here
     // costs one addition per event instead of a JSON decode, and Snapshot() encodes only once, right
@@ -575,18 +524,12 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         try
         {
             netConfig = NetworkConfig.Parse(profile.NetworkConfig);
+            netConfig = netConfig with { StyxServer = netConfig.StyxServer.TrimEnd('/') };
         }
         catch (Exception ex)
         {
             log.LogError(ex, "Failed to parse NetworkConfig — relay disabled");
             return;
-        }
-
-        if (netConfig.Embedded && EmbeddedRelayTls.WithHttps(netConfig.StyxServer) is var https && https != netConfig.StyxServer)
-        {
-            log.LogWarning("embeddedStyx.server is {Server}, but the embedded relay only speaks TLS, so connecting to {Https}. Change it to https:// in hydra.conf",
-                netConfig.StyxServer, https);
-            netConfig = netConfig with { StyxServer = https };
         }
 
         var hostName = profile.Name;
@@ -1047,10 +990,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
             return true;
         }
 
-        /// <summary>
-        /// The frame to send. ONE event goes as an ordinary <c>KeyEvent</c>, so the common case puts nothing
-        /// new on the wire and a peer only ever meets a batch it asked for.
-        /// </summary>
+        // one event goes as a plain KeyEvent
         internal byte[] Snapshot() => _events.Count == 1
             ? MessageSerializer.Encode(MessageKind.KeyEvent, _events[0])
             : MessageSerializer.Encode(MessageKind.KeyEventBatch, new KeyEventBatchMessage([.. _events]));

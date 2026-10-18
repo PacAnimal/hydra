@@ -30,26 +30,6 @@ public interface IWorldState
     // -- master-side (peer platform) --
     ValueTask SetPeerPlatform(string host, PeerPlatform platform);
     ValueTask<PeerPlatform> GetPeerPlatform(string host);
-
-    // -- master-side (peer capabilities) --
-
-    /// <summary>
-    /// Records what a peer said it can do, REPLACING whatever it said before.
-    ///
-    /// <para>Replacing rather than merging, because an advertisement is the peer's whole current answer: a
-    /// build that no longer offers something must be able to take it back, and a downgrade is exactly the
-    /// case that matters.</para>
-    /// </summary>
-    void SetPeerCapabilities(string host, IReadOnlySet<PeerCapability> capabilities);
-
-    /// <summary>
-    /// Whether a peer has SAID it can do something. False for a peer that never said — silence is no.
-    ///
-    /// <para>SYNCHRONOUS, unlike its neighbours, and deliberately: it is read from <c>RelayConnection.Send</c>
-    /// on the input hot path, inside the send-order lock, where there is nothing to await with. Backed by a
-    /// <c>ConcurrentDictionary</c> like the remote keys are, not by the semaphore the master state uses.</para>
-    /// </summary>
-    bool PeerSupports(string host, PeerCapability capability);
 }
 
 public class WorldState : IWorldState
@@ -58,11 +38,6 @@ public class WorldState : IWorldState
     private readonly SemaphoreSlimValue<SlaveState> _slave = new(new SlaveState(), disposeValue: false);
     private readonly ConcurrentDictionary<string, SimpleAesKey> _remoteKeys = new(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>
-    /// What each peer has said it can do. Concurrent rather than semaphore-guarded because the send path
-    /// reads it synchronously — see <see cref="IWorldState.PeerSupports"/>.
-    /// </summary>
-    private readonly ConcurrentDictionary<string, IReadOnlySet<PeerCapability>> _peerCapabilities = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, ILogger> _loggers = new(StringComparer.OrdinalIgnoreCase);
 
     public async ValueTask<PeerDelta> UpdatePeers(HashSet<string> currentPeers, HashSet<string> configuredSlaves)
@@ -82,12 +57,6 @@ public class WorldState : IWorldState
                 s.KnownPeers.Remove(host);
                 s.PeerScreens.Remove(host);
                 s.PeerPlatforms.Remove(host);
-                // A CAPABILITY BELONGS TO THE PEER, NOT TO THE HOSTNAME. Leave it behind and a host that
-                // returns on an older build inherits the previous occupant's claim — and is then sent, say,
-                // key bundles it discards without a word. Its next ScreenInfo would correct this, but there
-                // is a window before that arrives, and the whole reason a master asks first is that getting
-                // it wrong fails silently rather than loudly.
-                _peerCapabilities.TryRemove(host, out _);
                 foreach (var k in _loggers.Keys.Where(k => k.StartsWithIgnoreCase($"slave:{host}/")).ToList())
                     _loggers.TryRemove(k, out _);
             }
@@ -173,16 +142,7 @@ public class WorldState : IWorldState
         s.PeerPlatforms.Clear();
         _loggers.Clear();
         _remoteKeys.Clear(); // keys are re-derived from the message salt on reconnect
-        // Re-advertised on the next ScreenInfo. Cleared for the reason departure clears one peer's: a name
-        // that comes back on an older build must not inherit what the previous occupant claimed.
-        _peerCapabilities.Clear();
     }
-
-    public void SetPeerCapabilities(string host, IReadOnlySet<PeerCapability> capabilities) =>
-        _peerCapabilities[host] = capabilities;
-
-    public bool PeerSupports(string host, PeerCapability capability) =>
-        _peerCapabilities.TryGetValue(host, out var advertised) && advertised.Contains(capability);
 
     public async ValueTask SetPeerPlatform(string host, PeerPlatform platform)
     {

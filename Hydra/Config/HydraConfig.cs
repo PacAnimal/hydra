@@ -68,7 +68,7 @@ public class HydraConfig
     public ClipboardSyncMode ClipboardSync { get; init; } = ClipboardSyncMode.Hydra;
     public bool SyncScreensaver { get; init; } = true;
     // When enabled, remote activity does not keep this machine awake and Hydra disconnects from the
-    // relay before system sleep. The legacy/default behaviour keeps sleeping displays remotely wakeable.
+    // relay before system sleep. Off by default, so sleeping displays stay remotely wakeable.
     public bool AllowSystemSleep { get; init; }
     public bool ScreenLockPropagation { get; init; } = false;  // master only (Mac/Windows) — propagate machine lock to connected slaves
     public bool AccelerateMouseWheel { get; init; } = true;
@@ -230,6 +230,8 @@ public class HydraConfig
         {
             if (cfg.NetworkConfig == null && cfg.EmbeddedStyx == null && cfg.EmbeddedStyxServer == null)
                 throw new InvalidOperationException($"Profile '{cfg.ProfileName ?? "(default)"}' has no relay configured. Add networkConfig, embeddedStyx, or embeddedStyxServer.");
+            if (cfg.EmbeddedStyx?.Server.StartsWithIgnoreCase("http://") == true)
+                throw new InvalidOperationException("embeddedStyx.server must be https://: the embedded relay only speaks TLS.");
 
             // no duplicate host names within a profile
             var dupHost = cfg.Hosts

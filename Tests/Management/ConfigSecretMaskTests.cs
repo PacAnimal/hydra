@@ -12,7 +12,7 @@ public class ConfigSecretMaskTests
           "unknown": { "keep": true },
           "profiles": [{
             "networkConfig": "relay-secret",
-            "embeddedStyx": { "server": "http://localhost:5000", "password": "password-secret" }
+            "embeddedStyx": { "server": "https://localhost:5000", "password": "password-secret" }
           }]
         }
         """;

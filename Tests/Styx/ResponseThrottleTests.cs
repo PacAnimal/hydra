@@ -3,7 +3,6 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using Common.DTO;
 using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
 using Styx;
 using Tests.Setup;
@@ -14,8 +13,6 @@ namespace Tests.Styx;
 [TestFixture]
 public class ResponseThrottleTests
 {
-    private static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
-
     private StartedTimers _clock = null!;
     private WebApplicationFactory<global::Styx.Program> _factory = null!;
 
@@ -33,13 +30,11 @@ public class ResponseThrottleTests
     [TestCase(false)]
     public async Task Authenticate(bool valid)
     {
-        await using var hub = new HubConnectionBuilder()
-            .WithUrl($"{_factory.Server.BaseAddress}relay", options => options.UseTestServer(_factory.Server))
-            .Build();
-        await hub.StartAsync();
+        await using var client = new TestStyxClient();
+        await client.ConnectRaw(_factory);
         var authorization = valid ? await StyxTestServer.GenerateAuthorization(Guid.NewGuid()) : "not-an-authorization";
 
-        var answer = hub.InvokeAsync<RelayLoginResponse>("Authenticate", new RelayLogin { Authorization = authorization, HostName = "throttled" });
+        var answer = client.Server!.Authenticate(new RelayLogin { Authorization = authorization, HostName = "throttled" });
 
         Assert.That((await ReleaseThrottle(answer, Constants.AuthThrottleSeconds)).Authenticated, Is.EqualTo(valid));
     }

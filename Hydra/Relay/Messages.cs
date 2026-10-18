@@ -1,4 +1,3 @@
-using System.Collections.Frozen;
 using System.Text;
 using Cathedral.Config;
 using Cathedral.Extensions;
@@ -24,7 +23,7 @@ public enum MessageKind : byte
     ClipboardPush = 12,         // master → slave: apply this clipboard (text/image/files)
     ClipboardPull = 13,         // master → slave: send me your clipboard
     ClipboardPullResponse = 14, // slave → master: here's my clipboard
-    // 15, 16 reserved (formerly used; do not reuse — breaks wire compat with older clients)
+    // 15, 16 unused
     FileTransferRequest = 17,   // master → receiver: can you receive? (SourceHost = actual data sender if different)
     FileTransferStart = 26,     // data source → receiver: here's what's coming (FileNames + TotalBytes)
     FileTransferChunk = 18,     // data source → receiver: chunk of tar.gz data
@@ -131,104 +130,7 @@ public static class PeerPlatformNames
     };
 }
 
-/// <param name="Capabilities">
-/// What this peer can do, by NAME — see <see cref="PeerCapabilities"/>. Null or empty is what every build
-/// before a given capability sends, and is read as "none of them", because the failure mode of guessing
-/// wrong is silent: an unrecognised <see cref="MessageKind"/> reaches <c>RelayConnection.OnReceive</c>'s
-/// base and is discarded without a word.
-///
-/// <para><b>STRINGS, not <see cref="PeerCapability"/> values, and that is load-bearing for two reasons.</b>
-/// Cathedral's enum converter THROWS on a name or number it does not know, so an array of enums would make
-/// a newer peer's unknown capability fail the whole <c>ScreenInfoMessage</c> — costing that peer's SCREENS,
-/// which is far worse than not knowing about one feature. Names let a master ignore what it has never heard
-/// of.</para>
-///
-/// <para>And names carry no NUMBERING to keep. Nothing on the wire depends on a capability's ordinal, so
-/// members may be added, reordered or deleted freely and no hole has to be reserved for one that is gone.
-/// Compare <see cref="MessageKind"/>, which is numbered and therefore carries "15, 16 reserved (formerly
-/// used; do not reuse)" for ever. Do not "tidy" this into an enum array later: both reasons would be lost.</para>
-/// </param>
-public record ScreenInfoMessage(List<ScreenInfoEntry> Screens, PeerPlatform? Platform = null, string?[]? Capabilities = null);
-
-/// <summary>
-/// Something a peer can do that its peers must not assume.
-///
-/// <para>A capability exists when doing the thing at a peer that cannot would FAIL SILENTLY. That is the
-/// bar: anything a peer would merely refuse, or answer with an error, needs no entry here.</para>
-///
-/// <para><b>These travel by NAME, so their numbering means nothing.</b> Add, reorder or delete members as
-/// you like; there are no reserved values and no holes to preserve — see
-/// <c>ScreenInfoMessage.Capabilities</c> for why the wire is names and must stay names.</para>
-/// </summary>
-public enum PeerCapability
-{
-    /// <summary>
-    /// Applies <see cref="MessageKind.KeyEventBatch"/>. A peer without this is sent one key event per
-    /// frame; sending it a batch would lose every key in it in silence.
-    ///
-    /// <para><b>REMOVE AFTER 2026-10-30</b> — the MEMBER and every check of it, not the mechanism. After
-    /// that date every build applies a batch and asking is debt. See <see cref="PeerCapabilities.Mine"/>
-    /// for the full deletion list.</para>
-    /// </summary>
-    KeyEventBatch
-}
-
-/// <summary>
-/// What this build advertises, and how a peer's advertisement is read back.
-///
-/// <para>One place, so the two halves cannot drift: the names a slave sends are the names a master parses.</para>
-/// </summary>
-public static class PeerCapabilities
-{
-    /// <summary>
-    /// Everything this build can do. A slave sends these on its <c>ScreenInfo</c>.
-    ///
-    /// <para><b>REMOVE AFTER 2026-10-30:</b> take <see cref="PeerCapability.KeyEventBatch"/> out of here and
-    /// out of the enum, then delete <c>IWorldState.SetPeerCapabilities</c>'s only consumer —
-    /// <c>RelayConnection.EveryTargetSupports</c> and the <c>&amp;&amp;</c> in <c>Send</c> — and
-    /// <c>KeyBundleTests.APeerThatNeverAdvertisedSupportIsNeverSentABatch</c>, which is the one test about
-    /// asking rather than about bundling. The mechanism itself stays for whatever needs it next.</para>
-    /// </summary>
-    public static readonly PeerCapability[] Mine = [PeerCapability.KeyEventBatch];
-
-    /// <summary>The names to put on the wire for this build.</summary>
-    public static string[] Advertise() => [.. Mine.Select(c => c.ToString())];
-
-    /// <summary>
-    /// The declared names, and nothing else.
-    ///
-    /// <para><b>Matched against this rather than parsed with <c>Enum.TryParse</c>, which reads far more than
-    /// names.</b> It takes "0" as the member sitting at zero — so a peer sending a digit would be taken to
-    /// claim whatever that happens to be today, which is precisely the numbering dependency this design
-    /// exists to avoid — and it takes "A,B" as a bitwise OR. <c>Enum.IsDefined</c> closes neither: "0" is
-    /// defined, and an OR of two members can land on a defined value too. A lookup cannot do either.</para>
-    /// </summary>
-    private static readonly FrozenDictionary<string, PeerCapability> ByName =
-        Enum.GetValues<PeerCapability>().ToFrozenDictionary(c => c.ToString(), c => c, StringComparer.OrdinalIgnoreCase);
-
-    /// <summary>
-    /// The capabilities a peer advertised, ignoring any name this build does not know.
-    ///
-    /// <para><b>Ignoring is the whole point.</b> A name we do not recognise comes from a NEWER peer
-    /// advertising something this build has never heard of — which is normal, and must cost nothing. Parsing
-    /// strictly would throw away the message it arrived on.</para>
-    ///
-    /// <para>The ELEMENT is nullable because this array is deserialised from a peer's message: JSON
-    /// <c>["KeyEventBatch", null]</c> is valid and lands a null in it, whatever the type says. The guard
-    /// below is real, and annotating it away would make it look dead.</para>
-    /// </summary>
-    public static IReadOnlySet<PeerCapability> Parse(string?[]? names)
-    {
-        if (names is not { Length: > 0 }) return FrozenSet<PeerCapability>.Empty;
-
-        var known = new HashSet<PeerCapability>();
-        foreach (var name in names)
-            if (name != null && ByName.TryGetValue(name, out var capability))
-                known.Add(capability);
-
-        return known;
-    }
-}
+public record ScreenInfoMessage(List<ScreenInfoEntry> Screens, PeerPlatform? Platform = null);
 public record MasterConfigMessage(LogLevel? LogLevel);
 public record SlaveLogMessage(int Level, string Category, string Message, string? Exception);
 // IsRepeat marks an OS auto-repeat the master re-resolved (with live modifier/dead-key state) and forwarded;
@@ -246,10 +148,6 @@ public record KeyEventMessage(KeyEventType Type, KeyModifiers Modifiers, char? C
 /// <para>What it buys is frames. The input lane sends a key event as soon as the one before it is written, so
 /// events only pile up while the connection to the relay is backed up; then one frame carries them all instead of
 /// one frame each.</para>
-///
-/// <para><b>Only to a peer that has said it understands this.</b> An unrecognised kind reaches
-/// <c>RelayConnection.OnReceive</c>'s base, which does nothing at all — so sending one of these to a slave
-/// that predates it would discard every key in it, in silence. See <see cref="PeerCapability.KeyEventBatch"/>.</para>
 /// </summary>
 public record KeyEventBatchMessage(KeyEventMessage[] Events);
 public record MouseButtonMessage(MouseButton Button, bool IsPressed);
@@ -258,12 +156,17 @@ public record EnterScreenMessage(string Screen, int X, int Y, int Width, int Hei
 public record ScreensaverSyncMessage(bool Active);
 public record LeaveScreenMessage;
 public record ClipboardPullMessage(ulong? MasterHash = null, ulong? MasterPrimaryHash = null, int? PullId = null);
-// a clipboard as both a push and a full pull answer carry it
-public interface IClipboardPayload
+// the selection a clipboard message carries; PrimaryIsText means it repeats the clipboard's text
+public interface IClipboardSelection
 {
-    string? Text { get; }
     string? PrimaryText { get; }
     bool? PrimaryIsText { get; }
+}
+
+// a clipboard as both a push and a full pull answer carry it
+public interface IClipboardPayload : IClipboardSelection
+{
+    string? Text { get; }
     byte[]? ImagePng { get; }
     string? Html { get; }
     byte[]? Rtf { get; }
@@ -274,7 +177,7 @@ public record ClipboardPushMessage(string Text, string? PrimaryText = null, byte
 public record ClipboardPullResponseMessage(string? Text, string? PrimaryText = null, byte[]? ImagePng = null, bool? Unchanged = null, string? Html = null, byte[]? Rtf = null,
     bool? PrimaryIsText = null, int? PullId = null) : IClipboardPayload;
 // see ClipboardWire; a null Hash offers no clipboard, only the selection
-public record ClipboardHashMessage(ulong? Hash, string? PrimaryText = null, bool? PrimaryIsText = null, ulong? PrimaryHash = null);
+public record ClipboardHashMessage(ulong? Hash, string? PrimaryText = null, bool? PrimaryIsText = null, ulong? PrimaryHash = null) : IClipboardSelection;
 public record ClipboardPullRequestMessage;
 public record LockScreenMessage(long MillisecondsSinceLastInput);
 

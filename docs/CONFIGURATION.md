@@ -102,7 +102,7 @@ Use `Esc` to close the TUI. It does not change Hydra's running state.
 - `profileName` — name for this profile, logged at startup so you know which one is active (no duplicates allowed)
 - `mode` — `Master` or `Slave`
 - `networkConfig` — base64 relay config string from the Styx web UI; use this to connect to a standalone Styx server
-- `embeddedStyx` — connect to a Styx server using plain-text credentials: `{ "server": "https://<host>:<port>", "password": "<password>" }` — a more readable alternative to copying the base64 `networkConfig` blob. Always TLS: an `http://` address is reached over `https://` anyway, with a warning to change it
+- `embeddedStyx` — connect to a Styx server using plain-text credentials: `{ "server": "https://<host>:<port>", "password": "<password>" }` — a more readable alternative to copying the base64 `networkConfig` blob. Always TLS: an address with no scheme means `https://`, and `http://` is refused
 - `embeddedStyxServer` — run a Styx relay server embedded inside this Hydra process: `{ "port": <port>, "password": "<password>" }` — useful for home setups where you don't want a separate Styx container; the machine running this automatically connects to its own server, and other machines connect to it using `embeddedStyx`
 - `hosts` — list of host entries for the neighbour graph (master only; slaves don't need this)
 - `screenDefinitions` — per-screen scale config (slave only; reported to master via ScreenInfo)
@@ -441,13 +441,18 @@ When you move the cursor to a remote machine, Hydra pushes the local clipboard t
 
 For Mac-to-Mac peers already using Apple's Universal Clipboard, set `"clipboardSync": "System"` on the active master profile. Hydra then sends no clipboard hash, push, or pull messages for macOS peers, while retaining its normal clipboard sync for Windows and Linux peers. Hydra cannot detect whether both Macs share an Apple Account or whether Handoff is enabled, so this mode is explicit rather than automatic. It does not disable Hydra's separate file-transfer hotkeys.
 
-On macOS, a Finder clipboard containing file URLs is always preserved: Hydra neither treats it as an empty clipboard nor overwrites it with an automatic clipboard transition.
+On macOS and Windows, a clipboard holding copied files (from Finder or Explorer) is always preserved: Hydra neither treats it as an empty clipboard nor overwrites it with an automatic clipboard transition.
 
 Synced content:
 - **Plain text** — all platforms
+- **Formatted text (HTML)** — all platforms
+- **Formatted text (RTF)** — macOS and Windows; X11 has no standard RTF target, so Linux gets the HTML or plain text
 - **Images (PNG)** — all platforms; Windows also handles DIB format for compatibility with legacy apps
 
-Linux syncs both the `CLIPBOARD` selection and the X11 `PRIMARY` (middle-click) selection.
+Linux also syncs the X11 `PRIMARY` (middle-click) selection, beside the clipboard and independently of it. macOS and
+Windows have no such selection, so each keeps one for Hydra: the newest of a selection arriving from Linux and your
+own text copies. A text copy on a Mac or Windows machine therefore lands in both the clipboard and `PRIMARY` on
+Linux, while between Linux machines the two stay separate. Copies a password manager marks as concealed are left out.
 
 ## File transfer
 
@@ -494,7 +499,7 @@ When enabled, background activity reported by other Hydra peers no longer resets
 
 The pre-sleep notification is provided by IOKit on macOS, power-mode notifications on Windows, and `systemd-logind` on Linux. Linux uses a bounded delay inhibitor while Hydra closes the relay. If the platform notification service is unavailable, Hydra logs a warning and the operating system still controls whether the machine sleeps.
 
-This option intentionally disables Hydra-based remote wake while the machine is asleep. Operating-system wake sources such as Wake-on-LAN, Power Nap, network maintenance, USB devices, and scheduled wakes remain separate system settings. The default is `false` for backward compatibility and to preserve Hydra's existing always-reachable behaviour.
+This option intentionally disables Hydra-based remote wake while the machine is asleep. Operating-system wake sources such as Wake-on-LAN, Power Nap, network maintenance, USB devices, and scheduled wakes remain separate system settings. The default is `false`, so the machine stays reachable to Hydra's remote wake.
 
 ## Remote-only mode
 
@@ -609,7 +614,7 @@ Remote hosts can connect with: embeddedStyx: {"server": "https://<your-ip>:5000"
 }
 ```
 
-The embedded relay speaks only TLS, with no certificate to set up: it makes a new self-signed one on every start, and each machine checks that the relay knows the password before it trusts that certificate or sends anything else. A machine on Hydra older than 0.3 cannot connect to it, so update them together.
+The embedded relay speaks only TLS, with no certificate to set up: it makes a new self-signed one on every start, and each machine checks that the relay knows the password before it trusts that certificate or sends anything else.
 
 The `embeddedStyx` property is also an alternative to `networkConfig` for any external Styx server — just point it at the server's `https://` URL and provide the password instead of copying a base64 string. That server needs a certificate your machines already trust, such as one from the reverse proxy in front of it.
 
@@ -672,7 +677,7 @@ docker run -e RELAY_SIGNING_KEY=<key> -e RELAY_PASSWORD=<password> -p 5000:5000 
 
 ### Generating a network config
 
-Open `http://<your-styx-host>:5000` in a browser, enter the relay password, and click **Generate**. Copy the config string.
+Open `http://<your-styx-host>:5000` in a browser, enter the relay password, and click **Generate**. Copy the config string. This needs the relay started with `RELAY_SIGNING_KEY` or `RELAY_SIGNING_PASSPHRASE` as well as `RELAY_PASSWORD`; without both it creates no networks.
 
 ### Connecting Hydra to a standalone Styx server
 

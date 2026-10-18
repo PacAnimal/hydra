@@ -34,7 +34,7 @@ public class ClipboardSyncTests
     public async Task OnEnterRemoteScreen_PushesClipboardToSlave()
     {
         var clipboard = new FakeClipboardSync();
-        clipboard.SetText("hello from master");
+        clipboard.SetupText("hello from master");
 
         var (platform, relay, service) = CreateMasterService(clipboard);
         await service.StartAsync(CancellationToken.None);
@@ -56,7 +56,7 @@ public class ClipboardSyncTests
     public async Task SystemClipboardSync_MacToMac_SendsNoClipboardMessages()
     {
         var clipboard = new FakeClipboardSync();
-        clipboard.SetText("handled by Universal Clipboard");
+        clipboard.SetupText("handled by Universal Clipboard");
         var profile = CreateProfile(ClipboardSyncMode.System);
         var (platform, relay, service) = CreateMasterService(clipboard, profile, PeerPlatform.MacOs);
         await service.StartAsync(CancellationToken.None);
@@ -72,7 +72,7 @@ public class ClipboardSyncTests
     public async Task SystemClipboardSync_NonMacPeer_StillUsesHydra(PeerPlatform remotePlatform)
     {
         var clipboard = new FakeClipboardSync();
-        clipboard.SetText("cross-platform");
+        clipboard.SetupText("cross-platform");
         var profile = CreateProfile(ClipboardSyncMode.System);
         var (platform, relay, service) = CreateMasterService(clipboard, profile, PeerPlatform.MacOs);
         await service.StartAsync(CancellationToken.None);
@@ -107,7 +107,7 @@ public class ClipboardSyncTests
     public async Task OnEnterRemoteScreen_OversizedText_NoPushSent()
     {
         var clipboard = new FakeClipboardSync();
-        clipboard.SetText(new string('x', 16 * 1024 * 1024 + 1)); // > 16 MiB UTF-8
+        clipboard.SetupText(new string('x', 16 * 1024 * 1024 + 1)); // > 16 MiB UTF-8
 
         var (platform, relay, service) = CreateMasterService(clipboard);
         await service.StartAsync(CancellationToken.None);
@@ -125,7 +125,7 @@ public class ClipboardSyncTests
     public async Task OnLeaveRemoteScreen_PullsSentToSlave()
     {
         var clipboard = new FakeClipboardSync();
-        clipboard.SetText("something");
+        clipboard.SetupText("something");
 
         var (platform, relay, service) = CreateMasterService(clipboard);
         await service.StartAsync(CancellationToken.None);
@@ -184,7 +184,7 @@ public class ClipboardSyncTests
     public async Task OnClipboardPullResponse_WhenOnRemoteScreen_ForwardsToActiveHost()
     {
         var clipboard = new FakeClipboardSync();
-        clipboard.SetText("master text");
+        clipboard.SetupText("master text");
 
         var (platform, relay, service) = CreateMasterService(clipboard);
         await service.StartAsync(CancellationToken.None);
@@ -216,7 +216,7 @@ public class ClipboardSyncTests
     public async Task OnEnterLinuxSlave_PushesPrimaryText()
     {
         var clipboard = new FakeClipboardSync();
-        clipboard.SetText("clipboard text");
+        clipboard.SetupText("clipboard text");
         clipboard.SetPrimaryText("primary text");
 
         var (platform, relay, service) = CreateMasterService(clipboard);
@@ -237,7 +237,7 @@ public class ClipboardSyncTests
     public async Task OnEnterNonLinuxSlave_StillIncludesPrimaryText()
     {
         var clipboard = new FakeClipboardSync();
-        clipboard.SetText("clipboard text");
+        clipboard.SetupText("clipboard text");
         clipboard.SetPrimaryText("primary text");
 
         var (platform, relay, service) = CreateMasterService(clipboard);
@@ -278,7 +278,7 @@ public class ClipboardSyncTests
         // master has no local PRIMARY (GetPrimaryText returns null) but receives it from slave A;
         // cursor is still on that slave so primary text from pull response should be forwarded in the push
         var clipboard = new FakeClipboardSync();
-        clipboard.SetText("master clipboard");
+        clipboard.SetupText("master clipboard");
         // no SetPrimaryText — simulates a non-Linux master
 
         var (platform, relay, service) = CreateMasterService(clipboard);
@@ -350,7 +350,7 @@ public class ClipboardSyncTests
     public async Task SlaveReceivesClipboardPull_CallsGetText()
     {
         var clipboard = new FakeClipboardSync();
-        clipboard.SetText("slave content");
+        clipboard.SetupText("slave content");
 
         var slave = MakeTestableSlaveRelay(clipboard);
         var before = clipboard.GetTextCallCount;
@@ -410,7 +410,7 @@ public class ClipboardSyncTests
         // when both text and image are on the clipboard, image wins — text is just a fallback representation
         var png = MakeFakePng();
         var clipboard = new FakeClipboardSync();
-        clipboard.SetText("alt text");
+        clipboard.SetupText("alt text");
         clipboard.SetupImage(png);
 
         var (platform, relay, service) = CreateMasterService(clipboard);
@@ -485,7 +485,7 @@ public class ClipboardSyncTests
     public async Task OnEnterRemoteScreen_SendsClipboardHashNotPushDirectly()
     {
         var clipboard = new FakeClipboardSync();
-        clipboard.SetText("some text");
+        clipboard.SetupText("some text");
 
         var (platform, relay, service) = CreateMasterService(clipboard);
         await service.StartAsync(CancellationToken.None);
@@ -504,7 +504,7 @@ public class ClipboardSyncTests
     public async Task OnEnterRemoteScreen_ClipboardHashCarriesMasterHash()
     {
         var clipboard = new FakeClipboardSync();
-        clipboard.SetText("master content");
+        clipboard.SetupText("master content");
 
         var (platform, relay, service) = CreateMasterService(clipboard);
         await service.StartAsync(CancellationToken.None);
@@ -523,7 +523,7 @@ public class ClipboardSyncTests
     public async Task SlaveReceivesClipboardHash_HashDiffers_SendsPullRequest()
     {
         var clipboard = new FakeClipboardSync();
-        clipboard.SetText("slave has something else");
+        clipboard.SetupText("slave has something else");
         var slave = MakeTestableSlaveRelay(clipboard);
 
         // master sends a hash that won't match slave's clipboard
@@ -538,7 +538,7 @@ public class ClipboardSyncTests
     public async Task SlaveReceivesClipboardHash_HashMatches_NoResponse()
     {
         var clipboard = new FakeClipboardSync();
-        clipboard.SetText("identical content");
+        clipboard.SetupText("identical content");
         var slave = MakeTestableSlaveRelay(clipboard);
 
         var matchingHash = ClipboardUtils.ClipboardHash(new ClipboardSnapshot("identical content", null, null));
@@ -553,7 +553,7 @@ public class ClipboardSyncTests
     public async Task SlaveReceivesClipboardHash_HashMatchesWithANewSelection_SetsOnlyTheSelection()
     {
         var clipboard = new FakeClipboardSync();
-        clipboard.SetText("identical content");
+        clipboard.SetupText("identical content");
         var slave = MakeTestableSlaveRelay(clipboard);
 
         var hashMsg = ClipboardWire.ToHash(new ClipboardSnapshot("identical content", "master selection", null));
@@ -571,7 +571,7 @@ public class ClipboardSyncTests
     public async Task SlaveReceivesClipboardHash_SelectionIsTheText_TakesItFromItsOwnText()
     {
         var clipboard = new FakeClipboardSync();
-        clipboard.SetText("copied on the master");
+        clipboard.SetupText("copied on the master");
         var slave = MakeTestableSlaveRelay(clipboard);
 
         var hashMsg = ClipboardWire.ToHash(new ClipboardSnapshot("copied on the master", "copied on the master", null));
@@ -584,7 +584,7 @@ public class ClipboardSyncTests
     public async Task OnClipboardPullRequest_SendsFullPush()
     {
         var clipboard = new FakeClipboardSync();
-        clipboard.SetText("master has this");
+        clipboard.SetupText("master has this");
 
         var (platform, relay, service) = CreateMasterService(clipboard);
         await service.StartAsync(CancellationToken.None);
@@ -605,7 +605,7 @@ public class ClipboardSyncTests
     public async Task SlaveReceivesClipboardPull_HashMatches_SendsUnchangedResponse()
     {
         var clipboard = new FakeClipboardSync();
-        clipboard.SetText("same text");
+        clipboard.SetupText("same text");
         var slave = MakeTestableSlaveRelay(clipboard);
 
         var slaveHash = ClipboardUtils.ClipboardHash(new ClipboardSnapshot("same text", null, null));
@@ -621,7 +621,7 @@ public class ClipboardSyncTests
     public async Task SlaveReceivesClipboardPull_HashMatches_UnchangedCarriesTheSelection()
     {
         var clipboard = new FakeClipboardSync();
-        clipboard.SetText("same text");
+        clipboard.SetupText("same text");
         clipboard.SetPrimaryText("slave selection");
         var slave = MakeTestableSlaveRelay(clipboard);
 
@@ -641,7 +641,7 @@ public class ClipboardSyncTests
     public async Task SlaveReceivesClipboardPull_HashDiffers_SendsFullResponse()
     {
         var clipboard = new FakeClipboardSync();
-        clipboard.SetText("slave has this");
+        clipboard.SetupText("slave has this");
         var slave = MakeTestableSlaveRelay(clipboard);
 
         var pull = new ClipboardPullMessage(0UL); // hash won't match
@@ -662,7 +662,7 @@ public class ClipboardSyncTests
     public async Task OnClipboardPullRequest_CursorNotOnThatScreen_Ignored()
     {
         var clipboard = new FakeClipboardSync();
-        clipboard.SetText("master has this");
+        clipboard.SetupText("master has this");
 
         var (_, relay, service) = CreateMasterService(clipboard);
         await service.StartAsync(CancellationToken.None);
@@ -715,7 +715,7 @@ public class ClipboardSyncTests
     public async Task OnClipboardPullResponse_UnchangedWithASelection_SetsOnlyTheSelection()
     {
         var clipboard = new FakeClipboardSync();
-        clipboard.SetText("master clipboard");
+        clipboard.SetupText("master clipboard");
         var (platform, relay, service) = CreateMasterService(clipboard);
         await service.StartAsync(CancellationToken.None);
         await TransitionTestHelper.BringRemoteOnline(relay);
@@ -738,13 +738,13 @@ public class ClipboardSyncTests
     {
         // a copy on the master while the pull is in flight is not what the slave matched
         var clipboard = new FakeClipboardSync();
-        clipboard.SetText("pulled against");
+        clipboard.SetupText("pulled against");
         var (platform, relay, service) = CreateMasterService(clipboard);
         await service.StartAsync(CancellationToken.None);
         await TransitionTestHelper.BringRemoteOnline(relay);
 
         VisitAndLeaveRemote(platform);
-        clipboard.SetText("copied meanwhile");
+        clipboard.SetupText("copied meanwhile");
 
         var response = new ClipboardPullResponseMessage(null, Unchanged: true, PrimaryIsText: true);
         await AnswerPull(relay, response);
@@ -756,7 +756,7 @@ public class ClipboardSyncTests
     public async Task OnClipboardPullResponse_LateAnswerToAnEarlierPull_IsIgnoredAndLeavesTheLatestOne()
     {
         var clipboard = new FakeClipboardSync();
-        clipboard.SetText("master clipboard");
+        clipboard.SetupText("master clipboard");
         var (platform, relay, service) = CreateMasterService(clipboard);
         await service.StartAsync(CancellationToken.None);
         await TransitionTestHelper.BringRemoteOnline(relay);
@@ -780,7 +780,7 @@ public class ClipboardSyncTests
     public async Task SlaveReceivesClipboardHash_LargeSelectionChanged_RequestsThePush()
     {
         var clipboard = new FakeClipboardSync();
-        clipboard.SetText("identical content");
+        clipboard.SetupText("identical content");
         var slave = MakeTestableSlaveRelay(clipboard);
 
         var hashMsg = ClipboardWire.ToHash(new ClipboardSnapshot("identical content", new string('s', 5000), null));
@@ -798,7 +798,7 @@ public class ClipboardSyncTests
     {
         // a large selection crosses as its hash; the push it asks for then brings only that
         var clipboard = new FakeClipboardSync();
-        clipboard.SetText("identical content");
+        clipboard.SetupText("identical content");
         var slave = MakeTestableSlaveRelay(clipboard);
         var master = new ClipboardSnapshot("identical content", new string('s', 5000), null);
 
@@ -816,7 +816,7 @@ public class ClipboardSyncTests
     public async Task SlaveReceivesClipboardPull_HashMatchesWithALargeChangedSelection_UnchangedCarriesIt()
     {
         var clipboard = new FakeClipboardSync();
-        clipboard.SetText("same text");
+        clipboard.SetupText("same text");
         var selection = new string('s', 5000);
         clipboard.SetPrimaryText(selection);
         var slave = MakeTestableSlaveRelay(clipboard);
@@ -837,7 +837,7 @@ public class ClipboardSyncTests
     public async Task SlaveReceivesClipboardPull_HashAndSelectionMatch_UnchangedCarriesNoSelection()
     {
         var clipboard = new FakeClipboardSync();
-        clipboard.SetText("same text");
+        clipboard.SetupText("same text");
         clipboard.SetPrimaryText(new string('s', 5000));
         var slave = MakeTestableSlaveRelay(clipboard);
 
@@ -856,7 +856,7 @@ public class ClipboardSyncTests
     public async Task SlaveReceivesClipboardPush_AskedForTheSelectionButTheClipboardChangedSince_TakesBoth()
     {
         var clipboard = new FakeClipboardSync();
-        clipboard.SetText("identical content");
+        clipboard.SetupText("identical content");
         var slave = MakeTestableSlaveRelay(clipboard);
         var selection = new string('s', 5000);
 

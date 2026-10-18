@@ -87,7 +87,7 @@ public class TransactionalConfigStoreTests
           "profiles": [{
             "profileName": "{{profile}}",
             "mode": "Slave",
-            "embeddedStyx": { "server": "http://127.0.0.1:5000", "password": "test" }
+            "embeddedStyx": { "server": "https://127.0.0.1:5000", "password": "test" }
           }]
         }
         """;

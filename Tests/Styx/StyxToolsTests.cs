@@ -157,12 +157,14 @@ public class StyxToolsTests
         }
     }
 
-    private static (int Code, string Output, string Error) Run(string[] args, string? key = null, string? passphrase = null, string input = "")
+    private static ToolRun Run(string[] args, string? key = null, string? passphrase = null, string input = "")
     {
         var output = new StringWriter();
         var error = new StringWriter();
         string? Environment(string name) => name == Constants.RelaySigningKeyEnvVar ? key : name == Constants.RelaySigningPassphraseEnvVar ? passphrase : null;
         var code = StyxTools.Run(args, Environment, new StringReader(input), output, error);
-        return (code, output.ToString(), error.ToString());
+        return new ToolRun(code, output.ToString(), error.ToString());
     }
+
+    private sealed record ToolRun(int Code, string Output, string Error);
 }

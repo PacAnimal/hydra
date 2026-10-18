@@ -17,7 +17,7 @@ public class V1TokenVerifierTests
     [Test]
     public async Task AValidToken_NamesItsNetwork_AndIsAnsweredFromTheCacheAfterwards()
     {
-        var (verifier, _) = Verifier();
+        var (verifier, _, _) = NewSubject();
         var network = Guid.NewGuid();
         var token = await StyxTestServer.GenerateAuthorization(network);
 
@@ -36,7 +36,7 @@ public class V1TokenVerifierTests
     [TestCase("AAAA")]
     public async Task Junk_IsRefusedWithoutADerivation(string junk)
     {
-        var (verifier, limiter) = Verifier();
+        var (verifier, limiter, _) = NewSubject();
         Assert.That(await verifier.Verify(junk, Ip, CancellationToken.None), Is.Null);
         using (Assert.EnterMultipleScope())
         {
@@ -48,7 +48,7 @@ public class V1TokenVerifierTests
     [Test]
     public async Task ANonCanonicalSpelling_IsRefusedWithoutADerivation()
     {
-        var (verifier, _) = Verifier();
+        var (verifier, _, _) = NewSubject();
         var token = await StyxTestServer.GenerateAuthorization(Guid.NewGuid());
         using (Assert.EnterMultipleScope())
         {
@@ -60,7 +60,7 @@ public class V1TokenVerifierTests
     [Test]
     public async Task AWellFormedForgery_CostsOneDerivation_AndCountsTowardTheLimit()
     {
-        var (verifier, limiter) = Verifier();
+        var (verifier, limiter, _) = NewSubject();
         var forged = Convert.ToBase64String(new byte[V1TokenVerifier.TokenBytes]);
         for (var i = 0; i < FailureLimiter.MaxFailures; i++)
             Assert.That(await verifier.Verify(forged, Ip, CancellationToken.None), Is.Null);
@@ -83,7 +83,7 @@ public class V1TokenVerifierTests
     [Test]
     public async Task ACacheHit_IsAnsweredEvenWhileTheAddressIsBlocked()
     {
-        var (verifier, limiter) = Verifier();
+        var (verifier, limiter, _) = NewSubject();
         var network = Guid.NewGuid();
         var token = await StyxTestServer.GenerateAuthorization(network);
         await verifier.Verify(token, Ip, CancellationToken.None);
@@ -95,7 +95,7 @@ public class V1TokenVerifierTests
     [Test]
     public async Task AVersion8Network_IsNeverAdmitted_AndDoesNotCountAsAGuess()
     {
-        var (verifier, limiter) = Verifier();
+        var (verifier, limiter, _) = NewSubject();
         var token = await new SimpleAes(StyxTestServer.TestPassword).EncryptBase64(StyxToken.NewNetworkId(), CancellationToken.None);
         for (var i = 0; i < FailureLimiter.MaxFailures + 1; i++)
             Assert.That(await verifier.Verify(token, Ip, CancellationToken.None), Is.Null);
@@ -105,7 +105,7 @@ public class V1TokenVerifierTests
     [Test]
     public async Task WithoutAPassword_NothingIsAdmitted()
     {
-        var (verifier, _) = Verifier(password: null);
+        var (verifier, _, _) = NewSubject(password: null);
         var token = await StyxTestServer.GenerateAuthorization(Guid.NewGuid());
         using (Assert.EnterMultipleScope())
         {
@@ -131,13 +131,15 @@ public class V1TokenVerifierTests
     [Test]
     public async Task WhenEveryDerivationSlotIsTaken_ALoginGivesUpWithinTheBoundedWait()
     {
-        var (verifier, limiter) = Verifier();
+        var (verifier, limiter, clock) = NewSubject();
         var token = await StyxTestServer.GenerateAuthorization(Guid.NewGuid());
         var held = verifier.Derivations.CurrentCount;
         for (var i = 0; i < held; i++) await verifier.Derivations.WaitAsync();
         try
         {
-            Assert.That(await verifier.Verify(token, Ip, CancellationToken.None), Is.Null);
+            var login = verifier.Verify(token, Ip, CancellationToken.None);
+            clock.Advance(V1TokenVerifier.DerivationWait);
+            Assert.That(await login.WaitAsync(TimeSpan.FromSeconds(30)), Is.Null);
             using (Assert.EnterMultipleScope())
             {
                 Assert.That(verifier.DerivationCount, Is.Zero);
@@ -153,7 +155,7 @@ public class V1TokenVerifierTests
     [Test]
     public async Task AnAttemptQueuedForASlot_IsRefusedIfItsAddressIsBlockedMeanwhile()
     {
-        var (verifier, limiter) = Verifier();
+        var (verifier, limiter, _) = NewSubject();
         var token = await StyxTestServer.GenerateAuthorization(Guid.NewGuid());
         var held = verifier.Derivations.CurrentCount;
         for (var i = 0; i < held; i++) await verifier.Derivations.WaitAsync();
@@ -178,11 +180,13 @@ public class V1TokenVerifierTests
         Assert.That(limiter.IsBlocked(Ip), Is.True);
     }
 
-    private static (V1TokenVerifier Verifier, FailureLimiter Limiter) Verifier(string? password = StyxTestServer.TestPassword)
+    private static Subject NewSubject(string? password = StyxTestServer.TestPassword)
     {
         var clock = new FakeTimeProvider();
         var limiter = new FailureLimiter(clock);
         var auth = new StyxAuth([], password, new HashSet<Guid>(), new HashSet<string>());
-        return (new V1TokenVerifier(auth, limiter, clock, NullLogger<V1TokenVerifier>.Instance), limiter);
+        return new Subject(new V1TokenVerifier(auth, limiter, clock, NullLogger<V1TokenVerifier>.Instance), limiter, clock);
     }
+
+    private sealed record Subject(V1TokenVerifier Verifier, FailureLimiter Limiter, FakeTimeProvider Clock);
 }

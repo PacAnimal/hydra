@@ -151,9 +151,9 @@ application layer.
 
 The relay emits a ping record roughly every 5 s on an otherwise idle connection. Clients SHOULD treat a
 prolonged absence of relay traffic as a dead link, and SHOULD send their own ping records so that the
-relay can do the same. A silent client is not promptly disconnected in practice, so a client MUST NOT
-rely on the relay to garbage-collect its stale registrations; conversely, half-open links are detected
-only as fast as one side probes.
+relay can do the same. A silent client is disconnected once the client timeout passes, except while one of
+its own invocations is waiting its turn (above); either way, half-open links are detected only as fast as one
+side probes.
 
 ## 4. Authorization tokens
 
@@ -632,8 +632,7 @@ message structure — is the application's to build. The relay carries bytes bet
 The relay refuses to start unless it can verify something (`RELAY_SIGNING_KEY`, `RELAY_SIGNING_PASSPHRASE` or
 `RELAY_PASSWORD`), and refuses a malformed key, a passphrase outside the rules of §13.1, the same key twice,
 two keys sharing a `kid`, the published test key or passphrase of §14.6, a `RELAY_PARALLEL_INVOCATIONS` that is
-not a whole number from 1 to 64, or a retired setting (`RELAY_KEY`,
-`RELAY_KEY_PASSPHRASE`, `RELAY_ADMIN_PASSWORD`), naming what replaced it. Every
+not a whole number from 1 to 64. Every
 change to these is a restart, which drops every peer; that is also what makes a revocation complete.
 
 **Rotating the v2 key:** the first key mints and the rest only verify, and a passphrase's key comes first.

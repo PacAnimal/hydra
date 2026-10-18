@@ -2,13 +2,12 @@ namespace Styx.Services;
 
 public interface IClientRegistry
 {
-    ValueTask Register(string connectionId, NetworkKey network, string hostName, string remoteIp, string localIp = ClientRegistry.Unknown);
     ValueTask Unregister(string connectionId);
     ValueTask<string?> GetConnectionId(NetworkKey network, string hostName);
     ValueTask<ClientIdentity?> GetIdentity(string connectionId);
     // atomically kicks same-network+host duplicates AND registers the new connection under one lock, so two
     // concurrent authenticates for the same host can't both find nothing to kick and both register.
-    ValueTask<RegistrationResult> RegisterKickingDuplicates(string connectionId, NetworkKey network, string hostName, string remoteIp, string localIp = ClientRegistry.Unknown);
+    ValueTask<RegistrationResult> Register(string connectionId, NetworkKey network, string hostName, string remoteIp, string localIp = ClientRegistry.Unknown);
     // removes the registration only if it is still the one with this generation, so a timer armed for an earlier
     // login can never evict whatever holds the connection or the name now
     ValueTask<ClientIdentity?> UnregisterIfCurrent(string connectionId, long generation);
@@ -18,22 +17,24 @@ public interface IClientRegistry
 }
 
 /// <param name="Generation">unique per registration, so a later login on the same connection is told apart</param>
-public record ClientIdentity(NetworkKey Network, string HostName, string RemoteIp, string LocalIp, long Generation = 0);
+public record ClientIdentity(NetworkKey Network, string HostName, string RemoteIp, string LocalIp, long Generation);
 
 public record NetworkClient(string ConnectionId, string HostName);
 
-/// <param name="Kicked">connectionIds displaced by this registration — more than one if stale entries accumulated.</param>
+/// <param name="Kicked">the connection this registration displaced from the name, if any</param>
 /// <param name="OtherClients">the network with the duplicates gone but before this connection joined, so a
 /// displaced host can be broadcast as having left before it is broadcast as having arrived.</param>
 /// <param name="Generation">the new registration's generation</param>
 /// <param name="Left">the network this connection was registered on before, when it was a different one, so its
 /// peers there can be told it has gone</param>
-public record RegistrationResult(IReadOnlyList<string> Kicked, IReadOnlyList<NetworkClient> OtherClients, long Generation, NetworkKey? Left);
+public record RegistrationResult(string? Kicked, IReadOnlyList<NetworkClient> OtherClients, long Generation, NetworkKey? Left);
 
 public class ClientRegistry(ILogger<ClientRegistry> log) : IClientRegistry
 {
     // stands in for an address the connection could not report
     public const string Unknown = "unknown";
+
+    public static string RemoteIpOf(HttpContext? http) => http?.Connection.RemoteIpAddress?.ToString() ?? Unknown;
 
     private readonly Lock _lock = new();
     private readonly Dictionary<string, ClientIdentity> _byConnection = [];
@@ -42,22 +43,12 @@ public class ClientRegistry(ILogger<ClientRegistry> log) : IClientRegistry
     private readonly Dictionary<(NetworkKey Network, string HostName), string> _byNetworkHost = new(HostKeyComparer.Instance);
     private long _generation;
 
-    public ValueTask Register(string connectionId, NetworkKey network, string hostName, string remoteIp, string localIp = Unknown)
-    {
-        lock (_lock)
-            Register(connectionId, new ClientIdentity(network, hostName, remoteIp, localIp, ++_generation));
-        if (log.IsEnabled(LogLevel.Debug))
-            log.LogDebug("Registered client \"{HostName}\" from {RemoteIp} on network {Network}", hostName, remoteIp, network);
-        return ValueTask.CompletedTask;
-    }
-
     public ValueTask Unregister(string connectionId)
     {
         ClientIdentity? identity;
         lock (_lock)
             identity = Remove(connectionId);
-        if (identity != null && log.IsEnabled(LogLevel.Information))
-            log.LogInformation("Unregistered client \"{HostName}\" from network {Network}", identity.HostName, identity.Network);
+        LogUnregistered(identity);
         return ValueTask.CompletedTask;
     }
 
@@ -69,8 +60,7 @@ public class ClientRegistry(ILogger<ClientRegistry> log) : IClientRegistry
             if (_byConnection.TryGetValue(connectionId, out var current) && current.Generation == generation)
                 identity = Remove(connectionId);
         }
-        if (identity != null && log.IsEnabled(LogLevel.Information))
-            log.LogInformation("Unregistered client \"{HostName}\" from network {Network}", identity.HostName, identity.Network);
+        LogUnregistered(identity);
         return ValueTask.FromResult(identity);
     }
 
@@ -85,20 +75,17 @@ public class ClientRegistry(ILogger<ClientRegistry> log) : IClientRegistry
         lock (_lock) return ValueTask.FromResult(_byConnection.GetValueOrDefault(connectionId));
     }
 
-    // atomically kick same-network+host duplicates and register the new connection under one lock
-    public ValueTask<RegistrationResult> RegisterKickingDuplicates(string connectionId, NetworkKey network, string hostName, string remoteIp, string localIp = Unknown)
+    public ValueTask<RegistrationResult> Register(string connectionId, NetworkKey network, string hostName, string remoteIp, string localIp = Unknown)
     {
         RegistrationResult result;
         lock (_lock)
         {
-            // Look up the same case-insensitive key Register() below will evict by — a case-sensitive
-            // scan here could miss a duplicate that Register() then silently displaces without it ever
-            // appearing in Kicked, leaving the displaced connection never told it lost the name.
-            var found = new List<string>();
+            // the same case-insensitive key Index evicts by, so every displaced connection is told it lost the name
+            string? kicked = null;
             if (_byNetworkHost.TryGetValue((network, hostName), out var previousConnectionId)
                 && previousConnectionId != connectionId)
             {
-                found.Add(previousConnectionId);
+                kicked = previousConnectionId;
                 Remove(previousConnectionId);
                 if (log.IsEnabled(LogLevel.Information))
                     log.LogInformation("Kicked duplicate \"{HostName}\" from network {Network}", hostName, network);
@@ -106,8 +93,8 @@ public class ClientRegistry(ILogger<ClientRegistry> log) : IClientRegistry
             var left = _byConnection.TryGetValue(connectionId, out var before) && before.Network != network ? before.Network : (NetworkKey?)null;
             var others = OnNetwork(network, connectionId);
             var generation = ++_generation;
-            Register(connectionId, new ClientIdentity(network, hostName, remoteIp, localIp, generation));
-            result = new RegistrationResult(found, others, generation, left);
+            Index(connectionId, new ClientIdentity(network, hostName, remoteIp, localIp, generation));
+            result = new RegistrationResult(kicked, others, generation, left);
         }
         if (log.IsEnabled(LogLevel.Debug))
             log.LogDebug("Registered client \"{HostName}\" from {RemoteIp} on network {Network}", hostName, remoteIp, network);
@@ -135,7 +122,13 @@ public class ClientRegistry(ILogger<ClientRegistry> log) : IClientRegistry
         return result;
     }
 
-    private void Register(string connectionId, ClientIdentity identity)
+    private void LogUnregistered(ClientIdentity? identity)
+    {
+        if (identity != null && log.IsEnabled(LogLevel.Information))
+            log.LogInformation("Unregistered client \"{HostName}\" from network {Network}", identity.HostName, identity.Network);
+    }
+
+    private void Index(string connectionId, ClientIdentity identity)
     {
         // A connection can re-authenticate in tests/third-party clients. Remove its previous reverse index
         // before assigning the new identity so the O(1) host index never points at stale connection data.

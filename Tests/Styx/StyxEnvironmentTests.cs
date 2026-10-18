@@ -54,16 +54,6 @@ public class StyxEnvironmentTests
         }
     }
 
-    [TestCase("RELAY_KEY", "RELAY_SIGNING_KEY")]
-    [TestCase("RELAY_KEY_PASSPHRASE", "RELAY_SIGNING_PASSPHRASE")]
-    [TestCase("RELAY_ADMIN_PASSWORD", "RELAY_PASSWORD")]
-    public void ARetiredSetting_RefusesToStart_NamingWhatReplacedIt(string retired, string replacement)
-    {
-        var refused = Assert.Throws<StyxConfigurationException>(() =>
-            StyxEnvironment.Read(Env(("RELAY_SIGNING_KEY", Convert.ToBase64String(KeyA)), ("RELAY_PASSWORD", "pw"), (retired, "anything"))));
-        Assert.That(refused!.Message, Does.StartWith($"{retired} is no longer read").And.Contain(replacement));
-    }
-
     [Test]
     public void NothingToVerifyWith_RefusesToStart()
     {

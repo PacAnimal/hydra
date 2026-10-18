@@ -31,13 +31,18 @@ public sealed class CapturingLog<T>(LogLevel minimum = LogLevel.Trace) : ILogger
     // the first entry matching, waiting for it to be logged
     public async Task<CapturedEntry> WaitFor(Func<CapturedEntry, bool> match, int timeoutMs = 15000)
     {
-        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
-        while (true)
+        using var timeout = new CancellationTokenSource(timeoutMs);
+        try
         {
-            if (Entries.FirstOrDefault(match) is { } entry) return entry;
-            var remaining = deadline - DateTime.UtcNow;
-            if (remaining <= TimeSpan.Zero || !await _logged.WaitAsync(remaining))
-                throw new TimeoutException("Timed out waiting for a matching log entry");
+            while (true)
+            {
+                if (Entries.FirstOrDefault(match) is { } entry) return entry;
+                await _logged.WaitAsync(timeout.Token);
+            }
+        }
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+        {
+            throw new TimeoutException("Timed out waiting for a matching log entry");
         }
     }
 }

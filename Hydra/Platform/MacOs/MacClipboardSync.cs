@@ -19,9 +19,8 @@ public sealed class MacClipboardSync : IClipboardSync
     private static readonly string[] NotTextCopyTypes = [PasteboardTypePng, .. FileTypes, PasteboardTypeConcealed, PasteboardTypeTransient];
 
     private readonly ILogger<MacClipboardSync> _log;
-    private ClipboardEchoFilter _echo;
+    private readonly ClipboardEchoFilter _echo;
     private readonly CopiedPrimary _primary;
-    private long _ownedChangeCount = -1;
     private readonly string? _pasteboardName;
 
     public MacClipboardSync(ILogger<MacClipboardSync> log) : this(log, null) { }
@@ -32,46 +31,63 @@ public sealed class MacClipboardSync : IClipboardSync
         _log = log;
         _pasteboardName = pasteboardName;
         _primary = new CopiedPrimary(() => ChangeCount(GetGeneralPasteboard()), () => ReadTextCopy(GetGeneralPasteboard()), log);
+        _echo = new ClipboardEchoFilter(_primary.Owns);
         // NSPasteboard lives in AppKit — must be loaded before objc_getClass can find it.
         // Slaves don't open an event tap, so AppKit may not be loaded otherwise.
         NativeHelpers.EnsureAppKitLoaded();
     }
 
-    public string? GetText()
+    public string? GetText() => Guarded("text", pasteboard => _echo.FilterText(ReadString(pasteboard, PasteboardTypeString)));
+
+    public byte[]? GetImagePng() => Guarded("image", pasteboard => ReadData(pasteboard, PasteboardTypePng) is { } png && !_echo.IsDuplicateImage(png) ? png : null);
+
+    public string? GetHtml() => Guarded("html", pasteboard => _echo.FilterHtml(ReadString(pasteboard, PasteboardTypeHtml)));
+
+    public byte[]? GetRtf() => Guarded("rtf", pasteboard => _echo.FilterRtf(ReadData(pasteboard, PasteboardTypeRtf)));
+
+    // one read of the general pasteboard in its own pool, null when there is none or the read fails
+    private T? Guarded<T>(string what, Func<nint, T?> read) where T : class
     {
         using var pool = new ObjcAutoreleasePool();
         try
         {
-            return GetTextInner();
+            var pasteboard = GetGeneralPasteboard();
+            return pasteboard == nint.Zero ? null : read(pasteboard);
         }
         catch (Exception ex)
         {
-            _log.LogWarning(ex, "Failed to read clipboard text");
+            _log.LogWarning(ex, "Failed to read clipboard {What}", what);
             return null;
         }
     }
 
-    private string? GetTextInner()
+    private static string? ReadString(nint pasteboard, string type)
     {
-        var pasteboard = GetGeneralPasteboard();
-        if (pasteboard == nint.Zero) return null;
-
-        var text = ReadText(pasteboard);
-        return OwnsCurrentClipboard(pasteboard) ? _echo.FilterText(text) : text;
-    }
-
-    private static string? ReadText(nint pasteboard)
-    {
-        var typeStr = NativeHelpers.MakeNsString(PasteboardTypeString);
-        var sel = NativeMethods.sel_registerName("stringForType:");
-        var result = NativeMethods.objc_msgSend(pasteboard, sel, typeStr);
+        var typeStr = NativeHelpers.MakeNsString(type);
+        var result = NativeMethods.objc_msgSend(pasteboard, NativeMethods.sel_registerName("stringForType:"), typeStr);
         NativeMethods.CFRelease(typeStr);
         return result == nint.Zero ? null : NativeHelpers.CfStringToManaged(result);
     }
 
+    private static byte[]? ReadData(nint pasteboard, string type)
+    {
+        var typeStr = NativeHelpers.MakeNsString(type);
+        var nsData = NativeMethods.objc_msgSend(pasteboard, NativeMethods.sel_registerName("dataForType:"), typeStr);
+        NativeMethods.CFRelease(typeStr);
+        if (nsData == nint.Zero) return null;
+
+        var length = NativeMethods.CFDataGetLength(nsData);
+        var ptr = NativeMethods.CFDataGetBytePtr(nsData);
+        if (length <= 0 || ptr == nint.Zero) return null;
+
+        var bytes = new byte[(int)length];
+        Marshal.Copy(ptr, bytes, 0, (int)length);
+        return bytes;
+    }
+
     // CopiedPrimary's readTextCopy, by pasteboard type
     private static string? ReadTextCopy(nint pasteboard) =>
-        PasteboardTypes(pasteboard).Any(t => NotTextCopyTypes.Contains(t)) ? null : ReadText(pasteboard);
+        PasteboardTypes(pasteboard).Any(t => NotTextCopyTypes.Contains(t)) ? null : ReadString(pasteboard, PasteboardTypeString);
 
     private static long ChangeCount(nint pasteboard) => NativeMethods.objc_msgSend_long(pasteboard, NativeMethods.sel_registerName("changeCount"));
 
@@ -87,100 +103,6 @@ public sealed class MacClipboardSync : IClipboardSync
         return _primary.Relay(text);
     }
 
-    public byte[]? GetImagePng()
-    {
-        using var pool = new ObjcAutoreleasePool();
-        try
-        {
-            return GetImagePngInner();
-        }
-        catch (Exception ex)
-        {
-            _log.LogWarning(ex, "Failed to read clipboard image");
-            return null;
-        }
-    }
-
-    private byte[]? GetImagePngInner()
-    {
-        var pasteboard = GetGeneralPasteboard();
-        if (pasteboard == nint.Zero) return null;
-
-        var typeStr = NativeHelpers.MakeNsString(PasteboardTypePng);
-        var sel = NativeMethods.sel_registerName("dataForType:");
-        var nsData = NativeMethods.objc_msgSend(pasteboard, sel, typeStr);
-        NativeMethods.CFRelease(typeStr);
-
-        if (nsData == nint.Zero) return null;
-
-        var length = NativeMethods.CFDataGetLength(nsData);
-        if (length <= 0) return null;
-
-        var ptr = NativeMethods.CFDataGetBytePtr(nsData);
-        if (ptr == nint.Zero) return null;
-
-        var bytes = new byte[(int)length];
-        Marshal.Copy(ptr, bytes, 0, (int)length);
-
-        if (OwnsCurrentClipboard(pasteboard) && _echo.IsDuplicateImage(bytes)) return null;
-
-        return bytes;
-    }
-
-    public string? GetHtml()
-    {
-        using var pool = new ObjcAutoreleasePool();
-        try
-        {
-            var pasteboard = GetGeneralPasteboard();
-            if (pasteboard == nint.Zero) return null;
-
-            var typeStr = NativeHelpers.MakeNsString(PasteboardTypeHtml);
-            var sel = NativeMethods.sel_registerName("stringForType:");
-            var result = NativeMethods.objc_msgSend(pasteboard, sel, typeStr);
-            NativeMethods.CFRelease(typeStr);
-
-            if (result == nint.Zero) return null;
-            var html = NativeHelpers.CfStringToManaged(result);
-            return OwnsCurrentClipboard(pasteboard) ? _echo.FilterHtml(html) : html;
-        }
-        catch (Exception ex)
-        {
-            _log.LogWarning(ex, "Failed to read clipboard html");
-            return null;
-        }
-    }
-
-    public byte[]? GetRtf()
-    {
-        using var pool = new ObjcAutoreleasePool();
-        try
-        {
-            var pasteboard = GetGeneralPasteboard();
-            if (pasteboard == nint.Zero) return null;
-
-            var typeStr = NativeHelpers.MakeNsString(PasteboardTypeRtf);
-            var sel = NativeMethods.sel_registerName("dataForType:");
-            var nsData = NativeMethods.objc_msgSend(pasteboard, sel, typeStr);
-            NativeMethods.CFRelease(typeStr);
-
-            if (nsData == nint.Zero) return null;
-            var length = NativeMethods.CFDataGetLength(nsData);
-            if (length <= 0) return null;
-            var ptr = NativeMethods.CFDataGetBytePtr(nsData);
-            if (ptr == nint.Zero) return null;
-
-            var bytes = new byte[(int)length];
-            Marshal.Copy(ptr, bytes, 0, (int)length);
-            return OwnsCurrentClipboard(pasteboard) ? _echo.FilterRtf(bytes) : bytes;
-        }
-        catch (Exception ex)
-        {
-            _log.LogWarning(ex, "Failed to read clipboard rtf");
-            return null;
-        }
-    }
-
     public bool SetClipboard(ClipboardSnapshot contents)
     {
         using var pool = new ObjcAutoreleasePool();
@@ -192,7 +114,6 @@ public sealed class MacClipboardSync : IClipboardSync
             // another app makes after it is still the user's
             var cleared = NativeMethods.objc_msgSend_long(pasteboard, NativeMethods.sel_registerName("clearContents"));
             leftAt(cleared);
-            Volatile.Write(ref _ownedChangeCount, cleared);
             _echo.Track(contents);
             ClipboardUtils.WriteAll(_log,
                 contents.Text is { } text ? () => WriteString(pasteboard, text, PasteboardTypeString) : null,
@@ -234,15 +155,8 @@ public sealed class MacClipboardSync : IClipboardSync
 
     public bool CanUseEchoFallback()
     {
-        var pasteboard = GetGeneralPasteboard();
-        return pasteboard != nint.Zero && OwnsCurrentClipboard(pasteboard);
-    }
-
-    private bool OwnsCurrentClipboard(nint pasteboard)
-    {
-        var owned = Volatile.Read(ref _ownedChangeCount);
-        if (owned < 0) return false;
-        return ChangeCount(pasteboard) == owned;
+        using var pool = new ObjcAutoreleasePool();
+        return _primary.Owns();
     }
 
     // setString:forType: and setData:forType: answer whether the pasteboard took it, as a BOOL: only its low byte is set

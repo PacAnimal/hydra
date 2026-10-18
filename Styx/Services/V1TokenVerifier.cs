@@ -1,3 +1,4 @@
+using Common;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Cathedral.Utils;
@@ -37,7 +38,7 @@ public sealed class V1TokenVerifier(StyxAuth auth, FailureLimiter limiter, TimeP
         if (!_proven.TryGet(fingerprint, out var network))
         {
             if (limiter.IsBlocked(remoteIp)) return null;
-            if (!await _derivations.WaitAsync(DerivationWait, cancel)) return null;
+            if (!await TakeDerivation(cancel)) return null;
             try
             {
                 // many connections from one address can all pass the check above and queue here together
@@ -63,11 +64,25 @@ public sealed class V1TokenVerifier(StyxAuth auth, FailureLimiter limiter, TimeP
         return network;
     }
 
+    // false once DerivationWait has passed on the relay's clock
+    private async Task<bool> TakeDerivation(CancellationToken cancel)
+    {
+        using var timeout = new CancellationTokenSource(DerivationWait, clock);
+        using var either = CancellationTokenSource.CreateLinkedTokenSource(cancel, timeout.Token);
+        try
+        {
+            await _derivations.WaitAsync(either.Token);
+            return true;
+        }
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested && !cancel.IsCancellationRequested)
+        {
+            return false;
+        }
+    }
+
     private void LogOncePerDay(string fingerprint, Guid network, string remoteIp)
     {
-        var today = DateOnly.FromDateTime(clock.GetUtcNow().UtcDateTime);
-        if (_loggedOn.TryGet(fingerprint, out var logged) && logged == today) return;
-        _loggedOn.Set(fingerprint, today);
+        if (!_loggedOn.SetIfChanged(fingerprint, DateOnly.FromDateTime(clock.GetUtcNow().UtcDateTime))) return;
         if (log.IsEnabled(LogLevel.Information))
             log.LogInformation("v1 token in use on network {NetworkId} from {RemoteIp}", network, remoteIp);
     }

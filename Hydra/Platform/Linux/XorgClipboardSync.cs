@@ -32,7 +32,7 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
     private string? _ownedPrimaryText;
     private byte[]? _ownedImagePng;
     private string? _ownedHtml;
-    private ClipboardEchoFilter _echo;
+    private readonly ClipboardEchoFilter _echo = new(() => true);
 
     // GetText/GetImagePng synchronization — only one read in flight at a time
     private readonly Lock _getLock = new();

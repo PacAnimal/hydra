@@ -54,8 +54,9 @@ public class RelayDispatchTests : StyxFixtureBase
     [Test]
     public async Task OnTheOrderedPath_SendsThatDoNotWaitArriveInOrder()
     {
-        await using var pair = await ConnectedRawPair(global::Styx.Constants.RelayPath);
-        var (sender, receiver) = pair;
+        await using var peers = await ConnectedPeers(SenderOn(global::Styx.Constants.RelayPath), "sender", "receiver");
+        var sender = peers["sender"];
+        var receiver = peers["receiver"];
 
         _sends.Hold();
         const int count = 20;
@@ -79,8 +80,9 @@ public class RelayDispatchTests : StyxFixtureBase
     [Test]
     public async Task OnTheParallelPath_AsManySendsRunAtOnceAsItsWidth()
     {
-        await using var pair = await ConnectedRawPair(global::Styx.Constants.ParallelRelayPath);
-        var (sender, receiver) = pair;
+        await using var peers = await ConnectedPeers(SenderOn(global::Styx.Constants.ParallelRelayPath), "sender", "receiver");
+        var sender = peers["sender"];
+        var receiver = peers["receiver"];
 
         const int width = global::Styx.Constants.DefaultParallelInvocations;
         _sends.Hold();
@@ -105,7 +107,7 @@ public class RelayDispatchTests : StyxFixtureBase
     [Test]
     public async Task TheInputLaneSendsItsNextFrameWithoutWaitingForTheRelay()
     {
-        await using var pair = await ConnectedPair(peerTakesBundles: false);
+        await using var pair = await ConnectedPair();
         var (sender, receiver) = pair;
 
         _sends.Hold(async invocation => await HostOf(invocation) == "sender");
@@ -185,23 +187,8 @@ public class RelayDispatchTests : StyxFixtureBase
         }
     }
 
-    // the receiver always on /relay; disposed together even when a connect fails
-    private async Task<RawPair> ConnectedRawPair(string senderPath)
-    {
-        var token = StyxTestServer.MintToken().ToString();
-        var pair = new RawPair(new TestStyxClient(), new TestStyxClient());
-        try
-        {
-            await pair.Sender.Connect(Factory, token, "sender", senderPath);
-            await pair.Receiver.Connect(Factory, token, "receiver");
-            return pair;
-        }
-        catch
-        {
-            await pair.DisposeAsync();
-            throw;
-        }
-    }
+    // the receiver always on /relay
+    private static Func<string, string> SenderOn(string path) => name => name == "sender" ? path : global::Styx.Constants.RelayPath;
 
     private static RelayLogin Login(Guid network, string hostName) =>
         new() { Authorization = StyxTestServer.MintToken(network).ToString(), HostName = hostName };
@@ -211,34 +198,18 @@ public class RelayDispatchTests : StyxFixtureBase
 
     private static string? CharacterOf(string json) => System.Text.Json.JsonDocument.Parse(json).RootElement.GetProperty("character").GetString();
 
-    private sealed record RawPair(TestStyxClient Sender, TestStyxClient Receiver) : IAsyncDisposable
-    {
-        public async ValueTask DisposeAsync()
-        {
-            try
-            {
-                await Sender.DisposeAsync();
-            }
-            finally
-            {
-                await Receiver.DisposeAsync();
-            }
-        }
-    }
-
     /// <summary>The relay's own verifier behind a gate, counting how many checks run at once.</summary>
     private sealed class HeldVerifier(ITokenVerifier inner) : ITokenVerifier
     {
+        private readonly RunningCounter _running = new();
         private TaskCompletionSource? _hold;
-        private int _running;
-        private int _mostRunning;
 
         public NotificationQueue<string> Entered { get; private set; } = new();
-        public int MostRunning => Volatile.Read(ref _mostRunning);
+        public int MostRunning => _running.MostRunning;
 
         public void Hold()
         {
-            Volatile.Write(ref _mostRunning, 0);
+            _running.Reset();
             Entered = new NotificationQueue<string>();
             _hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         }
@@ -247,9 +218,7 @@ public class RelayDispatchTests : StyxFixtureBase
 
         public async Task<TokenVerdict> Verify(string authorization, string remoteIp, CancellationToken cancel)
         {
-            var running = Interlocked.Increment(ref _running);
-            for (var most = MostRunning; running > most; most = MostRunning)
-                Interlocked.CompareExchange(ref _mostRunning, running, most);
+            _running.Enter();
             try
             {
                 Entered.Push(authorization);
@@ -258,7 +227,7 @@ public class RelayDispatchTests : StyxFixtureBase
             }
             finally
             {
-                Interlocked.Decrement(ref _running);
+                _running.Exit();
             }
         }
     }

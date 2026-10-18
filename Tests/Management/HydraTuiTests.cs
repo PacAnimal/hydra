@@ -174,16 +174,13 @@ public class HydraTuiTests
     }
 
     [Test]
-    public void OverviewFallsBackGracefullyWhenOptionalDiagnosticsAreMissing()
+    public void OverviewShowsPlaceholdersForEmptyDiagnostics()
     {
-        // ActiveNetworkAdapters/EmbeddedRelayPeers/PeerLatency are nullable specifically because
-        // an older daemon's status response won't have them — this is the exact shape a newer
-        // TUI sees when talking to one, and it must render sensible fallback text, not throw.
         var status = Status(processId: 10, uptime: 30, relayAttempts: 1) with
         {
-            ActiveNetworkAdapters = null,
-            EmbeddedRelayPeers = null,
-            PeerLatency = null,
+            ActiveNetworkAdapters = [],
+            EmbeddedRelayPeers = [],
+            PeerLatency = [],
         };
 
         var overview = HydraTui.TuiController.FormatOverview(status);

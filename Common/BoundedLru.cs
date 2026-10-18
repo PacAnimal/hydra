@@ -1,4 +1,4 @@
-namespace Styx.Services;
+namespace Common;
 
 /// <summary>A thread-safe map that forgets its least recently used entry once it holds <c>capacity</c>.</summary>
 public sealed class BoundedLru<TKey, TValue>(int capacity) where TKey : notnull
@@ -29,6 +29,18 @@ public sealed class BoundedLru<TKey, TValue>(int capacity) where TKey : notnull
     }
 
     public void Set(TKey key, TValue value) => AddOrUpdate(key, _ => value);
+
+    /// <summary>Stores the value, and says whether it differs from the one held (true when absent), atomically.</summary>
+    public bool SetIfChanged(TKey key, TValue value)
+    {
+        var changed = false;
+        AddOrUpdate(key, current =>
+        {
+            changed = !EqualityComparer<TValue?>.Default.Equals(current, value);
+            return value;
+        });
+        return changed;
+    }
 
     /// <summary>Replaces the value with <paramref name="update"/> of the current one (default when absent), atomically.</summary>
     public TValue AddOrUpdate(TKey key, Func<TValue?, TValue> update)

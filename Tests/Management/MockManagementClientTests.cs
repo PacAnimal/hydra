@@ -57,8 +57,8 @@ public class MockManagementClientTests
         var status = await client.GetStatusAsync();
 
         var localAddresses = new List<string> { status.RelayConnection!.LocalAddress };
-        localAddresses.AddRange(status.ActiveNetworkAdapters!.SelectMany(adapter => adapter.Addresses));
-        localAddresses.AddRange(status.EmbeddedRelayPeers!.SelectMany(peer => new[] { peer.LocalAddress, peer.RemoteAddress }));
+        localAddresses.AddRange(status.ActiveNetworkAdapters.SelectMany(adapter => adapter.Addresses));
+        localAddresses.AddRange(status.EmbeddedRelayPeers.SelectMany(peer => new[] { peer.LocalAddress, peer.RemoteAddress }));
 
         using (Assert.EnterMultipleScope())
         {

@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Styx.Services;
 using System.Net;
+using System.Net.Security;
 using System.Net.Sockets;
 using Tests.Setup;
 using StyxConstants = Styx.Constants;
@@ -252,23 +253,6 @@ public class EmbeddedStyxTests
 
     // ─── tls ─────────────────────────────────────────────────────────────────
 
-    // an older Hydra reads why in its negotiate status, and this side says who it probably was, once
-    [Test]
-    public async Task PlainHttpIsAnsweredWithUpgradeRequiredAndOneWarning()
-    {
-        using var http = new HttpClient();
-        using var first = await http.PostAsync($"http://localhost:{_port}/relay/negotiate", new ByteArrayContent([]));
-        using var second = await http.PostAsync($"http://localhost:{_port}/relay/negotiate", new ByteArrayContent([]));
-
-        var warnings = _serverLog.Entries.Where(e => e.Level == LogLevel.Warning && e.Message.Contains("older than 0.3")).ToArray();
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(first.StatusCode, Is.EqualTo(HttpStatusCode.UpgradeRequired));
-            Assert.That(second.StatusCode, Is.EqualTo(HttpStatusCode.UpgradeRequired));
-            Assert.That(warnings, Has.Length.EqualTo(1), "an old peer retrying every few seconds must not flood the log");
-        }
-    }
-
     [Test]
     public async Task TheBindingAnswersOnlyAProofForThePresentedCertificate()
     {
@@ -292,7 +276,8 @@ public class EmbeddedStyxTests
         }
     }
 
-    // nothing proxies the embedded relay, so a forwarded address is a claim anyone on a private network could make
+    // past the failure limit even a right proof is refused, so the binding cannot be used to guess online; counted by the
+    // connecting address, since nothing proxies the embedded relay and a forwarded one is a claim anyone could make
     [Test]
     public async Task TheBindingCountsFailuresByTheConnectingAddressNotAForwardedOne()
     {
@@ -319,11 +304,11 @@ public class EmbeddedStyxTests
             Assert.That(joined.StatusCode, Is.EqualTo(HttpStatusCode.OK));
 
         var guess = PostBinding(new byte[EmbeddedRelayTls.ProofLength], server: stranger);
-        await clock.Started.Next(15000, "the guess's throttle");
-        using var again = await PostBinding(proofs.Client, server: peer).WaitAsync(TimeSpan.FromSeconds(15));
+        await clock.Started.Next((int)Bound.TotalMilliseconds, "the guess's throttle");
+        using var again = await PostBinding(proofs.Client, server: peer).WaitAsync(Bound);
 
         clock.Advance(TimeSpan.FromSeconds(StyxConstants.AuthThrottleSeconds));
-        using var refused = await guess.WaitAsync(TimeSpan.FromSeconds(15));
+        using var refused = await guess.WaitAsync(Bound);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(again.StatusCode, Is.EqualTo(HttpStatusCode.OK));
@@ -337,22 +322,9 @@ public class EmbeddedStyxTests
     {
         await using var interceptor = new TlsInterceptor(_port);
 
-        var proven = await EmbeddedRelayTls.ProveRelay(interceptor.Url, TestPassword, new SocketsHttpHandler(), TimeSpan.FromSeconds(10),
-            CancellationToken.None, trusts: _ => true);
+        var proven = await Prove(interceptor.Url, TestPassword, trusts: _ => true);
 
         Assert.That(proven, Is.Null);
-    }
-
-    // past the failure limit even a right proof is refused, so the binding cannot be used to guess online
-    [Test]
-    public async Task TheBindingStopsAnsweringAnAddressThatKeepsGuessing()
-    {
-        var proofs = EmbeddedRelayTls.ProofsFor(TestPassword, await PresentedFingerprint());
-        for (var i = 0; i < FailureLimiter.MaxFailures; i++)
-            using (await PostBinding(new byte[EmbeddedRelayTls.ProofLength])) { }
-
-        using var right = await PostBinding(proofs.Client);
-        Assert.That(right.StatusCode, Is.EqualTo(HttpStatusCode.Unauthorized));
     }
 
     [Test]
@@ -360,7 +332,7 @@ public class EmbeddedStyxTests
     {
         var presented = await PresentedFingerprint();
 
-        var proven = await EmbeddedRelayTls.ProveRelay(_serverUrl, TestPassword, new SocketsHttpHandler(), TimeSpan.FromSeconds(10), CancellationToken.None);
+        var proven = await Prove(_serverUrl, TestPassword);
 
         Assert.That(proven, Is.EqualTo(presented));
     }
@@ -368,34 +340,8 @@ public class EmbeddedStyxTests
     [Test]
     public void ProvingTheRelayWithTheWrongPasswordFails()
     {
-        var refused = Assert.ThrowsAsync<HttpRequestException>(() =>
-            EmbeddedRelayTls.ProveRelay(_serverUrl, "wrong-password", new SocketsHttpHandler(), TimeSpan.FromSeconds(10), CancellationToken.None));
+        var refused = Assert.ThrowsAsync<HttpRequestException>(() => Prove(_serverUrl, "wrong-password"));
         Assert.That(refused!.Message, Does.Contain("refused"));
-    }
-
-    // what a new Hydra says when the relay it reaches is an older one, speaking plain http
-    [Test]
-    public async Task ProvingAPlainHttpRelayNamesTheOlderHydra()
-    {
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        var answering = AnswerLikeAnOlderHydra(listener.AcceptSocketAsync());
-        var url = $"https://127.0.0.1:{((IPEndPoint)listener.LocalEndpoint).Port}";
-
-        var refused = Assert.ThrowsAsync<HttpRequestException>(() =>
-            EmbeddedRelayTls.ProveRelay(url, TestPassword, new SocketsHttpHandler(), TimeSpan.FromSeconds(10), CancellationToken.None));
-        await answering;
-
-        Assert.That(refused!.Message, Does.Contain("older than 0.3"));
-    }
-
-    // what an older Hydra's plain-http relay says to a TLS client hello
-    private static async Task AnswerLikeAnOlderHydra(Task<Socket> accepting)
-    {
-        using var socket = await accepting;
-        await using var stream = new NetworkStream(socket);
-        _ = await stream.ReadAtLeastAsync(new byte[1024], 1, throwOnEndOfStream: false);
-        await stream.WriteAsync("HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"u8.ToArray());
     }
 
     // whoever answers with another cert gets one guessable proof and nothing more: never the hub, never the token
@@ -467,18 +413,6 @@ public class EmbeddedStyxTests
     }
 
     [Test]
-    public async Task AnHttpAddressIsReachedOverTlsWithAWarning()
-    {
-        var log = new CapturingLog<RelayConnection>();
-        await using var client = Client("test-host", await Common.NetworkConfig.ComputeEmbeddedBlob($"http://localhost:{_port}", TestPassword), log);
-        await client.StartAsync(CancellationToken.None);
-
-        await client.WaitForReady();
-
-        Assert.That(log.Messages, Has.One.Contains("Change it to https://"));
-    }
-
-    [Test]
     public async Task AnHttpsAddressConnectsWithoutAWarning()
     {
         var log = new CapturingLog<RelayConnection>();
@@ -490,12 +424,21 @@ public class EmbeddedStyxTests
         Assert.That(log.Entries.Where(e => e.Level >= LogLevel.Warning), Is.Empty);
     }
 
-    [TestCase("http://192.168.1.10:5000", "https://192.168.1.10:5000")]
-    [TestCase("HTTP://relay", "https://relay")]
+    [Test]
+    public async Task AnAddressEndingInASlashConnects()
+    {
+        await using var client = Client("test-host", await Common.NetworkConfig.ComputeEmbeddedBlob(_serverUrl + "/", TestPassword));
+        await client.StartAsync(CancellationToken.None);
+
+        await client.WaitForReady();
+
+        Assert.That(await _server!.GetClients(), Has.Count.EqualTo(1));
+    }
+
     [TestCase("https://relay:5000", "https://relay:5000")]
     [TestCase("192.168.1.10:5000", "https://192.168.1.10:5000")]
     [TestCase("styx.example.com:8080", "https://styx.example.com:8080")]
-    public void WithHttpsUpgradesOnlyPlainHttp(string url, string expected) =>
+    public void WithHttpsSuppliesOnlyAMissingScheme(string url, string expected) =>
         Assert.That(EmbeddedRelayTls.WithHttps(url), Is.EqualTo(expected));
 
     [Test]
@@ -521,6 +464,9 @@ public class EmbeddedStyxTests
         using var response = await http.GetAsync($"{_serverUrl}/");
         return presented!;
     }
+
+    private static Task<byte[]?> Prove(string server, string password, Func<SslPolicyErrors, bool>? trusts = null) =>
+        EmbeddedRelayTls.ProveRelay(server, password, new SocketsHttpHandler(), Bound, CancellationToken.None, trusts);
 
     private async Task<HttpResponseMessage> PostBinding(byte[] proof, string? forwardedFor = null, string? server = null)
     {

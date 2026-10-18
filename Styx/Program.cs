@@ -71,7 +71,7 @@ app.MapGet("/api/status", async (HttpContext http, ITokenVerifier verifier, ICli
 
     var bearer = http.Request.Headers.Authorization.ToString();
     var token = bearer.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) ? bearer["Bearer ".Length..] : "";
-    var verdict = await verifier.Verify(token, RemoteIpOf(http), ct);
+    var verdict = await verifier.Verify(token, ClientRegistry.RemoteIpOf(http), ct);
     if (verdict.Network is not { } network)
     {
         await throttle;
@@ -95,7 +95,7 @@ app.MapPost("/api/network-config", async (HttpContext http, NetworkConfigRequest
         return Results.NotFound();
     }
 
-    var remoteIp = RemoteIpOf(http);
+    var remoteIp = ClientRegistry.RemoteIpOf(http);
     if (limiter.IsBlocked(remoteIp))
     {
         await throttle;
@@ -126,8 +126,6 @@ if (StyxEnvironment.ParallelInvocationsWarning(parallelInvocations) is { } paral
 if (debugMessages) app.Logger.LogInformation("Message debug logging enabled");
 app.Run();
 return 0;
-
-static string RemoteIpOf(HttpContext http) => http.Connection.RemoteIpAddress?.ToString() ?? ClientRegistry.Unknown;
 
 // digests, so the comparison takes the same time whatever either length is
 static bool SecretMatches(string? given, string expected) =>

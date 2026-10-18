@@ -1,6 +1,5 @@
 using System.Collections.Concurrent;
 using System.Security.Claims;
-using Cathedral.Styx;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.Extensions.Logging.Abstractions;
 using Common.Interfaces;
@@ -73,27 +72,6 @@ public class StalledPeerTests : StyxFixtureBase
         Assert.That(await peers["receiver"].NextReceived(), Is.EqualTo(new byte[] { 3 }));
     }
 
-    /// <summary>The clock runs only while something waits: a peer idle for an hour still has the whole deadline.</summary>
-    [Test]
-    public async Task TimeWithNothingWaiting_IsNotCharged()
-    {
-        await using var peers = await ConnectedPeers("sender", "slow");
-        await SlowDown(peers, "slow");
-        _clock.Advance(TimeSpan.FromHours(1));
-
-        var parked = peers["sender"].Server!.Send(["slow"], [1]);
-        var write = await Writes.ParkedReceive();
-        _clock.Advance(PeerWriter.Deadline - TimeSpan.FromTicks(1));
-        write.Take();
-
-        await parked.WaitAsync(Bound);
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(await peers["slow"].NextReceived(), Is.EqualTo(new byte[] { 1 }));
-            Assert.That(peers["slow"].State, Is.EqualTo(HubConnectionState.Connected));
-        }
-    }
-
     /// <summary>
     /// A Send queues its delivery to every target at once, so a slow target in one sender's list neither holds up its other
     /// targets nor lets a later sender's message overtake it at them.
@@ -115,11 +93,13 @@ public class StalledPeerTests : StyxFixtureBase
         Assert.That(await peers["slow"].NextReceived(), Is.EqualTo(new byte[] { 1 }));
     }
 
+    /// <summary>The clock runs only while something waits: a peer idle for an hour still has the whole deadline.</summary>
     [Test]
     public async Task APeerThatTakesTheMessageWithinTheDeadline_StaysConnected()
     {
         await using var peers = await ConnectedPeers("sender", "slow");
         await SlowDown(peers, "slow");
+        _clock.Advance(TimeSpan.FromHours(1));
 
         var parked = peers["sender"].Server!.Send(["slow"], [1]);
         var write = await Writes.ParkedReceive();
@@ -239,6 +219,33 @@ public class StalledPeerTests : StyxFixtureBase
         Assert.That(hub.Written, Is.EqualTo(["a", "a,b,c", "a", "c"]));
     }
 
+    /// <summary>
+    /// A broadcast still waiting on a slow peer does not hold up the next: a displacement queued behind it is in every other
+    /// peer's order before the displacing client is answered, so its first payload cannot overtake the host leaving.
+    /// </summary>
+    [Test]
+    public async Task ADisplacementBehindASlowPeersBroadcast_StillReachesTheOthersAheadOfTheNewcomer()
+    {
+        await using var peers = await ConnectedPeers("slow", "twin", "watcher");
+        await SlowDown(peers, "slow");
+
+        await using var joiner = new TestStyxClient();
+        var token = StyxTestServer.MintToken(peers.Network).ToString();
+        Assert.That((await joiner.Connect(Factory, token, "joiner")).Authenticated, Is.True);
+        await peers["watcher"].WaitForPeers(["slow", "twin", "joiner"], anyOrder: true);
+
+        await using var newcomer = new TestStyxClient();
+        Assert.That((await newcomer.Connect(Factory, token, "twin")).Authenticated, Is.True);
+        await newcomer.Server!.Send(["watcher"], [7]).WaitAsync(Bound);
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(await peers["watcher"].NextReceived(), Is.EqualTo(new byte[] { 7 }));
+            Assert.That(peers["watcher"].PeersWaiting, Is.Positive, "the newcomer's payload overtook the host leaving");
+            Assert.That(await peers["watcher"].WaitForPeers(), Does.Not.Contain("twin"), "the first membership after the payload must show the host leaving");
+        }
+    }
+
     // in two steps, as real time passes, so the early timer fires before the deadline and must wait out the rest
     private void PassTheDeadline()
     {
@@ -247,51 +254,20 @@ public class StalledPeerTests : StyxFixtureBase
     }
 
     // a synchronous stall holds the writing thread, as a write that completes inline would until it does
-    private async Task SlowDown(Peers peers, string hostName, bool synchronously = false)
+    private async Task SlowDown(PeerClients peers, string hostName, bool synchronously = false)
     {
         var connectionId = await ConnectionOf(peers, hostName);
         Volatile.Write(ref _slowPeer, connectionId);
         Writes.Stall(connectionId, synchronously);
     }
 
-    private async Task<string> ConnectionOf(Peers peers, string hostName) =>
+    private async Task<string> ConnectionOf(PeerClients peers, string hostName) =>
         (await Factory.Services.GetRequiredService<IClientRegistry>().GetConnectionId(peers.Network, hostName))!;
 
     // a Receive has joined this connection's queue
     private async Task QueuedFor(string connectionId, string what)
     {
         while (await _queuedReceives.Next(5000, what) != connectionId) { }
-    }
-
-    // peers on a fresh network, each having seen all the others
-    private async Task<Peers> ConnectedPeers(params string[] names)
-    {
-        var network = StyxToken.NewNetworkId();
-        var token = StyxTestServer.MintToken(network).ToString();
-        var peers = new Peers(network, names.ToDictionary(name => name, _ => new TestStyxClient()));
-        try
-        {
-            foreach (var (name, client) in peers.Clients)
-                Assert.That((await client.Connect(Factory, token, name)).Authenticated, Is.True);
-            foreach (var client in peers.Clients.Values)
-                while ((await client.WaitForPeers()).Length < names.Length - 1) { }
-            return peers;
-        }
-        catch
-        {
-            await peers.DisposeAsync();
-            throw;
-        }
-    }
-
-    private sealed record Peers(Guid Network, Dictionary<string, TestStyxClient> Clients) : IAsyncDisposable
-    {
-        public TestStyxClient this[string name] => Clients[name];
-
-        public async ValueTask DisposeAsync()
-        {
-            foreach (var client in Clients.Values) await client.DisposeAsync();
-        }
     }
 
     /// <summary>
