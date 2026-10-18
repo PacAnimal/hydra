@@ -15,8 +15,13 @@ public class SnapBackTests
     private static readonly ScreenPoint ExitEdge = new(2557, 720);
     private static readonly ScreenPoint Park = new(1280, 720);
 
-    private static Task<TestServiceBundle> Visiting(FakeScreenSaverSync? screenSaverSync = null, FakeScreenDetector? screens = null) =>
-        TransitionTestHelper.Visiting(TransitionTestHelper.CreateService(screenSaverSync: screenSaverSync, screens: screens));
+    private readonly StartedServices _services = new();
+
+    [TearDown]
+    public Task TearDown() => _services.StopAll();
+
+    private Task<TestServiceBundle> Visiting(FakeScreenSaverSync? screenSaverSync = null, FakeScreenDetector? screens = null) =>
+        _services.Visiting(TransitionTestHelper.CreateService(screenSaverSync: screenSaverSync, screens: screens));
 
     private static async Task ChangeScreens(FakeScreenDetector screens, ScreenRect screen)
     {
@@ -35,7 +40,6 @@ public class SnapBackTests
             Assert.That(bundle.Platform.IsOnVirtualScreen, Is.False, "returned");
             Assert.That(bundle.Platform.Calls, Has.Member("warp"), "the return warped");
         }
-        await bundle.Service.StopAsync(CancellationToken.None);
         return new ScreenPoint(bundle.Platform.WarpX, bundle.Platform.WarpY);
     }
 
@@ -52,7 +56,6 @@ public class SnapBackTests
 
         await bundle.Relay.FirePeersChanged();
         await bundle.Service.FlushAsync();
-        await bundle.Service.StopAsync(CancellationToken.None);
 
         Assert.That(new ScreenPoint(bundle.Platform.WarpX, bundle.Platform.WarpY), Is.EqualTo(ExitEdge));
     }
@@ -65,7 +68,6 @@ public class SnapBackTests
 
         screenSaverSync.FireActivated();
         await bundle.Service.FlushAsync();
-        await bundle.Service.StopAsync(CancellationToken.None);
 
         Assert.That(new ScreenPoint(bundle.Platform.WarpX, bundle.Platform.WarpY), Is.EqualTo(ExitEdge));
     }
@@ -94,9 +96,7 @@ public class SnapBackTests
     [Test]
     public async Task RemoteOnlyVisit_ReturnsToThePark()
     {
-        var bundle = TransitionTestHelper.CreateRemoteOnlyService();
-        await bundle.Service.StartAsync(CancellationToken.None);
-        await TransitionTestHelper.BringHostOnline(bundle.Relay, "mac");
+        var bundle = await _services.StartOnline(TransitionTestHelper.CreateRemoteOnlyService(), "mac");
 
         Assert.That(await SnapBack(bundle), Is.EqualTo(Park));
     }
@@ -113,9 +113,7 @@ public class SnapBackTests
         screenSaverSync.FireDeactivated();
         await bundle.Service.FlushAsync();
 
-        var virtualAfter = bundle.Platform.IsOnVirtualScreen;
-        await bundle.Service.StopAsync(CancellationToken.None);
-        Assert.That(virtualAfter, Is.False);
+        Assert.That(bundle.Platform.IsOnVirtualScreen, Is.False);
     }
 
     [Test]
@@ -130,9 +128,7 @@ public class SnapBackTests
         screenSaverSync.FireDeactivated();
         await bundle.Service.FlushAsync();
 
-        var virtualAfter = bundle.Platform.IsOnVirtualScreen;
-        await bundle.Service.StopAsync(CancellationToken.None);
-        Assert.That(virtualAfter, Is.True);
+        Assert.That(bundle.Platform.IsOnVirtualScreen, Is.True);
     }
 
     [Test]
@@ -140,17 +136,13 @@ public class SnapBackTests
     {
         // only the restore re-enters, once, when the screensaver ends
         var screenSaverSync = new FakeScreenSaverSync();
-        var bundle = TransitionTestHelper.CreateRemoteOnlyService(screenSaverSync: screenSaverSync);
-        await bundle.Service.StartAsync(CancellationToken.None);
-        await TransitionTestHelper.BringHostOnline(bundle.Relay, "mac");
+        var bundle = await _services.StartOnline(TransitionTestHelper.CreateRemoteOnlyService(screenSaverSync: screenSaverSync), "mac");
         screenSaverSync.FireActivated();
         await bundle.Service.FlushAsync();
 
         bundle.Platform.FireMouseButton(new MouseButtonEvent(MouseButton.Left, false));
 
-        var virtualAfter = bundle.Platform.IsOnVirtualScreen;
-        await bundle.Service.StopAsync(CancellationToken.None);
-        Assert.That(virtualAfter, Is.False);
+        Assert.That(bundle.Platform.IsOnVirtualScreen, Is.False);
     }
 
     // the screensaver interrupted a visit and ended while a button was held, so its restore is pending
@@ -178,7 +170,6 @@ public class SnapBackTests
         else bundle.Platform.FireMouseMove(1000, 720);
 
         var entered = bundle.Relay.Sent<EnterScreenMessage>(MessageKind.EnterScreen, "remote");
-        await bundle.Service.StopAsync(CancellationToken.None);
         Assert.That(entered, Is.Not.Empty);
     }
 
@@ -195,16 +186,14 @@ public class SnapBackTests
 
         bundle.Platform.FireMouseMove(1000, 720);
 
-        var virtualAfter = bundle.Platform.IsOnVirtualScreen;
-        await bundle.Service.StopAsync(CancellationToken.None);
-        Assert.That(virtualAfter, Is.False);
+        Assert.That(bundle.Platform.IsOnVirtualScreen, Is.False);
     }
 
     // a remote-only master on "win", right of "mac", which is the first remote it would otherwise enter
-    private static async Task<TestServiceBundle> RemoteOnlyOnWin(FakeScreenSaverSync screenSaverSync)
+    private async Task<TestServiceBundle> RemoteOnlyOnWin(FakeScreenSaverSync screenSaverSync)
     {
-        var bundle = TransitionTestHelper.CreateRemoteOnlyService(TransitionTestHelper.RemoteOnlyPairConfig, screenSaverSync: screenSaverSync);
-        await TransitionTestHelper.StartOnline(bundle, "mac", "win");
+        var bundle = await _services.StartOnline(
+            TransitionTestHelper.CreateRemoteOnlyService(TransitionTestHelper.RemoteOnlyPairConfig, screenSaverSync: screenSaverSync), "mac", "win");
         for (var i = 0; i < 30; i++)
             bundle.Platform.FireMouseDelta(100, 0);
         Assert.That(bundle.Relay.Sent<EnterScreenMessage>(MessageKind.EnterScreen, "win"), Is.Not.Empty, "pre-condition: on win");
@@ -223,7 +212,6 @@ public class SnapBackTests
         else bundle.Platform.FireMouseMove(1000, 720);
 
         var entered = bundle.Relay.Snapshot().Where(m => m.Kind == MessageKind.EnterScreen).SelectMany(m => m.Targets).ToList();
-        await bundle.Service.StopAsync(CancellationToken.None);
         Assert.That(entered, Is.EqualTo(["win"]));
     }
 
@@ -238,9 +226,7 @@ public class SnapBackTests
 
         bundle.Platform.FireMouseMove(1000, 720);
 
-        var virtualAfter = bundle.Platform.IsOnVirtualScreen;
-        await bundle.Service.StopAsync(CancellationToken.None);
-        Assert.That(virtualAfter, Is.False);
+        Assert.That(bundle.Platform.IsOnVirtualScreen, Is.False);
     }
 
     [Test]
@@ -259,7 +245,6 @@ public class SnapBackTests
         await bundle.Service.FlushAsync();
 
         var entered = bundle.Relay.Snapshot().Where(m => m.Kind == MessageKind.EnterScreen).SelectMany(m => m.Targets).ToList();
-        await bundle.Service.StopAsync(CancellationToken.None);
         Assert.That(entered, Is.EqualTo(["mac"]));
     }
 }

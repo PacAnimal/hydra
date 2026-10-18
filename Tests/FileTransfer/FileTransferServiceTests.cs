@@ -52,9 +52,12 @@ public class FileTransferServiceTests
         return settled.Task.WaitAsync(Bound);
     }
 
-    // creates a service with an aggressive 100ms watchdog/accept timeout for timeout tests
-    private FileTransferService FastTimeoutService() =>
-        new(_dialog, new FakeDropTargetResolver(_tempRoot), NullLogger<FileTransferService>.Instance, watchdogTimeoutMs: 100);
+    // a service whose watchdog and accept timeout run on the test's clock
+    private FileTransferService SteppedService(StartedTimers clock) =>
+        new(_dialog, new FakeDropTargetResolver(_tempRoot), NullLogger<FileTransferService>.Instance, clock: clock);
+
+    // past the first timer the service starts
+    private static async Task PassTheFirstTimer(StartedTimers clock) => clock.Advance(await clock.Started.Next("the watchdog to start"));
 
     // routes a message to _service as if it came from the given host
     private Task Simulate(string host, MessageKind kind, object msg) => Simulate(_service, host, kind, msg, _relay);
@@ -732,11 +735,13 @@ public class FileTransferServiceTests
     [Test]
     public async Task Watchdog_NoChunksAfterStart_AbortsReceive()
     {
-        using var service = FastTimeoutService();
+        var clock = new StartedTimers();
+        using var service = SteppedService(clock);
         var settled = WhenTransferSettles(service, _dialog);
         await Simulate(service, "master", MessageKind.FileTransferRequest, new FileTransferRequestMessage(), _relay);
         await Simulate(service, "master", MessageKind.FileTransferStart, new FileTransferStartMessage(["a.txt"], 100), _relay);
 
+        await PassTheFirstTimer(clock);
         await settled;
 
         using (Assert.EnterMultipleScope())
@@ -749,10 +754,12 @@ public class FileTransferServiceTests
     [Test]
     public async Task InitiateSend_NoAcceptedResponseWithinTimeout_ShowsError()
     {
-        using var service = FastTimeoutService();
+        var clock = new StartedTimers();
+        using var service = SteppedService(clock);
         var settled = WhenTransferSettles(service, _dialog);
         service.InitiateSend([CreateTempFile()], "slave", _relay);
 
+        await PassTheFirstTimer(clock);
         await settled;
 
         using (Assert.EnterMultipleScope())
@@ -822,6 +829,18 @@ public class FileTransferServiceTests
         {
             Assert.That(osd, Is.EqualTo("Finder is not focused"));
             Assert.That(_service.GetCopyBuffer()?.SourceHost, Is.EqualTo("original-host"));
+        }
+    }
+
+    [Test]
+    public void SelectionResult_ToResponse_SaysWhatHappened()
+    {
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(FileSelectionResult.Failure.ToResponse("Finder"), Is.EqualTo(new FileSelectionResponseMessage(null, FileSelectionResult.FailedMessage)));
+            Assert.That(new FileSelectionResult(false, null).ToResponse("Finder").Message, Is.EqualTo("Finder is not focused"));
+            Assert.That(new FileSelectionResult(true, null).ToResponse("Finder"), Is.EqualTo(new FileSelectionResponseMessage(null)));
+            Assert.That(new FileSelectionResult(true, ["a.txt"]).ToResponse("Finder").Paths, Is.EqualTo(["a.txt"]));
         }
     }
 

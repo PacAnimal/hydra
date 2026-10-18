@@ -9,14 +9,10 @@ namespace Tests.Relay;
 [TestFixture]
 public class ClipboardSyncTests
 {
-    private TestServiceBundle? _bundle;
+    private readonly StartedServices _services = new();
 
     [TearDown]
-    public async Task TearDown()
-    {
-        if (_bundle != null) await TransitionTestHelper.Stop(_bundle);
-        _bundle = null;
-    }
+    public Task TearDown() => _services.StopAll();
 
     // -- master pushes clipboard on screen enter --
 
@@ -746,8 +742,7 @@ public class ClipboardSyncTests
     private async Task<TestServiceBundle> StartMaster(IClipboardSync clipboard, PeerPlatform remotePlatform = PeerPlatform.Linux, IHydraProfile? profile = null,
         PeerPlatform? localPlatform = null)
     {
-        _bundle = TransitionTestHelper.CreateService(profile: profile, clipboard: clipboard, localPlatform: localPlatform);
-        return await TransitionTestHelper.StartOnline(_bundle, remotePlatform);
+        return await _services.StartOnline(TransitionTestHelper.CreateService(profile: profile, clipboard: clipboard, localPlatform: localPlatform), remotePlatform);
     }
 
     // onto the remote and back off its left edge, which pulls from it; the middle move is the warp artifact, dropped

@@ -11,6 +11,11 @@ namespace Tests.Screen;
 [TestFixture]
 public class ScreenNamingTests
 {
+    private readonly StartedServices _services = new();
+
+    [TearDown]
+    public Task StopServices() => _services.StopAll();
+
     [TestCase("mac", "mac")]
     [TestCase("mac", "mac:0")]
     [TestCase("mac", "mac:12")]
@@ -68,8 +73,7 @@ public class ScreenNamingTests
         var log = new CapturingLog<InputRouter>(LogLevel.Warning);
         var world = new WorldState();
         var ticks = new SteppableTicks();
-        var bundle = TransitionTestHelper.CreateService(profile: TransitionTestHelper.ChainConfig, world: world, log: log, getTickCount: ticks.Now);
-        await bundle.Service.StartAsync(CancellationToken.None);
+        var bundle = await _services.Start(TransitionTestHelper.CreateService(profile: TransitionTestHelper.ChainConfig, world: world, log: log, getTickCount: ticks.Now));
         await TransitionTestHelper.BringHostsOnline(bundle.Relay, ["remote", "remote2"]);
         bundle.Platform.FireMouseMove(2559, 720);
         for (var i = 0; i < 30; i++)
@@ -85,7 +89,6 @@ public class ScreenNamingTests
 
         var sent = bundle.Relay.Snapshot();
         var peerScreens = await world.GetPeerScreensSnapshot();
-        await TransitionTestHelper.Stop(bundle);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(peerScreens["remote"].Select(e => e.Name), Is.EqualTo(["remote"]), "the foreign entry never reaches the world");
@@ -100,8 +103,7 @@ public class ScreenNamingTests
     public async Task RepeatedNameWithinOnePeer_IsDropped_AndTheCursorStillEnters()
     {
         var world = new WorldState();
-        var bundle = TransitionTestHelper.CreateService(world: world);
-        await bundle.Service.StartAsync(CancellationToken.None);
+        var bundle = await _services.Start(TransitionTestHelper.CreateService(world: world));
         await bundle.Relay.FirePeersChanged("remote");
         await Advertise(bundle.Relay, "remote", Entry("remote:0", 0), Entry("REMOTE:0", 2560));
 
@@ -109,7 +111,6 @@ public class ScreenNamingTests
 
         var peerScreens = await world.GetPeerScreensSnapshot();
         var entered = bundle.Platform.IsOnVirtualScreen;
-        await TransitionTestHelper.Stop(bundle);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(peerScreens["remote"].Select(e => e.Name), Is.EqualTo(["remote:0"]));
@@ -121,14 +122,12 @@ public class ScreenNamingTests
     public async Task OnlyForeignNames_AreHandledLikeNoScreens_KeepingWhatThePeerHad()
     {
         var world = new WorldState();
-        var bundle = TransitionTestHelper.CreateService(world: world);
-        await bundle.Service.StartAsync(CancellationToken.None);
+        var bundle = await _services.Start(TransitionTestHelper.CreateService(world: world));
         await TransitionTestHelper.BringHostOnline(bundle.Relay, "remote");
 
         await Advertise(bundle.Relay, "remote", Entry("home:0", 0));
 
         var peerScreens = await world.GetPeerScreensSnapshot();
-        await TransitionTestHelper.Stop(bundle);
         Assert.That(peerScreens["remote"].Select(e => e.Name), Is.EqualTo(["remote"]));
     }
 

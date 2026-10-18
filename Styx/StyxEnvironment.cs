@@ -71,21 +71,18 @@ public static class StyxEnvironment
     }
 
     /// <summary>How many of a client's invocations <c>/relay/parallel</c> runs at once: <c>RELAY_PARALLEL_INVOCATIONS</c>, 4 when unset.</summary>
-    public static int ReadParallelInvocations(Func<string, string?> environment)
-    {
-        if (NullIfEmpty(environment(Constants.ParallelInvocationsEnvVar)) is not { } value) return Constants.DefaultParallelInvocations;
-        if (!int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var width) || width is < 1 or > Constants.ParallelInvocationsLimit)
-            throw new StyxConfigurationException(
-                $"{Constants.ParallelInvocationsEnvVar} is \"{value}\", not a whole number from 1 to {Constants.ParallelInvocationsLimit}");
-        return width;
-    }
+    public static int ReadParallelInvocations(Func<string, string?> environment) =>
+        ReadInt(environment, Constants.ParallelInvocationsEnvVar, Constants.DefaultParallelInvocations, Constants.ParallelInvocationsLimit, "a whole number");
 
-    public static int ReadLocalPort(Func<string, string?> environment)
+    public static int ReadLocalPort(Func<string, string?> environment) => ReadInt(environment, Constants.LocalPortEnvVar, Constants.DefaultLocalPort, 65535, "a port");
+
+    // the variable as a number from 1 to max, the fallback when unset
+    private static int ReadInt(Func<string, string?> environment, string name, int fallback, int max, string what)
     {
-        if (NullIfEmpty(environment(Constants.LocalPortEnvVar)) is not { } value) return Constants.DefaultLocalPort;
-        if (!int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var port) || port is < 1 or > 65535)
-            throw new StyxConfigurationException($"{Constants.LocalPortEnvVar} is \"{value}\", not a port from 1 to 65535");
-        return port;
+        if (NullIfEmpty(environment(name)) is not { } value) return fallback;
+        if (!int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var number) || number < 1 || number > max)
+            throw new StyxConfigurationException($"{name} is \"{value}\", not {what} from 1 to {max}");
+        return number;
     }
 
     // on only for "true", in any casing

@@ -23,7 +23,7 @@ public class SlaveSelectionConnectionTests : StyxFixtureBase
     private readonly QueryDuringSecondLogin _relay = new();
     private readonly StartedServices _services = new();
     private readonly List<GatedFileSelectionDetector> _finders = [];
-    private readonly List<TaskCompletionSource> _drops = [];
+    private readonly List<Gate> _drops = [];
     private readonly List<TestableSlaveRelay> _slaves = [];
 
     protected override void ConfigureRelay(IServiceCollection services) =>
@@ -33,7 +33,7 @@ public class SlaveSelectionConnectionTests : StyxFixtureBase
     [TearDown]
     public async Task TearDown()
     {
-        foreach (var drop in _drops) drop.TrySetResult();
+        foreach (var drop in _drops) drop.Release();
         foreach (var finder in _finders) finder.Release(new FileSelectionResult(true, []));
         _drops.Clear();
         _finders.Clear();
@@ -101,7 +101,7 @@ public class SlaveSelectionConnectionTests : StyxFixtureBase
         Assert.That(slave.RequestReconnect(), Is.True);
         await finder.Queried.WaitAsync(Bound);
 
-        drop.SetResult();
+        drop.Release();
 
         await finder.Cancelled.WaitAsync(Bound);
     }
@@ -136,10 +136,9 @@ public class SlaveSelectionConnectionTests : StyxFixtureBase
     private sealed class QueryDuringSecondLogin : IHubFilter
     {
         private readonly ConcurrentDictionary<string, int> _logins = new();
-        private readonly ConcurrentDictionary<string, TaskCompletionSource> _held = new();
+        private readonly ConcurrentDictionary<string, Gate> _held = new();
 
-        public TaskCompletionSource HoldSecondLogin(string authorization) =>
-            _held.GetOrAdd(authorization, _ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+        public Gate HoldSecondLogin(string authorization) => _held.GetOrAdd(authorization, _ => new Gate(held: true));
 
         public async ValueTask<object?> InvokeMethodAsync(HubInvocationContext context, Func<HubInvocationContext, ValueTask<object?>> next)
         {
@@ -150,7 +149,7 @@ public class SlaveSelectionConnectionTests : StyxFixtureBase
                 await context.Hub.Clients.Caller.SendAsync(nameof(IStyxClient.Receive), Master, "127.0.0.1", query, context.Context.ConnectionAborted);
                 if (_held.TryGetValue(login.Authorization, out var drop))
                 {
-                    await drop.Task;
+                    await drop.Passed();
                     context.Context.Abort();
                     throw new HubException("dropped by the relay");
                 }

@@ -19,6 +19,10 @@ namespace Hydra.Relay;
 public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log, IWorldState peerState)
     : SimpleHostedService(log), IStyxClient, IRelaySender
 {
+    protected ILogger<RelayConnection> Log => log;
+    protected IHydraProfile Profile => profile;
+    protected IWorldState PeerState => peerState;
+
     private IStyxServer? _server;
     private RelayEncryption? _encryption;
     // set once the relay accepts us, cleared by EndSession
@@ -37,17 +41,16 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     private long _completedWakeGeneration;
     private TaskCompletionSource _resumeConnection = CompletedSignal();
     private TaskCompletionSource? _suspensionComplete;
+    // Guards what the next enqueue may join (the open movement batch and key bundle) and CanEnqueue: every Enqueue* and
+    // Close* runs under it, and teardown clears the session under it before failing what is queued, so a send checked
+    // outside it could enqueue after that and strand an open bundle into the next connection.
     private readonly Lock _sendOrderLock = new();
     private MovementBatch? _openMovementBatch;
 
     // how many events one key frame may carry; a full bundle spills into a new one, so nothing is dropped
     internal const int KeyBundleCapacity = 64;
 
-    /// <summary>
-    /// Key events queued behind a frame already in flight — see <see cref="KeyBundle"/>. Guarded by the same
-    /// <c>_sendOrderLock</c> as the movement batch, because they are one question: what the NEXT enqueue may
-    /// still be added to.
-    /// </summary>
+    // key events queued behind a frame already in flight (see KeyBundle)
     private KeyBundle? _openKeyBundle;
     private RelayTransportSnapshot? _transport;
     // the embedded relay's cert fingerprint once it has proven the password; every TLS connection must present it
@@ -141,14 +144,10 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         }
     }
 
-    /// <summary>
-    /// Queues one key event, joining the bundle already open for these targets. Call with <c>_sendOrderLock</c> HELD.
-    /// </summary>
+    // joins the bundle already open for these targets
     private void EnqueueKey(string[] targetHosts, KeyEventMessage keyEvent)
     {
-        // The MOVEMENT batch only — this is about to open or extend the key bundle. A batch queued
-        // ahead of this key must stop absorbing, or a move made AFTER the keystroke merges into a frame
-        // that sits in front of it and is delivered first, at a coalesced position.
+        // the movement batch only: a move made after this key must not merge into a frame queued before it
         _openMovementBatch = null;
         if (_openKeyBundle?.TryAppend(targetHosts, keyEvent) == true) return;
 
@@ -157,10 +156,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         _inputQueue.Writer.TryWrite(OutboundMessage.ForKeys(targetHosts, bundle));
     }
 
-    /// <summary>
-    /// Queues an absolute move, joining the open movement batch where it can. Call with <c>_sendOrderLock</c>
-    /// HELD.
-    /// </summary>
+    // joins the open movement batch where it can
     private void EnqueueAbsolute(string[] targetHosts, byte[] payload)
     {
         CloseKeyBundle();
@@ -168,10 +164,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         StartMovementBatch(targetHosts, MovementBatch.CreateAbsolute(targetHosts, payload));
     }
 
-    /// <summary>
-    /// Queues a relative move, accumulating into the open movement batch where it can. Call with
-    /// <c>_sendOrderLock</c> HELD.
-    /// </summary>
+    // accumulates into the open movement batch where it can
     private void EnqueueDelta(string[] targetHosts, int dx, int dy)
     {
         CloseKeyBundle();
@@ -185,41 +178,19 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         _inputQueue.Writer.TryWrite(OutboundMessage.ForMovement(targetHosts, movement));
     }
 
-    /// <summary>
-    /// Closes whatever is still open to appending — the movement batch and the key bundle both.
-    ///
-    /// <para><b>Every enqueue that is not itself appending must call this.</b> An open batch or bundle is a
-    /// promise that the item already queued for it is still the LAST thing queued; enqueue past one without
-    /// closing it and the next append joins a frame that now sits behind this message, so it is delivered
-    /// before it. For keys that is a keystroke arriving before the mouse move that preceded it, which on a
-    /// KVM is a click in the wrong place.</para>
-    ///
-    /// <para>Call with <c>_sendOrderLock</c> HELD.</para>
-    /// </summary>
+    // every enqueue that does not append calls this, or the next append joins a frame now queued behind it
     private void CloseOpenBatches()
     {
         _openMovementBatch = null;
         CloseKeyBundle();
     }
 
-    /// <summary>
-    /// Closes the key bundle alone, for the paths that are about to append to the MOVEMENT batch and must
-    /// not close the thing they are opening — closing that would cost every bit of coalescing. Call with
-    /// <c>_sendOrderLock</c> HELD.
-    /// </summary>
+    // the key bundle alone, for a move about to join the movement batch
     private void CloseKeyBundle() => _openKeyBundle = null;
 
-    /// <summary>
-    /// Whether a connection is up to send on. Check it INSIDE <c>_sendOrderLock</c>, because teardown clears
-    /// both under the same lock before it drains. Checked outside, a send preempted between the check and the
-    /// lock enqueues AFTER <c>FailQueued</c> has run — stranding the item, and with it an open bundle, into the
-    /// next connection, where later keys append to a frame from before the drop.
-    /// </summary>
+    // a session to send on; read under _sendOrderLock
     private bool CanEnqueue => _server != null && _encryption != null;
 
-    // The caller already has dx/dy as ints (see IRelaySender.SendMouseDelta) — accumulating them here
-    // costs one addition per event instead of a JSON decode, and Snapshot() encodes only once, right
-    // before a batch actually goes out.
     public void SendMouseDelta(string[] targetHosts, int dx, int dy)
     {
         OnSentDelta(targetHosts, dx, dy);
@@ -583,14 +554,14 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         }
     }
 
-    private (TimeSpan Delay, long WakeStateVersion) CurrentReconnectDelayState()
+    private ReconnectDelayState CurrentReconnectDelayState()
     {
         lock (_connectionLock)
         {
             var delay = WakeClock.GetTimestamp() < _fastReconnectUntil
                 ? SystemWakeReconnectDelay
                 : ReconnectDelay;
-            return (delay, _wakeStateVersion);
+            return new ReconnectDelayState(delay, _wakeStateVersion);
         }
     }
 
@@ -661,14 +632,10 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     }
 
     /// <summary>
-    /// Clears the session and reports whether it was live, which is what decides the disconnect callbacks.
-    /// Live means authenticated OR having handled an inbound message: the relay delivers traffic during the
-    /// handshake, so a slave may already hold keys or a master config by the time a login times out, and
+    /// Clears the session, under <c>_sendOrderLock</c>, and reports whether it was live, which is what decides the
+    /// disconnect callbacks. Live means authenticated OR having handled an inbound message: the relay delivers traffic
+    /// during the handshake, so a slave may already hold keys or a master config by the time a login times out, and
     /// that state needs the same unwinding as a dropped connection.
-    ///
-    /// <para>UNDER THE SEND LOCK, so a send is either wholly before this (and gets drained) or wholly after
-    /// it (and sees null and drops). Cleared outside, a send could slip between the two and leave an item —
-    /// and an open bundle — in a queue nobody will read again.</para>
     /// </summary>
     private bool EndSession()
     {
@@ -714,7 +681,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         }
 
         await using var con = new HubConnectionBuilder()
-            .WithUrl($"{netConfig.StyxServer}/relay", ConfigureHubUrl)
+            .WithUrl(netConfig.StyxServer + StyxConstants.RelayPath, ConfigureHubUrl)
             .WithKeepAliveInterval(TimeSpan.FromSeconds(StyxConstants.KeepAliveSeconds))
             .WithServerTimeout(TimeSpan.FromSeconds(StyxConstants.ClientTimeoutSeconds))
             .AddMessagePackProtocol()
@@ -816,12 +783,9 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         {
             // One lane stopping means this connection is over, so wake the other rather than leaving it
             // parked in WaitToReadAsync until something else happens to cancel it.
+            // a cancellation is not caught: Execute classifies the drop, and its log line is the only one a master writes
             await disco.CancelAsync();
         }
-
-        // NOT caught. The cancellation has to reach Execute, which is where a drop is CLASSIFIED — lost,
-        // suspended for sleep, or shutting down — and where the only log line a master ever writes about
-        // it comes from, so an idle relay drop is never a silent reconnect.
     }
 
     // a non-blocking invocation: done once written to the transport, with nothing back from the relay
@@ -958,11 +922,8 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
             remote.Address.ToString(),
             remote.Port,
             DateTimeOffset.UtcNow,
-            Interlocked.Read(ref _connectionAttempts),
-            Interlocked.Read(ref _messagesSent),
-            Interlocked.Read(ref _messagesReceived),
-            Interlocked.Read(ref _bytesSent),
-            Interlocked.Read(ref _bytesReceived));
+            // the counters are read live by Transport
+            0, 0, 0, 0, 0);
     }
 
     // Lets SuspendConnectionAsync/RequestReconnect cancel whichever Connect() attempt is currently in
@@ -986,14 +947,11 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
             if (suspend) cancellation.Cancel();
         }
 
-        // an attempt can end without anything cancelling it, a refused login for one, and work tied to its
-        // ConnectionToken must still see it end
         public void Dispose()
         {
             lock (_owner._connectionLock)
                 if (ReferenceEquals(_owner._connectionCancellation, _cancellation))
                     _owner._connectionCancellation = null;
-            _cancellation.Cancel();
         }
     }
 
@@ -1019,4 +977,6 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         internal static OutboundMessage Reliable(string[] targets, byte[] payload, TaskCompletionSource completion, CancellationToken cancel) =>
             new(targets, payload, completion, null, null, cancel);
     }
+
+    private sealed record ReconnectDelayState(TimeSpan Delay, long WakeStateVersion);
 }

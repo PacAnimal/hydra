@@ -109,18 +109,10 @@ public sealed class WindowsClipboardSync : IClipboardSync, IDisposable
     }
 
     // CopiedPrimary's readTextCopy, by clipboard format; one attempt, since it runs under CopiedPrimary's gate
-    private string? ReadTextCopy()
-    {
-        if (!NativeMethods.OpenClipboard(_ownerWindow)) throw new IOException("the clipboard is held by another app");
-        try
-        {
-            return NotTextCopyFormats.Any(NativeMethods.IsClipboardFormatAvailable) || IsConcealed() ? null : ReadOpenText();
-        }
-        finally
-        {
-            NativeMethods.CloseClipboard();
-        }
-    }
+    private string? ReadTextCopy() =>
+        NativeMethods.OpenClipboard(_ownerWindow)
+            ? WhileOpen(() => NotTextCopyFormats.Any(NativeMethods.IsClipboardFormatAvailable) || IsConcealed() ? null : ReadOpenText())
+            : throw new IOException("the clipboard is held by another app");
 
     private static bool IsConcealed()
     {
@@ -147,7 +139,7 @@ public sealed class WindowsClipboardSync : IClipboardSync, IDisposable
             if (data == null) continue;
             // raw PNG bytes, else a device-independent bitmap converted to PNG
             if (format != CfPng) return DibToPng(data);
-            return _echo.IsDuplicateImage(data) ? null : data;
+            return _echo.FilterImage(data);
         }
         return null;
     });
@@ -163,37 +155,31 @@ public sealed class WindowsClipboardSync : IClipboardSync, IDisposable
     public byte[]? GetRtf() => WithClipboard(() =>
         NativeMethods.IsClipboardFormatAvailable(CfRtf) ? _echo.FilterRtf(TrimTrailingNulls(ReadGlobalMemory(NativeMethods.GetClipboardData(CfRtf)))) : null);
 
-    private T? WithClipboard<T>(Func<T?> read) where T : class
+    private T? WithClipboard<T>(Func<T?> read) where T : class => OpenClipboard() ? WhileOpen(read) : null;
+
+    // runs against a clipboard the caller opened, closing it after, then afterClose
+    private static T WhileOpen<T>(Func<T> body, Action? afterClose = null)
     {
-        if (!OpenClipboard()) return null;
         try
         {
-            return read();
+            return body();
         }
         finally
         {
             NativeMethods.CloseClipboard();
+            afterClose?.Invoke();
         }
     }
 
     public bool SetClipboard(ClipboardSnapshot contents)
     {
-        return _primary.Write(contents.PrimaryText, leftAt =>
+        return _primary.Write(contents.PrimaryText, leftAt => OpenClipboard() && WhileOpen(() => WriteOpenClipboard(contents), () =>
         {
-            if (!OpenClipboard()) return false;
-            try
-            {
-                return WriteOpenClipboard(contents);
-            }
-            finally
-            {
-                NativeMethods.CloseClipboard();
-                // after closing, which moves the sequence number too; read before asking who owns the clipboard, so
-                // another app writing after either leaves it untaken, never taken as ours
-                var after = NativeMethods.GetClipboardSequenceNumber();
-                if (NativeMethods.GetClipboardOwner() == _ownerWindow) leftAt(after);
-            }
-        });
+            // after closing, which moves the sequence number too; read before asking who owns the clipboard, so
+            // another app writing after either leaves it untaken, never taken as ours
+            var after = NativeMethods.GetClipboardSequenceNumber();
+            if (NativeMethods.GetClipboardOwner() == _ownerWindow) leftAt(after);
+        }));
     }
 
     private bool WriteOpenClipboard(ClipboardSnapshot contents)
@@ -350,7 +336,6 @@ public sealed class WindowsClipboardSync : IClipboardSync, IDisposable
 
             // a 40-byte BITMAPINFOHEADER with BI_BITFIELDS is followed by 3 (or 4 with alpha) DWORD colour
             // masks that sit BEFORE the pixel data — screenshots (Snipping Tool/PrtScn) arrive this way.
-            // Without counting them, bfOffBits was 12+ bytes short and the image decoded as garbage / failed.
             // (V4/V5 headers carry the masks inside the header, so biSize>40 needs no extra.)
             const int biBitfields = 3, biAlphaBitfields = 6;
             var biCompression = BitConverter.ToInt32(dib, 16);

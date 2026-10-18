@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using Hydra.Platform;
+using Hydra.Relay;
 using Microsoft.Extensions.Logging.Abstractions;
 using Tests.Setup;
 
@@ -24,7 +25,7 @@ public class ClipboardUtilsRichTests
         echo.Track(new ClipboardSnapshot(null, null, [9, 9]));
         echo.Track(new ClipboardSnapshot("written", null, null));
 
-        Assert.That(echo.IsDuplicateImage([9, 9]), Is.False);
+        Assert.That(echo.FilterImage([9, 9]), Is.Not.Null);
     }
 
     [Test]
@@ -39,7 +40,7 @@ public class ClipboardUtilsRichTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(echo.FilterText("written"), Is.EqualTo("written"));
-            Assert.That(echo.IsDuplicateImage([9, 9]), Is.False);
+            Assert.That(echo.FilterImage([9, 9]), Is.Not.Null);
             Assert.That(echo.FilterHtml("<b>written</b>"), Is.EqualTo("<b>written</b>"));
             Assert.That(echo.FilterRtf([7]), Is.EqualTo(new byte[] { 7 }));
         }
@@ -122,7 +123,7 @@ public class ClipboardUtilsRichTests
     [Test]
     public void ValidateFields_DropsOversizedHtmlAndRtf_KeepsValid()
     {
-        var result = ClipboardUtils.ValidateFields("t", null, null, OversizedText(), Oversized(), Log, "test", "host");
+        var result = ClipboardWire.From(new ClipboardPushMessage("t", Html: OversizedText(), Rtf: Oversized()), Log, "test", "host");
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result.Text, Is.EqualTo("t"));
@@ -134,7 +135,7 @@ public class ClipboardUtilsRichTests
     [Test]
     public void ValidateFields_KeepsValidRich()
     {
-        var result = ClipboardUtils.ValidateFields("t", null, null, "<b>x</b>", [3], Log, "test", "host");
+        var result = ClipboardWire.From(new ClipboardPushMessage("t", Html: "<b>x</b>", Rtf: [3]), Log, "test", "host");
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result.Html, Is.EqualTo("<b>x</b>"));

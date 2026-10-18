@@ -30,10 +30,8 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
     // by Own, GetPrimaryText and SelectionClear, so a clear for an earlier loss never nulls new data and a selection
     // another app has just taken is never answered with ours
     private readonly Lock _dataLock = new();
-    private string? _ownedText;
+    private ClipboardSnapshot? _ownedClipboard;
     private string? _ownedPrimaryText;
-    private byte[]? _ownedImagePng;
-    private string? _ownedHtml;
     private readonly ClipboardEchoFilter _echo = new(() => true);
 
     // GetText/GetImagePng synchronization — only one read in flight at a time
@@ -99,14 +97,9 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
     }
 
     public byte[]? GetImagePng() =>
-        ReadForeignClipboard(_atomHydraImageClip, _atomImagePng) is { } read && !_echo.IsDuplicateImage(read.Data) ? read.Data : null;
+        _echo.FilterImage(ReadForeignClipboard(_atomHydraImageClip, _atomImagePng)?.Data);
 
-    // text/html is UTF-8 and never triggers the STRING fallback, so decode as UTF-8 directly
-    public string? GetHtml() =>
-        ReadForeignClipboard(_atomHydraHtmlClip, _atomTextHtml) is { } read ? _echo.FilterHtml(Encoding.UTF8.GetString(read.Data)) : null;
-
-    // X11 has no standardised RTF selection target — HTML is the rich vehicle here, text is the fallback
-    public byte[]? GetRtf() => null;
+    public string? GetHtml() => _echo.FilterHtml(ReadForeignClipboard(_atomHydraHtmlClip, _atomTextHtml)?.DecodeText());
 
     public bool SetPrimaryText(string text)
     {
@@ -120,12 +113,7 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
         _echo.Track(contents);
 
         // the snapshot is the authoritative new clipboard — replace all owned representations
-        Own(_atomClipboard, () =>
-        {
-            _ownedText = contents.Text;
-            _ownedImagePng = contents.ImagePng;
-            _ownedHtml = contents.Html;
-        });
+        Own(_atomClipboard, () => _ownedClipboard = contents);
 
         if (contents.PrimaryText is { } primaryText) SetPrimaryText(primaryText);
         return true;
@@ -191,7 +179,7 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
                     lock (_dataLock)
                     {
                         if (NativeMethods.XGetSelectionOwner(_display, sel) == _window) break;
-                        if (sel == _atomClipboard) { _ownedText = null; _ownedImagePng = null; _ownedHtml = null; }
+                        if (sel == _atomClipboard) _ownedClipboard = null;
                         else if (sel == NativeMethods.XA_PRIMARY) _ownedPrimaryText = null;
                     }
                     break;
@@ -233,17 +221,19 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
 
     private nint WriteTargetToProperty(nint selection, nint requestor, nint target, nint property)
     {
+        ClipboardSnapshot? clipboard;
+        string? text;
+        lock (_dataLock)
+        {
+            clipboard = selection == _atomClipboard ? _ownedClipboard : null;
+            text = selection == NativeMethods.XA_PRIMARY ? _ownedPrimaryText : clipboard?.Text;
+        }
+
         if (target == _atomTargets)
         {
             var atoms = new List<nint> { _atomTargets, _atomUtf8String, NativeMethods.XA_STRING };
-            bool hasImage, hasHtml;
-            lock (_dataLock)
-            {
-                hasImage = selection == _atomClipboard && _ownedImagePng != null;
-                hasHtml = selection == _atomClipboard && _ownedHtml != null;
-            }
-            if (hasImage) atoms.Add(_atomImagePng);
-            if (hasHtml) atoms.Add(_atomTextHtml);
+            if (clipboard?.ImagePng != null) atoms.Add(_atomImagePng);
+            if (clipboard?.Html != null) atoms.Add(_atomTextHtml);
 
             _ = NativeMethods.XChangeProperty(_display, requestor, property,
                 NativeMethods.XA_ATOM, 32, NativeMethods.PropModeReplace, atoms.ToArray(), atoms.Count);
@@ -251,30 +241,13 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
         }
 
         if (target == _atomImagePng)
-        {
-            byte[]? img;
-            lock (_dataLock)
-                img = selection == _atomClipboard ? _ownedImagePng : null;
-            return img == null ? nint.Zero : ServeBytes(requestor, property, _atomImagePng, img);
-        }
+            return clipboard?.ImagePng is { } image ? ServeBytes(requestor, property, _atomImagePng, image) : nint.Zero;
 
         if (target == _atomTextHtml)
-        {
-            string? html;
-            lock (_dataLock)
-                html = selection == _atomClipboard ? _ownedHtml : null;
-            return html == null ? nint.Zero : ServeBytes(requestor, property, _atomTextHtml, Encoding.UTF8.GetBytes(html));
-        }
+            return clipboard?.Html is { } html ? ServeBytes(requestor, property, _atomTextHtml, Encoding.UTF8.GetBytes(html)) : nint.Zero;
 
-        if (target != _atomUtf8String && target != NativeMethods.XA_STRING)
+        if ((target != _atomUtf8String && target != NativeMethods.XA_STRING) || text == null)
             return nint.Zero;
-
-        string? text;
-        lock (_dataLock)
-        {
-            text = selection == NativeMethods.XA_PRIMARY ? _ownedPrimaryText : _ownedText;
-        }
-        if (text == null) return nint.Zero;
 
         // UTF8_STRING carries UTF-8; the legacy STRING target is ISO-8859-1 (Latin-1) per ICCCM
         var bytes = target == NativeMethods.XA_STRING
@@ -362,11 +335,14 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
     private void HandleSelectionNotify(ref XEvent ev)
     {
         var activeSelection = _activeReadSelection;
-        if (activeSelection == nint.Zero || ev.SelectionNotifySelection != activeSelection)
-            return;
-
         var propertyAtom = _activeReadProperty;
         var targetAtom = _activeReadTarget;
+
+        // a late answer to a read that already timed out names another target or property
+        var expectedTarget = _fallbackToString ? NativeMethods.XA_STRING : targetAtom;
+        if (activeSelection == nint.Zero || ev.SelectionNotifySelection != activeSelection || ev.SelectionNotifyTarget != expectedTarget
+            || (ev.SelectionNotifyProperty != nint.Zero && ev.SelectionNotifyProperty != propertyAtom))
+            return;
 
         if (ev.SelectionNotifyProperty == nint.Zero)
         {

@@ -18,14 +18,8 @@ public class ParallelRelayTests : StyxFixtureBase
     [TestCase(Parallel, Parallel)]
     public async Task PeersOnEitherPath_SeeEachOther_AndExchangeSends(string firstPath, string secondPath)
     {
-        var token = StyxTestServer.MintToken().ToString();
-        await using var first = new TestStyxClient();
-        await using var second = new TestStyxClient();
-        await first.Connect(Factory, token, "first", firstPath);
-        await second.Connect(Factory, token, "second", secondPath);
-
-        await first.WaitForPeers(["second"]);
-        await second.WaitForPeers(["first"]);
+        await using var peers = await ConnectedPeers(name => name == "first" ? firstPath : secondPath, "first", "second");
+        var (first, second) = (peers["first"], peers["second"]);
 
         await first.Server!.Send(["second"], [1]);
         await second.Server!.Send(["first"], [2]);

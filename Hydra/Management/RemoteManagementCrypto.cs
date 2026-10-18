@@ -31,19 +31,7 @@ internal static class RemoteManagementCrypto
 
     internal static string HashPairingCode(string code) => code.GetSha256Hash();
 
-    // hex is fixed-width per input length, so a straight byte compare here carries no timing signal
-    // beyond what the hex decode itself does — same fixed-time guarantee as FixedEquals, hex form
-    internal static bool HashesEqual(string left, string right)
-    {
-        try
-        {
-            return CryptographicOperations.FixedTimeEquals(Convert.FromHexString(left), Convert.FromHexString(right));
-        }
-        catch (FormatException)
-        {
-            return false;
-        }
-    }
+    internal static bool HashesEqual(string left, string right) => FixedEquals(left, right, Convert.FromHexString);
 
     private static string Sign(string secret, params string[] fields)
     {
@@ -51,11 +39,14 @@ internal static class RemoteManagementCrypto
         return Base64Url.EncodeToString(HMACSHA256.HashData(Base64Url.DecodeFromChars(secret), data));
     }
 
-    private static bool FixedEquals(string left, string right)
+    private static bool FixedEquals(string left, string right) => FixedEquals(left, right, text => Base64Url.DecodeFromChars(text));
+
+    // a fixed-time compare of what two encodings decode to; false when either does not decode
+    private static bool FixedEquals(string left, string right, Func<string, byte[]> decode)
     {
         try
         {
-            return CryptographicOperations.FixedTimeEquals(Base64Url.DecodeFromChars(left), Base64Url.DecodeFromChars(right));
+            return CryptographicOperations.FixedTimeEquals(decode(left), decode(right));
         }
         catch (FormatException)
         {

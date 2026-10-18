@@ -13,11 +13,16 @@ namespace Tests.Screen;
 [TestFixture]
 public class HeldButtonTests
 {
+    private readonly StartedServices _services = new();
+
+    [TearDown]
+    public Task StopServices() => _services.StopAll();
+
     // 50px per move, inside the absolute path's warp-artifact filter; 120 of them cross two monitors
     private const int Steps = 120, Step = 50;
 
-    private static Task<TestServiceBundle> Started(IHydraProfile? profile = null, ILogger<InputRouter>? log = null) =>
-        TransitionTestHelper.Visiting(TransitionTestHelper.CreateService(profile: profile, log: log), profile is null ? [] : ["remote", "remote2"]);
+    private Task<TestServiceBundle> Started(IHydraProfile? profile = null, ILogger<InputRouter>? log = null) =>
+        _services.Visiting(TransitionTestHelper.CreateService(profile: profile, log: log), profile is null ? [] : ["remote", "remote2"]);
 
     private static void Press(FakePlatform platform, MouseButton button = MouseButton.Left) =>
         platform.FireMouseButton(new MouseButtonEvent(button, true));
@@ -66,7 +71,6 @@ public class HeldButtonTests
         Push(bundle.Platform, delta, -1);
 
         var afterUp = bundle.Platform.IsOnVirtualScreen;
-        await TransitionTestHelper.Stop(bundle);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(whileHeld, Is.True, "refused home while the button is held");
@@ -87,7 +91,6 @@ public class HeldButtonTests
         Release(bundle.Platform);
         Push(bundle.Platform, delta, 1);
 
-        await TransitionTestHelper.Stop(bundle);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(whileHeld, Is.False, "refused onto remote2 while the button is held");
@@ -116,8 +119,7 @@ public class HeldButtonTests
                 },
             ],
         });
-        var bundle = TransitionTestHelper.CreateService(profile: profile);
-        await bundle.Service.StartAsync(CancellationToken.None);
+        var bundle = await _services.Start(TransitionTestHelper.CreateService(profile: profile));
         await bundle.Relay.FirePeersChanged("remote");
         await TransitionTestHelper.AdvertiseScreens(bundle.Relay, "remote", 2);
         bundle.Platform.FireMouseMove(2559, 720);
@@ -129,7 +131,6 @@ public class HeldButtonTests
 
         var enters = bundle.Relay.Sent<EnterScreenMessage>(MessageKind.EnterScreen).Select(e => e.Screen);
         var left = bundle.Relay.Snapshot().Any(s => s.Kind == MessageKind.LeaveScreen);
-        await TransitionTestHelper.Stop(bundle);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(enters, Is.EqualTo(["remote:1", "remote:0"]), "wraps onto remote:0 with the button held");
@@ -150,7 +151,6 @@ public class HeldButtonTests
         Push(bundle.Platform, delta: true, -1);
 
         var stayed = bundle.Platform.IsOnVirtualScreen;
-        await TransitionTestHelper.Stop(bundle);
         return stayed;
     }
 
@@ -166,7 +166,6 @@ public class HeldButtonTests
         Push(bundle.Platform, delta: true, -1);
 
         var stayed = bundle.Platform.IsOnVirtualScreen;
-        await TransitionTestHelper.Stop(bundle);
         Assert.That(stayed, Is.True);
     }
 
@@ -182,7 +181,6 @@ public class HeldButtonTests
         Press(bundle.Platform, MouseButton.Right);
         Push(bundle.Platform, delta: true, -1);
 
-        await TransitionTestHelper.Stop(bundle);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(once, Is.EqualTo(1), "one line however often the edge is hit");
@@ -201,7 +199,6 @@ public class HeldButtonTests
 
         Push(bundle.Platform, delta: true, 1);
 
-        await TransitionTestHelper.Stop(bundle);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(Entered(bundle.Relay, "remote2"), Is.True, "pre-condition: crossed");
@@ -214,8 +211,7 @@ public class HeldButtonTests
     public async Task ReturnByHotkey_ReleasesTheButtonsHeldOnTheHostBeforeLeavingIt()
     {
         // a remote-only master's lock hotkey returns home whatever is held
-        var bundle = TransitionTestHelper.CreateRemoteOnlyService();
-        await bundle.Service.StartAsync(CancellationToken.None);
+        var bundle = await _services.Start(TransitionTestHelper.CreateRemoteOnlyService());
         await TransitionTestHelper.BringHostOnline(bundle.Relay, "mac");
         Assert.That(bundle.Platform.IsOnVirtualScreen, Is.True, "pre-condition: on mac");
         Press(bundle.Platform);
@@ -224,7 +220,6 @@ public class HeldButtonTests
         bundle.Platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyDown, 'l', KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Super));
 
         var returned = !bundle.Platform.IsOnVirtualScreen;
-        await TransitionTestHelper.Stop(bundle);
         Assert.That(returned, Is.True, "pre-condition: returned home");
         AssertReleasedBeforeLeaving(bundle.Relay, "mac", MouseButton.Left);
     }
@@ -240,7 +235,6 @@ public class HeldButtonTests
         Push(bundle.Platform, delta: true, 1);
         Push(bundle.Platform, delta: true, -1);
 
-        await TransitionTestHelper.Stop(bundle);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(Entered(bundle.Relay, "remote2"), Is.True, "pre-condition: crossed");

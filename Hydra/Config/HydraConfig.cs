@@ -1,4 +1,5 @@
 using Cathedral.Extensions;
+using Hydra.Relay;
 using Hydra.Screen;
 
 namespace Hydra.Config;
@@ -230,7 +231,7 @@ public class HydraConfig
         {
             if (cfg.NetworkConfig == null && cfg.EmbeddedStyx == null && cfg.EmbeddedStyxServer == null)
                 throw new InvalidOperationException($"Profile '{cfg.ProfileName ?? "(default)"}' has no relay configured. Add networkConfig, embeddedStyx, or embeddedStyxServer.");
-            if (cfg.EmbeddedStyx?.Server.StartsWithIgnoreCase("http://") == true)
+            if (cfg.EmbeddedStyx != null && !EmbeddedRelayTls.WithHttps(cfg.EmbeddedStyx.Server).StartsWithIgnoreCase("https://"))
                 throw new InvalidOperationException("embeddedStyx.server must be https://: the embedded relay only speaks TLS.");
 
             // no duplicate host names within a profile

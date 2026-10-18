@@ -110,23 +110,12 @@ public class TransactionalConfigStoreTests
         var writer = new TransactionalConfigStore(runtime);
         var reader = new TransactionalConfigStore(runtime);
 
-        var reading = new CancellationTokenSource();
-        // The TOKEN is captured, not the source, so the loop cannot touch a disposed one however the awaits
-        // below unwind.
-        var token = reading.Token;
-        var reads = Task.Run(async () =>
+        await using (ConcurrentReader.Start(async () => await reader.ReadAsync(CancellationToken.None)))
         {
-            while (!token.IsCancellationRequested)
-                await reader.ReadAsync(CancellationToken.None);
-        }, CancellationToken.None);
-
-        var document = await writer.ReadAsync();
-        for (var i = 0; i < 15; i++)
-            document = await writer.SaveAsync(document.Revision, Valid($"Desk{i}"), CancellationToken.None);
-
-        await reading.CancelAsync();
-        await reads;
-        reading.Dispose();
+            var document = await writer.ReadAsync();
+            for (var i = 0; i < 15; i++)
+                document = await writer.SaveAsync(document.Revision, Valid($"Desk{i}"), CancellationToken.None);
+        }
 
         Assert.That(await File.ReadAllTextAsync(_path), Does.Contain("Desk14"),
             "a save was lost while another instance was reading — on Windows the reader's handle refuses the replace");

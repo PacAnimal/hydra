@@ -18,12 +18,10 @@ namespace Tests.Styx;
 [TestFixture]
 public class RelayLaneTests : StyxFixtureBase
 {
-    /// <summary>The X of a MouseMove, which is how an input message carries its position in the burst.</summary>
-    private static int PositionOf(string json) =>
-        System.Text.Json.JsonDocument.Parse(json).RootElement.GetProperty("x").GetInt32();
+    // the X of a MouseMove, which is how an input message carries its position in the burst
+    private static int PositionOf(ReceivedMessage message) => message.As<MouseMoveMessage>().X;
 
-    private static int SequenceOf(string json) =>
-        System.Text.Json.JsonDocument.Parse(json).RootElement.GetProperty("sequence").GetInt32();
+    private static int SequenceOf(ReceivedMessage message) => message.As<FileTransferChunkMessage>().Sequence;
 
     // ── ordering is not weakened ─────────────────────────────────────────────────────────────────
 
@@ -52,7 +50,7 @@ public class RelayLaneTests : StyxFixtureBase
         var sent = Enumerable.Range(0, count).Select(i => sender.SendReliableAsync(["receiver"], TestMessages.Move(i)).AsTask()).ToArray();
 
         var arrived = new List<int>();
-        for (var i = 0; i < count; i++) arrived.Add(PositionOf((await receiver.WaitForMessage()).Json));
+        for (var i = 0; i < count; i++) arrived.Add(PositionOf(await receiver.WaitForMessage()));
         await Task.WhenAll(sent).WaitAsync(Bound);
 
         Assert.That(arrived, Is.EqualTo(Enumerable.Range(0, count)),
@@ -75,7 +73,7 @@ public class RelayLaneTests : StyxFixtureBase
         var sent = Enumerable.Range(0, count).Select(i => sender.SendReliableAsync(["receiver"], TestMessages.Chunk(i)).AsTask()).ToArray();
 
         var arrived = new List<int>();
-        for (var i = 0; i < count; i++) arrived.Add(SequenceOf((await receiver.WaitForMessage()).Json));
+        for (var i = 0; i < count; i++) arrived.Add(SequenceOf(await receiver.WaitForMessage()));
         await Task.WhenAll(sent).WaitAsync(Bound);
 
         Assert.That(arrived, Is.EqualTo(Enumerable.Range(0, count)));
@@ -107,9 +105,9 @@ public class RelayLaneTests : StyxFixtureBase
         var bulk = new List<int>();
         for (var i = 0; i < count * 2; i++)
         {
-            var (_, kind, json) = await receiver.WaitForMessage();
-            if (kind == MessageKind.FileTransferChunk) bulk.Add(SequenceOf(json));
-            else input.Add(PositionOf(json));
+            var message = await receiver.WaitForMessage();
+            if (message.Kind == MessageKind.FileTransferChunk) bulk.Add(SequenceOf(message));
+            else input.Add(PositionOf(message));
         }
 
         await Task.WhenAll(sent).WaitAsync(Bound);
@@ -216,7 +214,7 @@ public class RelayLaneTests : StyxFixtureBase
         var held = sender.SendReliableAsync(["receiver"], TestMessages.Chunk(1)).AsTask();
         await sender.WaitUntilLaneHeld();
 
-        sender.Send(["receiver"], MessageSerializer.Encode(MessageKind.FileTransferAbort, new FileTransferAbortMessage("cancelled")));
+        sender.Send(["receiver"], MessageKind.FileTransferAbort, new FileTransferAbortMessage("cancelled"));
 
         var (_, kind, _) = await receiver.WaitForMessage("the abort sent while the chunk it cancels was parked (if it never comes, it is queued behind it)");
         Assert.That(kind, Is.EqualTo(MessageKind.FileTransferAbort));
@@ -247,28 +245,16 @@ public class RelayLaneTests : StyxFixtureBase
 
         // Park the input drain on something ahead of everything below, so nothing is read while the batch
         // is being built and the close is the ONLY thing that can separate the two moves.
-        sender.HoldLane(RelayLane.Input);
-        var blocker = sender.SendReliableAsync(["receiver"], TestMessages.Key(9)).AsTask();
-        await sender.WaitUntilLaneHeld();
+        Task? separator = null;
+        await sender.BehindParkedLane(RelayLane.Input, "receiver", TestMessages.Key(9), () =>
+        {
+            sender.Send(["receiver"], TestMessages.Move(1));
+            separator = sender.SendReliableAsync(["receiver"], TestMessages.Key(0)).AsTask();
+            sender.Send(["receiver"], TestMessages.Move(2));
+        });
+        await separator!.WaitAsync(Bound);
 
-        sender.Send(["receiver"], TestMessages.Move(1));
-        var separator = sender.SendReliableAsync(["receiver"], TestMessages.Key(0)).AsTask();
-        sender.Send(["receiver"], TestMessages.Move(2));
-
-        // A SENTINEL, so the count is read off what actually arrived. Waiting for a fixed number of
-        // messages would make a merge — which produces one FEWER — fail by timing out on a message that
-        // was never coming, and a timeout says "something is slow" where this needs to say "the moves
-        // merged". It is enqueued last and cannot coalesce, so it is always the final arrival.
-        var sentinel = sender.SendReliableAsync(["receiver"], TestMessages.Key(1)).AsTask();
-
-        sender.ReleaseLane();
-        await Task.WhenAll(blocker, separator, sentinel).WaitAsync(Bound);
-
-        var arrived = new List<MessageKind>();
-        while (arrived.Count(k => k == MessageKind.KeyEvent) < 3)
-            arrived.Add((await receiver.WaitForMessage()).Kind);
-
-        Assert.That(arrived.Count(k => k == MessageKind.MouseMove), Is.EqualTo(2),
+        Assert.That((await receiver.ReadUntilSentinel()).Count(m => m.Kind == MessageKind.MouseMove), Is.EqualTo(2),
             "the two moves merged across a keypress — the press would be delivered at the wrong position");
     }
 

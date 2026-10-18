@@ -120,14 +120,10 @@ public class RelayDispatchTests : StyxFixtureBase
 
         sender.ReleaseLane();
         _sends.Release();
+        sender.Send(["receiver"], TestMessages.Sentinel());
 
-        var keys = new List<string?>();
-        while (keys.Count < 2)
-        {
-            var (_, kind, json) = await receiver.WaitForMessage();
-            if (kind == MessageKind.KeyEvent) keys.Add(CharacterOf(json));
-        }
-        Assert.That(keys, Is.EqualTo(["b", "c"]));
+        var keys = (await receiver.ReadUntilSentinel()).Where(m => m.Kind == MessageKind.KeyEvent).Select(m => m.As<KeyEventMessage>().Character);
+        Assert.That(keys, Is.EqualTo(new char?[] { 'b', 'c' }));
     }
 
     /// <summary>
@@ -195,8 +191,6 @@ public class RelayDispatchTests : StyxFixtureBase
 
     private static async ValueTask<string?> HostOf(HubInvocationContext invocation) =>
         (await invocation.ServiceProvider.GetRequiredService<IClientRegistry>().GetIdentity(invocation.Context.ConnectionId))?.HostName;
-
-    private static string? CharacterOf(string json) => System.Text.Json.JsonDocument.Parse(json).RootElement.GetProperty("character").GetString();
 
     /// <summary>The relay's own verifier behind a gate, counting how many checks run at once.</summary>
     private sealed class HeldVerifier(ITokenVerifier inner) : ITokenVerifier

@@ -11,8 +11,8 @@ public class RemoteOnlyTests
 {
     private FakePlatform _platform = null!;
     private FakeRelay _relay = null!;
-    private InputRouter _service = null!;
     private readonly SteppableTicks _ticks = new();
+    private readonly StartedServices _services = new();
     // a lone screen is named after its host; a second one renames it to host:0
     private static readonly ScreenRect Home = new("pi", "pi", 0, 0, 2560, 1440, IsLocal: true);
     // small enough that the default park point (1280, 720) is off it
@@ -22,25 +22,19 @@ public class RemoteOnlyTests
         new([.. screens], [.. screens.Select(s => new ScreenInfoEntry(s.Name, s.X, s.Y, s.Width, s.Height, 1.0m))]);
 
     [SetUp]
-    public async Task SetUp()
+    public async Task SetUp() => (_platform, _relay, _) = await _services.Start(TransitionTestHelper.CreateRemoteOnlyService(getTickCount: _ticks.Now));
+
+    // replaces the router SetUp started
+    private async Task Restart(TestServiceBundle bundle)
     {
-        (_platform, _relay, _service) = TransitionTestHelper.CreateRemoteOnlyService(getTickCount: _ticks.Now);
-        await _service.StartAsync(CancellationToken.None);
+        await _services.StopAll();
+        (_platform, _relay, _) = await _services.Start(bundle);
     }
 
-    private async Task RestartWith(FakeScreenDetector screens)
-    {
-        await _service.StopAsync(CancellationToken.None);
-        (_platform, _relay, _service) = TransitionTestHelper.CreateRemoteOnlyService(getTickCount: _ticks.Now, screens: screens);
-        await _service.StartAsync(CancellationToken.None);
-    }
+    private Task RestartWith(FakeScreenDetector screens) => Restart(TransitionTestHelper.CreateRemoteOnlyService(getTickCount: _ticks.Now, screens: screens));
 
     [TearDown]
-    public async Task TearDown()
-    {
-        await _service.StopAsync(CancellationToken.None);
-        await _platform.DisposeAsync();
-    }
+    public Task TearDown() => _services.StopAll();
 
     // -- auto-entry --
 
@@ -70,9 +64,7 @@ public class RemoteOnlyTests
     [Test]
     public async Task AutoEntry_Headless_HasNothingToPark()
     {
-        await _service.StopAsync(CancellationToken.None);
-        (_platform, _relay, _service) = TransitionTestHelper.CreateRemoteOnlyService(headless: true, getTickCount: _ticks.Now);
-        await _service.StartAsync(CancellationToken.None);
+        await Restart(TransitionTestHelper.CreateRemoteOnlyService(headless: true, getTickCount: _ticks.Now));
 
         await TransitionTestHelper.BringHostOnline(_relay, "mac");
 
@@ -351,9 +343,7 @@ public class RemoteOnlyTests
     [Test]
     public async Task MouseDelta_TransitionsToNeighborHost()
     {
-        await _service.StopAsync(CancellationToken.None);
-        (_platform, _relay, _service) = TransitionTestHelper.CreateRemoteOnlyService(TransitionTestHelper.RemoteOnlyPairConfig);
-        await _service.StartAsync(CancellationToken.None);
+        await Restart(TransitionTestHelper.CreateRemoteOnlyService(TransitionTestHelper.RemoteOnlyPairConfig));
 
         await TransitionTestHelper.BringHostsOnline(_relay, ["mac", "win"]);
         Assert.That(_platform.IsOnVirtualScreen, Is.True, "pre-condition: on mac");
@@ -371,9 +361,7 @@ public class RemoteOnlyTests
     [Test]
     public async Task MouseDelta_SendsLeaveScreen_WhenCrossingToNewHost()
     {
-        await _service.StopAsync(CancellationToken.None);
-        (_platform, _relay, _service) = TransitionTestHelper.CreateRemoteOnlyService(TransitionTestHelper.RemoteOnlyPairConfig);
-        await _service.StartAsync(CancellationToken.None);
+        await Restart(TransitionTestHelper.CreateRemoteOnlyService(TransitionTestHelper.RemoteOnlyPairConfig));
 
         await TransitionTestHelper.BringHostsOnline(_relay, ["mac", "win"]);
         _relay.ClearSent();

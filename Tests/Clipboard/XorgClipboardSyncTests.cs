@@ -163,6 +163,60 @@ public class XorgClipboardSyncTests
         }
     }
 
+    // a late answer to a text read that already gave up: its data in its own property, or its refusal
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task Read_IgnoresANotifyForAnotherTarget(bool refusal)
+    {
+        var owner = NativeMethods.XOpenDisplay(null);
+        try
+        {
+            var window = NativeMethods.XCreateSimpleWindow(owner, NativeMethods.XDefaultRootWindow(owner), 0, 0, 1, 1, 0, nint.Zero, nint.Zero);
+            var clipboard = NativeMethods.XInternAtom(owner, "CLIPBOARD", false);
+            _ = NativeMethods.XSetSelectionOwner(owner, clipboard, window, NativeMethods.CurrentTime);
+            Assert.That(NativeMethods.XGetSelectionOwner(owner, clipboard), Is.EqualTo(window));
+
+            using var reader = new XorgClipboardSync();
+            var read = Task.Run(reader.GetImagePng);
+
+            // the read's request has reached us, so it is waiting for an answer
+            var answered = Task.Run(() =>
+            {
+                _ = NativeMethods.XNextEvent(owner, out var request);
+                Assert.That(request.Type, Is.EqualTo(NativeMethods.SelectionRequest));
+
+                var staleProperty = refusal ? nint.Zero : NativeMethods.XInternAtom(owner, "HYDRA_CLIPBOARD", false);
+                Notify(owner, request, NativeMethods.XInternAtom(owner, "UTF8_STRING", false), staleProperty);
+                var png = TestImages.Png;
+                _ = NativeMethods.XChangeProperty(owner, request.SelectionRequestRequestor, request.SelectionRequestProperty,
+                    request.SelectionRequestTarget, 8, NativeMethods.PropModeReplace, png, png.Length);
+                Notify(owner, request, request.SelectionRequestTarget, request.SelectionRequestProperty);
+            });
+
+            await answered.WaitAsync(Bound);
+            Assert.That(await read.WaitAsync(Bound), Is.EqualTo(TestImages.Png));
+        }
+        finally
+        {
+            _ = NativeMethods.XCloseDisplay(owner);
+        }
+    }
+
+    private static void Notify(nint display, XEvent request, nint target, nint property)
+    {
+        var notify = default(XEvent);
+        notify.Type = NativeMethods.SelectionNotify;
+        notify.SendEvent = 1;
+        notify.EventDisplay = display;
+        notify.SelectionNotifyRequestor = request.SelectionRequestRequestor;
+        notify.SelectionNotifySelection = request.SelectionRequestSelection;
+        notify.SelectionNotifyTarget = target;
+        notify.SelectionNotifyProperty = property;
+        notify.SelectionNotifyTime = request.SelectionRequestTime;
+        _ = NativeMethods.XSendEvent(display, request.SelectionRequestRequestor, false, nint.Zero, ref notify);
+        _ = NativeMethods.XFlush(display);
+    }
+
     // -- xclip helpers (raw bytes in/out) --
 
     private static byte[] XclipRead(string target, string selection = "clipboard")

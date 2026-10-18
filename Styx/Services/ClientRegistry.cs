@@ -4,7 +4,8 @@ namespace Styx.Services;
 
 public interface IClientRegistry
 {
-    ValueTask Unregister(string connectionId);
+    // what was registered on the connection, if anything
+    ValueTask<ClientIdentity?> Unregister(string connectionId);
     ValueTask<string?> GetConnectionId(NetworkKey network, string hostName);
     ValueTask<ClientIdentity?> GetIdentity(string connectionId);
     // atomically kicks same-network+host duplicates AND registers the new connection under one lock, so two
@@ -42,13 +43,13 @@ public class ClientRegistry(ILogger<ClientRegistry> log) : IClientRegistry
     private readonly Dictionary<HostKey, string> _byNetworkHost = [];
     private long _generation;
 
-    public ValueTask Unregister(string connectionId)
+    public ValueTask<ClientIdentity?> Unregister(string connectionId)
     {
         ClientIdentity? identity;
         lock (_lock)
             identity = Remove(connectionId);
         LogUnregistered(identity);
-        return ValueTask.CompletedTask;
+        return ValueTask.FromResult(identity);
     }
 
     public ValueTask<ClientIdentity?> UnregisterIfCurrent(string connectionId, long generation)

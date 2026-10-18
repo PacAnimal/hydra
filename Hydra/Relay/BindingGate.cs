@@ -56,11 +56,8 @@ internal sealed class BindingGate(ResponseThrottle throttle, FailureLimiter limi
         return blocked ? await Refuse(cancel) : BindingVerdict.Refused;
     }
 
-    private async Task<BindingVerdict> Refuse(CancellationToken cancel)
-    {
-        await throttle.Start(StyxConstants.AuthThrottleSeconds, cancel);
-        return BindingVerdict.Refused;
-    }
+    private Task<BindingVerdict> Refuse(CancellationToken cancel) =>
+        ResponseThrottle.After(throttle.Start(StyxConstants.AuthThrottleSeconds, cancel), BindingVerdict.Refused);
 
     private sealed class Lane
     {

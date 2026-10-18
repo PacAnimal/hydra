@@ -9,14 +9,17 @@ namespace Tests.Relay;
 public class RelayLatencyServiceTests
 {
     private static readonly string[] RemoteOnly = ["remote"];
+    private readonly StartedServices _services = new();
+
+    [TearDown]
+    public Task TearDown() => _services.StopAll();
 
     [Test]
     public async Task PeerProbe_ResponseRecordsRtt()
     {
         var clock = new FakeTimeProvider(DateTimeOffset.FromUnixTimeMilliseconds(100));
         var relay = new FakeRelay();
-        var service = new RelayLatencyService(relay, () => clock.GetUtcNow().ToUnixTimeMilliseconds());
-        await service.StartAsync(CancellationToken.None);
+        var service = await _services.Start(new RelayLatencyService(relay, () => clock.GetUtcNow().ToUnixTimeMilliseconds()));
 
         await relay.FirePeersChanged("remote");
         var (_, _, json) = relay.Snapshot().Single(item => item.Kind == MessageKind.LatencyProbe);
@@ -35,16 +38,13 @@ public class RelayLatencyServiceTests
             Assert.That(result.Samples, Is.EqualTo(1));
             Assert.That(result.Lost, Is.Zero);
         }
-
-        await service.StopAsync(CancellationToken.None);
     }
 
     [Test]
     public async Task IncomingProbe_IsEchoedToSource()
     {
         var relay = new FakeRelay();
-        var service = new RelayLatencyService(relay);
-        await service.StartAsync(CancellationToken.None);
+        _ = await _services.Start(new RelayLatencyService(relay));
 
         await relay.FireMessageReceived("remote", MessageKind.LatencyProbe,
             new LatencyProbeMessage(42).ToSaneJson());
@@ -56,8 +56,6 @@ public class RelayLatencyServiceTests
             Assert.That(kind, Is.EqualTo(MessageKind.LatencyProbeResponse));
             Assert.That(json.FromSaneJson<LatencyProbeResponseMessage>()!.Sequence, Is.EqualTo(42));
         }
-
-        await service.StopAsync(CancellationToken.None);
     }
 
     [Test]
@@ -65,8 +63,7 @@ public class RelayLatencyServiceTests
     {
         var clock = new FakeTimeProvider(DateTimeOffset.FromUnixTimeMilliseconds(100));
         var relay = new FakeRelay();
-        var service = new RelayLatencyService(relay, () => clock.GetUtcNow().ToUnixTimeMilliseconds());
-        await service.StartAsync(CancellationToken.None);
+        var service = await _services.Start(new RelayLatencyService(relay, () => clock.GetUtcNow().ToUnixTimeMilliseconds()));
         await relay.FirePeersChanged("remote");
 
         clock.Advance(TimeSpan.FromMilliseconds(5_001));
@@ -79,21 +76,16 @@ public class RelayLatencyServiceTests
             Assert.That(result.Lost, Is.EqualTo(1));
             Assert.That(relay.Snapshot().Count(item => item.Kind == MessageKind.LatencyProbe), Is.EqualTo(2));
         }
-
-        await service.StopAsync(CancellationToken.None);
     }
 
     [Test]
     public async Task MalformedProbe_IsIgnored()
     {
         var relay = new FakeRelay();
-        var service = new RelayLatencyService(relay);
-        await service.StartAsync(CancellationToken.None);
+        await _services.Start(new RelayLatencyService(relay));
 
         Assert.That(async () => await relay.FireMessageReceived("remote", MessageKind.LatencyProbe,
             "{"), Throws.Nothing);
         Assert.That(relay.Snapshot(), Is.Empty);
-
-        await service.StopAsync(CancellationToken.None);
     }
 }

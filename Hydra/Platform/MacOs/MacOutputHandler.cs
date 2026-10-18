@@ -56,13 +56,14 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
                 _charToVk = BuildCharToVkMap();
                 _asciiCharToVk = BuildCharToVkMap(asciiCapable: true);
             };
-            var name = NativeHelpers.MakeNsString("com.apple.Carbon.TISNotifySelectedKeyboardInputSourceChanged");
+            using var name = new NsString(InputSourceChanged);
             NativeMethods.CFNotificationCenterAddObserver(_layoutNotificationCenter, 1, _layoutChangeCallback, name, nint.Zero,
                 NativeMethods.CFNotificationSuspensionBehaviorDeliverImmediately);
-            NativeMethods.CFRelease(name);
         }
         GetHidConnection();
     }
+
+    private const string InputSourceChanged = "com.apple.Carbon.TISNotifySelectedKeyboardInputSourceChanged";
 
     // combined session state source — used only for keyboard CGEvent fallback paths.
     // mouse events use nint.Zero (null source) so system UI does not filter them as synthetic.
@@ -152,8 +153,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
             if (generic == 0 && device == 0)
             {
                 // NumLock (KeypadClear) has no modifier mask — inject as a regular toggle key, not a flags change
-                if (!PostHidKey((ushort)modVk, isDown, isRepeat: false))
-                    PostCgKey((ushort)modVk, isDown, flags, isRepeat: false);
+                PostKey((ushort)modVk, isDown, flags, isRepeat: false);
                 return;
             }
 
@@ -185,8 +185,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
 
             if (!isAltGr && _charToVk.TryGetValue(ch, out var charVk))
             {
-                if (!PostHidKey(charVk, isDown, isRepeat))
-                    PostCgKey(charVk, isDown, flags, isRepeat);
+                PostKey(charVk, isDown, flags, isRepeat);
             }
             else if (!isAltGr && _charToVk.TryGetValue(char.ToLowerInvariant(ch), out charVk))
             {
@@ -194,14 +193,12 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
                 // state for Shift; if Shift is not yet in _deviceModifierFlags (e.g. focus arrived while
                 // Shift was already held), use PostCgKey which applies flags — including Shift — directly.
                 var shiftReady = (_deviceModifierFlags & (NativeMethods.NxDeviceLShiftKeyMask | NativeMethods.NxDeviceRShiftKeyMask)) != 0;
-                if (!shiftReady || !PostHidKey(charVk, isDown, isRepeat))
-                    PostCgKey(charVk, isDown, flags, isRepeat);
+                PostKey(charVk, isDown, flags, isRepeat, viaHid: shiftReady);
             }
             else if (!isAltGr && (flags & (NativeMethods.KCGEventFlagMaskCommand | NativeMethods.KCGEventFlagMaskControl)) != 0 &&
                      _asciiCharToVk.TryGetValue(ch, out charVk))
             {
-                if (!PostHidKey(charVk, isDown, isRepeat))
-                    PostCgKey(charVk, isDown, flags, isRepeat);
+                PostKey(charVk, isDown, flags, isRepeat);
             }
             else
             {
@@ -240,8 +237,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
             else if (MacSpecialKeyMap.Instance.Reverse.TryGetValue(key2, out var vk))
             {
                 // non-modifier special key: IOHIDPostEvent-first, CGEvent fallback
-                if (!PostHidKey((ushort)vk, isDown, isRepeat))
-                    PostCgKey((ushort)vk, isDown, flags, isRepeat);
+                PostKey((ushort)vk, isDown, flags, isRepeat);
             }
         }
     }
@@ -316,7 +312,13 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
         NativeMethods.CFRelease(eventRef);
     }
 
-    // post a CG keyboard event — used for non-modifier special keys and as fallback for modifiers.
+    // through IOHIDPostEvent where it can, else as a CG event
+    private void PostKey(ushort vk, bool isDown, ulong flags, bool isRepeat, bool viaHid = true)
+    {
+        if (!viaHid || !PostHidKey(vk, isDown, isRepeat)) PostCgKey(vk, isDown, flags, isRepeat);
+    }
+
+    // post a CG keyboard event, with its flags applied directly
     private static void PostCgKey(ushort vk, bool isDown, ulong flags, bool isRepeat)
     {
         var eventRef = NativeMethods.CGEventCreateKeyboardEvent(EventSource, vk, isDown);
@@ -662,9 +664,8 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
     {
         if (_layoutNotificationCenter != nint.Zero)
         {
-            var name = NativeHelpers.MakeNsString("com.apple.Carbon.TISNotifySelectedKeyboardInputSourceChanged");
-            NativeMethods.CFNotificationCenterRemoveObserver(_layoutNotificationCenter, 1, name, nint.Zero);
-            NativeMethods.CFRelease(name);
+            using (var name = new NsString(InputSourceChanged))
+                NativeMethods.CFNotificationCenterRemoveObserver(_layoutNotificationCenter, 1, name, nint.Zero);
             _layoutChangeCallback = null;
         }
         if (_cursorHidden)

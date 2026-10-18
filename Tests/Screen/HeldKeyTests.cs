@@ -10,6 +10,11 @@ namespace Tests.Screen;
 [TestFixture]
 public class HeldKeyTests
 {
+    private readonly StartedServices _services = new();
+
+    [TearDown]
+    public Task StopServices() => _services.StopAll();
+
     private const int KeyA = 30, KeyE = 18, ShiftL = 42, CtrlL = 29, AltL = 56, SuperL = 125, KeyL = 38, KeyM = 50;
     private const KeyModifiers Chord = KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Super;
 
@@ -22,8 +27,8 @@ public class HeldKeyTests
     private static KeyEvent Repeat(char ch, int key, KeyModifiers mods = KeyModifiers.None) =>
         Char(KeyEventType.KeyDown, ch, key, mods) with { IsRepeat = true };
 
-    private static Task<TestServiceBundle> Started(IHydraProfile? profile = null) =>
-        TransitionTestHelper.StartOnline(TransitionTestHelper.CreateService(profile: profile), profile is null ? [] : ["remote", "remote2"]);
+    private Task<TestServiceBundle> Started(IHydraProfile? profile = null) =>
+        _services.StartOnline(TransitionTestHelper.CreateService(profile: profile), profile is null ? [] : ["remote", "remote2"]);
 
     private static List<KeyEventMessage> ForwardedKeys(FakeRelay relay, string? host = null) => relay.Sent<KeyEventMessage>(MessageKind.KeyEvent, host);
 
@@ -42,7 +47,6 @@ public class HeldKeyTests
         bundle.Platform.FireKeyEvent(Char(KeyEventType.KeyUp, 'm', KeyM, Chord));
 
         var forwarded = ForwardedKeys(bundle.Relay);
-        await TransitionTestHelper.Stop(bundle);
         Assert.That(forwarded.Select(k => (k.Type, k.Character)), Is.EqualTo([(KeyEventType.KeyUp, (char?)'m')]));
     }
 
@@ -60,7 +64,6 @@ public class HeldKeyTests
         bundle.Platform.FireKeyEvent(Char(KeyEventType.KeyUp, 'm', KeyM, Chord));
 
         var forwarded = ForwardedKeys(bundle.Relay);
-        await TransitionTestHelper.Stop(bundle);
         Assert.That(forwarded, Is.Empty);
     }
 
@@ -75,7 +78,6 @@ public class HeldKeyTests
         bundle.Platform.FireKeyEvent(Special(KeyEventType.KeyUp, SpecialKey.Control_L, CtrlL));
 
         Assert.That(ForwardedKeys(bundle.Relay), Is.Empty);
-        await TransitionTestHelper.Stop(bundle);
     }
 
     [Test]
@@ -91,7 +93,6 @@ public class HeldKeyTests
         bundle.Platform.FireKeyEvent(Char(KeyEventType.KeyUp, 'a', KeyA));
 
         Assert.That(ForwardedKeys(bundle.Relay), Is.Empty);
-        await TransitionTestHelper.Stop(bundle);
     }
 
     // also a down hooked before the flip that the router only processes after the entry: it is the visit's
@@ -109,7 +110,6 @@ public class HeldKeyTests
         var sent = ForwardedKeys(bundle.Relay);
         Assert.That(sent.Select(k => (k.Type, k.Character, k.IsRepeat)),
             Is.EqualTo([(KeyEventType.KeyDown, 'a', false), (KeyEventType.KeyDown, 'a', true), (KeyEventType.KeyUp, 'a', false)]));
-        await TransitionTestHelper.Stop(bundle);
     }
 
     [Test]
@@ -127,7 +127,6 @@ public class HeldKeyTests
         Assert.That(ForwardedKeys(bundle.Relay).Select(k => (k.Type, k.Character, k.IsRepeat)), Is.EqualTo([
             (KeyEventType.KeyDown, (char?)'e', false), (KeyEventType.KeyDown, null, false),
             (KeyEventType.KeyDown, 'E', true), (KeyEventType.KeyUp, 'e', false)]));
-        await TransitionTestHelper.Stop(bundle);
     }
 
     [Test]
@@ -146,14 +145,12 @@ public class HeldKeyTests
         bundle.Platform.FireKeyEvent(Char(KeyEventType.KeyUp, 'a', KeyA));
 
         Assert.That(ForwardedKeys(bundle.Relay), Is.Empty);
-        await TransitionTestHelper.Stop(bundle);
     }
 
     [Test]
     public async Task PressedOnOneMonitor_ItsUpIsForwardedOnTheSameHostsOtherMonitor()
     {
-        var (platform, relay, service) = TransitionTestHelper.CreateRemoteOnlyService(TransitionTestHelper.RemoteOnlyPairConfig, headless: true);
-        await service.StartAsync(CancellationToken.None);
+        var (platform, relay, _) = await _services.Start(TransitionTestHelper.CreateRemoteOnlyService(TransitionTestHelper.RemoteOnlyPairConfig, headless: true));
         await relay.FirePeersChanged("mac", "win");
         await TransitionTestHelper.AdvertiseScreens(relay, "mac", 2);
         await TransitionTestHelper.AdvertiseScreens(relay, "win", 1);
@@ -168,7 +165,6 @@ public class HeldKeyTests
         platform.FireKeyEvent(Char(KeyEventType.KeyUp, 'a', KeyA));
 
         Assert.That(ForwardedKeys(relay, "mac").Select(k => (k.Type, k.Character)), Is.EqualTo([(KeyEventType.KeyUp, 'a')]));
-        await TransitionTestHelper.Stop(new TestServiceBundle(platform, relay, service));
     }
 
     [Test]
@@ -186,7 +182,6 @@ public class HeldKeyTests
         bundle.Platform.FireKeyEvent(Char(KeyEventType.KeyUp, 'a', KeyA));
 
         Assert.That(ForwardedKeys(bundle.Relay), Is.Empty);
-        await TransitionTestHelper.Stop(bundle);
     }
 
     [Test]
@@ -201,14 +196,12 @@ public class HeldKeyTests
         bundle.Platform.FireKeyEvent(Char(KeyEventType.KeyUp, 'm', KeyM));
 
         Assert.That(ForwardedKeys(bundle.Relay), Is.Empty);
-        await TransitionTestHelper.Stop(bundle);
     }
 
     [Test]
     public async Task RemoteOnlyHotkeyEntry_TheChordsModifierUpsAreNotForwarded()
     {
-        var (platform, relay, service) = TransitionTestHelper.CreateRemoteOnlyService();
-        await service.StartAsync(CancellationToken.None);
+        var (platform, relay, _) = await _services.Start(TransitionTestHelper.CreateRemoteOnlyService());
         await TransitionTestHelper.BringHostOnline(relay, "mac");
         platform.FireKeyEvent(Char(KeyEventType.KeyDown, 'l', KeyL, Chord)); // unlock: local
         platform.FireKeyEvent(Char(KeyEventType.KeyUp, 'l', KeyL, Chord));
@@ -223,6 +216,5 @@ public class HeldKeyTests
         platform.FireKeyEvent(Special(KeyEventType.KeyUp, SpecialKey.Control_L, CtrlL));
 
         Assert.That(ForwardedKeys(relay), Is.Empty);
-        await TransitionTestHelper.Stop(new TestServiceBundle(platform, relay, service));
     }
 }

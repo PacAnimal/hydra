@@ -61,6 +61,18 @@ public sealed class HydraTestClient(WebApplicationFactory<global::Styx.Program>?
     // lets the parked lane through and stops gating, so later payloads pass untouched
     public void ReleaseLane() => Interlocked.Exchange(ref _gate, null)?.Open.Release();
 
+    // parks the lane behind a reliable blocker, enqueues behind it, then closes with a sentinel and lets it all go
+    public async Task BehindParkedLane(RelayLane lane, string target, byte[] blocker, Action enqueue)
+    {
+        HoldLane(lane);
+        var parked = SendReliableAsync([target], blocker).AsTask();
+        await WaitUntilLaneHeld();
+        enqueue();
+        Send([target], TestMessages.Sentinel());
+        ReleaseLane();
+        await parked.WaitAsync(TestBound.Bound);
+    }
+
     protected override async ValueTask<byte[]> EncryptForSend(byte[] payload, CancellationToken cancel)
     {
         if (_gate is { } gate && MessageLane.Of(payload) == gate.Lane)

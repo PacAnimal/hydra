@@ -1,4 +1,5 @@
 using System.Runtime.ExceptionServices;
+using Hydra.Relay;
 using Microsoft.Extensions.Hosting;
 
 namespace Tests.Setup;
@@ -31,6 +32,25 @@ internal sealed class StartedServices
     {
         Own(bundle.Platform);
         await Start(bundle.Service);
+        return bundle;
+    }
+
+    // the router with hosts online, the standard remote unless named
+    internal Task<TestServiceBundle> StartOnline(TestServiceBundle bundle, params string[] hosts) => StartOnline(bundle, PeerPlatform.Linux, hosts);
+
+    // as above, the hosts advertising the given platform
+    internal async Task<TestServiceBundle> StartOnline(TestServiceBundle bundle, PeerPlatform platform, params string[] hosts)
+    {
+        await Start(bundle);
+        await TransitionTestHelper.BringHostsOnline(bundle.Relay, hosts.Length > 0 ? hosts : ["remote"], platform);
+        return bundle;
+    }
+
+    // started as StartOnline, with the cursor on the remote screen
+    internal async Task<TestServiceBundle> Visiting(TestServiceBundle bundle, params string[] hosts)
+    {
+        await StartOnline(bundle, hosts);
+        TransitionTestHelper.EnterRemote(bundle.Platform);
         return bundle;
     }
 

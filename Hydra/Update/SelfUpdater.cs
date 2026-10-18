@@ -59,7 +59,7 @@ internal sealed class SelfUpdater(IHydraProfile profile, ILogger<SelfUpdater> lo
 
     private async Task CheckAndUpdate(CancellationToken cancel)
     {
-        var current = CurrentVersion();
+        var current = Version.Parse(HydraVersion.Current);
         var channel = profile.UpdateChannel;
         if (log.IsEnabled(LogLevel.Information))
             log.LogInformation("Checking for updates (current: {Version}, channel: {Channel})", current, channel);
@@ -226,8 +226,6 @@ internal sealed class SelfUpdater(IHydraProfile profile, ILogger<SelfUpdater> lo
         try { File.Delete(file); }
         catch { /* best effort */ }
     }
-
-    private static Version CurrentVersion() => Version.Parse(HydraVersion.Current);
 
     // the highest-versioned release that is not a draft
     internal static JsonElement? Newest(JsonElement releases)

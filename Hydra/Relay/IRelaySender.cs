@@ -12,13 +12,9 @@ public interface IRelaySender
     void BeginSystemWake(long generation);
     void CompleteSystemWake(long generation);
     ValueTask SendReliableAsync(string[] targetHosts, byte[] payload, CancellationToken cancel = default);
-    // The caller already has the dx/dy as ints; sending them through this instead of pre-encoding to
-    // bytes lets an implementation that batches relative-mouse traffic (RelayConnection) accumulate on
-    // the numeric values directly, with no decode of its own payload just to add two more deltas to it.
+    // typed rather than encoded, so a batching relay adds to an open batch without decoding it
     void SendMouseDelta(string[] targetHosts, int dx, int dy);
-    // The same bargain for keys: the caller already holds the KeyEventMessage, and an implementation that
-    // bundles key traffic (RelayConnection) appends the typed event straight into the open frame instead of
-    // decoding the payload it was just handed.
+    // typed for the same reason, so a bundling relay appends it to the open frame
     void SendKeyEvent(string[] targetHosts, KeyEventMessage message);
     event Func<string[], Task>? PeersChanged;
     event Func<string, MessageKind, ReadOnlyMemory<byte>, Task>? MessageReceived;
@@ -61,10 +57,18 @@ public class NullRelaySender : IRelaySender
         return ValueTask.CompletedTask;
     }
     public virtual void SendMouseDelta(string[] targetHosts, int dx, int dy) =>
-        Send(targetHosts, MessageSerializer.Encode(MessageKind.MouseMoveDelta, new MouseMoveDeltaMessage(dx, dy)));
+        this.Send(targetHosts, MessageKind.MouseMoveDelta, new MouseMoveDeltaMessage(dx, dy));
     public virtual void SendKeyEvent(string[] targetHosts, KeyEventMessage message) =>
-        Send(targetHosts, MessageSerializer.Encode(MessageKind.KeyEvent, message));
+        this.Send(targetHosts, MessageKind.KeyEvent, message);
     public virtual event Func<string[], Task>? PeersChanged { add { } remove { } }
     public virtual event Func<string, MessageKind, ReadOnlyMemory<byte>, Task>? MessageReceived { add { } remove { } }
     public virtual event Func<Task>? Disconnected { add { } remove { } }
+}
+
+public static class RelaySenderExt
+{
+    public static void Send<T>(this IRelaySender relay, string host, MessageKind kind, T message) => relay.Send([host], kind, message);
+
+    public static void Send<T>(this IRelaySender relay, string[] hosts, MessageKind kind, T message) =>
+        relay.Send(hosts, MessageSerializer.Encode(kind, message));
 }

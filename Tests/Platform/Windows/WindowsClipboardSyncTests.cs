@@ -3,6 +3,7 @@ using System.Runtime.Versioning;
 using Hydra.Platform;
 using Hydra.Platform.Windows;
 using Microsoft.Extensions.Logging.Abstractions;
+using Tests.Setup;
 
 namespace Tests.Platform.Windows;
 
@@ -34,24 +35,18 @@ public class WindowsClipboardSyncTests : CopiedPrimaryContract
     [Test]
     public void FilesCopiedInExplorer_AreLeftOnTheClipboard()
     {
-        var file = Path.GetTempFileName();
-        try
-        {
-            HydraWritesThen(() => RunInOtherProcess("$f = New-Object System.Collections.Specialized.StringCollection; " +
-                                                    $"[void]$f.Add('{file}'); [System.Windows.Forms.Clipboard]::SetFileDropList($f)"));
+        var file = Path.Combine(TestPaths.FreshFixtureRoot(nameof(WindowsClipboardSyncTests)), "copied.txt");
+        File.WriteAllText(file, "");
+        HydraWritesThen(() => RunInOtherProcess("$f = New-Object System.Collections.Specialized.StringCollection; " +
+                                                $"[void]$f.Add('{file}'); [System.Windows.Forms.Clipboard]::SetFileDropList($f)"));
 
-            var applied = ClipboardUtils.ApplyPreservingFiles(Hydra, new ClipboardSnapshot("pushed", null, null), NullLogger.Instance, "test");
+        var applied = ClipboardUtils.ApplyPreservingFiles(Hydra, new ClipboardSnapshot("pushed", null, null), NullLogger.Instance, "test");
 
-            using (Assert.EnterMultipleScope())
-            {
-                Assert.That(applied, Is.Null);
-                Assert.That(Hydra.HasFileClipboard(), Is.True);
-                Assert.That(Hydra.GetText(), Is.Null);
-            }
-        }
-        finally
+        using (Assert.EnterMultipleScope())
         {
-            File.Delete(file);
+            Assert.That(applied, Is.Null);
+            Assert.That(Hydra.HasFileClipboard(), Is.True);
+            Assert.That(Hydra.GetText(), Is.Null);
         }
     }
 

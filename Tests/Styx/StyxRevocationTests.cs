@@ -146,8 +146,7 @@ public class StyxRevocationTests
         }
     }
 
-    private static StyxAuth Auth() =>
-        new([StyxTestServer.TestKey], StyxTestServer.TestPassword, new HashSet<Guid>(), new HashSet<string>());
+    private static StyxAuth Auth() => StyxAuth.WithoutRevocations([StyxTestServer.TestKey], StyxTestServer.TestPassword);
 
     private static WebApplicationFactory<global::Styx.Program> Relay(StyxAuth auth) =>
         StyxTestServer.Create(configure: services => services.AddSingleton(auth));

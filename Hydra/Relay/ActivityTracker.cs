@@ -78,6 +78,6 @@ public sealed class ActivityTracker(IHydraProfile profile, Lazy<IRelaySender> re
         if (targets.Length == 0) return;
         if (log.IsEnabled(LogLevel.Debug))
             log.LogDebug("Activity ping → {Targets}", string.Join(", ", targets));
-        relay.Value.Send(targets, MessageSerializer.Encode(MessageKind.ActivityPing, new ActivityPingMessage()));
+        relay.Value.Send(targets, MessageKind.ActivityPing, new ActivityPingMessage());
     }
 }

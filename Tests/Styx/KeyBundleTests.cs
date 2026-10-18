@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Hydra.Keyboard;
 using Hydra.Relay;
 using Tests.Setup;
@@ -39,32 +38,20 @@ public class KeyBundleTests : StyxFixtureBase
     private static List<string> KeysIn(IEnumerable<ReceivedMessage> messages)
     {
         var keys = new List<string>();
-        foreach (var (_, kind, json) in messages)
+        foreach (var message in messages)
         {
-            switch (kind)
+            switch (message.Kind)
             {
                 case MessageKind.KeyEvent:
-                    keys.Add(One(JsonDocument.Parse(json).RootElement));
+                    keys.Add(Key(message.As<KeyEventMessage>()));
                     break;
                 case MessageKind.KeyEventBatch:
-                    foreach (var element in JsonDocument.Parse(json).RootElement.GetProperty("events").EnumerateArray())
-                        keys.Add(One(element));
+                    keys.AddRange(message.As<KeyEventBatchMessage>().Events.Select(Key));
                     break;
             }
         }
 
         return keys;
-
-        // Tolerant of how the serializer spells these: an enum may arrive as a name or a number, and a char
-        // as a one-character string. The test is about which events arrived, not about the encoding — which
-        // StyxWireFormatTests is the right place to pin.
-        static string One(JsonElement e)
-        {
-            var type = e.GetProperty("type");
-            var character = e.GetProperty("character");
-            return Key(type.ValueKind == JsonValueKind.Number ? (KeyEventType)type.GetInt32() : Enum.Parse<KeyEventType>(type.GetString()!, ignoreCase: true),
-                    character.ValueKind == JsonValueKind.Number ? (char)character.GetInt32() : character.GetString()![0]);
-        }
     }
 
     /// <summary>Every frame that carried key events, so a test can assert HOW they were packed.</summary>
@@ -73,7 +60,7 @@ public class KeyBundleTests : StyxFixtureBase
 
     /// <summary>How many events one frame carried — 1 for a plain KeyEvent, N for a batch.</summary>
     private static int EventsIn(ReceivedMessage frame) =>
-        frame.Kind == MessageKind.KeyEvent ? 1 : JsonDocument.Parse(frame.Json).RootElement.GetProperty("events").GetArrayLength();
+        frame.Kind == MessageKind.KeyEvent ? 1 : frame.As<KeyEventBatchMessage>().Events.Length;
 
     // ── nothing is lost ──────────────────────────────────────────────────────────────────────────
 
@@ -94,15 +81,10 @@ public class KeyBundleTests : StyxFixtureBase
 
         const int count = 40;
 
-        sender.HoldLane(RelayLane.Input);
-        var blocker = sender.SendReliableAsync([Receiver], TestMessages.Key(0)).AsTask();
-        await sender.WaitUntilLaneHeld();
-
-        for (var i = 1; i <= count; i++) sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(i));
-
-        sender.Send([Receiver], TestMessages.Sentinel());
-        sender.ReleaseLane();
-        await blocker.WaitAsync(Bound);
+        await sender.BehindParkedLane(RelayLane.Input, Receiver, TestMessages.Key(0), () =>
+        {
+            for (var i = 1; i <= count; i++) sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(i));
+        });
 
         var frames = await receiver.ReadUntilSentinel();
         var expected = Enumerable.Range(0, count + 1).Select(i => Key(KeyEventType.KeyDown, (char)('a' + i % 26))).ToList();
@@ -127,16 +109,11 @@ public class KeyBundleTests : StyxFixtureBase
         await using var pair = await ConnectedPair();
         var (sender, receiver) = pair;
 
-        sender.HoldLane(RelayLane.Input);
-        var blocker = sender.SendReliableAsync([Receiver], TestMessages.Move(1)).AsTask();
-        await sender.WaitUntilLaneHeld();
-
-        sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(0));
-        sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(0, KeyEventType.KeyUp));
-
-        sender.Send([Receiver], TestMessages.Sentinel());
-        sender.ReleaseLane();
-        await blocker.WaitAsync(Bound);
+        await sender.BehindParkedLane(RelayLane.Input, Receiver, TestMessages.Move(1), () =>
+        {
+            sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(0));
+            sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(0, KeyEventType.KeyUp));
+        });
 
         var frames = await receiver.ReadUntilSentinel();
         var carrying = KeyFrames(frames);
@@ -170,15 +147,10 @@ public class KeyBundleTests : StyxFixtureBase
         // Comfortably over the cap, so at least three frames are needed.
         const int count = 150;
 
-        sender.HoldLane(RelayLane.Input);
-        var blocker = sender.SendReliableAsync([Receiver], TestMessages.Move(1)).AsTask();
-        await sender.WaitUntilLaneHeld();
-
-        for (var i = 0; i < count; i++) sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(i));
-
-        sender.Send([Receiver], TestMessages.Sentinel());
-        sender.ReleaseLane();
-        await blocker.WaitAsync(Bound);
+        await sender.BehindParkedLane(RelayLane.Input, Receiver, TestMessages.Move(1), () =>
+        {
+            for (var i = 0; i < count; i++) sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(i));
+        });
 
         var expected = Enumerable.Range(0, count).Select(i => Key(KeyEventType.KeyDown, (char)('a' + i % 26))).ToList();
 
@@ -218,17 +190,12 @@ public class KeyBundleTests : StyxFixtureBase
         await using var pair = await ConnectedPair();
         var (sender, receiver) = pair;
 
-        sender.HoldLane(RelayLane.Input);
-        var blocker = sender.SendReliableAsync([Receiver], TestMessages.Key(25)).AsTask();
-        await sender.WaitUntilLaneHeld();
-
-        sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(0));
-        sender.Send([Receiver], TestMessages.Move(7));
-        sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(1));
-
-        sender.Send([Receiver], TestMessages.Sentinel());
-        sender.ReleaseLane();
-        await blocker.WaitAsync(Bound);
+        await sender.BehindParkedLane(RelayLane.Input, Receiver, TestMessages.Key(25), () =>
+        {
+            sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(0));
+            sender.Send([Receiver], TestMessages.Move(7));
+            sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(1));
+        });
 
         var frames = await receiver.ReadUntilSentinel();
         var order = frames.Select(f => f.Kind).Where(k => k is MessageKind.KeyEvent or MessageKind.KeyEventBatch or MessageKind.MouseMove).ToList();
@@ -297,17 +264,12 @@ public class KeyBundleTests : StyxFixtureBase
         await using var pair = await ConnectedPair();
         var (sender, receiver) = pair;
 
-        sender.HoldLane(RelayLane.Input);
-        var blocker = sender.SendReliableAsync([Receiver], TestMessages.Move(1)).AsTask();
-        await sender.WaitUntilLaneHeld();
-
-        sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(0));
-        sender.SendMouseDelta([Receiver], 7, 9);
-        sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(1));
-
-        sender.Send([Receiver], TestMessages.Sentinel());
-        sender.ReleaseLane();
-        await blocker.WaitAsync(Bound);
+        await sender.BehindParkedLane(RelayLane.Input, Receiver, TestMessages.Move(1), () =>
+        {
+            sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(0));
+            sender.SendMouseDelta([Receiver], 7, 9);
+            sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(1));
+        });
 
         var frames = await receiver.ReadUntilSentinel();
         var kinds = frames.Select(f => f.Kind).ToList();
@@ -332,17 +294,14 @@ public class KeyBundleTests : StyxFixtureBase
         await using var pair = await ConnectedPair();
         var (sender, receiver) = pair;
 
-        sender.HoldLane(RelayLane.Input);
-        var blocker = sender.SendReliableAsync([Receiver], TestMessages.Move(1)).AsTask();
-        await sender.WaitUntilLaneHeld();
-
-        sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(0));
-        var between = sender.SendReliableAsync([Receiver], MessageSerializer.Encode(MessageKind.LockScreen, new LockScreenMessage(0))).AsTask();
-        sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(1));
-
-        sender.Send([Receiver], TestMessages.Sentinel());
-        sender.ReleaseLane();
-        await Task.WhenAll(blocker, between).WaitAsync(Bound);
+        Task? between = null;
+        await sender.BehindParkedLane(RelayLane.Input, Receiver, TestMessages.Move(1), () =>
+        {
+            sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(0));
+            between = sender.SendReliableAsync([Receiver], MessageSerializer.Encode(MessageKind.LockScreen, new LockScreenMessage(0))).AsTask();
+            sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(1));
+        });
+        await between!.WaitAsync(Bound);
 
         var frames = await receiver.ReadUntilSentinel();
         var kinds = frames.Select(f => f.Kind).ToList();
@@ -370,21 +329,16 @@ public class KeyBundleTests : StyxFixtureBase
         var random = new Random(20260921);
         var sent = new List<string>();
 
-        sender.HoldLane(RelayLane.Input);
-        var blocker = sender.SendReliableAsync([Receiver], TestMessages.Move(1)).AsTask();
-        await sender.WaitUntilLaneHeld();
-
-        for (var i = 0; i < 300; i++)
+        await sender.BehindParkedLane(RelayLane.Input, Receiver, TestMessages.Move(1), () =>
         {
-            var type = random.Next(2) == 0 ? KeyEventType.KeyDown : KeyEventType.KeyUp;
-            var n = random.Next(26);
-            sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(n, type));
-            sent.Add(Key(type, (char)('a' + n)));
-        }
-
-        sender.Send([Receiver], TestMessages.Sentinel());
-        sender.ReleaseLane();
-        await blocker.WaitAsync(Bound);
+            for (var i = 0; i < 300; i++)
+            {
+                var type = random.Next(2) == 0 ? KeyEventType.KeyDown : KeyEventType.KeyUp;
+                var n = random.Next(26);
+                sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(n, type));
+                sent.Add(Key(type, (char)('a' + n)));
+            }
+        });
 
         Assert.That(KeysIn(await receiver.ReadUntilSentinel()), Is.EqualTo(sent));
     }
@@ -406,17 +360,12 @@ public class KeyBundleTests : StyxFixtureBase
         await using var pair = await ConnectedPair();
         var (sender, receiver) = pair;
 
-        sender.HoldLane(RelayLane.Input);
-        var blocker = sender.SendReliableAsync([Receiver], TestMessages.Key(25)).AsTask();
-        await sender.WaitUntilLaneHeld();
-
-        sender.Send([Receiver], TestMessages.Move(3));
-        sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(0));
-        sender.Send([Receiver], TestMessages.Move(9));
-
-        sender.Send([Receiver], TestMessages.Sentinel());
-        sender.ReleaseLane();
-        await blocker.WaitAsync(Bound);
+        await sender.BehindParkedLane(RelayLane.Input, Receiver, TestMessages.Key(25), () =>
+        {
+            sender.Send([Receiver], TestMessages.Move(3));
+            sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(0));
+            sender.Send([Receiver], TestMessages.Move(9));
+        });
 
         var frames = await receiver.ReadUntilSentinel();
         var order = frames.Select(f => f.Kind).Where(k => k is MessageKind.KeyEvent or MessageKind.KeyEventBatch or MessageKind.MouseMove).ToList();
@@ -439,15 +388,10 @@ public class KeyBundleTests : StyxFixtureBase
         await using var pair = await ConnectedPair();
         var (sender, receiver) = pair;
 
-        sender.HoldLane(RelayLane.Input);
-        var blocker = sender.SendReliableAsync([Receiver], TestMessages.Move(1)).AsTask();
-        await sender.WaitUntilLaneHeld();
-
-        sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(0));
-
-        sender.Send([Receiver], TestMessages.Sentinel());
-        sender.ReleaseLane();
-        await blocker.WaitAsync(Bound);
+        await sender.BehindParkedLane(RelayLane.Input, Receiver, TestMessages.Move(1), () =>
+        {
+            sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(0));
+        });
 
         var frames = await receiver.ReadUntilSentinel();
         var carrying = KeyFrames(frames);
@@ -478,17 +422,12 @@ public class KeyBundleTests : StyxFixtureBase
         var (sender, receiver) = pair;
 
         const string other = "somebody-else";
-        sender.HoldLane(RelayLane.Input);
-        var blocker = sender.SendReliableAsync([Receiver], TestMessages.Move(1)).AsTask();
-        await sender.WaitUntilLaneHeld();
-
-        sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(0));
-        sender.SendKeyEvent([other], TestMessages.KeyMessage(1));
-        sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(2));
-
-        sender.Send([Receiver], TestMessages.Sentinel());
-        sender.ReleaseLane();
-        await blocker.WaitAsync(Bound);
+        await sender.BehindParkedLane(RelayLane.Input, Receiver, TestMessages.Move(1), () =>
+        {
+            sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(0));
+            sender.SendKeyEvent([other], TestMessages.KeyMessage(1));
+            sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(2));
+        });
 
         Assert.That(KeysIn(await receiver.ReadUntilSentinel()),
             Is.EqualTo([Key(KeyEventType.KeyDown, 'a'), Key(KeyEventType.KeyDown, 'c')]),
@@ -497,4 +436,6 @@ public class KeyBundleTests : StyxFixtureBase
 
     // a key event as the assertions name it
     private static string Key(KeyEventType type, char character) => $"{type} {character}";
+
+    private static string Key(KeyEventMessage e) => Key(e.Type, e.Character!.Value);
 }

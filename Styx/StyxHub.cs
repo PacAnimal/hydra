@@ -40,11 +40,7 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, ITokenVer
         var throttle = throttler.Start(Constants.AuthThrottleSeconds, Context.ConnectionAborted);
         var remoteIp = RemoteIp;
 
-        async Task<RelayLoginResponse> Refuse(string? message)
-        {
-            await throttle;
-            return new RelayLoginResponse { Authenticated = false, Message = message };
-        }
+        Task<RelayLoginResponse> Refuse(string? message) => ResponseThrottle.After(throttle, new RelayLoginResponse { Authenticated = false, Message = message });
 
         // a third-party client can send any shape of login it likes — refuse an incomplete one with an
         // answer it can act on, rather than failing somewhere in the paths below
@@ -160,8 +156,7 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, ITokenVer
     {
         expiry.Cancel(Context.ConnectionId);
         writer.Forget(Context.ConnectionId);
-        var identity = await registry.GetIdentity(Context.ConnectionId);
-        await registry.Unregister(Context.ConnectionId);
+        var identity = await registry.Unregister(Context.ConnectionId);
         if (identity != null)
             peers.QueueBroadcast(identity.Network);
         await base.OnDisconnectedAsync(exception);

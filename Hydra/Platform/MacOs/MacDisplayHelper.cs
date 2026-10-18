@@ -82,8 +82,7 @@ internal static class MacDisplayHelper
             if (screens == nint.Zero) return map;
 
             var count = (nuint)NativeMethods.objc_msgSend_long(screens, selCount);
-            var nsScreenNumberKey = NativeMethods.CFStringCreateWithCString(
-                nint.Zero, "NSScreenNumber", NativeMethods.KCFStringEncodingUtf8);
+            using var nsScreenNumberKey = new NsString("NSScreenNumber");
 
             for (nuint i = 0; i < count; i++)
             {
@@ -109,8 +108,6 @@ internal static class MacDisplayHelper
                 }
                 map[displayId] = name;
             }
-
-            NativeMethods.CFRelease(nsScreenNumberKey);
         }
         catch (Exception)
         {

@@ -33,8 +33,7 @@ public sealed class SlaveLogSender(IRelaySender relay, SlaveLogForwarder logForw
             if (targets.Length == 0) continue;
 
             var msg = new SlaveLogMessage((int)entry.Level, entry.Category, entry.OriginalMessage, entry.Exception?.ToString());
-            var payload = MessageSerializer.Encode(MessageKind.SlaveLog, msg);
-            relay.Send(targets, payload);
+            relay.Send(targets, MessageKind.SlaveLog, msg);
         }
     }
 }

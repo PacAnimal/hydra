@@ -315,27 +315,15 @@ public class RemoteManagementTests
 
         await writer.CreatePairingCodeAsync();
 
-        var reading = new CancellationTokenSource();
-        // The TOKEN is captured, not the source: a struct the loop owns, so the reader cannot touch a
-        // disposed CancellationTokenSource however the awaits below unwind.
-        var token = reading.Token;
-        var reads = Task.Run(async () =>
-        {
-            while (!token.IsCancellationRequested)
-                await reader.GetTargetAsync("anything", CancellationToken.None);
-        }, CancellationToken.None);
-
         var codes = new List<string>();
-        for (var i = 0; i < 20; i++) codes.Add(await writer.CreatePairingCodeAsync());
-
-        await reading.CancelAsync();
-        await reads;
-        reading.Dispose();
+        await using (ConcurrentReader.Start(async () => await reader.GetTargetAsync("anything", CancellationToken.None)))
+        {
+            for (var i = 0; i < 20; i++) codes.Add(await writer.CreatePairingCodeAsync());
+        }
 
         var checker = new RemoteManagementStore(configPath);
         foreach (var code in codes)
             Assert.That(await checker.ConsumePairingCodeAsync(code, CancellationToken.None), Is.True,
                 "a write was lost while another instance was reading — on Windows the reader's handle refuses the replace");
     }
-
 }

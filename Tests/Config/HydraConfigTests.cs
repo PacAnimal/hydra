@@ -1,5 +1,6 @@
 using Hydra.Config;
 using Hydra.Screen;
+using static Tests.Setup.ConfigJson;
 
 namespace Tests.Config;
 
@@ -19,8 +20,6 @@ public class HydraConfigTests
 
     // minimum relay config — injected into profile JSON objects that need it
     private const string Relay = ",\"embeddedStyx\":{\"server\":\"https://localhost:5000\",\"password\":\"test\"}";
-
-    private static string AsFile(string profilesJson) => $$"""{"profiles":{{profilesJson}}}""";
 
     [Test]
     public void ClipboardSync_DefaultsToHydra_AndParsesSystem()

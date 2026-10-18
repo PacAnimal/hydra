@@ -39,7 +39,7 @@ public sealed class MacClipboardSync : IClipboardSync
 
     public string? GetText() => Guarded("text", pasteboard => _echo.FilterText(ReadString(pasteboard, PasteboardTypeString)));
 
-    public byte[]? GetImagePng() => Guarded("image", pasteboard => ReadData(pasteboard, PasteboardTypePng) is { } png && !_echo.IsDuplicateImage(png) ? png : null);
+    public byte[]? GetImagePng() => Guarded("image", pasteboard => _echo.FilterImage(ReadData(pasteboard, PasteboardTypePng)));
 
     public string? GetHtml() => Guarded("html", pasteboard => _echo.FilterHtml(ReadString(pasteboard, PasteboardTypeHtml)));
 
@@ -65,17 +65,15 @@ public sealed class MacClipboardSync : IClipboardSync
 
     private static string? ReadString(nint pasteboard, string type)
     {
-        var typeStr = NativeHelpers.MakeNsString(type);
+        using var typeStr = new NsString(type);
         var result = NativeMethods.objc_msgSend(pasteboard, NativeMethods.sel_registerName("stringForType:"), typeStr);
-        NativeMethods.CFRelease(typeStr);
         return result == nint.Zero ? null : NativeHelpers.CfStringToManaged(result);
     }
 
     private static byte[]? ReadData(nint pasteboard, string type)
     {
-        var typeStr = NativeHelpers.MakeNsString(type);
+        using var typeStr = new NsString(type);
         var nsData = NativeMethods.objc_msgSend(pasteboard, NativeMethods.sel_registerName("dataForType:"), typeStr);
-        NativeMethods.CFRelease(typeStr);
         if (nsData == nint.Zero) return null;
 
         var length = NativeMethods.CFDataGetLength(nsData);
@@ -151,12 +149,9 @@ public sealed class MacClipboardSync : IClipboardSync
     // setString:forType: and setData:forType: answer whether the pasteboard took it, as a BOOL: only its low byte is set
     internal static bool WriteString(nint pasteboard, string value, string type)
     {
-        var nsStr = NativeHelpers.MakeNsString(value);
-        var typeStr = NativeHelpers.MakeNsString(type);
-        var taken = (byte)NativeMethods.objc_msgSend_2arg(pasteboard, NativeMethods.sel_registerName("setString:forType:"), nsStr, typeStr) != 0;
-        NativeMethods.CFRelease(nsStr);
-        NativeMethods.CFRelease(typeStr);
-        return taken;
+        using var nsStr = new NsString(value);
+        using var typeStr = new NsString(type);
+        return (byte)NativeMethods.objc_msgSend_2arg(pasteboard, NativeMethods.sel_registerName("setString:forType:"), nsStr, typeStr) != 0;
     }
 
     private static unsafe bool WriteData(nint pasteboard, byte[] bytes, string type)
@@ -167,10 +162,8 @@ public sealed class MacClipboardSync : IClipboardSync
                 (nuint)bytes.Length);
         if (nsData == nint.Zero) return false;
 
-        var typeStr = NativeHelpers.MakeNsString(type);
-        var taken = (byte)NativeMethods.objc_msgSend_2arg(pasteboard, NativeMethods.sel_registerName("setData:forType:"), nsData, typeStr) != 0;
-        NativeMethods.CFRelease(typeStr);
-        return taken;
+        using var typeStr = new NsString(type);
+        return (byte)NativeMethods.objc_msgSend_2arg(pasteboard, NativeMethods.sel_registerName("setData:forType:"), nsData, typeStr) != 0;
     }
 
     private nint GetGeneralPasteboard() => Pasteboard(_pasteboardName);
@@ -182,9 +175,7 @@ public sealed class MacClipboardSync : IClipboardSync
         if (cls == nint.Zero) return nint.Zero;
         if (named == null) return NativeMethods.objc_msgSend_noarg(cls, NativeMethods.sel_registerName("generalPasteboard"));
 
-        var name = NativeHelpers.MakeNsString(named);
-        var pasteboard = NativeMethods.objc_msgSend(cls, NativeMethods.sel_registerName("pasteboardWithName:"), name);
-        NativeMethods.CFRelease(name);
-        return pasteboard;
+        using var name = new NsString(named);
+        return NativeMethods.objc_msgSend(cls, NativeMethods.sel_registerName("pasteboardWithName:"), name);
     }
 }

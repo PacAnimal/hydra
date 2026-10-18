@@ -1,12 +1,11 @@
 using Hydra.Config;
+using static Tests.Setup.ConfigJson;
 
 namespace Tests.Config;
 
 [TestFixture]
 public class HydraConfigValidationTests
 {
-    private static string AsFile(string profilesJson) => $$"""{"profiles":{{profilesJson}}}""";
-
     // ─── maxMouseHz ───────────────────────────────────────────────────────────
 
     [Test]
@@ -57,6 +56,25 @@ public class HydraConfigValidationTests
     public void Validate_WithEmbeddedStyx_Passes()
     {
         var json = AsFile("""[{"mode":"Master","embeddedStyx":{"server":"https://localhost:5000","password":"pw"}}]""");
+        Assert.DoesNotThrow(() => HydraConfig.ParseAndValidate(json));
+    }
+
+    [TestCase("http://localhost:5000")]
+    [TestCase("ws://localhost:5000")]
+    [TestCase("tcp://localhost:5000")]
+    public void Validate_EmbeddedStyx_NotHttps_Throws(string server)
+    {
+        var json = AsFile($$$"""[{"mode":"Master","embeddedStyx":{"server":"{{{server}}}","password":"pw"}}]""");
+        var ex = Assert.Throws<InvalidOperationException>(() => HydraConfig.ParseAndValidate(json));
+        Assert.That(ex!.Message, Does.Contain("embeddedStyx.server must be https://"));
+    }
+
+    [TestCase("https://localhost:5000")]
+    [TestCase("HTTPS://localhost:5000")]
+    [TestCase("localhost:5000")]
+    public void Validate_EmbeddedStyx_HttpsOrSchemeless_Passes(string server)
+    {
+        var json = AsFile($$$"""[{"mode":"Master","embeddedStyx":{"server":"{{{server}}}","password":"pw"}}]""");
         Assert.DoesNotThrow(() => HydraConfig.ParseAndValidate(json));
     }
 

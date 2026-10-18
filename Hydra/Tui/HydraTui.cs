@@ -1367,21 +1367,18 @@ internal static class HydraTui
                   Relay traffic ↑ {FormatBytes(relay.BytesSent)} / {relay.MessagesSent} msg   ↓ {FormatBytes(relay.BytesReceived)} / {relay.MessagesReceived} msg
                   Attempts      {relay.ConnectionAttempts}
                 """;
-            var activeAdapters = s.ActiveNetworkAdapters;
-            var adapters = activeAdapters.Count == 0
+            var adapters = s.ActiveNetworkAdapters.Count == 0
                 ? "  (none detected)"
-                : string.Join('\n', activeAdapters.Select(adapter =>
+                : string.Join('\n', s.ActiveNetworkAdapters.Select(adapter =>
                     $"  {(adapter.HasGateway ? "◆" : "◇")} {adapter.Type,-12} {adapter.Name,-10} {FormatLinkSpeed(adapter.LinkSpeedBitsPerSecond),9}  ↓ {FormatBytes(adapter.BytesReceived),9} ↑ {FormatBytes(adapter.BytesSent),9}  drops ↓{FormatCounter(adapter.ReceiveDrops)} ↑{FormatCounter(adapter.SendDrops)} errors ↓{FormatCounter(adapter.ReceiveErrors)} ↑{FormatCounter(adapter.SendErrors)}\n" +
                     $"      {string.Join(", ", adapter.Addresses)}"));
-            var relayPeers = s.EmbeddedRelayPeers;
-            var embeddedPeers = relayPeers.Count == 0
+            var embeddedPeers = s.EmbeddedRelayPeers.Count == 0
                 ? "  (not hosting an embedded relay)"
-                : string.Join('\n', relayPeers.Select(peer =>
+                : string.Join('\n', s.EmbeddedRelayPeers.Select(peer =>
                     $"  ● {peer.HostName,-16} {peer.InterfaceType} ({peer.InterfaceName})  {peer.RemoteAddress} → {peer.LocalAddress}{(peer.HostName.EqualsIgnoreCase(s.HostName) ? "  [this Hydra]" : "")}"));
-            var latency = s.PeerLatency;
-            var peerLatency = latency.Count == 0
+            var peerLatency = s.PeerLatency.Count == 0
                 ? "  (collecting samples)"
-                : string.Join('\n', latency.Select(peer =>
+                : string.Join('\n', s.PeerLatency.Select(peer =>
                     $"  {peer.Host,-16} now {peer.LastRttMs,6:0.0} ms   avg {peer.AverageRttMs,6:0.0} ms   p95 {peer.P95RttMs,6:0.0} ms   jitter {peer.JitterMs,5:0.0} ms   lost {peer.Lost}"));
             return $"""
                 Runtime

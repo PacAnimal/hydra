@@ -71,12 +71,9 @@ public class PeerBroadcastService(IClientRegistry registry, PeerWriter writer, [
     }
 
     // only live-registry broadcasts collapse into each other. A snapshot is one step of an ordered sequence
-    // (a reconnecting host leaving, then arriving), so dropping it loses the event it exists to convey.
-    // A broadcast somebody is waiting on is never collapsed away, or that caller waits for a delivery that
-    // now never happens.
+    // (a reconnecting host leaving, then arriving) that its caller waits on, so it is never collapsed away.
     private static bool CanCollapse(PeerBroadcast current, PeerBroadcast next) =>
-        current.Snapshot is null && next.Snapshot is null && current.Done is null && next.Done is null &&
-        current.Network == next.Network;
+        current.Snapshot is null && next.Snapshot is null && current.Network == next.Network;
 
     private async Task BroadcastPeers(PeerBroadcast broadcast)
     {
@@ -130,5 +127,6 @@ public class PeerBroadcastService(IClientRegistry registry, PeerWriter writer, [
         }
     }
 
+    // a snapshot always comes with its Done, a live broadcast with neither
     private record PeerBroadcast(NetworkKey Network, IReadOnlyList<NetworkClient>? Snapshot, TaskCompletionSource? Done);
 }

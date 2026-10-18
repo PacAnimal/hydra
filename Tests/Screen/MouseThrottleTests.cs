@@ -21,8 +21,7 @@ public class MouseThrottleTests
     [SetUp]
     public async Task SetUp()
     {
-        (_platform, _relay, _) = await _services.Start(TransitionTestHelper.CreateService(getTickCount: _ticks.Now));
-        await BringRemoteOnline(_relay);
+        (_platform, _relay, _) = await _services.StartOnline(TransitionTestHelper.CreateService(getTickCount: _ticks.Now));
     }
 
     [TearDown]
@@ -32,8 +31,7 @@ public class MouseThrottleTests
     public async Task MouseMoves_AreThrottled_ToMaxHz()
     {
         // frozen clock: all 50 events share the same tick so only the first send fires
-        var (platform, relay, _) = await _services.Start(TransitionTestHelper.CreateService(getTickCount: () => 1000L));
-        await BringRemoteOnline(relay);
+        var (platform, relay, _) = await _services.StartOnline(TransitionTestHelper.CreateService(getTickCount: () => 1000L));
 
         platform.FireMouseMove(2559, 720);
         Assert.That(platform.IsOnVirtualScreen, Is.True);
@@ -56,9 +54,8 @@ public class MouseThrottleTests
         // frozen clock: every sample after the first lands inside one send interval
         var tracker = new HeldActivityTracker();
         var timers = new FakeTimeProvider();
-        var (platform, relay, service) = await _services.Start(TransitionTestHelper.CreateService(
+        var (platform, _, service) = await _services.StartOnline(TransitionTestHelper.CreateService(
             getTickCount: () => 1000L, activityTracker: tracker, timeProvider: timers));
-        await BringRemoteOnline(relay);
         platform.FireMouseMove(2559, 720);
         Assert.That(platform.IsOnVirtualScreen, Is.True);
 
@@ -94,9 +91,8 @@ public class MouseThrottleTests
     {
         // frozen clock: the interval never elapses, so nothing but the first sample may post
         var timers = new FakeTimeProvider();
-        var (platform, relay, service) = await _services.Start(TransitionTestHelper.CreateService(
+        var (platform, _, service) = await _services.StartOnline(TransitionTestHelper.CreateService(
             getTickCount: () => 1000L, timeProvider: timers));
-        await BringRemoteOnline(relay);
         platform.FireMouseMove(2559, 720);
         Assert.That(platform.IsOnVirtualScreen, Is.True);
 
@@ -130,9 +126,8 @@ public class MouseThrottleTests
     private async Task<int> SendsOverSixtyMillisecondsOfMotion(int? maxMouseHz)
     {
         var now = new Boxed<long>(1000L);
-        var (platform, relay, _) = await _services.Start(TransitionTestHelper.CreateService(
+        var (platform, relay, _) = await _services.StartOnline(TransitionTestHelper.CreateService(
             getTickCount: () => now.Value, profile: TransitionTestHelper.ProfileWith(maxMouseHz)));
-        await BringRemoteOnline(relay);
         platform.FireMouseMove(2559, 720);
         relay.ClearSent();
 
@@ -157,8 +152,7 @@ public class MouseThrottleTests
         // So unlike the delta-reporting path below, this one recentres on every sample, however
         // small — sample batching upstream already keeps the resulting warp rate to at most
         // MaxMouseHz, so this is not the ~900/s a raw mouse would otherwise produce.
-        var (platform, relay, _) = await _services.Start(TransitionTestHelper.CreateService());
-        await BringRemoteOnline(relay);
+        var (platform, _, _) = await _services.StartOnline(TransitionTestHelper.CreateService());
         platform.FireMouseMove(2559, 720);
         Assert.That(platform.IsOnVirtualScreen, Is.True);
 
@@ -179,8 +173,7 @@ public class MouseThrottleTests
         // an on-screen position, so it can never run into a real screen edge no matter how long it
         // goes between warps — recentring less often than every sample costs nothing here but an X
         // warp + socket flush.
-        var (platform, relay, _) = await _services.Start(TransitionTestHelper.CreateService());
-        await BringRemoteOnline(relay);
+        var (platform, _, _) = await _services.StartOnline(TransitionTestHelper.CreateService());
         platform.FireMouseMove(2559, 720);
         Assert.That(platform.IsOnVirtualScreen, Is.True);
 
@@ -204,7 +197,7 @@ public class MouseThrottleTests
         // WindowsInputHandler recentres per sample itself; a router warp on top would be an extra reset jump
         var (platform, relay, _) = await _services.Start(TransitionTestHelper.CreateService());
         platform.RecentresItself = true;
-        await BringRemoteOnline(relay);
+        await TransitionTestHelper.BringRemoteOnline(relay);
         platform.FireMouseMove(2559, 720);
         Assert.That(platform.IsOnVirtualScreen, Is.True);
 
@@ -223,7 +216,7 @@ public class MouseThrottleTests
     {
         var (platform, relay, _) = await _services.Start(TransitionTestHelper.CreateService());
         platform.RecentresItself = true;
-        await BringRemoteOnline(relay);
+        await TransitionTestHelper.BringRemoteOnline(relay);
         platform.FireMouseMove(2559, 720);
         Assert.That(platform.IsOnVirtualScreen, Is.True);
 
@@ -303,6 +296,4 @@ public class MouseThrottleTests
 
     // -- helpers --
 
-    private static Task BringRemoteOnline(FakeRelay relay) =>
-        TransitionTestHelper.BringRemoteOnline(relay);
 }

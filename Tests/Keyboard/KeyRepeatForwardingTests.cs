@@ -8,26 +8,23 @@ namespace Tests.Keyboard;
 [TestFixture]
 public class KeyRepeatForwardingTests
 {
-    private TestServiceBundle? _bundle;
+    private readonly StartedServices _services = new();
+    private TestServiceBundle _bundle = null!;
 
     [SetUp]
     public async Task SetUp()
     {
-        _bundle = await TransitionTestHelper.Visiting(TransitionTestHelper.CreateService());
+        _bundle = await _services.Visiting(TransitionTestHelper.CreateService());
         _bundle.Relay.ClearSent();
     }
 
     [TearDown]
-    public async Task TearDown()
-    {
-        if (_bundle != null) await TransitionTestHelper.Stop(_bundle);
-        _bundle = null;
-    }
+    public Task TearDown() => _services.StopAll();
 
     [Test]
     public void KeyDown_ForwardedNotMarkedRepeat()
     {
-        _bundle!.Platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyDown, 'w', KeyModifiers.None));
+        _bundle.Platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyDown, 'w', KeyModifiers.None));
 
         var forwarded = _bundle.Relay.Sent<KeyEventMessage>(MessageKind.KeyEvent);
         Assert.That(forwarded, Has.Count.GreaterThanOrEqualTo(1));
@@ -38,7 +35,7 @@ public class KeyRepeatForwardingTests
     public void RepeatKeyEvent_ForwardedMarkedRepeat()
     {
         // an OS auto-repeat is re-resolved on the master and surfaces as a KeyEvent flagged IsRepeat
-        _bundle!.Platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyDown, 'w', KeyModifiers.None));
+        _bundle.Platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyDown, 'w', KeyModifiers.None));
         _bundle.Platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyDown, 'w', KeyModifiers.None) with { IsRepeat = true });
 
         var forwarded = _bundle.Relay.Sent<KeyEventMessage>(MessageKind.KeyEvent);
