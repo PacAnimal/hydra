@@ -164,6 +164,33 @@ public class StyxEnvironmentTests
         Assert.That(refused!.Message, Does.Contain("RELAY_PARALLEL_INVOCATIONS"));
     }
 
+    [Test]
+    public void LocalPort_DefaultsTo5000() =>
+        Assert.That(StyxEnvironment.ReadLocalPort(Env()), Is.EqualTo(5000));
+
+    [TestCase("1", 1)]
+    [TestCase("8080", 8080)]
+    [TestCase("65535", 65535)]
+    public void LocalPort_IsRead(string value, int expected) =>
+        Assert.That(StyxEnvironment.ReadLocalPort(Env(("LOCAL_PORT", value))), Is.EqualTo(expected));
+
+    [TestCase("0")]
+    [TestCase("65536")]
+    [TestCase("http")]
+    [TestCase("-80")]
+    public void LocalPort_ThatIsNotAPort_IsRefused(string value)
+    {
+        var refused = Assert.Throws<StyxConfigurationException>(() => StyxEnvironment.ReadLocalPort(Env(("LOCAL_PORT", value))));
+        Assert.That(refused!.Message, Does.Contain("LOCAL_PORT"));
+    }
+
+    [TestCase(null, false)]
+    [TestCase("true", true)]
+    [TestCase("TRUE", true)]
+    [TestCase("1", false)]
+    public void Flags_AreOnlyOnForTrue(string? value, bool expected) =>
+        Assert.That(StyxEnvironment.ReadFlag(Env(("LOCAL_ONLY", value!)), "LOCAL_ONLY"), Is.EqualTo(expected));
+
     [TestCase(2)]
     [TestCase(4)]
     [TestCase(8)]

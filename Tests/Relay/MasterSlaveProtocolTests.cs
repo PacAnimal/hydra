@@ -53,7 +53,7 @@ public class MasterSlaveProtocolTests
         var received = new List<MessageKind>();
         relay.MessageReceived += async (_, kind, _) => { received.Add(kind); await ValueTask.CompletedTask; };
 
-        var info = new ScreenInfoMessage([new ScreenInfoEntry("screen:0", 0, 0, 1920, 1080, 1.0m)]);
+        var info = new ScreenInfoMessage([new ScreenInfoEntry("screen:0", 0, 0, 1920, 1080, 1.0m)], PeerPlatform.Linux);
         await relay.SimulateReceive("slave-pc", MessageKind.ScreenInfo, JsonSerializer.Serialize(info, SaneJson.Options));
 
         Assert.That(received, Is.EqualTo([MessageKind.ScreenInfo]));

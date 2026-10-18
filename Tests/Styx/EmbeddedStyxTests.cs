@@ -25,18 +25,7 @@ public class EmbeddedStyxTests
     private string _serverUrl = "";
     private CapturingLog<EmbeddedStyxServer> _serverLog = new();
 
-    /// <summary>
-    /// Starts the relay on a free port, RETRYING on a port that stopped being free.
-    ///
-    /// <para><c>FindFreePort</c> asks the OS for one and closes the listener, so between that and Kestrel
-    /// binding it, anything else on a busy machine may take it — a real race, not a theoretical one, and the
-    /// busier the machine the likelier. Each attempt draws a FRESH port, because retrying the same one is
-    /// retrying the thing that just failed.</para>
-    ///
-    /// <para>This only became visible once <see cref="EmbeddedStyxServer.WaitForReady"/> started faulting on
-    /// a failed start. Before that, losing the race hung the run instead of failing it — thirty four minutes
-    /// of a lane with nothing to show for it.</para>
-    /// </summary>
+    // starts the relay on a free port, on a fresh one each attempt: another process can take a free port before Kestrel binds it
     [SetUp]
     public Task SetUp() => StartOnFreePort();
 
@@ -77,8 +66,8 @@ public class EmbeddedStyxTests
 
         await _server.StartAsync(_cts.Token);
 
-        // longer than Bound: the listener can take longer than that to come up under load
-        await _server.WaitForReady().WaitAsync(TimeSpan.FromSeconds(60));
+        // the listener can take longer than Bound to come up under load
+        await _server.WaitForReady().WaitAsync(Bound * 2);
     }
 
     /// <summary>Whether a start failed because something else holds the port — the one thing worth retrying.</summary>
@@ -117,14 +106,13 @@ public class EmbeddedStyxTests
         _cts = null;
     }
 
-    private static EmbeddedHydraTestClient Client(string name, string? networkConfig = null, ILogger<RelayConnection>? log = null)
-        => new(TransitionTestHelper.Profile(name, new HydraConfig { Mode = Mode.Master, NetworkConfig = networkConfig }), log);
+    private static HydraTestClient Client(string name, string? networkConfig = null, ILogger<RelayConnection>? log = null)
+        => HydraTestClient.OverTcp(TransitionTestHelper.Profile(name, new HydraConfig { Mode = Mode.Master, NetworkConfig = networkConfig }), log);
 
-    private static async Task<EmbeddedHydraTestClient> ConnectedClient(string name, string networkConfig)
+    private static async Task<HydraTestClient> ConnectedClient(string name, string networkConfig)
     {
         var client = Client(name, networkConfig);
-        await client.StartAsync(CancellationToken.None);
-        await client.WaitForReady();
+        await client.StartReady();
         return client;
     }
 
@@ -491,40 +479,23 @@ public class EmbeddedStyxTests
 
     // ─── helpers ─────────────────────────────────────────────────────────────
 
-    /// <summary>
-    /// A relay that cannot start FAILS its readiness rather than leaving the caller waiting.
-    ///
-    /// <para><b>A hang is the worst shape this failure can take, and it was the shape it had.</b>
-    /// <c>WaitForReady</c> completed only on success, so anything that threw on the way up — a port taken
-    /// between being probed and being bound, or a listener that could not even be described — left every
-    /// awaiter on a task nothing would ever finish. The hosted service
-    /// logged the failure and the test sat there; a whole CI lane was killed after thirty four minutes with
-    /// no idea which test it was in.</para>
-    ///
-    /// <para>The failure here is certain rather than raced, and certain on every platform — see the port.</para>
-    /// </summary>
+    // a relay that cannot start faults its readiness: anything awaiting a start that threw would otherwise wait for ever
     [Test]
     public async Task ARelayThatCannotStartFailsItsReadinessInsteadOfHanging()
     {
-        // A port number that cannot exist, rather than one held by a squatter. Holding a port is NOT a
-        // portable way to make a bind fail: on Windows the relay binds it anyway and starts happily, so
-        // that version of this test passed there for the wrong reason while failing to prove anything. An
-        // out-of-range port fails while the listener is merely being DESCRIBED, identically everywhere.
+        // a port that cannot exist fails alike everywhere; Windows binds a port another socket holds
         var config = new EmbeddedStyxServerConfig { Port = 70000, Password = TestPassword };
         using var cts = new CancellationTokenSource();
         using var blocked = new EmbeddedStyxServer(config, TestLog.CreateLogger<EmbeddedStyxServer>());
 
         try { await blocked.StartAsync(cts.Token); } catch { /* the hosted service may surface it here too */ }
 
-        // TWO assertions, because one cannot tell the bug from the fix: `Throws.Exception` around a bounded
-        // wait is satisfied by the TimeoutException the bound itself raises, so it passes whether readiness
-        // faulted or hung.
         var ready = blocked.WaitForReady();
-        var settled = await Task.WhenAny(ready, Task.Delay(Bound));
+        var settled = await Settles(ready);
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(settled, Is.SameAs(ready),
+            Assert.That(settled, Is.True,
                 "a relay that could not start left its readiness waiting for ever — the hang this test exists for");
             Assert.That(ready.IsFaulted, Is.True,
                 "readiness must report the failure; completing it successfully would be worse than the hang");

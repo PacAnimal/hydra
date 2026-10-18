@@ -1,5 +1,6 @@
 using Hydra.Platform;
 using Microsoft.Extensions.Logging.Abstractions;
+using Tests.Setup;
 
 namespace Tests.Platform;
 
@@ -7,8 +8,7 @@ namespace Tests.Platform;
 // IClipboardSync stands in for another app, since to the first it is one.
 public abstract class CopiedPrimaryContract
 {
-    protected static readonly byte[] Png = Convert.FromBase64String(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==");
+    protected static readonly byte[] Png = TestImages.Png;
 
     protected IClipboardSync Hydra { get; private set; } = null!;
     private IClipboardSync _otherApp = null!;

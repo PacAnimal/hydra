@@ -14,6 +14,9 @@ public record NetworkConfig(
     string Authorization,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool Embedded = false)
 {
+    // the one network every peer of an embedded relay shares
+    public static readonly Guid EmbeddedNetworkId = new("1337b007-dead-beef-cafe-000123456789");
+
     private const string EncryptionKeyAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 
     // 128 alphanumerics, the form the web UI generates
@@ -34,7 +37,7 @@ public record NetworkConfig(
     // any machine with the password can independently compute a valid authorization token
     public static async ValueTask<string> ComputeEmbeddedBlob(string server, string password, CancellationToken cancel = default)
     {
-        var authorization = await V1Authorization(password, EmbeddedRelayConstants.NetworkId, cancel);
+        var authorization = await V1Authorization(password, EmbeddedNetworkId, cancel);
         return new NetworkConfig(server, password, authorization, Embedded: true).ToBlob();
     }
 

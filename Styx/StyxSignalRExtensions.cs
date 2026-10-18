@@ -33,10 +33,7 @@ public static class StyxSignalRExtensions
                 });
         }).AddMessagePackProtocol(options =>
         {
-            // a client picks its own member-name casing, and MessagePack would otherwise match keys by exact
-            // bytes and hand the hub an argument with unset members. StyxWireFormatTests pins the encoding of
-            // everything crossing this hub, so a change in what these options do to it can't pass unnoticed —
-            // the protocol is documented for third parties to implement against.
+            // members match in any casing; StyxWireFormatTests pins the encoding
             options.SerializerOptions = SaneMessagePack.InteropOptions;
         }).AddHubOptions<ParallelStyxHub>(hub => hub.MaximumParallelInvocationsPerClient = parallelInvocations);
 

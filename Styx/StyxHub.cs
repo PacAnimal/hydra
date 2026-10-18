@@ -9,8 +9,6 @@ namespace Styx;
 public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, ITokenVerifier verifier, IExpiryScheduler expiry, PeerWriter writer,
     ILogger<StyxHub> log, StyxOptions options, ResponseThrottle throttler) : Hub<IStyxClient>, IStyxServer
 {
-    public const string HostNameNotAllowed = "Authorization does not allow this hostname";
-
     // one login at a time per connection, whatever the path's width, so the throttle below caps it at one a second
     private static readonly object LoginGateKey = new();
 
@@ -38,8 +36,7 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, ITokenVer
 
     private async Task<RelayLoginResponse> Login(RelayLogin? login)
     {
-        // throttle — minimum response time regardless of outcome; it also caps a connection at one login a second,
-        // and with it the displacement churn a token holder could cause by re-authenticating in a loop
+        // minimum response time regardless of outcome, which also caps the displacement churn of a re-login loop
         var throttle = throttler.Start(Constants.AuthThrottleSeconds, Context.ConnectionAborted);
         var remoteIp = RemoteIp;
 
@@ -54,7 +51,7 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, ITokenVer
         if (login is null || string.IsNullOrWhiteSpace(login.Authorization) || string.IsNullOrWhiteSpace(login.HostName))
         {
             log.LogWarning("Authentication rejected from {RemoteIp}: login is missing an authorization or a hostname", remoteIp);
-            return await Refuse("Authorization and hostName are both required");
+            return await Refuse(RelayReasons.IncompleteLogin);
         }
 
         // the canonical form peers see the name in and address it by (Styx.md §2)
@@ -71,16 +68,14 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, ITokenVer
         {
             log.LogWarning("Authentication refused for \"{HostName}\" from {RemoteIp} on network {Network}: the token does not allow the name",
                 hostName, remoteIp, network);
-            return await Refuse(HostNameNotAllowed);
+            return await Refuse(RelayReasons.HostNameNotAllowed);
         }
 
-        // kick same network+hostname duplicates and register atomically (one lock) so two concurrent
-        // authenticates for the same host can't both register (stale phantom peer)
         var registration = await registry.Register(Context.ConnectionId, network, hostName, remoteIp, LocalIp);
         if (registration.Kicked is { } kicked)
         {
             expiry.Cancel(kicked);
-            writer.Kick(kicked, "duplicate hostname");
+            writer.Kick(kicked, RelayReasons.KickedDuplicateHostname);
         }
 
         // armed before the abort check below, whose cleanup then cancels it too
@@ -97,7 +92,7 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, ITokenVer
             // other peers the host is gone — converge them on what the registry actually holds now
             if (registration.Kicked != null) peers.QueueBroadcast(network);
             if (registration.Left is { } abandoned) peers.QueueBroadcast(abandoned);
-            return new RelayLoginResponse { Authenticated = false, Message = "Connection aborted" };
+            return new RelayLoginResponse { Authenticated = false, Message = RelayReasons.ConnectionAborted };
         }
 
         if (log.IsEnabled(LogLevel.Information))

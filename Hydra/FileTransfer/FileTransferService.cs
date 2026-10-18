@@ -75,8 +75,8 @@ public sealed class FileTransferService : IDisposable
     // called when a FileSelectionResponse arrives for a remote copy; returns the OSD text to display
     public string HandleSelectionResponse(string sourceHost, FileSelectionResponseMessage msg)
     {
-        if (msg.NotFocusedMessage != null)
-            return msg.NotFocusedMessage;
+        if (msg.Message != null)
+            return msg.Message;
         if (msg.Paths is { Length: > 0 })
         {
             lock (_lock) _copyBuffer = new FileCopyState(sourceHost, msg.Paths);

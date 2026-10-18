@@ -7,7 +7,7 @@ namespace Tests.Clipboard;
 [TestFixture]
 public class ClipboardScenarioTests
 {
-    private static readonly byte[] Png = [0x89, 0x50, 0x4E, 0x47, 1, 2, 3];
+    private static readonly byte[] Png = TestImages.Png;
 
     private static SimulatedClipboard Linux() => new(ClipboardOs.Linux);
 

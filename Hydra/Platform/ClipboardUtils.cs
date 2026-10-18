@@ -27,7 +27,7 @@ internal sealed class ClipboardEchoFilter(Func<bool> owned)
     public byte[]? FilterRtf(byte[]? rtf) => Echoes(_lastRtfHash, Hash(rtf)) ? null : rtf;
 
     private bool Echoes(ulong? written, ulong? read) => written != null && read == written && owned();
-    private static ulong? Hash(byte[]? data) => data == null ? null : ClipboardUtils.QuickHash(data);
+    private static ulong? Hash(byte[]? data) => data == null ? null : XxHash64.HashToUInt64(data);
     private static ulong? Hash(string? text) => text == null ? null : Hash(Encoding.UTF8.GetBytes(text));
 }
 
@@ -85,7 +85,7 @@ public static class ClipboardUtils
             : TrimToFit(text, primaryText, null, html, rtf, log, context);
     }
 
-    // a hash every host computes alike, for what crosses the wire; QuickHash is seeded per process
+    // a hash every host computes alike, for what crosses the wire
     public static ulong StableHash(string text) => XxHash64.HashToUInt64(Encoding.UTF8.GetBytes(text));
 
     // every format of a write, in the platform's order, each null when absent; one the clipboard refuses is warned about,
@@ -163,17 +163,6 @@ public static class ClipboardUtils
             primaryText = null; // any primary left was a copy of the text, so it goes with it
         }
         return new ClipboardSnapshot(text, primaryText, image, html, rtf);
-    }
-
-    public static ulong QuickHash(byte[] data)
-    {
-        // two hashes with different inputs combined into 64-bit to reduce collision probability
-        var hc1 = new HashCode();
-        hc1.AddBytes(data);
-        var hc2 = new HashCode();
-        hc2.Add(data.Length); // prefix with length to differentiate from hc1
-        hc2.AddBytes(data);
-        return ((ulong)(uint)hc1.ToHashCode() << 32) | (uint)hc2.ToHashCode();
     }
 
     // xxhash64 of the clipboard's fields, to skip redundant syncs

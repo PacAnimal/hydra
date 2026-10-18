@@ -22,7 +22,6 @@ public sealed class TestStyxClient : IStyxClient, IAsyncDisposable
     private readonly NotificationQueue<Exception?> _closed = new();
 
     public IStyxServer? Server { get; private set; }
-    public StyxReceived? LastReceived { get; private set; }
     public string? KickReason { get; private set; }
 
     // connect and authenticate — returns the auth response for the caller to inspect
@@ -96,9 +95,7 @@ public sealed class TestStyxClient : IStyxClient, IAsyncDisposable
     // IStyxClient
     public Task Receive(string sourceHost, string sourceIp, byte[] payload)
     {
-        var received = new StyxReceived(sourceHost, sourceIp, payload);
-        LastReceived = received;
-        _received.Push(received);
+        _received.Push(new StyxReceived(sourceHost, sourceIp, payload));
         return Task.CompletedTask;
     }
 

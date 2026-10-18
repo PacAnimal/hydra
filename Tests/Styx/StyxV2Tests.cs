@@ -3,7 +3,6 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using Cathedral.Styx;
 using Styx;
-using Styx.Services;
 using Tests.Setup;
 
 namespace Tests.Styx;
@@ -33,7 +32,7 @@ public class StyxV2Tests : StyxFixtureBase
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response.Authenticated, Is.False);
-            Assert.That(response.Message, Is.EqualTo(TokenVerifier.InvalidAuthorization));
+            Assert.That(response.Message, Is.EqualTo(RelayReasons.InvalidAuthorization));
         }
     }
 
@@ -43,7 +42,7 @@ public class StyxV2Tests : StyxFixtureBase
         var expired = StyxTestServer.MintToken(null, StyxCaveat.Expires(DateTimeOffset.UnixEpoch.AddSeconds(1))).ToString();
         await using var client = new TestStyxClient();
         var response = await client.Connect(Factory, expired, "alpha");
-        Assert.That(response.Message, Is.EqualTo(TokenVerifier.AuthorizationExpired));
+        Assert.That(response.Message, Is.EqualTo(RelayReasons.AuthorizationExpired));
     }
 
     [Test]
@@ -59,7 +58,7 @@ public class StyxV2Tests : StyxFixtureBase
         using (Assert.EnterMultipleScope())
         {
             Assert.That(refused.Authenticated, Is.False);
-            Assert.That(refused.Message, Is.EqualTo(StyxHub.HostNameNotAllowed));
+            Assert.That(refused.Message, Is.EqualTo(RelayReasons.HostNameNotAllowed));
             Assert.That(accepted.Authenticated, Is.True);
         }
 
@@ -77,8 +76,8 @@ public class StyxV2Tests : StyxFixtureBase
         await using var laptop = new TestStyxClient();
         using (Assert.EnterMultipleScope())
         {
-            Assert.That((await server.Connect(Factory, token, "ATT-Server")).Message, Is.EqualTo(StyxHub.HostNameNotAllowed));
-            Assert.That((await outsider.Connect(Factory, token, "other")).Message, Is.EqualTo(StyxHub.HostNameNotAllowed));
+            Assert.That((await server.Connect(Factory, token, "ATT-Server")).Message, Is.EqualTo(RelayReasons.HostNameNotAllowed));
+            Assert.That((await outsider.Connect(Factory, token, "other")).Message, Is.EqualTo(RelayReasons.HostNameNotAllowed));
             Assert.That((await laptop.Connect(Factory, token, "att-laptop")).Authenticated, Is.True);
         }
     }
@@ -91,8 +90,8 @@ public class StyxV2Tests : StyxFixtureBase
         await using var padded = new TestStyxClient();
         using (Assert.EnterMultipleScope())
         {
-            Assert.That((await kelvin.Connect(Factory, token, "Kiosk")).Message, Is.EqualTo(StyxHub.HostNameNotAllowed));
-            Assert.That((await padded.Connect(Factory, token, "kiosk ")).Message, Is.EqualTo(StyxHub.HostNameNotAllowed));
+            Assert.That((await kelvin.Connect(Factory, token, "Kiosk")).Message, Is.EqualTo(RelayReasons.HostNameNotAllowed));
+            Assert.That((await padded.Connect(Factory, token, "kiosk ")).Message, Is.EqualTo(RelayReasons.HostNameNotAllowed));
         }
     }
 
@@ -104,7 +103,7 @@ public class StyxV2Tests : StyxFixtureBase
         await using var lookalike = new TestStyxClient();
         await real.Connect(Factory, token, "kiosk");
         await lookalike.Connect(Factory, token, "Kiosk");
-        Assert.That(await real.WaitForKick(), Is.EqualTo("duplicate hostname"));
+        Assert.That(await real.WaitForKick(), Is.EqualTo(RelayReasons.KickedDuplicateHostname));
     }
 
     [Test]
@@ -114,17 +113,23 @@ public class StyxV2Tests : StyxFixtureBase
         await using var roomA = new TestStyxClient();
         await using var roomA2 = new TestStyxClient();
         await using var roomB = new TestStyxClient();
-        await roomB.Connect(Factory, StyxTestServer.MintToken(network, StyxCaveat.Sub("game"), StyxCaveat.Sub("b")).ToString(), "bee");
+        await using var roomB2 = new TestStyxClient();
+        var roomBToken = StyxTestServer.MintToken(network, StyxCaveat.Sub("game"), StyxCaveat.Sub("b")).ToString();
+        await roomB.Connect(Factory, roomBToken, "bee");
+        await roomB2.Connect(Factory, roomBToken, "bee2");
         await roomA.Connect(Factory, StyxTestServer.MintToken(network, StyxCaveat.Sub("game"), StyxCaveat.Sub("a")).ToString(), "ay");
         await roomA2.Connect(Factory, StyxTestServer.MintToken(network, StyxCaveat.Sub("game"), StyxCaveat.Sub("a")).ToString(), "ay2");
 
         Assert.That(await roomA.WaitForPeers(["ay2"]), Is.EqualTo(["ay2"]));
         await roomA.Server!.Send(["bee", "ay2"], [1, 2, 3]);
+        // a send has its place in every target's queue once it returns, so this sentinel lands behind any leak
+        await roomB2.Server!.Send(["bee"], [9]);
         var (source, _, _) = await roomA2.WaitForReceive();
+        var (bSource, _, _) = await roomB.WaitForReceive();
         using (Assert.EnterMultipleScope())
         {
             Assert.That(source, Is.EqualTo("ay"));
-            Assert.That(roomB.LastReceived, Is.Null);
+            Assert.That(bSource, Is.EqualTo("bee2"), "room b received room a's send");
         }
     }
 
@@ -148,7 +153,7 @@ public class StyxV2Tests : StyxFixtureBase
     {
         var v1 = await StyxTestServer.GenerateAuthorization(StyxToken.NewNetworkId());
         await using var client = new TestStyxClient();
-        Assert.That((await client.Connect(Factory, v1, "alpha")).Message, Is.EqualTo(TokenVerifier.InvalidAuthorization));
+        Assert.That((await client.Connect(Factory, v1, "alpha")).Message, Is.EqualTo(RelayReasons.InvalidAuthorization));
     }
 
     [Test]

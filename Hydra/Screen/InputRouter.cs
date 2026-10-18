@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Threading.Channels;
 using Cathedral.Extensions;
@@ -48,8 +47,7 @@ public class InputRouter(
 
     private readonly IWorldState _peerState = peerState ?? new WorldState();
     private readonly Func<long> _getTickCount = getTickCount ?? (() => Environment.TickCount64);
-    private readonly PeerPlatform _localPlatform = localPlatform ?? DetectLocalPlatform();
-    private readonly ConcurrentDictionary<string, PeerPlatform> _peerPlatforms = new(StringComparer.OrdinalIgnoreCase);
+    private readonly PeerPlatform _localPlatform = localPlatform ?? PeerPlatforms.Local;
 
     // channel-based actor model: single consumer processes all state mutations sequentially.
     // event tap callbacks post commands via TryWrite (non-blocking); async callers use TCS.
@@ -287,8 +285,6 @@ public class InputRouter(
     private async Task OnPeersChanged(string[] hostNames)
     {
         var current = new HashSet<string>(hostNames, StringComparer.OrdinalIgnoreCase);
-        foreach (var host in _peerPlatforms.Keys.Where(host => !current.Contains(host)).ToArray())
-            _peerPlatforms.TryRemove(host, out _);
         var configuredSlaves = profile.RemoteHosts
             .Select(s => s.Name)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -339,7 +335,6 @@ public class InputRouter(
 
         // reset known peers so all slaves get a fresh MasterConfig on reconnect
         await _peerState.ClearPeers();
-        _peerPlatforms.Clear();
 
         if (disconnectedHost != null)
         {
@@ -499,13 +494,9 @@ public class InputRouter(
                 {
                     await _peerState.SetPeerScreens(sourceHost, owned.Kept);
 
-                    if (info.Platform.HasValue)
-                    {
-                        await _peerState.SetPeerPlatform(sourceHost, info.Platform.Value);
-                        _peerPlatforms[sourceHost] = info.Platform.Value;
-                        if (!UseHydraClipboard(sourceHost) && log.IsEnabled(LogLevel.Information))
-                            log.LogInformation("Clipboard sync with {Host}: using macOS Universal Clipboard; Hydra is standing down", sourceHost);
-                    }
+                    _peerState.SetPeerPlatform(sourceHost, info.Platform);
+                    if (!UseHydraClipboard(sourceHost) && log.IsEnabled(LogLevel.Information))
+                        log.LogInformation("Clipboard sync with {Host}: using macOS Universal Clipboard; Hydra is standing down", sourceHost);
                     var snapshot = await _peerState.GetPeerScreensSnapshot();
                     await RunFence(async st =>
                     {
@@ -1545,20 +1536,10 @@ public class InputRouter(
         PullClipboardFromHost(host);
     }
 
-    private bool UseHydraClipboard(string host)
-    {
-        var remotePlatform = _peerPlatforms.GetValueOrDefault(host, PeerPlatform.Unknown);
-        return UseHydraClipboard(profile.ClipboardSync, _localPlatform, remotePlatform);
-    }
+    private bool UseHydraClipboard(string host) => UseHydraClipboard(profile.ClipboardSync, _localPlatform, _peerState.PeerPlatformOf(host));
 
     internal static bool UseHydraClipboard(ClipboardSyncMode mode, PeerPlatform localPlatform, PeerPlatform remotePlatform) =>
         mode != ClipboardSyncMode.System || localPlatform != PeerPlatform.MacOs || remotePlatform != PeerPlatform.MacOs;
-
-    private static PeerPlatform DetectLocalPlatform() =>
-        OperatingSystem.IsMacOS() ? PeerPlatform.MacOs :
-        OperatingSystem.IsWindows() ? PeerPlatform.Windows :
-        OperatingSystem.IsLinux() ? PeerPlatform.Linux :
-        PeerPlatform.Unknown;
 
     private void UpdateWarpPoint(LocalMasterState st, ScreenRect screen)
     {

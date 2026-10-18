@@ -1,3 +1,4 @@
+using Styx;
 using Tests.Setup;
 
 namespace Tests.Styx;
@@ -9,8 +10,8 @@ namespace Tests.Styx;
 [TestFixture]
 public class ParallelRelayTests : StyxFixtureBase
 {
-    private const string Parallel = global::Styx.Constants.ParallelRelayPath;
-    private const string Ordered = global::Styx.Constants.RelayPath;
+    private const string Parallel = Constants.ParallelRelayPath;
+    private const string Ordered = Constants.RelayPath;
 
     [TestCase(Ordered, Parallel)]
     [TestCase(Parallel, Ordered)]
@@ -45,6 +46,6 @@ public class ParallelRelayTests : StyxFixtureBase
         await holder.Connect(Factory, token, "twin", holderPath);
         await newcomer.Connect(Factory, token, "twin", newcomerPath);
 
-        Assert.That(await holder.WaitForKick(), Is.EqualTo("duplicate hostname"));
+        Assert.That(await holder.WaitForKick(), Is.EqualTo(RelayReasons.KickedDuplicateHostname));
     }
 }

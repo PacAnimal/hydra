@@ -28,8 +28,8 @@ public static class ClipboardWire
     public static ClipboardPushMessage ToPush(ClipboardSnapshot s) =>
         new(s.Text ?? "", WirePrimary(s), s.ImagePng, s.Html, s.Rtf, PrimaryIsText(s));
 
-    public static ClipboardPullResponseMessage ToPullResponse(ClipboardSnapshot s, ClipboardPullMessage? pull) =>
-        new(s.Text, WirePrimary(s), s.ImagePng, Html: s.Html, Rtf: s.Rtf, PrimaryIsText: PrimaryIsText(s), PullId: pull?.PullId);
+    public static ClipboardPullResponseMessage ToPullResponse(ClipboardSnapshot s, ClipboardPullMessage pull) =>
+        new(pull.PullId, s.Text, WirePrimary(s), s.ImagePng, Html: s.Html, Rtf: s.Rtf, PrimaryIsText: PrimaryIsText(s));
 
     public static ClipboardHashMessage ToHash(ClipboardSnapshot s)
     {
@@ -40,7 +40,7 @@ public static class ClipboardWire
             : new ClipboardHashMessage(hash, PrimaryHash: SelectionHash(primary));
     }
 
-    public static ClipboardPullMessage ToPull(ClipboardBaseline against, int pullId) => new(against.Hash, SelectionHash(against.PrimaryText), pullId);
+    public static ClipboardPullMessage ToPull(ClipboardBaseline against, int pullId) => new(pullId, against.Hash, SelectionHash(against.PrimaryText));
 
     public static ClipboardSnapshot From(IClipboardPayload m, ILogger log, string context, string host) =>
         ClipboardUtils.ValidateFields(m.Text, Primary(m.Text, m.PrimaryText, m.PrimaryIsText), m.ImagePng, m.Html, m.Rtf, log, context, host);
@@ -74,12 +74,12 @@ public static class ClipboardWire
 
     // a slave's answer to a pull: unchanged when its clipboard matches the master's, with its selection beside it only
     // when that differs, else the whole clipboard
-    internal static ClipboardPullResponseMessage AnswerPull(ClipboardSnapshot local, ClipboardPullMessage? pull)
+    internal static ClipboardPullResponseMessage AnswerPull(ClipboardSnapshot local, ClipboardPullMessage pull)
     {
-        if (pull?.MasterHash != ClipboardUtils.ClipboardHash(local)) return ToPullResponse(local, pull);
+        if (pull.MasterHash != ClipboardUtils.ClipboardHash(local)) return ToPullResponse(local, pull);
         return SelectionHash(local.PrimaryText) == pull.MasterPrimaryHash
-            ? new ClipboardPullResponseMessage(null, Unchanged: true, PullId: pull.PullId)
-            : new ClipboardPullResponseMessage(null, WirePrimary(local), Unchanged: true, PrimaryIsText: PrimaryIsText(local), PullId: pull.PullId);
+            ? new ClipboardPullResponseMessage(pull.PullId, null, Unchanged: true)
+            : new ClipboardPullResponseMessage(pull.PullId, null, WirePrimary(local), Unchanged: true, PrimaryIsText: PrimaryIsText(local));
     }
 
     // the master's side of that answer, against what it pulled with: the selection alone beside an unchanged

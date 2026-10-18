@@ -6,6 +6,8 @@ namespace Tests.Styx;
 [TestFixture]
 public class ClientRegistryTests
 {
+    private const string LocalIp = "192.168.1.1";
+
     [Test]
     public async Task HostLookup_IsCaseInsensitiveAndNetworkScoped()
     {
@@ -13,7 +15,7 @@ public class ClientRegistryTests
         var networkA = Guid.NewGuid();
         var networkB = Guid.NewGuid();
         await registry.Register("a", networkA, "Workstation", "10.0.0.1", "192.168.1.10");
-        await registry.Register("b", networkB, "Workstation", "10.0.0.2");
+        await registry.Register("b", networkB, "Workstation", "10.0.0.2", LocalIp);
 
         using (Assert.EnterMultipleScope())
         {
@@ -30,8 +32,8 @@ public class ClientRegistryTests
     {
         var registry = new ClientRegistry(NullLogger<ClientRegistry>.Instance);
         var network = Guid.NewGuid();
-        await registry.Register("connection", network, "old", "10.0.0.1");
-        await registry.Register("connection", network, "new", "10.0.0.1");
+        await registry.Register("connection", network, "old", "10.0.0.1", LocalIp);
+        await registry.Register("connection", network, "new", "10.0.0.1", LocalIp);
 
         using (Assert.EnterMultipleScope())
         {
@@ -45,7 +47,7 @@ public class ClientRegistryTests
     {
         var registry = new ClientRegistry(NullLogger<ClientRegistry>.Instance);
         var network = Guid.NewGuid();
-        await registry.Register("connection", network, "host", "10.0.0.1");
+        await registry.Register("connection", network, "host", "10.0.0.1", LocalIp);
 
         await registry.Unregister("connection");
 
@@ -61,9 +63,9 @@ public class ClientRegistryTests
     {
         var registry = new ClientRegistry(NullLogger<ClientRegistry>.Instance);
         var network = Guid.NewGuid();
-        await registry.Register("a", network, "Laptop", "10.0.0.1");
+        await registry.Register("a", network, "Laptop", "10.0.0.1", LocalIp);
 
-        var result = await registry.Register("b", network, "LAPTOP", "10.0.0.2");
+        var result = await registry.Register("b", network, "LAPTOP", "10.0.0.2", LocalIp);
 
         using (Assert.EnterMultipleScope())
         {
@@ -81,7 +83,7 @@ public class ClientRegistryTests
         var network = Guid.NewGuid();
 
         await Task.WhenAll(Enumerable.Range(0, 64).Select(i => Task.Run(async () =>
-            await registry.Register($"connection-{i}", network, "shared-host", $"10.0.0.{i}"))));
+            await registry.Register($"connection-{i}", network, "shared-host", $"10.0.0.{i}", LocalIp))));
 
         var clients = await registry.GetNetworkClients(network);
         using (Assert.EnterMultipleScope())
@@ -97,8 +99,8 @@ public class ClientRegistryTests
     {
         var registry = new ClientRegistry(NullLogger<ClientRegistry>.Instance);
         var network = Guid.NewGuid();
-        var first = await registry.Register("connection", network, "host", "10.0.0.1");
-        var second = await registry.Register("connection", network, "host", "10.0.0.1");
+        var first = await registry.Register("connection", network, "host", "10.0.0.1", LocalIp);
+        var second = await registry.Register("connection", network, "host", "10.0.0.1", LocalIp);
         Assert.That(second.Generation, Is.GreaterThan(first.Generation));
     }
 
@@ -107,8 +109,8 @@ public class ClientRegistryTests
     {
         var registry = new ClientRegistry(NullLogger<ClientRegistry>.Instance);
         var network = Guid.NewGuid();
-        var stale = await registry.Register("connection", network, "host", "10.0.0.1");
-        var current = await registry.Register("connection", network, "host", "10.0.0.1");
+        var stale = await registry.Register("connection", network, "host", "10.0.0.1", LocalIp);
+        var current = await registry.Register("connection", network, "host", "10.0.0.1", LocalIp);
 
         using (Assert.EnterMultipleScope())
         {
@@ -126,9 +128,9 @@ public class ClientRegistryTests
         var network = Guid.NewGuid();
         var lobby = new NetworkKey(network, "");
         var room = new NetworkKey(network, "room");
-        var first = await registry.Register("connection", lobby, "host", "10.0.0.1");
-        var moved = await registry.Register("connection", room, "host", "10.0.0.1");
-        var stayed = await registry.Register("connection", room, "renamed", "10.0.0.1");
+        var first = await registry.Register("connection", lobby, "host", "10.0.0.1", LocalIp);
+        var moved = await registry.Register("connection", room, "host", "10.0.0.1", LocalIp);
+        var stayed = await registry.Register("connection", room, "renamed", "10.0.0.1", LocalIp);
 
         using (Assert.EnterMultipleScope())
         {
@@ -144,8 +146,8 @@ public class ClientRegistryTests
     {
         var registry = new ClientRegistry(NullLogger<ClientRegistry>.Instance);
         var network = Guid.NewGuid();
-        await registry.Register("a", new NetworkKey(network, "x"), "host", "10.0.0.1");
-        await registry.Register("b", new NetworkKey(network, "y"), "host", "10.0.0.2");
+        await registry.Register("a", new NetworkKey(network, "x"), "host", "10.0.0.1", LocalIp);
+        await registry.Register("b", new NetworkKey(network, "y"), "host", "10.0.0.2", LocalIp);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(await registry.GetConnectionId(new NetworkKey(network, "x"), "host"), Is.EqualTo("a"));

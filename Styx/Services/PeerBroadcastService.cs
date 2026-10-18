@@ -7,10 +7,6 @@ namespace Styx.Services;
 public interface IPeerBroadcaster
 {
     void QueueBroadcast(NetworkKey network);
-    // queues a membership taken from a caller-supplied snapshot instead of the live registry. Peers key off
-    // the hostname, so displacing a duplicate and registering its replacement yields an identical list and
-    // reads as no change at all — the snapshot is how a reconnecting host is shown leaving before it arrives.
-    void QueueBroadcast(NetworkKey network, IReadOnlyList<NetworkClient> clients);
     // queues a snapshot and completes when it has joined every peer's queue, which delivers in order. A displaced host's
     // leaving is awaited before the displacing client is told it is authenticated, or its first payload can overtake the
     // notice that the name changed hands (Styx.md §6.2) — and the recipient still trusts the old holder. Its arrival
@@ -30,8 +26,6 @@ public class PeerBroadcastService(IClientRegistry registry, PeerWriter writer, [
 
     public void QueueBroadcast(NetworkKey network) => _channel.Writer.TryWrite(new PeerBroadcast(network, null, null));
 
-    public void QueueBroadcast(NetworkKey network, IReadOnlyList<NetworkClient> clients) => _channel.Writer.TryWrite(new PeerBroadcast(network, clients, null));
-
     public async Task BroadcastAndWait(NetworkKey network, IReadOnlyList<NetworkClient> clients, CancellationToken cancel)
     {
         var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -39,9 +33,18 @@ public class PeerBroadcastService(IClientRegistry registry, PeerWriter writer, [
 
         // A stuck broadcaster must not wedge authentication. Losing the ordering guarantee is bad; refusing
         // to answer a login at all is worse, so this degrades rather than hangs — loudly.
-        var timeout = Task.Delay(BroadcastWait, cancel);
-        if (await Task.WhenAny(done.Task, timeout) == timeout)
+        try
+        {
+            await done.Task.WaitAsync(BroadcastWait, cancel);
+        }
+        catch (TimeoutException)
+        {
             log.LogWarning("Timed out waiting for a displacement broadcast on network {Network}", network);
+        }
+        catch (OperationCanceledException) when (cancel.IsCancellationRequested)
+        {
+            // the login's connection went; the hub sees that next
+        }
     }
 
     private static readonly TimeSpan BroadcastWait = TimeSpan.FromSeconds(5);
@@ -52,7 +55,7 @@ public class PeerBroadcastService(IClientRegistry registry, PeerWriter writer, [
         {
             while (_channel.Reader.TryRead(out var broadcast))
             {
-                // drain consecutive duplicates — only broadcast once for the last unique ID seen
+                // drain what is queued behind it, collapsing what CanCollapse allows
                 while (_channel.Reader.TryRead(out var next))
                 {
                     if (!CanCollapse(broadcast, next))

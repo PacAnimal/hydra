@@ -93,7 +93,7 @@ public sealed class TestableSlaveRelay : SlaveRelayConnection
     public List<T> Sent<T>(MessageKind kind) => _signals.Sent<T>(kind);
 
     // completes once a message of this kind has been sent, for a reply worked out off the receive path
-    public Task WaitForSent(MessageKind kind) => _signals.WaitFor(kind, TestBound.Bound);
+    public Task WaitForSent(MessageKind kind) => _signals.WaitFor(kind);
 
     // completes once the relay has logged the slave in again
     public Task NextAuthentication() => _authenticated.Next("the slave to authenticate");

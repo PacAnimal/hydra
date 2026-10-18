@@ -16,11 +16,9 @@ public sealed class NotificationQueue<T>
     // pushed but not yet read
     public int Count => _channel.Reader.Count;
 
-    public Task<T> Next(string what) => Next(TestBound.Bound, what);
-
-    public async Task<T> Next(TimeSpan timeout, string what)
+    public async Task<T> Next(string what)
     {
-        using var cancel = new CancellationTokenSource(timeout);
+        using var cancel = new CancellationTokenSource(TestBound.Bound);
         try
         {
             return await _channel.Reader.ReadAsync(cancel.Token);

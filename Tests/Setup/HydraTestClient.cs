@@ -1,9 +1,13 @@
+using System.Collections.Concurrent;
+using System.Net;
+using System.Net.Sockets;
 using System.Text;
 using Cathedral.Utils;
 using Hydra.Config;
 using Hydra.Relay;
 using Microsoft.AspNetCore.Http.Connections.Client;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.Logging;
 
 namespace Tests.Setup;
 
@@ -12,38 +16,15 @@ namespace Tests.Setup;
 /// Use this for end-to-end tests that prove the full Hydra relay stack works as intended.
 /// Use TestStyxClient instead when you need to test protocol-level edge cases.
 /// </summary>
-public sealed class HydraTestClient : RelayConnection, IAsyncDisposable
+public sealed class HydraTestClient(WebApplicationFactory<global::Styx.Program>? factory, IHydraProfile profile, ILogger<RelayConnection>? log = null)
+    : RelayConnection(profile, log ?? TestLog.CreateLogger<RelayConnection>(), new WorldState()), IAsyncDisposable
 {
-    private readonly WebApplicationFactory<global::Styx.Program> _factory;
-
-    /// <summary>
-    /// The state this client sends against, so a test can say what its peers are capable of. A master learns
-    /// that from a peer's ScreenInfo in production; a test that only wants to drive the send path says it
-    /// directly rather than staging a whole handshake to reach one boolean.
-    /// </summary>
-    public IWorldState World { get; }
-
-    /// <summary>
-    /// Not a primary constructor, and not `world ?? new WorldState()` written twice: that reads as one
-    /// default and is two, so the base would send against one instance while <see cref="World"/> handed the
-    /// test another — and every capability a test set would be invisible to the code under test.
-    /// </summary>
-    public HydraTestClient(WebApplicationFactory<global::Styx.Program> factory, IHydraProfile profile, IWorldState? world = null)
-        : this(factory, profile, Shared(world)) { }
-
-    private HydraTestClient(WebApplicationFactory<global::Styx.Program> factory, IHydraProfile profile, (IWorldState World, bool _) shared)
-        : base(profile, TestLog.CreateLogger<RelayConnection>(), shared.World)
-    {
-        _factory = factory;
-        World = shared.World;
-    }
-
-    /// <summary>Evaluates the default exactly once, so the base and <see cref="World"/> share one instance.</summary>
-    private static (IWorldState, bool) Shared(IWorldState? world) => (world ?? new WorldState(), true);
-
     // a master named host on the network the config describes
     public static HydraTestClient Master(WebApplicationFactory<global::Styx.Program> factory, string host, string networkConfig) =>
         new(factory, TransitionTestHelper.Profile(host, new HydraConfig { Mode = Mode.Master, NetworkConfig = networkConfig }));
+
+    // dials the relay over real TCP, for an embedded relay listening on a port
+    public static HydraTestClient OverTcp(IHydraProfile profile, ILogger<RelayConnection>? log = null) => new(null, profile, log);
 
     private readonly Toggle _disposed = new();
     public bool Disposed => _disposed;
@@ -53,6 +34,7 @@ public sealed class HydraTestClient : RelayConnection, IAsyncDisposable
     private readonly NotificationQueue<ReceivedMessage> _messages = new();
     private readonly NotificationQueue<string> _kicks = new();
     private readonly SemaphoreSlim _parkedSignal = new(0);
+    private readonly ConcurrentQueue<Socket> _connectorSockets = new();
 
     private string? _kickReason;
 
@@ -66,20 +48,9 @@ public sealed class HydraTestClient : RelayConnection, IAsyncDisposable
 
     protected override void OnParkedUntilResumed() => _parkedSignal.Release();
 
-    /// <summary>
-    /// Parks one lane just before it encrypts, until <see cref="ReleaseLane"/>.
-    ///
-    /// <para>A GATE, never a delay: the claims under test are about what can overtake what, and a test that
-    /// raced a big payload against a small one would be asserting that this machine happened to be fast
-    /// enough. <see cref="WaitUntilLaneHeld"/> says when the lane is genuinely parked, so a test waits on a fact.</para>
-    ///
-    /// <para>Either lane, because both need parking: the bulk one to show input overtaking it, the input
-    /// one to show a dropped connection failing what is queued there. Holding one says nothing about the
-    /// other — that is the whole point of them being separate.</para>
-    /// </summary>
+    // parks the lane just before it encrypts, until ReleaseLane; WaitUntilLaneHeld says when it is parked
     public void HoldLane(RelayLane lane) => _gate = new LaneGate(lane);
 
-    // blocks until a payload is parked on the lane HoldLane gated
     public async Task WaitUntilLaneHeld()
     {
         var gate = _gate ?? throw new InvalidOperationException("no lane is held");
@@ -87,15 +58,15 @@ public sealed class HydraTestClient : RelayConnection, IAsyncDisposable
         catch (TimeoutException) { throw new TimeoutException($"Timed out waiting for the {gate.Lane} lane to park"); }
     }
 
-    /// <summary>Lets the parked lane through, and STOPS GATING, so later payloads pass untouched.</summary>
-    public void ReleaseLane() => Interlocked.Exchange(ref _gate, null)?.Release.TrySetResult();
+    // lets the parked lane through and stops gating, so later payloads pass untouched
+    public void ReleaseLane() => Interlocked.Exchange(ref _gate, null)?.Open.Release();
 
     protected override async ValueTask<byte[]> EncryptForSend(byte[] payload, CancellationToken cancel)
     {
         if (_gate is { } gate && MessageLane.Of(payload) == gate.Lane)
         {
             gate.Held.TrySetResult();
-            await gate.Release.Task.WaitAsync(cancel);
+            await gate.Open.Passed(cancel);
         }
 
         return await base.EncryptForSend(payload, cancel);
@@ -105,19 +76,32 @@ public sealed class HydraTestClient : RelayConnection, IAsyncDisposable
     {
         public RelayLane Lane { get; } = lane;
         public TaskCompletionSource Held { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Gate Open { get; } = new(held: true);
     }
 
-    // route the hub connection through the in-memory test server handler
+    // route the hub connection through the in-memory test server handler, when there is one
     protected override void ConfigureHubUrl(HttpConnectionOptions options)
     {
-        options.UseTestServer(_factory.Server);
+        if (factory != null) options.UseTestServer(factory.Server);
+        else base.ConfigureHubUrl(options);
+    }
+
+    protected override async Task<Socket> ConnectRelaySocket(DnsEndPoint target, CancellationToken cancel)
+    {
+        var socket = await base.ConnectRelaySocket(target, cancel);
+        _connectorSockets.Enqueue(socket);
+        return socket;
+    }
+
+    // closes every socket the relay's connector has opened so far
+    public void CloseConnectorSockets()
+    {
+        while (_connectorSockets.TryDequeue(out var socket)) socket.Dispose();
     }
 
     protected override Task OnReceive(string sourceHost, MessageKind kind, ReadOnlyMemory<byte> body)
     {
-        var message = new ReceivedMessage(sourceHost, kind, Encoding.UTF8.GetString(body.Span));
-        _messages.Push(message);
+        _messages.Push(new ReceivedMessage(sourceHost, kind, Encoding.UTF8.GetString(body.Span)));
         return Task.CompletedTask;
     }
 
@@ -155,13 +139,34 @@ public sealed class HydraTestClient : RelayConnection, IAsyncDisposable
         await WaitForReady(cancel: cancel);
     }
 
-    // blocks until the next Peers broadcast arrives
+    // each wait takes the next notification in arrival order, so two before a wait are never read as one
     public Task<string[]> WaitForPeers() => _peers.Next("peers update");
 
-    // pops the next message in arrival order
-    public Task<ReceivedMessage> WaitForMessage() => _messages.Next("message");
+    public Task<ReceivedMessage> WaitForMessage(string what = "message") => _messages.Next(what);
 
     public Task<string> WaitForKick() => _kicks.Next("kick");
+
+    // the body of the next message of this kind, skipping the rest
+    public async Task<string> WaitForMessage(MessageKind kind)
+    {
+        while (true)
+        {
+            var message = await WaitForMessage($"{kind} message");
+            if (message.Kind == kind) return message.Json;
+        }
+    }
+
+    // every frame before TestMessages.Sentinel, so a lost message fails on the assertion rather than a timeout
+    public async Task<List<ReceivedMessage>> ReadUntilSentinel()
+    {
+        var frames = new List<ReceivedMessage>();
+        while (true)
+        {
+            var frame = await WaitForMessage("sentinel");
+            if (frame.Kind == TestMessages.SentinelKind) return frames;
+            frames.Add(frame);
+        }
+    }
 
     public async ValueTask DisposeAsync()
     {

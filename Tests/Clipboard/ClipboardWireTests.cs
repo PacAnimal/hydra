@@ -14,7 +14,7 @@ public class ClipboardWireTests
     public void PrimaryRepeatingTheText_IsSentOnce()
     {
         var push = ClipboardWire.ToPush(new ClipboardSnapshot("copied", "copied", null));
-        var response = ClipboardWire.ToPullResponse(new ClipboardSnapshot("copied", "copied", null), null);
+        var response = ClipboardWire.ToPullResponse(new ClipboardSnapshot("copied", "copied", null), new ClipboardPullMessage(1));
 
         using (Assert.EnterMultipleScope())
         {

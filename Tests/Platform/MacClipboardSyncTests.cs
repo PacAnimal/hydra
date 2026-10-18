@@ -39,20 +39,9 @@ public class MacClipboardSyncTests : CopiedPrimaryContract
     private static void WriteForeignCopy(string text, string markerType)
     {
         using var pool = new ObjcAutoreleasePool();
-        var name = NativeHelpers.MakeNsString(PasteboardName);
-        var pasteboard = NativeMethods.objc_msgSend(NativeMethods.objc_getClass("NSPasteboard"), NativeMethods.sel_registerName("pasteboardWithName:"), name);
-        NativeMethods.CFRelease(name);
+        var pasteboard = MacClipboardSync.Pasteboard(PasteboardName);
         _ = NativeMethods.objc_msgSend_long(pasteboard, NativeMethods.sel_registerName("clearContents"));
-        SetString(pasteboard, text, "public.utf8-plain-text");
-        SetString(pasteboard, "", markerType);
-    }
-
-    private static void SetString(nint pasteboard, string value, string type)
-    {
-        var str = NativeHelpers.MakeNsString(value);
-        var typeStr = NativeHelpers.MakeNsString(type);
-        NativeMethods.objc_msgSend_2arg(pasteboard, NativeMethods.sel_registerName("setString:forType:"), str, typeStr);
-        NativeMethods.CFRelease(str);
-        NativeMethods.CFRelease(typeStr);
+        MacClipboardSync.WriteString(pasteboard, text, "public.utf8-plain-text");
+        MacClipboardSync.WriteString(pasteboard, "", markerType);
     }
 }

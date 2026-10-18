@@ -40,14 +40,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     private readonly Lock _sendOrderLock = new();
     private MovementBatch? _openMovementBatch;
 
-    /// <summary>
-    /// How many events one key frame may carry. A bound so a stalled relay cannot grow one frame without
-    /// limit — not a discard: <c>KeyBundle.TryAppend</c> refuses when full and the caller enqueues a NEW
-    /// bundle, so the event that did not fit still goes, still in order.
-    ///
-    /// <para>Internal rather than private so the spill test asserts against THIS number instead of a copy
-    /// of it — a mirrored constant is a test that stops testing the moment somebody retunes the real one.</para>
-    /// </summary>
+    // how many events one key frame may carry; a full bundle spills into a new one, so nothing is dropped
     internal const int KeyBundleCapacity = 64;
 
     /// <summary>
@@ -89,7 +82,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     // times the fast-reconnect window after a wake, so a test can step past it
     protected virtual TimeProvider WakeClock => TimeProvider.System;
 
-    // RR5: ±25% jitter so peers that all dropped at once (e.g. a relay restart) don't reconnect in lockstep
+    // ±25% jitter so peers that all dropped at once (e.g. a relay restart) don't reconnect in lockstep
     private static TimeSpan WithJitter(TimeSpan baseDelay)
     {
         var offsetMs = (Random.Shared.NextDouble() * 2 - 1) * baseDelay.TotalMilliseconds * 0.25;
@@ -131,10 +124,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
                 return;
             }
 
-            // Closed by ANY message, bulk included. Skipping it for the bulk lane looks like free extra
-            // coalescing, but the batch is cleared again the moment the input drain READS the item, so the
-            // window where it would make a difference is one a test cannot open — and an optimisation
-            // nothing can observe is not worth a special case in the one path that decides where clicks land.
+            // closed by any message, bulk included
             CloseOpenBatches();
             LaneFor(payload).Writer.TryWrite(OutboundMessage.Plain(targetHosts, payload));
         }
@@ -203,10 +193,6 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     /// closing it and the next append joins a frame that now sits behind this message, so it is delivered
     /// before it. For keys that is a keystroke arriving before the mouse move that preceded it, which on a
     /// KVM is a click in the wrong place.</para>
-    ///
-    /// <para>ONE method rather than the line repeated at each site, because repeated is how one of them was
-    /// missed: <c>SendMouseDelta</c>'s close could be deleted with the whole suite still green, and
-    /// <c>SendMouseDelta</c> is the path <c>InputRouter</c> actually takes.</para>
     ///
     /// <para>Call with <c>_sendOrderLock</c> HELD.</para>
     /// </summary>
@@ -751,8 +737,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         // a drop; set here, with the server, because a message handled during the login belongs to this connection
         ConnectionToken = disco.Token;
 
-        // RR6: bound the auth round-trip so a server that accepts the socket then stalls the handshake
-        // doesn't hang the connect attempt — WaitAsync surfaces a timeout/cancel to the reconnect loop.
+        // bounded, so a server that accepts the socket then stalls the handshake cannot hang the connect attempt
         var response = await server.Authenticate(new RelayLogin
         {
             Authorization = netConfig.Authorization,
@@ -770,23 +755,9 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
             log.LogInformation("Authenticated on relay as {HostName}", hostName);
         await OnAuthenticated();
 
-        // Drain both lanes until the connection drops. Concurrently, which is the entire point: a chunk
-        // being encrypted and sent no longer holds up the keystroke behind it.
-        //
-        // CONCURRENT ENCRYPTION IS SAFE, AND THE REASON IS NARROWER THAN IT LOOKS. RelayEncryption draws ONE
-        // salt per connection (_localKey) and reuses it for every message, so the AES-GCM key is CONSTANT for
-        // the life of this connection — what is per-message is the nonce, not the salt. Under a fixed key,
-        // nonce uniqueness is the only thing between us and catastrophe: GCM reuse leaks the XOR of the two
-        // plaintexts and hands out forgeries.
-        //
-        // Iv96.Next gives it. Its low 48 bits are Interlocked.Increment on a PROCESS-wide counter, so two
-        // lanes cannot draw the same value however they interleave — and process-wide is the right scope,
-        // because it holds across two RelayEncryption instances as well as across these two loops. The high
-        // 48 bits are a timestamp and may well be identical; the counter is what separates them. Everything
-        // else SimpleAes.Encrypt touches is immutable, and it builds a fresh AesGcm per call.
-        //
-        // Either lane exiting ends the connection: whatever stopped it (a cancelled send, a dead socket) has
-        // stopped the other too or is about to.
+        // Both lanes drain concurrently, so a chunk being sent never holds up a keystroke. Encrypting on two lanes is
+        // safe only because the GCM nonce comes from Iv96.Next's process-wide counter: the key is constant for the
+        // connection, so a repeated nonce would be fatal. Either lane exiting ends the connection.
         await Task.WhenAll(
             Drain(_inputQueue.Reader, disco, InputLaneSend(con, disco)),
             Drain(_bulkQueue.Reader, disco, BulkLaneSend(server)));
@@ -860,14 +831,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     // an invocation: done once the relay's hub method has returned, so one at a time
     private static Func<string[], byte[], Task> BulkLaneSend(IStyxServer server) => server.Send;
 
-    /// <summary>
-    /// Encrypts one queued payload, on its own lane's drain loop.
-    ///
-    /// <para>Virtual for ONE reason: a test needs to hold one lane still while the other runs, and that is
-    /// the property the whole split exists for. Asserting it by racing a big payload against a small one
-    /// would be timing dressed as a test — on a loaded machine it would eventually lie in both directions.
-    /// Production has exactly one implementation, and this is it.</para>
-    /// </summary>
+    // encrypts one queued payload on its lane's drain loop; virtual so a test can hold one lane while the other runs
     protected virtual ValueTask<byte[]> EncryptForSend(byte[] payload, CancellationToken cancel) =>
         _encryption!.Encrypt(payload, cancel);
 
@@ -905,20 +869,11 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     }
 
     /// <summary>
-    /// Key events queued for one target while an earlier frame is still in flight, kept IN ORDER.
-    ///
-    /// <para><b>This is the opposite of <see cref="MovementBatch"/> and the difference is the whole point.</b>
-    /// A batch of moves collapses to the latest position because the earlier ones are no longer true. Every
-    /// key event stays true: a KeyDown and its KeyUp are two separate facts, and dropping either leaves a key
-    /// held down on somebody else's machine. So this appends and never replaces.</para>
-    ///
-    /// <para><b>The loss to fear is an append to a bundle nobody will read again.</b> Appending does not
-    /// enqueue anything — it mutates an object an already-queued item points at — so the moment the drain
-    /// has taken its <see cref="Snapshot"/>, a further append would vanish without trace. That is why
-    /// <c>_openKeyBundle</c> is cleared under <c>_sendOrderLock</c> both by the drain (by reference) and by
-    /// every other enqueue, exactly as the movement batch is. It is not a theoretical hazard: deleting that
-    /// clear silently loses a mouse move, which is what <c>AMessageBetweenTwoMouseMovesKeepsThemApart</c>
-    /// exists to catch.</para>
+    /// Key events queued for one target while an earlier frame is still in flight, kept in order. Unlike
+    /// <see cref="MovementBatch"/> it appends and never replaces: a dropped KeyUp is a key held down on another machine.
+    /// <para>Appending enqueues nothing, so an append after the drain took its <see cref="Snapshot"/> would be lost;
+    /// <c>_openKeyBundle</c> is cleared under <c>_sendOrderLock</c> by the drain (by reference) and by every other
+    /// enqueue to prevent it.</para>
     /// </summary>
     private sealed class KeyBundle
     {

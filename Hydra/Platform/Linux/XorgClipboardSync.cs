@@ -7,6 +7,8 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
 {
     // max bytes to send/receive in a single XChangeProperty (INCR threshold)
     private const int MaxPropertyBytes = 256 * 1024;
+    // how much of a property one read takes, in 32-bit units; owners send more than this by INCR
+    private const int ReadPropertyLongs = 1_000_000 / 4;
     private const int ClipboardTimeoutMs = 2000;
 
     private readonly nint _display;
@@ -78,15 +80,11 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
         _eventThread.Start();
     }
 
-    public string? GetText()
-    {
-        // fast path: we own the clipboard — return null to prevent re-syncing our own write
-        if (NativeMethods.XGetSelectionOwner(_display, _atomClipboard) == _window)
-            return null;
-        var read = ReadSelection(_atomClipboard, _atomHydraClipboard, _atomUtf8String);
-        if (read == null) return null;
-        return _echo.FilterText(read.DecodeText());
-    }
+    public string? GetText() => ReadForeignClipboard(_atomHydraClipboard, _atomUtf8String) is { } read ? _echo.FilterText(read.DecodeText()) : null;
+
+    // CLIPBOARD as another client holds it; null while we own it, so our own write is never synced back
+    private SelectionRead? ReadForeignClipboard(nint property, nint target) =>
+        NativeMethods.XGetSelectionOwner(_display, _atomClipboard) == _window ? null : ReadSelection(_atomClipboard, property, target);
 
     internal bool OwnsPrimary => NativeMethods.XGetSelectionOwner(_display, NativeMethods.XA_PRIMARY) == _window;
 
@@ -100,25 +98,12 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
         return ReadSelection(NativeMethods.XA_PRIMARY, _atomHydraPrimary, _atomUtf8String)?.DecodeText();
     }
 
-    public byte[]? GetImagePng()
-    {
-        if (NativeMethods.XGetSelectionOwner(_display, _atomClipboard) == _window)
-            return null;
-        var read = ReadSelection(_atomClipboard, _atomHydraImageClip, _atomImagePng);
-        if (read == null) return null;
-        if (_echo.IsDuplicateImage(read.Data)) return null;
-        return read.Data;
-    }
+    public byte[]? GetImagePng() =>
+        ReadForeignClipboard(_atomHydraImageClip, _atomImagePng) is { } read && !_echo.IsDuplicateImage(read.Data) ? read.Data : null;
 
-    public string? GetHtml()
-    {
-        if (NativeMethods.XGetSelectionOwner(_display, _atomClipboard) == _window)
-            return null;
-        // text/html is UTF-8 and never triggers the STRING fallback, so decode as UTF-8 directly
-        var read = ReadSelection(_atomClipboard, _atomHydraHtmlClip, _atomTextHtml);
-        if (read == null) return null;
-        return _echo.FilterHtml(Encoding.UTF8.GetString(read.Data));
-    }
+    // text/html is UTF-8 and never triggers the STRING fallback, so decode as UTF-8 directly
+    public string? GetHtml() =>
+        ReadForeignClipboard(_atomHydraHtmlClip, _atomTextHtml) is { } read ? _echo.FilterHtml(Encoding.UTF8.GetString(read.Data)) : null;
 
     // X11 has no standardised RTF selection target — HTML is the rich vehicle here, text is the fallback
     public byte[]? GetRtf() => null;
@@ -270,15 +255,7 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
             byte[]? img;
             lock (_dataLock)
                 img = selection == _atomClipboard ? _ownedImagePng : null;
-            if (img == null) return nint.Zero;
-
-            if (img.Length <= MaxPropertyBytes)
-            {
-                _ = NativeMethods.XChangeProperty(_display, requestor, property,
-                    _atomImagePng, 8, NativeMethods.PropModeReplace, img, img.Length);
-                return property;
-            }
-            return StartIncrSend(requestor, property, _atomImagePng, img);
+            return img == null ? nint.Zero : ServeBytes(requestor, property, _atomImagePng, img);
         }
 
         if (target == _atomTextHtml)
@@ -286,16 +263,7 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
             string? html;
             lock (_dataLock)
                 html = selection == _atomClipboard ? _ownedHtml : null;
-            if (html == null) return nint.Zero;
-
-            var htmlBytes = Encoding.UTF8.GetBytes(html);
-            if (htmlBytes.Length <= MaxPropertyBytes)
-            {
-                _ = NativeMethods.XChangeProperty(_display, requestor, property,
-                    _atomTextHtml, 8, NativeMethods.PropModeReplace, htmlBytes, htmlBytes.Length);
-                return property;
-            }
-            return StartIncrSend(requestor, property, _atomTextHtml, htmlBytes);
+            return html == null ? nint.Zero : ServeBytes(requestor, property, _atomTextHtml, Encoding.UTF8.GetBytes(html));
         }
 
         if (target != _atomUtf8String && target != NativeMethods.XA_STRING)
@@ -312,14 +280,15 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
         var bytes = target == NativeMethods.XA_STRING
             ? Encoding.Latin1.GetBytes(text)
             : Encoding.UTF8.GetBytes(text);
-        if (bytes.Length <= MaxPropertyBytes)
-        {
-            _ = NativeMethods.XChangeProperty(_display, requestor, property,
-                target, 8, NativeMethods.PropModeReplace, bytes, bytes.Length);
-            return property;
-        }
+        return ServeBytes(requestor, property, target, bytes);
+    }
 
-        return StartIncrSend(requestor, property, target, bytes);
+    // in one property when it fits, else by INCR
+    private nint ServeBytes(nint requestor, nint property, nint type, byte[] bytes)
+    {
+        if (bytes.Length > MaxPropertyBytes) return StartIncrSend(requestor, property, type, bytes);
+        _ = NativeMethods.XChangeProperty(_display, requestor, property, type, 8, NativeMethods.PropModeReplace, bytes, bytes.Length);
+        return property;
     }
 
     private nint StartIncrSend(nint requestor, nint property, nint targetAtom, byte[] data)
@@ -378,7 +347,6 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
                 if (!signal.Wait(ClipboardTimeoutMs) || _getResult == null)
                     return null;
 
-                // the STRING fallback yields ISO-8859-1 (Latin-1) bytes per ICCCM, not UTF-8
                 return new SelectionRead(_getResult, _fallbackToString);
             }
             finally
@@ -420,7 +388,7 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
 
         // read the property — delete=true to signal the owner we consumed it (required for INCR)
         var rc = NativeMethods.XGetWindowProperty(_display, _window, propertyAtom,
-            nint.Zero, 1_000_000 / 4, true, NativeMethods.AnyPropertyType,
+            nint.Zero, ReadPropertyLongs, true, NativeMethods.AnyPropertyType,
             out var actualType, out var format, out var nitems, out _, out var prop);
 
         if (rc != 0)
@@ -438,17 +406,22 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
             return;
         }
 
-        byte[]? result = null;
-        if (nitems != nint.Zero && prop != nint.Zero)
-        {
-            var byteCount = (int)nitems * (format / 8);
-            result = new byte[byteCount];
-            Marshal.Copy(prop, result, 0, byteCount);
-        }
-        if (prop != nint.Zero) _ = NativeMethods.XFree(prop);
-
-        _getResult = result;
+        _getResult = TakeProperty(prop, nitems, format);
         SignalGet();
+    }
+
+    // copies a property XGetWindowProperty returned and frees it; null when it held nothing
+    private static byte[]? TakeProperty(nint prop, nint nitems, int format)
+    {
+        if (prop == nint.Zero) return null;
+        byte[]? data = null;
+        if (nitems != nint.Zero)
+        {
+            data = new byte[(int)nitems * (format / 8)];
+            Marshal.Copy(prop, data, 0, data.Length);
+        }
+        _ = NativeMethods.XFree(prop);
+        return data;
     }
 
     private void HandlePropertyNotify(ref XEvent ev)
@@ -486,7 +459,7 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
 
         var propertyAtom = _activeReadProperty;
         var rc = NativeMethods.XGetWindowProperty(_display, _window, propertyAtom,
-            nint.Zero, MaxPropertyBytes / 4, true, NativeMethods.AnyPropertyType,
+            nint.Zero, ReadPropertyLongs, true, NativeMethods.AnyPropertyType,
             out _, out var format, out var nitems, out _, out var prop);
 
         if (rc != 0)
@@ -496,19 +469,9 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
             return;
         }
 
-        if (nitems == nint.Zero)
-        {
-            // zero-length chunk = end of transfer
-            if (prop != nint.Zero) _ = NativeMethods.XFree(prop);
-            FinishIncrReceive(_incrReceiveBuffer!.ToArray());
-            return;
-        }
-
-        var byteCount = (int)nitems * (format / 8);
-        var chunk = new byte[byteCount];
-        Marshal.Copy(prop, chunk, 0, byteCount);
-        _ = NativeMethods.XFree(prop);
-        _incrReceiveBuffer!.Write(chunk);
+        // a zero-length chunk ends the transfer
+        if (TakeProperty(prop, nitems, format) is { } chunk) _incrReceiveBuffer!.Write(chunk);
+        else FinishIncrReceive(_incrReceiveBuffer!.ToArray());
     }
 
     private void FinishIncrReceive(byte[]? result)

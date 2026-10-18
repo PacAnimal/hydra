@@ -45,19 +45,21 @@ public sealed class MacClipboardSync : IClipboardSync
 
     public byte[]? GetRtf() => Guarded("rtf", pasteboard => _echo.FilterRtf(ReadData(pasteboard, PasteboardTypeRtf)));
 
-    // one read of the general pasteboard in its own pool, null when there is none or the read fails
-    private T? Guarded<T>(string what, Func<nint, T?> read) where T : class
+    private T? Guarded<T>(string what, Func<nint, T?> read) where T : class => Guarded(what, read, null);
+
+    // one read of the general pasteboard in its own pool, failed when there is none or the read fails
+    private T Guarded<T>(string what, Func<nint, T> read, T failed)
     {
         using var pool = new ObjcAutoreleasePool();
         try
         {
             var pasteboard = GetGeneralPasteboard();
-            return pasteboard == nint.Zero ? null : read(pasteboard);
+            return pasteboard == nint.Zero ? failed : read(pasteboard);
         }
         catch (Exception ex)
         {
             _log.LogWarning(ex, "Failed to read clipboard {What}", what);
-            return null;
+            return failed;
         }
     }
 
@@ -124,20 +126,7 @@ public sealed class MacClipboardSync : IClipboardSync
         });
     }
 
-    public bool HasFileClipboard()
-    {
-        using var pool = new ObjcAutoreleasePool();
-        try
-        {
-            var pasteboard = GetGeneralPasteboard();
-            return pasteboard != nint.Zero && PasteboardTypes(pasteboard).Any(t => FileTypes.Contains(t));
-        }
-        catch (Exception ex)
-        {
-            _log.LogWarning(ex, "Failed to inspect clipboard types");
-            return false;
-        }
-    }
+    public bool HasFileClipboard() => Guarded("types", pasteboard => PasteboardTypes(pasteboard).Any(t => FileTypes.Contains(t)), false);
 
     private static IEnumerable<string?> PasteboardTypes(nint pasteboard)
     {
@@ -160,7 +149,7 @@ public sealed class MacClipboardSync : IClipboardSync
     }
 
     // setString:forType: and setData:forType: answer whether the pasteboard took it, as a BOOL: only its low byte is set
-    private static bool WriteString(nint pasteboard, string value, string type)
+    internal static bool WriteString(nint pasteboard, string value, string type)
     {
         var nsStr = NativeHelpers.MakeNsString(value);
         var typeStr = NativeHelpers.MakeNsString(type);
@@ -184,16 +173,18 @@ public sealed class MacClipboardSync : IClipboardSync
         return taken;
     }
 
-    private nint GetGeneralPasteboard()
+    private nint GetGeneralPasteboard() => Pasteboard(_pasteboardName);
+
+    // the general pasteboard, or the named one
+    internal static nint Pasteboard(string? named)
     {
         var cls = NativeMethods.objc_getClass("NSPasteboard");
         if (cls == nint.Zero) return nint.Zero;
-        if (_pasteboardName == null) return NativeMethods.objc_msgSend_noarg(cls, NativeMethods.sel_registerName("generalPasteboard"));
+        if (named == null) return NativeMethods.objc_msgSend_noarg(cls, NativeMethods.sel_registerName("generalPasteboard"));
 
-        var name = NativeHelpers.MakeNsString(_pasteboardName);
+        var name = NativeHelpers.MakeNsString(named);
         var pasteboard = NativeMethods.objc_msgSend(cls, NativeMethods.sel_registerName("pasteboardWithName:"), name);
         NativeMethods.CFRelease(name);
         return pasteboard;
     }
-
 }

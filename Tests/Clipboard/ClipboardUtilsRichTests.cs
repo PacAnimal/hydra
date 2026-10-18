@@ -5,15 +5,16 @@ using Tests.Setup;
 
 namespace Tests.Clipboard;
 
-// covers the Html/Rtf rich-format behavior added to ClipboardUtils.
+// ClipboardUtils: hashing, the echo filter, trimming, and reading and writing every format
 [TestFixture]
 public class ClipboardUtilsRichTests
 {
     private static readonly NullLogger Log = NullLogger.Instance;
+    private static readonly byte[] Image = [9, 9];
     private static byte[] Oversized() => new byte[ClipboardUtils.MaxClipboardBytes + 1];
     private static string OversizedText() => new('a', (int)ClipboardUtils.MaxClipboardBytes + 1);
 
-    // -- ClipboardHash: rich fields participate, the selection beside them does not --
+    // -- EchoFilter --
 
     [Test]
     public void EchoFilter_ForgetsWhatALaterWriteReplaced()
@@ -43,6 +44,8 @@ public class ClipboardUtilsRichTests
             Assert.That(echo.FilterRtf([7]), Is.EqualTo(new byte[] { 7 }));
         }
     }
+
+    // -- hashes: rich fields participate in ClipboardHash, the selection beside them does not --
 
     [Test]
     public void StableHash_IsTheSameOnEveryHost() =>
@@ -160,11 +163,11 @@ public class ClipboardUtilsRichTests
     {
         var sync = new FakeClipboardSync();
         // image present alongside html: an image copy wins outright, rich/text are not carried
-        sync.SetClipboard(new ClipboardSnapshot("t", null, [9, 9], Html: "<b>x</b>"));
+        sync.SetClipboard(new ClipboardSnapshot("t", null, Image, Html: "<b>x</b>"));
         var result = ClipboardUtils.ReadWithFallback(sync, null, Log, "read");
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(result.ImagePng, Is.EqualTo("\t\t"u8.ToArray()));
+            Assert.That(result.ImagePng, Is.EqualTo(Image));
             Assert.That(result.Html, Is.Null);
             Assert.That(result.Text, Is.Null);
         }
@@ -212,7 +215,7 @@ public class ClipboardUtilsRichTests
     public void ReadWithFallback_ImageCopy_KeepsThePrimary()
     {
         var sync = new FakeClipboardSync();
-        sync.SetClipboard(new ClipboardSnapshot("alt text", "selection", [9, 9]));
+        sync.SetClipboard(new ClipboardSnapshot("alt text", "selection", Image));
 
         var result = ClipboardUtils.ReadWithFallback(sync, null, Log, "read");
 
@@ -220,7 +223,7 @@ public class ClipboardUtilsRichTests
         {
             Assert.That(result.Text, Is.Null);
             Assert.That(result.PrimaryText, Is.EqualTo("selection"));
-            Assert.That(result.ImagePng, Is.EqualTo("\t\t"u8.ToArray()));
+            Assert.That(result.ImagePng, Is.EqualTo(Image));
         }
     }
 
@@ -230,14 +233,14 @@ public class ClipboardUtilsRichTests
         // the clipboard comes from the fallback, the selection never does
         var sync = new FakeClipboardSync();
         sync.SetPrimaryText("current selection");
-        var fallback = new ClipboardSnapshot(null, "older selection", [9, 9]);
+        var fallback = new ClipboardSnapshot(null, "older selection", Image);
 
         var result = ClipboardUtils.ReadWithFallback(sync, fallback, Log, "read");
 
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result.PrimaryText, Is.EqualTo("current selection"));
-            Assert.That(result.ImagePng, Is.EqualTo("\t\t"u8.ToArray()));
+            Assert.That(result.ImagePng, Is.EqualTo(Image));
         }
     }
 

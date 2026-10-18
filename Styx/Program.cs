@@ -2,7 +2,6 @@ using Cathedral.Config;
 using Cathedral.Extensions;
 using Cathedral.Logging;
 using Cathedral.Styx;
-using Cathedral.Utils;
 using Styx;
 using Styx.Services;
 using System.Net;
@@ -12,14 +11,14 @@ using System.Text;
 if (args.Length > 0 && StyxTools.IsCommand(args[0]))
     return StyxTools.Run(args, Environment.GetEnvironmentVariable, Console.In, Console.Out, Console.Error);
 
-var config = Env.Config;
-
 StyxAuth auth;
 int parallelInvocations;
+int port;
 try
 {
     auth = StyxEnvironment.Read(Environment.GetEnvironmentVariable);
     parallelInvocations = StyxEnvironment.ReadParallelInvocations(Environment.GetEnvironmentVariable);
+    port = StyxEnvironment.ReadLocalPort(Environment.GetEnvironmentVariable);
 }
 catch (StyxConfigurationException ex)
 {
@@ -38,11 +37,10 @@ services.AddSereneConsoleLogging(logging =>
 });
 services.ConfigureHttpJsonOptions(options => SaneJson.Configure(options.SerializerOptions));
 
-var debugMessages = Environment.GetEnvironmentVariable(Constants.DebugMessagesEnvVar)?.EqualsIgnoreCase("true") ?? false;
+var debugMessages = StyxEnvironment.ReadFlag(Environment.GetEnvironmentVariable, Constants.DebugMessagesEnvVar);
 builder.AddStyxRelay(auth, new StyxOptions(debugMessages, parallelInvocations), behindProxy: true);
 
-var port = int.Parse(config.GetString("LOCAL_PORT", "5000"));
-var localOnly = Environment.GetEnvironmentVariable(Constants.LocalOnlyEnvVar)?.EqualsIgnoreCase("true") ?? false;
+var localOnly = StyxEnvironment.ReadFlag(Environment.GetEnvironmentVariable, Constants.LocalOnlyEnvVar);
 builder.WebHost.ConfigureKestrel(options =>
 {
     void ConfigureListener(IPAddress address) => options.Listen(address, port, listenOptions => listenOptions.UseTcpNoDelay());

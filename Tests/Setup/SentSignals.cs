@@ -55,14 +55,14 @@ public sealed class SentSignals
     }
 
     // completes once a message of this kind has been sent
-    public Task WaitFor(MessageKind kind, TimeSpan timeout)
+    public Task WaitFor(MessageKind kind)
     {
         lock (_awaited)
         {
             if (_sent.Any(s => s.Kind == kind)) return Task.CompletedTask;
             var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             _awaited.Add(new AwaitedSend(kind, signal));
-            return signal.Task.WaitAsync(timeout);
+            return signal.Task.WaitAsync(TestBound.Bound);
         }
     }
 

@@ -10,6 +10,8 @@ public static class Constants
     public const string ParallelInvocationsEnvVar = "RELAY_PARALLEL_INVOCATIONS";
     public const string DebugMessagesEnvVar = "DEBUG_MESSAGES";
     public const string LocalOnlyEnvVar = "LOCAL_ONLY";
+    public const string LocalPortEnvVar = "LOCAL_PORT";
+    public const int DefaultLocalPort = 5000;
 
     // SignalR hub tuning. ClientTimeout is how long a silent (e.g. half-open, wifi-dropped) connection
     // goes undetected — kept low so held keys are released and the cursor unlocks from a dead remote

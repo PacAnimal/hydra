@@ -2,7 +2,7 @@ using Cathedral.Styx;
 using Common.DTO;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Time.Testing;
-using Styx.Services;
+using Styx;
 using Tests.Setup;
 
 namespace Tests.Styx;
@@ -26,7 +26,7 @@ public class StyxExpiryTests : StyxFixtureBase
         await watcher.WaitForPeers(["expiring"]);
 
         _clock.Advance(TimeSpan.FromHours(1));
-        Assert.That(await expiring.WaitForKick(), Is.EqualTo(ExpiryScheduler.ExpiredReason));
+        Assert.That(await expiring.WaitForKick(), Is.EqualTo(RelayReasons.KickedExpired));
         await watcher.WaitForPeers([]);
     }
 
@@ -35,19 +35,20 @@ public class StyxExpiryTests : StyxFixtureBase
     public async Task AtExpiry_APeerOnTheParallelPathIsKicked()
     {
         await using var expiring = new TestStyxClient();
-        await expiring.Connect(Factory, Expiring(StyxToken.NewNetworkId(), TimeSpan.FromHours(1)), "expiring", global::Styx.Constants.ParallelRelayPath);
+        await expiring.Connect(Factory, Expiring(StyxToken.NewNetworkId(), TimeSpan.FromHours(1)), "expiring", Constants.ParallelRelayPath);
 
         _clock.Advance(TimeSpan.FromHours(1));
-        Assert.That(await expiring.WaitForKick(), Is.EqualTo(ExpiryScheduler.ExpiredReason));
+        Assert.That(await expiring.WaitForKick(), Is.EqualTo(RelayReasons.KickedExpired));
     }
 
     [Test]
     public async Task BeforeExpiry_NothingHappens()
     {
+        var network = StyxToken.NewNetworkId();
         await using var client = new TestStyxClient();
-        await client.Connect(Factory, Expiring(StyxToken.NewNetworkId(), TimeSpan.FromHours(1)), "early");
+        await client.Connect(Factory, Expiring(network, TimeSpan.FromHours(1)), "early");
         _clock.Advance(TimeSpan.FromMinutes(59));
-        Assert.That(await Kicked(client), Is.False);
+        await AssertNotKicked(client, network, "early");
     }
 
     [Test]
@@ -59,9 +60,9 @@ public class StyxExpiryTests : StyxFixtureBase
         await Login(client, Expiring(network, TimeSpan.FromHours(10)), "renewing");
 
         _clock.Advance(TimeSpan.FromHours(2));
-        Assert.That(await Kicked(client), Is.False);
+        await AssertNotKicked(client, network, "renewing");
         _clock.Advance(TimeSpan.FromHours(8));
-        Assert.That(await client.WaitForKick(), Is.EqualTo(ExpiryScheduler.ExpiredReason));
+        Assert.That(await client.WaitForKick(), Is.EqualTo(RelayReasons.KickedExpired));
     }
 
     [Test]
@@ -73,7 +74,7 @@ public class StyxExpiryTests : StyxFixtureBase
         await Login(client, Expiring(network, TimeSpan.FromHours(1)), "shortening");
 
         _clock.Advance(TimeSpan.FromHours(1));
-        Assert.That(await client.WaitForKick(), Is.EqualTo(ExpiryScheduler.ExpiredReason));
+        Assert.That(await client.WaitForKick(), Is.EqualTo(RelayReasons.KickedExpired));
     }
 
     [Test]
@@ -85,7 +86,7 @@ public class StyxExpiryTests : StyxFixtureBase
         await Login(client, StyxTestServer.MintToken(network).ToString(), "forever");
 
         _clock.Advance(TimeSpan.FromHours(2));
-        Assert.That(await Kicked(client), Is.False);
+        await AssertNotKicked(client, network, "forever");
     }
 
     [Test]
@@ -98,7 +99,7 @@ public class StyxExpiryTests : StyxFixtureBase
         Assume.That(refused.Authenticated, Is.False);
 
         _clock.Advance(TimeSpan.FromHours(1));
-        Assert.That(await client.WaitForKick(), Is.EqualTo(ExpiryScheduler.ExpiredReason));
+        Assert.That(await client.WaitForKick(), Is.EqualTo(RelayReasons.KickedExpired));
     }
 
     [Test]
@@ -109,26 +110,27 @@ public class StyxExpiryTests : StyxFixtureBase
         await using var second = new TestStyxClient();
         await first.Connect(Factory, Expiring(network, TimeSpan.FromHours(1)), "seat");
         await second.Connect(Factory, StyxTestServer.MintToken(network).ToString(), "seat");
-        Assert.That(await first.WaitForKick(), Is.EqualTo("duplicate hostname"));
+        Assert.That(await first.WaitForKick(), Is.EqualTo(RelayReasons.KickedDuplicateHostname));
 
         _clock.Advance(TimeSpan.FromHours(1));
         await first.Server!.Ping();
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(first.KickReason, Is.EqualTo("duplicate hostname"), "kicked once, not again at expiry");
-            Assert.That(await Kicked(second), Is.False);
+            Assert.That(first.KickReason, Is.EqualTo(RelayReasons.KickedDuplicateHostname), "kicked once, not again at expiry");
+            await AssertNotKicked(second, network, "seat");
         }
     }
 
     [Test]
     public async Task AnExpiryMoreThanFiftyDaysOut_StillFires()
     {
+        var network = StyxToken.NewNetworkId();
         await using var client = new TestStyxClient();
-        await client.Connect(Factory, Expiring(StyxToken.NewNetworkId(), TimeSpan.FromDays(60)), "patient");
+        await client.Connect(Factory, Expiring(network, TimeSpan.FromDays(60)), "patient");
         _clock.Advance(TimeSpan.FromDays(59));
-        Assert.That(await Kicked(client), Is.False);
+        await AssertNotKicked(client, network, "patient");
         _clock.Advance(TimeSpan.FromDays(1));
-        Assert.That(await client.WaitForKick(), Is.EqualTo(ExpiryScheduler.ExpiredReason));
+        Assert.That(await client.WaitForKick(), Is.EqualTo(RelayReasons.KickedExpired));
     }
 
     [Test]
@@ -144,7 +146,9 @@ public class StyxExpiryTests : StyxFixtureBase
 
         var server = expiring.Server!;
         Assert.That(async () => await server.Send(["listener"], [1]), Throws.Exception);
-        Assert.That(listener.LastReceived, Is.Null);
+        await using var witness = await Witness(network);
+        await witness.Server!.Send(["listener"], [0]);
+        Assert.That((await listener.WaitForReceive()).Source, Is.EqualTo(WitnessName), "the kicked peer's send was delivered");
     }
 
     private string Expiring(Guid network, TimeSpan after) =>
@@ -153,11 +157,21 @@ public class StyxExpiryTests : StyxFixtureBase
     private static Task<RelayLoginResponse> Login(TestStyxClient client, string authorization, string hostName) =>
         client.Server!.Authenticate(new RelayLogin { Authorization = authorization, HostName = hostName });
 
-    // A kick is sent before the clock call returns its timers' work, but delivered asynchronously. A round trip
-    // through the hub on the same connection comes back only after anything the relay sent before it.
-    private static async Task<bool> Kicked(TestStyxClient client)
+    // a witness's message joins the client's queue behind anything already on its way, a kick included
+    private async Task AssertNotKicked(TestStyxClient client, Guid network, string hostName)
     {
-        await client.Server!.Ping();
-        return client.KickReason is not null;
+        await using var witness = await Witness(network);
+        await witness.Server!.Send([hostName], [0]);
+        await client.WaitForReceive();
+        Assert.That(client.KickReason, Is.Null);
+    }
+
+    private const string WitnessName = "witness";
+
+    private async Task<TestStyxClient> Witness(Guid network)
+    {
+        var witness = new TestStyxClient();
+        await witness.Connect(Factory, StyxTestServer.MintToken(network).ToString(), WitnessName);
+        return witness;
     }
 }

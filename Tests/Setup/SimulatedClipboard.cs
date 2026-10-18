@@ -31,7 +31,7 @@ public sealed class SimulatedClipboard : IClipboardSync
 
     public string? Text { get; private set; }
     public byte[]? ImagePng { get; private set; }
-    public string? Primary => _os == ClipboardOs.Linux ? _x11Primary : GetPrimaryText();
+    public string? Primary => GetPrimaryText();
     public int ClipboardWrites { get; private set; }
 
     public void Copy(string text) => Take(text, null);

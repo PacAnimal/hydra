@@ -1,6 +1,7 @@
 using Cathedral.Extensions;
 using Common;
 using Hydra.Relay;
+using Styx;
 using Tests.Setup;
 
 namespace Tests.Styx;
@@ -213,17 +214,13 @@ public class StyxIntegrationTests : StyxFixtureBase
             expectedDx += i;
             expectedDy -= i;
         }
-        // neither coalesces nor bundles, and follows the deltas on their lane, so it marks the end of them
-        sender.Send(["receiver"], MessageSerializer.Encode(MessageKind.Osd, new OsdMessage("end-of-test")));
+        sender.Send(["receiver"], TestMessages.Sentinel());
 
         var receivedDx = 0;
         var receivedDy = 0;
         var messageCount = 0;
-        while (true)
+        foreach (var (_, kind, json) in await receiver.ReadUntilSentinel())
         {
-            var (_, kind, json) = await receiver.WaitForMessage();
-            if (kind == MessageKind.Osd) break;
-
             Assert.That(kind, Is.EqualTo(MessageKind.MouseMoveDelta));
             var decoded = json.FromSaneJson<MouseMoveDeltaMessage>();
             Assert.That(decoded, Is.Not.Null);
@@ -287,7 +284,7 @@ public class StyxIntegrationTests : StyxFixtureBase
         await second.StartReady();
 
         var reason = await first.WaitForKick();
-        Assert.That(reason, Is.EqualTo("duplicate hostname"));
+        Assert.That(reason, Is.EqualTo(RelayReasons.KickedDuplicateHostname));
     }
 
     [Test]
@@ -316,7 +313,7 @@ public class StyxIntegrationTests : StyxFixtureBase
         using (Assert.EnterMultipleScope())
         {
             Assert.That((await reconnected.Connect(Factory, auth, "roamer")).Authenticated, Is.True);
-            Assert.That(await original.WaitForKick(), Is.EqualTo("duplicate hostname"));
+            Assert.That(await original.WaitForKick(), Is.EqualTo(RelayReasons.KickedDuplicateHostname));
 
             // both halves, in order — an observer given one identical list has no way to tell this happened
             Assert.That(await observer.WaitForPeers(), Is.Empty, "displaced host should be broadcast as gone first");

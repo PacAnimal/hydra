@@ -28,8 +28,8 @@ public interface IWorldState
     ValueTask ClearPeers();
 
     // -- master-side (peer platform) --
-    ValueTask SetPeerPlatform(string host, PeerPlatform platform);
-    ValueTask<PeerPlatform> GetPeerPlatform(string host);
+    void SetPeerPlatform(string host, PeerPlatform platform);
+    PeerPlatform PeerPlatformOf(string host);
 }
 
 public class WorldState : IWorldState
@@ -37,6 +37,7 @@ public class WorldState : IWorldState
     private readonly SemaphoreSlimValue<MasterState> _master = new(new MasterState(), disposeValue: false);
     private readonly SemaphoreSlimValue<SlaveState> _slave = new(new SlaveState(), disposeValue: false);
     private readonly ConcurrentDictionary<string, SimpleAesKey> _remoteKeys = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, PeerPlatform> _peerPlatforms = new(StringComparer.OrdinalIgnoreCase);
 
     private readonly ConcurrentDictionary<string, ILogger> _loggers = new(StringComparer.OrdinalIgnoreCase);
 
@@ -56,11 +57,12 @@ public class WorldState : IWorldState
             {
                 s.KnownPeers.Remove(host);
                 s.PeerScreens.Remove(host);
-                s.PeerPlatforms.Remove(host);
                 foreach (var k in _loggers.Keys.Where(k => k.StartsWithIgnoreCase($"slave:{host}/")).ToList())
                     _loggers.TryRemove(k, out _);
             }
             s.KnownPeers.UnionWith(currentPeers);
+            foreach (var host in _peerPlatforms.Keys.Where(h => !currentPeers.Contains(h)).ToList())
+                _peerPlatforms.TryRemove(host, out _);
             snapshot = s.PeerScreens.ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase);
         }
 
@@ -94,11 +96,10 @@ public class WorldState : IWorldState
     {
         using var m = await _master.WaitForDisposable();
         var knownPeers = m.Value.KnownPeers;
-        var peerPlatforms = m.Value.PeerPlatforms;
         var peerScreens = m.Value.PeerScreens;
         return [.. knownPeers.Order(StringComparer.OrdinalIgnoreCase).Select(name => new PeerRuntimeSnapshot(
             name,
-            peerPlatforms.GetValueOrDefault(name),
+            PeerPlatformOf(name),
             peerScreens.TryGetValue(name, out var screens) ? [.. screens] : []))];
     }
 
@@ -139,22 +140,14 @@ public class WorldState : IWorldState
         var s = m.Value;
         s.KnownPeers.Clear();
         s.PeerScreens.Clear();
-        s.PeerPlatforms.Clear();
+        _peerPlatforms.Clear();
         _loggers.Clear();
         _remoteKeys.Clear(); // keys are re-derived from the message salt on reconnect
     }
 
-    public async ValueTask SetPeerPlatform(string host, PeerPlatform platform)
-    {
-        using var m = await _master.WaitForDisposable();
-        m.Value.PeerPlatforms[host] = platform;
-    }
+    public void SetPeerPlatform(string host, PeerPlatform platform) => _peerPlatforms[host] = platform;
 
-    public async ValueTask<PeerPlatform> GetPeerPlatform(string host)
-    {
-        using var m = await _master.WaitForDisposable();
-        return m.Value.PeerPlatforms.TryGetValue(host, out var p) ? p : PeerPlatform.Unknown;
-    }
+    public PeerPlatform PeerPlatformOf(string host) => _peerPlatforms.GetValueOrDefault(host, PeerPlatform.Unknown);
 
     public ValueTask SetRemoteKey(string host, SimpleAesKey key)
     {
@@ -169,7 +162,6 @@ public class WorldState : IWorldState
     {
         public HashSet<string> KnownPeers = new(StringComparer.OrdinalIgnoreCase);
         public Dictionary<string, List<ScreenInfoEntry>> PeerScreens = new(StringComparer.OrdinalIgnoreCase);
-        public Dictionary<string, PeerPlatform> PeerPlatforms = new(StringComparer.OrdinalIgnoreCase);
     }
 
     private class SlaveState

@@ -5,7 +5,6 @@ using Microsoft.AspNetCore.Http.Connections.Client;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Time.Testing;
 using Tests.Setup;
 
 namespace Tests.Relay;
@@ -18,6 +17,7 @@ namespace Tests.Relay;
 [TestFixture]
 public class RelayAuthFailureTests
 {
+    private static readonly TimeSpan AuthTimeout = TimeSpan.FromSeconds(Constants.AuthTimeoutSeconds);
     private static WebApplicationFactory<global::Styx.Program>? _open;
     private static WebApplicationFactory<global::Styx.Program>? _stalled;
     private static WebApplicationFactory<global::Styx.Program>? _stalledAfterPeers;
@@ -50,8 +50,8 @@ public class RelayAuthFailureTests
         await using var probe = new AuthProbe(_open!, cfg);
         await probe.StartAsync(CancellationToken.None);
 
-        await probe.Clock.NextTimer();
-        await probe.Clock.NextTimer();
+        await probe.Clock.Started.Next("an auth timer");
+        await probe.Clock.Started.Next("an auth timer");
 
         Assert.That(probe.Disconnects, Is.Zero);
     }
@@ -62,9 +62,9 @@ public class RelayAuthFailureTests
         await using var probe = new AuthProbe(_stalled!, await StyxTestServer.BuildNetworkConfig(_stalled!, Guid.NewGuid()));
         await probe.StartAsync(CancellationToken.None);
 
-        await probe.Clock.NextTimer();
-        probe.Clock.TimeOut();
-        await probe.Clock.NextTimer();
+        await probe.Clock.Started.Next("an auth timer");
+        probe.Clock.Advance(AuthTimeout);
+        await probe.Clock.Started.Next("an auth timer");
 
         Assert.That(probe.Disconnects, Is.Zero);
     }
@@ -75,9 +75,9 @@ public class RelayAuthFailureTests
         await using var probe = new AuthProbe(_stalled!, await StyxTestServer.BuildNetworkConfig(_stalled!, Guid.NewGuid()));
         await probe.StartAsync(CancellationToken.None);
 
-        await probe.Clock.NextTimer();
+        await probe.Clock.Started.Next("an auth timer");
         Assert.That(probe.RequestReconnect(), Is.True);
-        await probe.Clock.NextTimer();
+        await probe.Clock.Started.Next("an auth timer");
 
         Assert.That(probe.Disconnects, Is.Zero);
     }
@@ -88,10 +88,10 @@ public class RelayAuthFailureTests
         await using var probe = new AuthProbe(_stalledAfterPeers!, await StyxTestServer.BuildNetworkConfig(_stalledAfterPeers!, Guid.NewGuid()));
         await probe.StartAsync(CancellationToken.None);
 
-        await probe.Clock.NextTimer();
+        await probe.Clock.Started.Next("an auth timer");
         await probe.PeersHandled.WaitAsync(Bound);
-        probe.Clock.TimeOut();
-        await probe.Clock.NextTimer();
+        probe.Clock.Advance(AuthTimeout);
+        await probe.Clock.Started.Next("an auth timer");
 
         Assert.That(probe.Disconnects, Is.EqualTo(2), "OnDisconnected and Disconnected each fire once");
     }
@@ -113,22 +113,6 @@ public class RelayAuthFailureTests
         }
     }
 
-    // hands each auth timer to the test as it is armed; nothing fires until the test steps past the auth timeout
-    private sealed class SteppedAuthClock : FakeTimeProvider
-    {
-        private readonly NotificationQueue<ITimer> _timers = new();
-
-        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
-        {
-            var timer = base.CreateTimer(callback, state, dueTime, period);
-            _timers.Push(timer);
-            return timer;
-        }
-
-        internal Task<ITimer> NextTimer() => _timers.Next("an auth timer");
-        internal void TimeOut() => Advance(TimeSpan.FromSeconds(Constants.AuthTimeoutSeconds));
-    }
-
     private sealed class AuthProbe : RelayConnection, IAsyncDisposable
     {
         private readonly WebApplicationFactory<global::Styx.Program> _factory;
@@ -147,7 +131,7 @@ public class RelayAuthFailureTests
             };
         }
 
-        internal SteppedAuthClock Clock { get; } = new();
+        internal StartedTimers Clock { get; } = new();
         internal int Disconnects => Volatile.Read(ref _disconnects);
         internal Task PeersHandled => _peersHandled.Task;
 

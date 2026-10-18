@@ -9,12 +9,11 @@ public interface IClientRegistry
     ValueTask<ClientIdentity?> GetIdentity(string connectionId);
     // atomically kicks same-network+host duplicates AND registers the new connection under one lock, so two
     // concurrent authenticates for the same host can't both find nothing to kick and both register.
-    ValueTask<RegistrationResult> Register(string connectionId, NetworkKey network, string hostName, string remoteIp, string localIp = ClientRegistry.Unknown);
+    ValueTask<RegistrationResult> Register(string connectionId, NetworkKey network, string hostName, string remoteIp, string localIp);
     // removes the registration only if it is still the one with this generation, so a timer armed for an earlier
     // login can never evict whatever holds the connection or the name now
     ValueTask<ClientIdentity?> UnregisterIfCurrent(string connectionId, long generation);
-    // returns all clients on a network, optionally excluding one connection
-    ValueTask<IReadOnlyList<NetworkClient>> GetNetworkClients(NetworkKey network, string? excludeConnectionId = null);
+    ValueTask<IReadOnlyList<NetworkClient>> GetNetworkClients(NetworkKey network);
     ValueTask<IReadOnlyList<ClientIdentity>> GetAllIdentities();
 }
 
@@ -75,7 +74,7 @@ public class ClientRegistry(ILogger<ClientRegistry> log) : IClientRegistry
         lock (_lock) return ValueTask.FromResult(_byConnection.GetValueOrDefault(connectionId));
     }
 
-    public ValueTask<RegistrationResult> Register(string connectionId, NetworkKey network, string hostName, string remoteIp, string localIp = Unknown)
+    public ValueTask<RegistrationResult> Register(string connectionId, NetworkKey network, string hostName, string remoteIp, string localIp)
     {
         RegistrationResult result;
         lock (_lock)
@@ -100,9 +99,9 @@ public class ClientRegistry(ILogger<ClientRegistry> log) : IClientRegistry
         return ValueTask.FromResult(result);
     }
 
-    public ValueTask<IReadOnlyList<NetworkClient>> GetNetworkClients(NetworkKey network, string? excludeConnectionId = null)
+    public ValueTask<IReadOnlyList<NetworkClient>> GetNetworkClients(NetworkKey network)
     {
-        lock (_lock) return ValueTask.FromResult<IReadOnlyList<NetworkClient>>(OnNetwork(network, excludeConnectionId));
+        lock (_lock) return ValueTask.FromResult<IReadOnlyList<NetworkClient>>(OnNetwork(network, null));
     }
 
     public ValueTask<IReadOnlyList<ClientIdentity>> GetAllIdentities()

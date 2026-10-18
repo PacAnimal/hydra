@@ -626,14 +626,15 @@ message structure — is the application's to build. The relay carries bytes bet
 | `RELAY_REVOKED_NETWORKS` | Comma-separated network UUIDs whose tokens are refused, v1 and v2. |
 | `RELAY_REVOKED_IDS` | Comma-separated v2 `id` caveat values whose tokens are refused (compared ordinally). |
 | `RELAY_PARALLEL_INVOCATIONS` | How many of one client's invocations `/relay/parallel` runs at once (§3.4): a whole number from 1 to 64, default 4. Each invocation running can hold a whole message, so one client can hold this many times 32 MiB; above 8 the relay says how much when it starts. At 1 the path is not parallel, which the relay also says when it starts: a way to tell whether a fault needs invocations to overlap without changing the client. |
-| `LOCAL_PORT` | Listening port. Default `5000`. |
+| `LOCAL_PORT` | Listening port, from 1 to 65535. Default `5000`. |
 | `LOCAL_ONLY` | `true` binds loopback only. |
 | `DEBUG_MESSAGES` | `true` logs per-payload routing metadata (network, sender, targets, size — not contents). |
 
 The relay refuses to start unless it can verify something (`RELAY_SIGNING_KEY`, `RELAY_SIGNING_PASSPHRASE` or
 `RELAY_PASSWORD`), and refuses a malformed key, a passphrase outside the rules of §13.1, the same key twice,
 two keys sharing a `kid`, the published test key or passphrase of §14.6, a `RELAY_REVOKED_NETWORKS` entry that
-is not a UUID, or a `RELAY_PARALLEL_INVOCATIONS` that is not a whole number from 1 to 64. Every
+is not a UUID, a `RELAY_PARALLEL_INVOCATIONS` that is not a whole number from 1 to 64, or a `LOCAL_PORT` that is
+not a port from 1 to 65535. Every
 change to these is a restart, which drops every peer; that is also what makes a revocation complete.
 
 **Rotating the v2 key:** the first key mints and the rest only verify, and a passphrase's key comes first.

@@ -13,12 +13,11 @@ public static class StyxTestServer
     /// <summary>The test servers' v2 key. Not Styx.md's published one, which a relay refuses to start with.</summary>
     public static readonly byte[] TestKey = [.. Enumerable.Range(0, 64).Select(i => (byte)(0x80 + i))];
 
-    public static WebApplicationFactory<global::Styx.Program> Create(string password = TestPassword, Action<IServiceCollection>? configure = null)
+    public static WebApplicationFactory<global::Styx.Program> Create(Action<IServiceCollection>? configure = null)
     {
-        // must be set before the factory initializes the host. process-wide, so safe only while fixtures run
-        // one at a time — every caller uses the default today. Anything else a test wants differs in code,
-        // by replacing StyxAuth through `configure`.
-        Environment.SetEnvironmentVariable(Constants.RelayPasswordEnvVar, password);
+        // must be set before the factory initializes the host, and the same for every server, since it is process-wide;
+        // anything else a test wants differs in code, by replacing StyxAuth through `configure`
+        Environment.SetEnvironmentVariable(Constants.RelayPasswordEnvVar, TestPassword);
         Environment.SetEnvironmentVariable(Constants.RelaySigningKeyEnvVar, Convert.ToBase64String(TestKey));
         Environment.SetEnvironmentVariable(Constants.RelaySigningPassphraseEnvVar, null);
         Environment.SetEnvironmentVariable(Constants.RevokedNetworksEnvVar, null);

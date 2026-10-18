@@ -31,7 +31,7 @@ public sealed class ClipboardSlave(IClipboardSync sync, ILogger log)
         _selectionPushFor = null;
     }
 
-    public ClipboardPullResponseMessage OnPull(ClipboardPullMessage? pull, string host)
+    public ClipboardPullResponseMessage OnPull(ClipboardPullMessage pull, string host)
     {
         var answer = ClipboardWire.AnswerPull(_echo.Read("pull response"), pull);
         if (log.IsEnabled(LogLevel.Debug))

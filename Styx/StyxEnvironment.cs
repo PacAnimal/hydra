@@ -80,6 +80,17 @@ public static class StyxEnvironment
         return width;
     }
 
+    public static int ReadLocalPort(Func<string, string?> environment)
+    {
+        if (NullIfEmpty(environment(Constants.LocalPortEnvVar)) is not { } value) return Constants.DefaultLocalPort;
+        if (!int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var port) || port is < 1 or > 65535)
+            throw new StyxConfigurationException($"{Constants.LocalPortEnvVar} is \"{value}\", not a port from 1 to 65535");
+        return port;
+    }
+
+    // on only for "true", in any casing
+    public static bool ReadFlag(Func<string, string?> environment, string name) => environment(name)?.EqualsIgnoreCase("true") ?? false;
+
     /// <summary>What a relay started with this parallel width should warn of, if anything.</summary>
     public static string? ParallelInvocationsWarning(int width) => width switch
     {

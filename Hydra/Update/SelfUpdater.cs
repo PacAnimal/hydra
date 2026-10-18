@@ -113,6 +113,8 @@ internal sealed class SelfUpdater(IHydraProfile profile, ILogger<SelfUpdater> lo
         await DownloadAndApply(downloadUrl, cancel);
     }
 
+    private static string ExeName => OperatingSystem.IsWindows() ? "Hydra.exe" : "Hydra";
+
     private async Task DownloadAndApply(string url, CancellationToken cancel)
     {
         var exePath = Environment.ProcessPath
@@ -120,8 +122,7 @@ internal sealed class SelfUpdater(IHydraProfile profile, ILogger<SelfUpdater> lo
         var appDir = Path.GetDirectoryName(exePath)
             ?? throw new InvalidOperationException("cannot determine app directory");
 
-        var exeName = OperatingSystem.IsWindows() ? "Hydra.exe" : "Hydra";
-        var tmpPath = Path.Combine(appDir, exeName + ".tmp");
+        var tmpPath = Path.Combine(appDir, ExeName + ".tmp");
 
         // stream: http → gzip → tar → .tmp file
         using var downloadCancel = CancellationTokenSource.CreateLinkedTokenSource(cancel);
@@ -137,14 +138,14 @@ internal sealed class SelfUpdater(IHydraProfile profile, ILogger<SelfUpdater> lo
         TarEntry? entry;
         while ((entry = await tar.GetNextEntryAsync(cancellationToken: downloadCancel.Token)) != null)
         {
-            if (Path.GetFileName(entry.Name) != exeName || entry.DataStream == null) continue;
+            if (Path.GetFileName(entry.Name) != ExeName || entry.DataStream == null) continue;
             await using var tmp = File.Create(tmpPath);
             await entry.DataStream.CopyToAsync(tmp, downloadCancel.Token);
             break;
         }
 
         if (!File.Exists(tmpPath))
-            throw new InvalidOperationException($"'{exeName}' not found in archive");
+            throw new InvalidOperationException($"'{ExeName}' not found in archive");
 
         // stop child before swapping — prevents file-lock conflicts in service mode
         if (StopChild != null)
@@ -156,7 +157,8 @@ internal sealed class SelfUpdater(IHydraProfile profile, ILogger<SelfUpdater> lo
             // Windows can't overwrite a running exe, so rename it aside then move the new one in — two
             // non-atomic steps. Retry the second move to ride out transient AV/indexer locks on the fresh
             // file; if it still fails, roll the old exe back so the install is never left with NO Hydra.exe.
-            File.Move(exePath, exePath + ".old");
+            var oldPath = exePath + ".old";
+            File.Move(exePath, oldPath);
             try
             {
                 for (var attempt = 0; ; attempt++)
@@ -169,8 +171,8 @@ internal sealed class SelfUpdater(IHydraProfile profile, ILogger<SelfUpdater> lo
             {
                 try
                 {
-                    if (!File.Exists(exePath) && File.Exists(exePath + ".old"))
-                        File.Move(exePath + ".old", exePath); // restore — never leave the install with no exe
+                    if (!File.Exists(exePath) && File.Exists(oldPath))
+                        File.Move(oldPath, exePath); // restore — never leave the install with no exe
                 }
                 catch { /* best-effort restore */ }
                 throw;
@@ -214,8 +216,7 @@ internal sealed class SelfUpdater(IHydraProfile profile, ILogger<SelfUpdater> lo
 
         // only clear .old backups once the real binary is present again — never destroy the last
         // recovery copy while Hydra.exe is missing (e.g. after an interrupted Windows swap)
-        var exeName = OperatingSystem.IsWindows() ? "Hydra.exe" : "Hydra";
-        if (File.Exists(Path.Combine(appDir, exeName)))
+        if (File.Exists(Path.Combine(appDir, ExeName)))
             foreach (var file in Directory.EnumerateFiles(appDir, "*.old"))
                 TryDelete(file);
     }

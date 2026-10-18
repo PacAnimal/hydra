@@ -22,7 +22,7 @@ public sealed class FakeRelay : NullRelaySender
     public List<T> Sent<T>(MessageKind kind, string? host = null) => _signals.Sent<T>(kind, host);
 
     // completes once a message of this kind has been sent, for a sender working on its own thread
-    public Task WaitForSent(MessageKind kind) => _signals.WaitFor(kind, TestBound.Bound);
+    public Task WaitForSent(MessageKind kind) => _signals.WaitFor(kind);
 
     public async Task FirePeersChanged(params string[] hosts)
     {

@@ -20,8 +20,6 @@ public sealed class ExpiryScheduler(
     TimeProvider clock,
     ILogger<ExpiryScheduler> log) : IExpiryScheduler, IDisposable
 {
-    public const string ExpiredReason = "authorization expired";
-
     // a timer cannot be due more than ~49.7 days out, so a later expiry is reached in steps
     private static readonly TimeSpan MaxStep = TimeSpan.FromHours(24);
 
@@ -87,7 +85,7 @@ public sealed class ExpiryScheduler(
             if (log.IsEnabled(LogLevel.Information))
                 log.LogInformation("Authorization of \"{HostName}\" on network {Network} expired", identity.HostName, identity.Network);
             peers.QueueBroadcast(identity.Network);
-            writer.Kick(connectionId, ExpiredReason);
+            writer.Kick(connectionId, RelayReasons.KickedExpired);
         }
         catch (Exception ex)
         {

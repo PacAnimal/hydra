@@ -18,30 +18,6 @@ namespace Tests.Styx;
 [TestFixture]
 public class RelayLaneTests : StyxFixtureBase
 {
-    /// <summary>
-    /// The next message, or a failure that NAMES what never came.
-    ///
-    /// <para>The two tests using this are about a message arriving WHILE another is parked, so the
-    /// regression they guard against shows up as nothing arriving at all — and a bare read reports that as
-    /// "Timed out waiting for message", which says something is slow rather than that the two lanes have
-    /// become one queue again. Measured: with the lanes collapsed both failed on that bare timeout.</para>
-    ///
-    /// <para>A sentinel is no help here, unlike everywhere else in these fixtures: with one queue it would
-    /// be stuck behind the very item that is parked. Naming the expectation is all there is.</para>
-    /// </summary>
-    private static async Task<ReceivedMessage> NextOrFail(HydraTestClient receiver, string what)
-    {
-        try
-        {
-            return await receiver.WaitForMessage();
-        }
-        catch (TimeoutException)
-        {
-            Assert.Fail(what);
-            throw;
-        }
-    }
-
     /// <summary>The X of a MouseMove, which is how an input message carries its position in the burst.</summary>
     private static int PositionOf(string json) =>
         System.Text.Json.JsonDocument.Parse(json).RootElement.GetProperty("x").GetInt32();
@@ -171,8 +147,7 @@ public class RelayLaneTests : StyxFixtureBase
 
         sender.Send(["receiver"], TestMessages.Move(1));
 
-        var (_, kind, _) = await NextOrFail(receiver,
-            "nothing arrived at all while the chunk was parked — the keystroke is queued behind it, so the lanes are one queue again");
+        var (_, kind, _) = await receiver.WaitForMessage("the keystroke sent while a chunk was parked (if it never comes, the lanes are one queue again)");
         Assert.That(kind, Is.EqualTo(MessageKind.MouseMove),
             "the keystroke was sent second and must arrive first — the whole point of taking bulk off the input lane");
 
@@ -243,8 +218,7 @@ public class RelayLaneTests : StyxFixtureBase
 
         sender.Send(["receiver"], MessageSerializer.Encode(MessageKind.FileTransferAbort, new FileTransferAbortMessage("cancelled")));
 
-        var (_, kind, _) = await NextOrFail(receiver,
-            "the abort never arrived while the chunk it cancels was parked — it is queued behind the backlog it exists to stop");
+        var (_, kind, _) = await receiver.WaitForMessage("the abort sent while the chunk it cancels was parked (if it never comes, it is queued behind it)");
         Assert.That(kind, Is.EqualTo(MessageKind.FileTransferAbort));
 
         sender.ReleaseLane();
@@ -337,10 +311,10 @@ public class RelayLaneTests : StyxFixtureBase
 
         foreach (var (task, where) in new[] { (parked, "parked in the lane"), (behind, "queued behind it") })
         {
-            var settled = await Task.WhenAny(task, Task.Delay(Bound));
+            var settled = await Settles(task);
             using (Assert.EnterMultipleScope())
             {
-                Assert.That(settled, Is.SameAs(task), $"a caller {where} was left waiting on a send that can never happen");
+                Assert.That(settled, Is.True, $"a caller {where} was left waiting on a send that can never happen");
                 Assert.That(task.IsCompletedSuccessfully, Is.False, $"the payload {where} never left, so it must not report success");
             }
         }

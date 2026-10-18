@@ -135,5 +135,5 @@ public class ScreenNamingTests
     private static ScreenInfoEntry Entry(string name, int x) => new(name, x, 0, 2560, 1440, 1.0m);
 
     private static async Task Advertise(FakeRelay relay, string host, params ScreenInfoEntry[] entries) =>
-        await relay.FireMessageReceived(host, MessageKind.ScreenInfo, JsonSerializer.Serialize(new ScreenInfoMessage([.. entries]), SaneJson.Options));
+        await relay.FireMessageReceived(host, MessageKind.ScreenInfo, JsonSerializer.Serialize(new ScreenInfoMessage([.. entries], PeerPlatform.Linux), SaneJson.Options));
 }

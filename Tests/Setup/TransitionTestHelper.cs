@@ -104,10 +104,10 @@ public static class TransitionTestHelper
     public static async Task BringRemoteOnline(FakeRelay relay) => await BringHostOnline(relay, "remote");
 
     // starts the router with hosts online, the standard remote unless named
-    public static Task<TestServiceBundle> StartOnline(TestServiceBundle bundle, params string[] hosts) => StartOnline(bundle, platform: null, hosts);
+    public static Task<TestServiceBundle> StartOnline(TestServiceBundle bundle, params string[] hosts) => StartOnline(bundle, PeerPlatform.Linux, hosts);
 
     // as above, the hosts advertising the given platform
-    public static async Task<TestServiceBundle> StartOnline(TestServiceBundle bundle, PeerPlatform? platform, params string[] hosts)
+    public static async Task<TestServiceBundle> StartOnline(TestServiceBundle bundle, PeerPlatform platform, params string[] hosts)
     {
         await bundle.Service.StartAsync(CancellationToken.None);
         await BringHostsOnline(bundle.Relay, hosts.Length > 0 ? hosts : ["remote"], platform);
@@ -170,7 +170,7 @@ public static class TransitionTestHelper
     }
 
     // advertises one host's monitors, laid out left to right and named as the host itself names them
-    public static async Task AdvertiseScreens(FakeRelay relay, string host, int count, PeerPlatform? platform = null)
+    public static async Task AdvertiseScreens(FakeRelay relay, string host, int count, PeerPlatform platform = PeerPlatform.Linux)
     {
         var entries = Enumerable.Range(0, count).Select(i => new ScreenInfoEntry(ScreenNaming.BuildScreenName(host, i, count), i * 2560, 0, 2560, 1440, 1.0m)).ToList();
         var info = JsonSerializer.Serialize(new ScreenInfoMessage(entries, platform), SaneJson.Options);
@@ -180,7 +180,7 @@ public static class TransitionTestHelper
     public static async Task BringHostOnline(FakeRelay relay, string host) => await BringHostsOnline(relay, [host]);
 
     // brings multiple hosts online at once — fires a single PeersChanged with all hosts, then one monitor's ScreenInfo for each
-    public static async Task BringHostsOnline(FakeRelay relay, string[] hosts, PeerPlatform? platform = null)
+    public static async Task BringHostsOnline(FakeRelay relay, string[] hosts, PeerPlatform platform = PeerPlatform.Linux)
     {
         await relay.FirePeersChanged(hosts);
         foreach (var host in hosts)

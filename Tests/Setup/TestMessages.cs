@@ -18,6 +18,11 @@ public static class TestMessages
     public static byte[] Key(int n, KeyEventType type = KeyEventType.KeyDown) =>
         MessageSerializer.Encode(MessageKind.KeyEvent, KeyMessage(n, type));
 
+    // marks the end of what a test expects: Osd neither coalesces nor bundles, so it takes a frame of its own
+    public const MessageKind SentinelKind = MessageKind.Osd;
+
+    public static byte[] Sentinel() => MessageSerializer.Encode(SentinelKind, new OsdMessage("end-of-test"));
+
     public static byte[] Chunk(int n, int bytes = 8) =>
         MessageSerializer.Encode(MessageKind.FileTransferChunk, new FileTransferChunkMessage(n, new byte[bytes]));
 }

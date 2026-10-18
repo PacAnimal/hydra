@@ -6,21 +6,12 @@ using Tests.Setup;
 
 namespace Tests.Clipboard;
 
-// End-to-end X11 selection-protocol tests for XorgClipboardSync. These drive the real
-// Xlib code against a live X server (Xvfb) and use xclip as the peer so we can assert the
-// exact wire bytes — in particular that STRING is ISO-8859-1 while UTF8_STRING is UTF-8.
-//
-// They self-skip unless on Linux with a live DISPLAY (see RequireX11), so libX11 never loads on
-// macOS/Windows and a plain `dotnet test` is safe everywhere. They actually execute under Xvfb:
-// the test-linux CI job (dotnet test under xvfb-run) and run-tests.sh linux. Sequential by design:
-// the CLIPBOARD selection is a single global resource.
+// the real Xlib code against Xvfb, with xclip as the peer; sequential, since CLIPBOARD is global
 [TestFixture]
 [Category("Linux")]
 [NonParallelizable]
 public class XorgClipboardSyncTests
 {
-    // discovered everywhere but only runnable on Linux with a live X server. Skip (don't fail) elsewhere,
-    // and skip BEFORE touching XorgClipboardSync so libX11 is never loaded on macOS/Windows.
     [OneTimeSetUp]
     public void RequireX11() => X11Required.OrIgnore();
 
@@ -63,7 +54,7 @@ public class XorgClipboardSyncTests
     [Test]
     public void Serve_ImagePng()
     {
-        var png = new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3, 4, 5 };
+        var png = TestImages.Png;
         using var owner = new XorgClipboardSync();
         owner.SetClipboard(new ClipboardSnapshot(null, null, png));
 
@@ -94,7 +85,7 @@ public class XorgClipboardSyncTests
     [Test]
     public void Read_ImagePng_FromForeignOwner()
     {
-        var png = new byte[] { 0x89, 0x50, 0x4E, 0x47, 9, 8, 7, 6 };
+        var png = TestImages.Png;
         XclipWrite("image/png", png);
 
         using var reader = new XorgClipboardSync();
