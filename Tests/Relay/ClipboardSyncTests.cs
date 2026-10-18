@@ -62,9 +62,7 @@ public class ClipboardSyncTests
         await service.StartAsync(CancellationToken.None);
         await BringRemoteOnlineWithPlatform(relay, PeerPlatform.MacOs);
 
-        platform.FireMouseMove(2559, 720);
-        platform.FireMouseMove(1280, 720);
-        platform.FireMouseMove(1275, 720);
+        VisitAndLeaveRemote(platform);
 
         Assert.That(relay.Snapshot().Where(s => s.Kind is MessageKind.ClipboardHash or MessageKind.ClipboardPush or MessageKind.ClipboardPull), Is.Empty);
     }
@@ -154,14 +152,11 @@ public class ClipboardSyncTests
         await service.StartAsync(CancellationToken.None);
         await TransitionTestHelper.BringRemoteOnline(relay);
 
-        // trigger leave so _lastPulledFrom = "remote"
-        platform.FireMouseMove(2559, 720);
-        platform.FireMouseMove(1280, 720); // warp artifact
-        platform.FireMouseMove(1275, 720); // leave remote → pull → _lastPulledFrom = "remote"
+        // leave the remote, which pulls from it
+        VisitAndLeaveRemote(platform);
 
         var response = new ClipboardPullResponseMessage("from slave");
-        await relay.FireMessageReceived("remote", MessageKind.ClipboardPullResponse,
-            JsonSerializer.Serialize(response, SaneJson.Options));
+        await AnswerPull(relay, response);
 
         Assert.That(clipboard.Text, Is.EqualTo("from slave"));
 
@@ -175,15 +170,12 @@ public class ClipboardSyncTests
         await service.StartAsync(CancellationToken.None);
         await TransitionTestHelper.BringRemoteOnline(relay);
 
-        platform.FireMouseMove(2559, 720);
-        platform.FireMouseMove(1280, 720);
-        platform.FireMouseMove(1275, 720);
+        VisitAndLeaveRemote(platform);
         clipboard.HasFileClipboardValue = true;
         var before = clipboard.SetClipboardCallCount;
 
         var response = new ClipboardPullResponseMessage("incoming text");
-        await relay.FireMessageReceived("remote", MessageKind.ClipboardPullResponse,
-            JsonSerializer.Serialize(response, SaneJson.Options));
+        await AnswerPull(relay, response);
 
         Assert.That(clipboard.SetClipboardCallCount, Is.EqualTo(before));
     }
@@ -198,17 +190,15 @@ public class ClipboardSyncTests
         await service.StartAsync(CancellationToken.None);
         await TransitionTestHelper.BringRemoteOnline(relay);
 
-        // enter → leave (sets _lastPulledFrom) → re-enter so cursor is on remote
-        platform.FireMouseMove(2559, 720);
-        platform.FireMouseMove(1280, 720); // warp artifact
-        platform.FireMouseMove(1275, 720); // leave remote → _lastPulledFrom = "remote"
+        // enter → leave (which pulls) → re-enter so the cursor is on the remote
+        VisitAndLeaveRemote(platform);
+        var pullId = LatestPullId(relay);
         platform.FireMouseMove(2559, 720); // re-enter remote
         relay.ClearSent();
 
         // pull response arrives while cursor is still on remote → forwards via hash query
         var response = new ClipboardPullResponseMessage("slave had this");
-        await relay.FireMessageReceived("remote", MessageKind.ClipboardPullResponse,
-            JsonSerializer.Serialize(response, SaneJson.Options));
+        await AnswerPull(relay, response, pullId);
 
         Assert.That(relay.Snapshot().Any(s => s.Kind == MessageKind.ClipboardHash), Is.True);
         await SimulatePullRequest(relay); // slave sees different hash, requests push
@@ -272,14 +262,11 @@ public class ClipboardSyncTests
         await service.StartAsync(CancellationToken.None);
         await BringRemoteOnlineWithPlatform(relay, PeerPlatform.Linux);
 
-        // trigger leave so _lastPulledFrom = "remote"
-        platform.FireMouseMove(2559, 720);
-        platform.FireMouseMove(1280, 720); // warp artifact
-        platform.FireMouseMove(1275, 720); // leave remote → _lastPulledFrom = "remote"
+        // leave the remote, which pulls from it
+        VisitAndLeaveRemote(platform);
 
         var response = new ClipboardPullResponseMessage("from slave", "primary from slave");
-        await relay.FireMessageReceived("remote", MessageKind.ClipboardPullResponse,
-            JsonSerializer.Serialize(response, SaneJson.Options));
+        await AnswerPull(relay, response);
 
         Assert.That(clipboard.PrimaryText, Is.EqualTo("primary from slave"));
 
@@ -298,17 +285,15 @@ public class ClipboardSyncTests
         await service.StartAsync(CancellationToken.None);
         await BringRemoteOnlineWithPlatform(relay, PeerPlatform.Linux);
 
-        // enter → leave (sets _lastPulledFrom) → re-enter so cursor is on remote
-        platform.FireMouseMove(2559, 720);
-        platform.FireMouseMove(1280, 720); // warp artifact
-        platform.FireMouseMove(1275, 720); // leave remote → _lastPulledFrom = "remote"
+        // enter → leave (which pulls) → re-enter so the cursor is on the remote
+        VisitAndLeaveRemote(platform);
+        var pullId = LatestPullId(relay);
         platform.FireMouseMove(2559, 720); // re-enter remote
         relay.ClearSent();
 
         // pull response arrives while cursor is still on the Linux slave → forward via hash query
         var response = new ClipboardPullResponseMessage("slave clipboard", "highlighted text");
-        await relay.FireMessageReceived("remote", MessageKind.ClipboardPullResponse,
-            JsonSerializer.Serialize(response, SaneJson.Options));
+        await AnswerPull(relay, response, pullId);
 
         await SimulatePullRequest(relay); // slave sees different hash, requests push
 
@@ -455,14 +440,11 @@ public class ClipboardSyncTests
         await service.StartAsync(CancellationToken.None);
         await TransitionTestHelper.BringRemoteOnline(relay);
 
-        // trigger leave so _lastPulledFrom = "remote"
-        platform.FireMouseMove(2559, 720);
-        platform.FireMouseMove(1280, 720); // warp artifact
-        platform.FireMouseMove(1275, 720); // leave remote → _lastPulledFrom = "remote"
+        // leave the remote, which pulls from it
+        VisitAndLeaveRemote(platform);
 
         var response = new ClipboardPullResponseMessage(null, null, png);
-        await relay.FireMessageReceived("remote", MessageKind.ClipboardPullResponse,
-            JsonSerializer.Serialize(response, SaneJson.Options));
+        await AnswerPull(relay, response);
 
         Assert.That(clipboard.ImagePng, Is.EqualTo(png));
 
@@ -568,6 +550,37 @@ public class ClipboardSyncTests
     }
 
     [Test]
+    public async Task SlaveReceivesClipboardHash_HashMatchesWithANewSelection_SetsOnlyTheSelection()
+    {
+        var clipboard = new FakeClipboardSync();
+        clipboard.SetText("identical content");
+        var slave = MakeTestableSlaveRelay(clipboard);
+
+        var hashMsg = ClipboardWire.ToHash(new ClipboardSnapshot("identical content", "master selection", null));
+        await slave.SimulateReceive("master-pc", MessageKind.ClipboardHash, JsonSerializer.Serialize(hashMsg, SaneJson.Options));
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(clipboard.PrimaryText, Is.EqualTo("master selection"));
+            Assert.That(clipboard.SetClipboardCallCount, Is.Zero);
+            Assert.That(slave.Snapshot().Where(s => s.Kind == MessageKind.ClipboardPullRequest), Is.Empty);
+        }
+    }
+
+    [Test]
+    public async Task SlaveReceivesClipboardHash_SelectionIsTheText_TakesItFromItsOwnText()
+    {
+        var clipboard = new FakeClipboardSync();
+        clipboard.SetText("copied on the master");
+        var slave = MakeTestableSlaveRelay(clipboard);
+
+        var hashMsg = ClipboardWire.ToHash(new ClipboardSnapshot("copied on the master", "copied on the master", null));
+        await slave.SimulateReceive("master-pc", MessageKind.ClipboardHash, JsonSerializer.Serialize(hashMsg, SaneJson.Options));
+
+        Assert.That(clipboard.PrimaryText, Is.EqualTo("copied on the master"));
+    }
+
+    [Test]
     public async Task OnClipboardPullRequest_SendsFullPush()
     {
         var clipboard = new FakeClipboardSync();
@@ -600,10 +613,28 @@ public class ClipboardSyncTests
         await slave.SimulateReceive("master-pc", MessageKind.ClipboardPull,
             JsonSerializer.Serialize(pull, SaneJson.Options));
 
-        var resp = slave.Snapshot().Where(s => s.Kind == MessageKind.ClipboardPullResponse).ToList();
-        Assert.That(resp, Has.Count.EqualTo(1));
-        var msg = JsonSerializer.Deserialize<ClipboardPullResponseMessage>(resp[0].Json, SaneJson.Options);
-        Assert.That(msg?.Unchanged, Is.True);
+        var msg = SlaveSent<ClipboardPullResponseMessage>(slave, MessageKind.ClipboardPullResponse);
+        Assert.That(msg.Unchanged, Is.True);
+    }
+
+    [Test]
+    public async Task SlaveReceivesClipboardPull_HashMatches_UnchangedCarriesTheSelection()
+    {
+        var clipboard = new FakeClipboardSync();
+        clipboard.SetText("same text");
+        clipboard.SetPrimaryText("slave selection");
+        var slave = MakeTestableSlaveRelay(clipboard);
+
+        var pull = new ClipboardPullMessage(ClipboardUtils.ClipboardHash(new ClipboardSnapshot("same text", null, null)));
+        await slave.SimulateReceive("master-pc", MessageKind.ClipboardPull, JsonSerializer.Serialize(pull, SaneJson.Options));
+
+        var msg = SlaveSent<ClipboardPullResponseMessage>(slave, MessageKind.ClipboardPullResponse);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(msg.Unchanged, Is.True);
+            Assert.That(msg.Text, Is.Null);
+            Assert.That(msg.PrimaryText, Is.EqualTo("slave selection"));
+        }
     }
 
     [Test]
@@ -617,13 +648,11 @@ public class ClipboardSyncTests
         await slave.SimulateReceive("master-pc", MessageKind.ClipboardPull,
             JsonSerializer.Serialize(pull, SaneJson.Options));
 
-        var resp = slave.Snapshot().Where(s => s.Kind == MessageKind.ClipboardPullResponse).ToList();
-        Assert.That(resp, Has.Count.EqualTo(1));
-        var msg = JsonSerializer.Deserialize<ClipboardPullResponseMessage>(resp[0].Json, SaneJson.Options);
+        var msg = SlaveSent<ClipboardPullResponseMessage>(slave, MessageKind.ClipboardPullResponse);
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(msg?.Text, Is.EqualTo("slave has this"));
-            Assert.That(msg?.Unchanged, Is.Not.True);
+            Assert.That(msg.Text, Is.EqualTo("slave has this"));
+            Assert.That(msg.Unchanged, Is.Not.True);
         }
     }
 
@@ -653,16 +682,13 @@ public class ClipboardSyncTests
         await service.StartAsync(CancellationToken.None);
         await TransitionTestHelper.BringRemoteOnline(relay);
 
-        // trigger leave from "remote" → _lastPulledFrom = "remote"
-        platform.FireMouseMove(2559, 720);
-        platform.FireMouseMove(1280, 720); // warp artifact
-        platform.FireMouseMove(1275, 720); // leave remote
+        // leave the remote, which pulls from it
+        VisitAndLeaveRemote(platform);
 
         // response arrives from a different host — guard should block SetClipboard
         var before = clipboard.SetClipboardCallCount;
         var response = new ClipboardPullResponseMessage("from attacker");
-        await relay.FireMessageReceived("other-host", MessageKind.ClipboardPullResponse,
-            JsonSerializer.Serialize(response, SaneJson.Options));
+        await AnswerPull(relay, response, host: "other-host");
 
         Assert.That(clipboard.SetClipboardCallCount, Is.EqualTo(before));
     }
@@ -675,17 +701,175 @@ public class ClipboardSyncTests
         await service.StartAsync(CancellationToken.None);
         await TransitionTestHelper.BringRemoteOnline(relay);
 
-        // trigger leave so _lastPulledFrom = "remote" (guard passes)
-        platform.FireMouseMove(2559, 720);
-        platform.FireMouseMove(1280, 720); // warp artifact
-        platform.FireMouseMove(1275, 720); // leave remote → _lastPulledFrom = "remote"
+        // leave the remote, which pulls from it
+        VisitAndLeaveRemote(platform);
 
         var before = clipboard.SetClipboardCallCount;
         var response = new ClipboardPullResponseMessage(null, Unchanged: true);
-        await relay.FireMessageReceived("remote", MessageKind.ClipboardPullResponse,
-            JsonSerializer.Serialize(response, SaneJson.Options));
+        await AnswerPull(relay, response);
 
         Assert.That(clipboard.SetClipboardCallCount, Is.EqualTo(before));
+    }
+
+    [Test]
+    public async Task OnClipboardPullResponse_UnchangedWithASelection_SetsOnlyTheSelection()
+    {
+        var clipboard = new FakeClipboardSync();
+        clipboard.SetText("master clipboard");
+        var (platform, relay, service) = CreateMasterService(clipboard);
+        await service.StartAsync(CancellationToken.None);
+        await TransitionTestHelper.BringRemoteOnline(relay);
+
+        VisitAndLeaveRemote(platform);
+
+        var response = new ClipboardPullResponseMessage(null, "slave selection", Unchanged: true);
+        await AnswerPull(relay, response);
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(clipboard.PrimaryText, Is.EqualTo("slave selection"));
+            Assert.That(clipboard.SetClipboardCallCount, Is.Zero);
+            Assert.That(clipboard.Text, Is.EqualTo("master clipboard"));
+        }
+    }
+
+    [Test]
+    public async Task OnClipboardPullResponse_UnchangedSelectionIsTheText_IsTheTextThatWasPulledAgainst()
+    {
+        // a copy on the master while the pull is in flight is not what the slave matched
+        var clipboard = new FakeClipboardSync();
+        clipboard.SetText("pulled against");
+        var (platform, relay, service) = CreateMasterService(clipboard);
+        await service.StartAsync(CancellationToken.None);
+        await TransitionTestHelper.BringRemoteOnline(relay);
+
+        VisitAndLeaveRemote(platform);
+        clipboard.SetText("copied meanwhile");
+
+        var response = new ClipboardPullResponseMessage(null, Unchanged: true, PrimaryIsText: true);
+        await AnswerPull(relay, response);
+
+        Assert.That(clipboard.PrimaryText, Is.EqualTo("pulled against"));
+    }
+
+    [Test]
+    public async Task OnClipboardPullResponse_LateAnswerToAnEarlierPull_IsIgnoredAndLeavesTheLatestOne()
+    {
+        var clipboard = new FakeClipboardSync();
+        clipboard.SetText("master clipboard");
+        var (platform, relay, service) = CreateMasterService(clipboard);
+        await service.StartAsync(CancellationToken.None);
+        await TransitionTestHelper.BringRemoteOnline(relay);
+
+        VisitAndLeaveRemote(platform);
+        var earlier = LatestPullId(relay);
+        VisitAndLeaveRemote(platform);
+
+        await AnswerPull(relay, new ClipboardPullResponseMessage(null, "older selection", Unchanged: true), earlier);
+        var afterLate = clipboard.PrimaryText;
+        await AnswerPull(relay, new ClipboardPullResponseMessage(null, "latest selection", Unchanged: true));
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(afterLate, Is.Null);
+            Assert.That(clipboard.PrimaryText, Is.EqualTo("latest selection"));
+        }
+    }
+
+    [Test]
+    public async Task SlaveReceivesClipboardHash_LargeSelectionChanged_RequestsThePush()
+    {
+        var clipboard = new FakeClipboardSync();
+        clipboard.SetText("identical content");
+        var slave = MakeTestableSlaveRelay(clipboard);
+
+        var hashMsg = ClipboardWire.ToHash(new ClipboardSnapshot("identical content", new string('s', 5000), null));
+        await slave.SimulateReceive("master-pc", MessageKind.ClipboardHash, JsonSerializer.Serialize(hashMsg, SaneJson.Options));
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(hashMsg.PrimaryText, Is.Null, "a large selection crosses as its hash");
+            Assert.That(slave.Snapshot().Any(s => s.Kind == MessageKind.ClipboardPullRequest), Is.True);
+        }
+    }
+
+    [Test]
+    public async Task SlaveReceivesClipboardPush_AskedForTheSelectionAlone_LeavesTheClipboard()
+    {
+        // a large selection crosses as its hash; the push it asks for then brings only that
+        var clipboard = new FakeClipboardSync();
+        clipboard.SetText("identical content");
+        var slave = MakeTestableSlaveRelay(clipboard);
+        var master = new ClipboardSnapshot("identical content", new string('s', 5000), null);
+
+        await slave.SimulateReceive("master-pc", MessageKind.ClipboardHash, JsonSerializer.Serialize(ClipboardWire.ToHash(master), SaneJson.Options));
+        await slave.SimulateReceive("master-pc", MessageKind.ClipboardPush, JsonSerializer.Serialize(ClipboardWire.ToPush(master), SaneJson.Options));
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(clipboard.SetClipboardCallCount, Is.Zero);
+            Assert.That(clipboard.PrimaryText, Is.EqualTo(master.PrimaryText));
+        }
+    }
+
+    [Test]
+    public async Task SlaveReceivesClipboardPull_HashMatchesWithALargeChangedSelection_UnchangedCarriesIt()
+    {
+        var clipboard = new FakeClipboardSync();
+        clipboard.SetText("same text");
+        var selection = new string('s', 5000);
+        clipboard.SetPrimaryText(selection);
+        var slave = MakeTestableSlaveRelay(clipboard);
+
+        var pull = ClipboardWire.ToPull(ClipboardBaseline.Of(new ClipboardSnapshot("same text", null, null)), 1);
+        await slave.SimulateReceive("master-pc", MessageKind.ClipboardPull, JsonSerializer.Serialize(pull, SaneJson.Options));
+
+        var msg = SlaveSent<ClipboardPullResponseMessage>(slave, MessageKind.ClipboardPullResponse);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(msg.Unchanged, Is.True, "the clipboard matched, so it is not sent again");
+            Assert.That(msg.Text, Is.Null);
+            Assert.That(msg.PrimaryText, Is.EqualTo(selection));
+        }
+    }
+
+    [Test]
+    public async Task SlaveReceivesClipboardPull_HashAndSelectionMatch_UnchangedCarriesNoSelection()
+    {
+        var clipboard = new FakeClipboardSync();
+        clipboard.SetText("same text");
+        clipboard.SetPrimaryText(new string('s', 5000));
+        var slave = MakeTestableSlaveRelay(clipboard);
+
+        var pull = ClipboardWire.ToPull(ClipboardBaseline.Of(new ClipboardSnapshot("same text", new string('s', 5000), null)), 1);
+        await slave.SimulateReceive("master-pc", MessageKind.ClipboardPull, JsonSerializer.Serialize(pull, SaneJson.Options));
+
+        var msg = SlaveSent<ClipboardPullResponseMessage>(slave, MessageKind.ClipboardPullResponse);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(msg.Unchanged, Is.True);
+            Assert.That(msg.PrimaryText, Is.Null);
+        }
+    }
+
+    [Test]
+    public async Task SlaveReceivesClipboardPush_AskedForTheSelectionButTheClipboardChangedSince_TakesBoth()
+    {
+        var clipboard = new FakeClipboardSync();
+        clipboard.SetText("identical content");
+        var slave = MakeTestableSlaveRelay(clipboard);
+        var selection = new string('s', 5000);
+
+        var checkedWith = ClipboardWire.ToHash(new ClipboardSnapshot("identical content", selection, null));
+        await slave.SimulateReceive("master-pc", MessageKind.ClipboardHash, JsonSerializer.Serialize(checkedWith, SaneJson.Options));
+        var pushed = ClipboardWire.ToPush(new ClipboardSnapshot("copied on the master since", selection, null));
+        await slave.SimulateReceive("master-pc", MessageKind.ClipboardPush, JsonSerializer.Serialize(pushed, SaneJson.Options));
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(clipboard.Text, Is.EqualTo("copied on the master since"));
+            Assert.That(clipboard.PrimaryText, Is.EqualTo(selection));
+        }
     }
 
     // minimal valid-ish PNG bytes (just needs to be non-null and distinguishable)
@@ -750,6 +934,26 @@ public class ClipboardSyncTests
         new(clipboard: clipboard);
 
     // simulate slave deciding its hash differs from master's and requesting a full push
+    // onto the remote and back off its left edge, which pulls from it; the middle move is the warp artifact, dropped
+    private static void VisitAndLeaveRemote(FakePlatform platform)
+    {
+        platform.FireMouseMove(2559, 720);
+        platform.FireMouseMove(1280, 720);
+        platform.FireMouseMove(1275, 720);
+    }
+
+    private static int LatestPullId(FakeRelay relay) =>
+        JsonSerializer.Deserialize<ClipboardPullMessage>(relay.Snapshot().Last(s => s.Kind == MessageKind.ClipboardPull).Json, SaneJson.Options)!.PullId!.Value;
+
+    // the slave's answer to the master's latest pull, or to the one named
+    private static Task AnswerPull(FakeRelay relay, ClipboardPullResponseMessage response, int? pullId = null, string host = "remote") =>
+        relay.FireMessageReceived(host, MessageKind.ClipboardPullResponse,
+            JsonSerializer.Serialize(response with { PullId = pullId ?? LatestPullId(relay) }, SaneJson.Options));
+
+    // the one message of that kind the slave sent
+    private static T SlaveSent<T>(TestableSlaveRelay slave, MessageKind kind) =>
+        JsonSerializer.Deserialize<T>(slave.Snapshot().Single(s => s.Kind == kind).Json, SaneJson.Options)!;
+
     private static async Task SimulatePullRequest(FakeRelay relay, string host = "remote")
         => await relay.FireMessageReceived(host, MessageKind.ClipboardPullRequest,
             JsonSerializer.Serialize(new ClipboardPullRequestMessage(), SaneJson.Options));

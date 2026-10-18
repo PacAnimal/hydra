@@ -257,10 +257,24 @@ public record MouseScrollMessage(short XDelta, short YDelta);
 public record EnterScreenMessage(string Screen, int X, int Y, int Width, int Height);
 public record ScreensaverSyncMessage(bool Active);
 public record LeaveScreenMessage;
-public record ClipboardPullMessage(ulong? MasterHash = null);
-public record ClipboardPushMessage(string Text, string? PrimaryText = null, byte[]? ImagePng = null, string? Html = null, byte[]? Rtf = null);
-public record ClipboardPullResponseMessage(string? Text, string? PrimaryText = null, byte[]? ImagePng = null, bool? Unchanged = null, string? Html = null, byte[]? Rtf = null);
-public record ClipboardHashMessage(ulong Hash);
+public record ClipboardPullMessage(ulong? MasterHash = null, ulong? MasterPrimaryHash = null, int? PullId = null);
+// a clipboard as both a push and a full pull answer carry it
+public interface IClipboardPayload
+{
+    string? Text { get; }
+    string? PrimaryText { get; }
+    bool? PrimaryIsText { get; }
+    byte[]? ImagePng { get; }
+    string? Html { get; }
+    byte[]? Rtf { get; }
+}
+
+public record ClipboardPushMessage(string Text, string? PrimaryText = null, byte[]? ImagePng = null, string? Html = null, byte[]? Rtf = null, bool? PrimaryIsText = null)
+    : IClipboardPayload;
+public record ClipboardPullResponseMessage(string? Text, string? PrimaryText = null, byte[]? ImagePng = null, bool? Unchanged = null, string? Html = null, byte[]? Rtf = null,
+    bool? PrimaryIsText = null, int? PullId = null) : IClipboardPayload;
+// see ClipboardWire; a null Hash offers no clipboard, only the selection
+public record ClipboardHashMessage(ulong? Hash, string? PrimaryText = null, bool? PrimaryIsText = null, ulong? PrimaryHash = null);
 public record ClipboardPullRequestMessage;
 public record LockScreenMessage(long MillisecondsSinceLastInput);
 

@@ -24,14 +24,15 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
     private readonly nint _atomHydraImageClip;  // property for image ConvertSelection responses
     private readonly nint _atomHydraHtmlClip;   // property for html ConvertSelection responses
 
-    // owned clipboard state (written by Set*, read by event loop thread)
+    // owned clipboard state (written by Set*, read by event loop thread). Ownership is checked and changed under it too,
+    // by Own, GetPrimaryText and SelectionClear, so a clear for an earlier loss never nulls new data and a selection
+    // another app has just taken is never answered with ours
     private readonly Lock _dataLock = new();
     private string? _ownedText;
     private string? _ownedPrimaryText;
     private byte[]? _ownedImagePng;
     private string? _ownedHtml;
     private ClipboardEchoFilter _echo;
-    private string? _lastSetPrimaryText;
 
     // GetText/GetImagePng synchronization — only one read in flight at a time
     private readonly Lock _getLock = new();
@@ -87,14 +88,16 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
         return _echo.FilterText(read.DecodeText());
     }
 
+    internal bool OwnsPrimary => NativeMethods.XGetSelectionOwner(_display, NativeMethods.XA_PRIMARY) == _window;
+
+    // never echo-suppressed: the selection travels as it stands, even when Hydra set it
     public string? GetPrimaryText()
     {
-        if (NativeMethods.XGetSelectionOwner(_display, NativeMethods.XA_PRIMARY) == _window)
-            return null;
-        var read = ReadSelection(NativeMethods.XA_PRIMARY, _atomHydraPrimary, _atomUtf8String);
-        if (read == null) return null;
-        var text = read.DecodeText();
-        return text == _lastSetPrimaryText ? null : text;
+        lock (_dataLock)
+        {
+            if (OwnsPrimary && _ownedPrimaryText != null) return _ownedPrimaryText;
+        }
+        return ReadSelection(NativeMethods.XA_PRIMARY, _atomHydraPrimary, _atomUtf8String)?.DecodeText();
     }
 
     public byte[]? GetImagePng()
@@ -120,72 +123,37 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
     // X11 has no standardised RTF selection target — HTML is the rich vehicle here, text is the fallback
     public byte[]? GetRtf() => null;
 
-    public void SetText(string text)
+    public bool SetPrimaryText(string text)
     {
-        _echo.TrackText(text);
-        lock (_dataLock)
-        {
-            _ownedText = text;
-            _ownedImagePng = null; // replacing clipboard content
-            _ownedHtml = null;
-        }
-        _ = NativeMethods.XSetSelectionOwner(_display, _atomClipboard, _window, NativeMethods.CurrentTime);
-        _ = NativeMethods.XFlush(_display);
+        // taking PRIMARY back with the text it already holds would clear its owner's highlight
+        if (GetPrimaryText() != text) Own(NativeMethods.XA_PRIMARY, () => _ownedPrimaryText = text);
+        return true;
     }
 
-    public void SetPrimaryText(string text)
+    public bool SetClipboard(ClipboardSnapshot contents)
     {
-        _lastSetPrimaryText = text;
-        lock (_dataLock)
-            _ownedPrimaryText = text;
-        _ = NativeMethods.XSetSelectionOwner(_display, NativeMethods.XA_PRIMARY, _window, NativeMethods.CurrentTime);
-        _ = NativeMethods.XFlush(_display);
-    }
-
-    public void SetImagePng(byte[] pngData)
-    {
-        _echo.TrackImage(pngData);
-        lock (_dataLock)
-        {
-            _ownedImagePng = pngData;
-            _ownedText = null; // replacing clipboard content
-            _ownedHtml = null;
-        }
-        _ = NativeMethods.XSetSelectionOwner(_display, _atomClipboard, _window, NativeMethods.CurrentTime);
-        _ = NativeMethods.XFlush(_display);
-    }
-
-    public void SetClipboard(ClipboardSnapshot contents)
-    {
-        var text = contents.Text;
-        var primaryText = contents.PrimaryText;
-        var imagePng = contents.ImagePng;
-        var html = contents.Html;
-        if (text == null && primaryText == null && imagePng == null && html == null) return;
-
-        if (text != null) _echo.TrackText(text);
-        if (imagePng != null) _echo.TrackImage(imagePng);
-        if (html != null) _echo.TrackHtml(html);
+        _echo.Track(contents);
 
         // the snapshot is the authoritative new clipboard — replace all owned representations
+        Own(_atomClipboard, () =>
+        {
+            _ownedText = contents.Text;
+            _ownedImagePng = contents.ImagePng;
+            _ownedHtml = contents.Html;
+        });
+
+        if (contents.PrimaryText is { } primaryText) SetPrimaryText(primaryText);
+        return true;
+    }
+
+    private void Own(nint selection, Action setData)
+    {
         lock (_dataLock)
         {
-            _ownedText = text;
-            _ownedImagePng = imagePng;
-            _ownedHtml = html;
+            setData();
+            _ = NativeMethods.XSetSelectionOwner(_display, selection, _window, NativeMethods.CurrentTime);
         }
-
-        _ = NativeMethods.XSetSelectionOwner(_display, _atomClipboard, _window, NativeMethods.CurrentTime);
         _ = NativeMethods.XFlush(_display);
-
-        if (primaryText != null)
-        {
-            _lastSetPrimaryText = primaryText;
-            lock (_dataLock)
-                _ownedPrimaryText = primaryText;
-            _ = NativeMethods.XSetSelectionOwner(_display, NativeMethods.XA_PRIMARY, _window, NativeMethods.CurrentTime);
-            _ = NativeMethods.XFlush(_display);
-        }
     }
 
     public void Dispose()
@@ -237,6 +205,7 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
                     var sel = ev.SelectionClearSelection;
                     lock (_dataLock)
                     {
+                        if (NativeMethods.XGetSelectionOwner(_display, sel) == _window) break;
                         if (sel == _atomClipboard) { _ownedText = null; _ownedImagePng = null; _ownedHtml = null; }
                         else if (sel == NativeMethods.XA_PRIMARY) _ownedPrimaryText = null;
                     }

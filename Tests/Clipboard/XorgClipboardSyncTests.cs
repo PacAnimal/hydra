@@ -38,7 +38,7 @@ public class XorgClipboardSyncTests
     public void Serve_String_IsLatin1_Utf8String_IsUtf8()
     {
         using var owner = new XorgClipboardSync();
-        owner.SetText("café");
+        owner.SetClipboard(new ClipboardSnapshot("café", null, null));
 
         using (Assert.EnterMultipleScope())
         {
@@ -65,7 +65,7 @@ public class XorgClipboardSyncTests
     {
         var png = new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3, 4, 5 };
         using var owner = new XorgClipboardSync();
-        owner.SetImagePng(png);
+        owner.SetClipboard(new ClipboardSnapshot(null, null, png));
 
         Assert.That(XclipRead("image/png"), Is.EqualTo(png));
     }
@@ -121,11 +121,62 @@ public class XorgClipboardSyncTests
         }
     }
 
+    // -- PRIMARY: a selection of its own, read as it stands even when Hydra set it --
+
+    [Test]
+    public void Primary_SetByHydra_ReadsBackAsIs()
+    {
+        using var owner = new XorgClipboardSync();
+        owner.SetPrimaryText("selected");
+
+        Assert.That(owner.GetPrimaryText(), Is.EqualTo("selected"));
+    }
+
+    [Test]
+    public void Primary_FromForeignOwner()
+    {
+        using var reader = new XorgClipboardSync();
+        XclipWrite("UTF8_STRING", Encoding.UTF8.GetBytes("highlighted"), "primary");
+
+        Assert.That(reader.GetPrimaryText(), Is.EqualTo("highlighted"));
+    }
+
+    [Test]
+    public void Primary_AlreadyHeldElsewhere_IsLeftWithItsOwner()
+    {
+        // taking PRIMARY back with the same text would clear the owner's highlight
+        using var owner = new XorgClipboardSync();
+        using var receiver = new XorgClipboardSync();
+        owner.SetPrimaryText("highlighted");
+        XclipRead("UTF8_STRING", "primary"); // barrier: the server has the owner
+
+        receiver.SetPrimaryText("highlighted");
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(owner.OwnsPrimary, Is.True);
+            Assert.That(receiver.OwnsPrimary, Is.False);
+        }
+    }
+
+    [Test]
+    public void SetClipboard_ServesClipboardAndPrimarySeparately()
+    {
+        using var owner = new XorgClipboardSync();
+        owner.SetClipboard(new ClipboardSnapshot("copied", "selected", null));
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(XclipRead("UTF8_STRING"), Is.EqualTo(Encoding.UTF8.GetBytes("copied")));
+            Assert.That(XclipRead("UTF8_STRING", "primary"), Is.EqualTo(Encoding.UTF8.GetBytes("selected")));
+        }
+    }
+
     // -- xclip helpers (raw bytes in/out) --
 
-    private static byte[] XclipRead(string target)
+    private static byte[] XclipRead(string target, string selection = "clipboard")
     {
-        using var p = Process.Start(new ProcessStartInfo("xclip", $"-selection clipboard -o -t {target}")
+        using var p = Process.Start(new ProcessStartInfo("xclip", $"-selection {selection} -o -t {target}")
         {
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -136,9 +187,9 @@ public class XorgClipboardSyncTests
         return ms.ToArray();
     }
 
-    private static void XclipWrite(string target, byte[] data)
+    private static void XclipWrite(string target, byte[] data, string selection = "clipboard")
     {
-        using var p = Process.Start(new ProcessStartInfo("xclip", $"-selection clipboard -i -t {target}")
+        using var p = Process.Start(new ProcessStartInfo("xclip", $"-selection {selection} -i -t {target}")
         {
             RedirectStandardInput = true,
             RedirectStandardError = true,

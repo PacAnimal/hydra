@@ -1,4 +1,5 @@
 using Hydra.Platform;
+using Hydra.Relay;
 using Microsoft.Extensions.Logging.Abstractions;
 using Tests.Setup;
 
@@ -12,7 +13,28 @@ public class ClipboardUtilsRichTests
     private static byte[] Oversized() => new byte[ClipboardUtils.MaxClipboardBytes + 1];
     private static string OversizedText() => new('a', (int)ClipboardUtils.MaxClipboardBytes + 1);
 
-    // -- ClipboardHash: rich fields participate --
+    // -- ClipboardHash: rich fields participate, the selection beside them does not --
+
+    [Test]
+    public void EchoFilter_ForgetsWhatALaterWriteReplaced()
+    {
+        // a write replaces every format, so an image Hydra wrote before a text is no echo once the user copies it again
+        var echo = new ClipboardEchoFilter();
+        echo.Track(new ClipboardSnapshot(null, null, [9, 9]));
+        echo.Track(new ClipboardSnapshot("written", null, null));
+
+        Assert.That(echo.IsDuplicateImage([9, 9]), Is.False);
+    }
+
+    [Test]
+    public void StableHash_IsTheSameOnEveryHost() =>
+        // XXH64's published vector for "abc": a per-process seed (System.HashCode) would never match a peer's
+        Assert.That(ClipboardUtils.StableHash("abc"), Is.EqualTo(0x44BC2CF5AD770999UL));
+
+    [Test]
+    public void ClipboardHash_IgnoresTheSelection() =>
+        Assert.That(ClipboardUtils.ClipboardHash(new ClipboardSnapshot("t", "a", null)),
+            Is.EqualTo(ClipboardUtils.ClipboardHash(new ClipboardSnapshot("t", "b", null))));
 
     [Test]
     public void ClipboardHash_DiffersWhenHtmlDiffers()
@@ -166,16 +188,227 @@ public class ClipboardUtilsRichTests
         Assert.That(result, Is.EqualTo(new ClipboardSnapshot(null, null, null)));
     }
 
-    [Test]
-    public void TrySetClipboardPreservingFiles_FileClipboard_DoesNotOverwrite()
-    {
-        var sync = new FakeClipboardSync { HasFileClipboardValue = true };
+    // -- primary selection: a selection of its own, beside the clipboard --
 
-        var applied = ClipboardUtils.TrySetClipboardPreservingFiles(sync, new ClipboardSnapshot("incoming", null, null), Log, "test");
+    [Test]
+    public void ReadWithFallback_ImageCopy_KeepsThePrimary()
+    {
+        var sync = new FakeClipboardSync();
+        sync.SetClipboard(new ClipboardSnapshot("alt text", "selection", [9, 9]));
+
+        var result = ClipboardUtils.ReadWithFallback(sync, null, Log, "read");
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(applied, Is.False);
+            Assert.That(result.Text, Is.Null);
+            Assert.That(result.PrimaryText, Is.EqualTo("selection"));
+            Assert.That(result.ImagePng, Is.EqualTo("\t\t"u8.ToArray()));
+        }
+    }
+
+    [Test]
+    public void ReadWithFallback_EchoedClipboard_KeepsTheCurrentPrimary()
+    {
+        // the clipboard comes from the fallback, the selection never does
+        var sync = new FakeClipboardSync();
+        sync.SetPrimaryText("current selection");
+        var fallback = new ClipboardSnapshot(null, "older selection", [9, 9]);
+
+        var result = ClipboardUtils.ReadWithFallback(sync, fallback, Log, "read");
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.PrimaryText, Is.EqualTo("current selection"));
+            Assert.That(result.ImagePng, Is.EqualTo("\t\t"u8.ToArray()));
+        }
+    }
+
+    [Test]
+    public void ReadWithFallback_NoSelection_DoesNotTakeTheFallbacks()
+    {
+        var sync = new FakeClipboardSync();
+        var fallback = new ClipboardSnapshot("echoed", "older selection", null);
+
+        var result = ClipboardUtils.ReadWithFallback(sync, fallback, Log, "read");
+
+        Assert.That(result, Is.EqualTo(new ClipboardSnapshot("echoed", null, null)));
+    }
+
+    [Test]
+    public void ReadWithFallback_FileClipboard_StillCarriesTheSelection()
+    {
+        var sync = new FakeClipboardSync { HasFileClipboardValue = true };
+        sync.SetPrimaryText("selection");
+
+        var result = ClipboardUtils.ReadWithFallback(sync, null, Log, "read");
+
+        Assert.That(result, Is.EqualTo(new ClipboardSnapshot(null, "selection", null)));
+    }
+
+    [Test]
+    public void TrimToFit_PrimaryRepeatingTheText_CostsNothing()
+    {
+        var text = new string('a', (int)(ClipboardUtils.MaxClipboardBytes / 2) + 1);
+
+        var result = ClipboardUtils.TrimToFit(text, text, null, "<b>rich</b>", null, Log, "trim");
+
+        Assert.That(result, Is.EqualTo(new ClipboardSnapshot(text, text, null, Html: "<b>rich</b>")));
+    }
+
+    [Test]
+    public void TrimToFit_ImageWithALargeSelection_DropsTheSelectionFirst()
+    {
+        // the copy is what the user asked to move; the selection beside it is the lesser of the two
+        var selection = new string('s', (int)(ClipboardUtils.MaxClipboardBytes / 2) + 1);
+        var image = new byte[ClipboardUtils.MaxClipboardBytes / 2];
+
+        var result = ClipboardUtils.TrimToFit(null, selection, image, null, null, Log, "trim");
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.ImagePng, Is.SameAs(image));
+            Assert.That(result.PrimaryText, Is.Null);
+        }
+    }
+
+    [Test]
+    public void TrimToFit_OversizedImage_KeepsASelectionThatFits()
+    {
+        var image = new byte[ClipboardUtils.MaxClipboardBytes + 1];
+
+        var result = ClipboardUtils.TrimToFit(null, "selection", image, null, null, Log, "trim");
+
+        Assert.That(result, Is.EqualTo(new ClipboardSnapshot(null, "selection", null)));
+    }
+
+    [Test]
+    public void Wire_PrimaryRepeatingTheText_IsSentOnce()
+    {
+        var push = ClipboardWire.ToPush(new ClipboardSnapshot("copied", "copied", null));
+        var response = ClipboardWire.ToPullResponse(new ClipboardSnapshot("copied", "copied", null), null);
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(push.PrimaryText, Is.Null);
+            Assert.That(push.PrimaryIsText, Is.True);
+            Assert.That(ClipboardWire.From(push, Log, "push", "peer").PrimaryText, Is.EqualTo("copied"));
+            Assert.That(response.PrimaryText, Is.Null);
+            Assert.That(ClipboardWire.From(response, Log, "pull response", "peer").PrimaryText, Is.EqualTo("copied"));
+        }
+    }
+
+    [Test]
+    public void Wire_PrimaryOfItsOwn_IsSentAsIs()
+    {
+        var push = ClipboardWire.ToPush(new ClipboardSnapshot("copied", "selected", null));
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(push.PrimaryText, Is.EqualTo("selected"));
+            Assert.That(push.PrimaryIsText, Is.Null);
+        }
+    }
+
+    [Test]
+    public void Remember_SelectionOnly_KeepsTheClipboardFallback()
+    {
+        var last = new ClipboardSnapshot("written", null, null, Html: "<b>written</b>");
+
+        var remembered = ClipboardUtils.Remember(last, new ClipboardSnapshot(null, "new selection", null));
+
+        Assert.That(remembered, Is.SameAs(last));
+    }
+
+    [Test]
+    public void Remember_Clipboard_ReplacesTheFallback()
+    {
+        var applied = new ClipboardSnapshot("new", null, null);
+
+        Assert.That(ClipboardUtils.Remember(new ClipboardSnapshot("old", "selection", null), applied), Is.EqualTo(applied));
+    }
+
+    [Test]
+    public void ApplyPreservingFiles_SelectionOnly_LeavesTheClipboardAlone()
+    {
+        var sync = new FakeClipboardSync();
+        sync.SetText("local copy");
+
+        var applied = ClipboardUtils.ApplyPreservingFiles(sync, new ClipboardSnapshot(null, "selection", null), Log, "test");
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(applied, Is.EqualTo(new ClipboardSnapshot(null, "selection", null)));
+            Assert.That(sync.Text, Is.EqualTo("local copy"));
+            Assert.That(sync.PrimaryText, Is.EqualTo("selection"));
+        }
+    }
+
+    [Test]
+    public void ApplyPreservingFiles_NowhereToKeepASelection_ReportsNothing()
+    {
+        var sync = new FakeClipboardSync { WriteFailsValue = true, KeepsSelectionValue = false };
+
+        Assert.That(ClipboardUtils.ApplyPreservingFiles(sync, new ClipboardSnapshot("incoming", "selection", null), Log, "test"), Is.Null);
+    }
+
+    [Test]
+    public void ApplyPreservingFiles_FailedWrite_ReportsOnlyTheSelection()
+    {
+        var sync = new FakeClipboardSync { WriteFailsValue = true };
+
+        var applied = ClipboardUtils.ApplyPreservingFiles(sync, new ClipboardSnapshot("incoming", "selection", null), Log, "test");
+
+        Assert.That(applied, Is.EqualTo(new ClipboardSnapshot(null, "selection", null)));
+    }
+
+    [Test]
+    public void ReadWithFallback_FileClipboard_TrimsTheSelection()
+    {
+        var sync = new FakeClipboardSync { HasFileClipboardValue = true };
+        sync.SetPrimaryText(OversizedText());
+
+        Assert.That(ClipboardUtils.ReadWithFallback(sync, null, Log, "read").PrimaryText, Is.Null);
+    }
+
+    [Test]
+    public void ApplyPreservingFiles_FileClipboard_StillTakesTheSelection()
+    {
+        var sync = new FakeClipboardSync { HasFileClipboardValue = true };
+
+        var applied = ClipboardUtils.ApplyPreservingFiles(sync, new ClipboardSnapshot("incoming", "selection", null), Log, "test");
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(applied, Is.EqualTo(new ClipboardSnapshot(null, "selection", null)), "only the selection was applied");
+            Assert.That(sync.SetClipboardCallCount, Is.Zero);
+            Assert.That(sync.PrimaryText, Is.EqualTo("selection"));
+        }
+    }
+
+    [Test]
+    public void ApplyPreservingFiles_SelectionOnly_AppliesBesideFiles()
+    {
+        var sync = new FakeClipboardSync { HasFileClipboardValue = true };
+
+        var applied = ClipboardUtils.ApplyPreservingFiles(sync, new ClipboardSnapshot(null, "selection", null), Log, "test");
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(applied, Is.Not.Null);
+            Assert.That(sync.PrimaryText, Is.EqualTo("selection"));
+        }
+    }
+
+    [Test]
+    public void ApplyPreservingFiles_FileClipboard_DoesNotOverwrite()
+    {
+        var sync = new FakeClipboardSync { HasFileClipboardValue = true };
+
+        var applied = ClipboardUtils.ApplyPreservingFiles(sync, new ClipboardSnapshot("incoming", null, null), Log, "test");
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(applied, Is.Null);
             Assert.That(sync.SetClipboardCallCount, Is.Zero);
         }
     }

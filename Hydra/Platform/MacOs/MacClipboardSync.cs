@@ -11,15 +11,27 @@ public sealed class MacClipboardSync : IClipboardSync
     private const string PasteboardTypeRtf = "public.rtf";
     private const string PasteboardTypeFileUrl = "public.file-url";
     private const string PasteboardTypeLegacyFileNames = "NSFilenamesPboardType";
+    private const string PasteboardTypeConcealed = "org.nspasteboard.ConcealedType";
+    private const string PasteboardTypeTransient = "org.nspasteboard.TransientType";
+
+    // the formats sent as files, never as their names, and those whose text is no text copy of the user's
+    private static readonly string[] FileTypes = [PasteboardTypeFileUrl, PasteboardTypeLegacyFileNames];
+    private static readonly string[] NotTextCopyTypes = [PasteboardTypePng, .. FileTypes, PasteboardTypeConcealed, PasteboardTypeTransient];
 
     private readonly ILogger<MacClipboardSync> _log;
     private ClipboardEchoFilter _echo;
-    private string? _storedPrimaryText;
+    private readonly CopiedPrimary _primary;
     private long _ownedChangeCount = -1;
+    private readonly string? _pasteboardName;
 
-    public MacClipboardSync(ILogger<MacClipboardSync> log)
+    public MacClipboardSync(ILogger<MacClipboardSync> log) : this(log, null) { }
+
+    // a named pasteboard for tests, which leave the user's general one alone
+    internal MacClipboardSync(ILogger<MacClipboardSync> log, string? pasteboardName)
     {
         _log = log;
+        _pasteboardName = pasteboardName;
+        _primary = new CopiedPrimary(() => ChangeCount(GetGeneralPasteboard()), () => ReadTextCopy(GetGeneralPasteboard()), log);
         // NSPasteboard lives in AppKit — must be loaded before objc_getClass can find it.
         // Slaves don't open an event tap, so AppKit may not be loaded otherwise.
         NativeHelpers.EnsureAppKitLoaded();
@@ -44,38 +56,36 @@ public sealed class MacClipboardSync : IClipboardSync
         var pasteboard = GetGeneralPasteboard();
         if (pasteboard == nint.Zero) return null;
 
+        var text = ReadText(pasteboard);
+        return OwnsCurrentClipboard(pasteboard) ? _echo.FilterText(text) : text;
+    }
+
+    private static string? ReadText(nint pasteboard)
+    {
         var typeStr = NativeHelpers.MakeNsString(PasteboardTypeString);
         var sel = NativeMethods.sel_registerName("stringForType:");
         var result = NativeMethods.objc_msgSend(pasteboard, sel, typeStr);
         NativeMethods.CFRelease(typeStr);
-
-        if (result == nint.Zero) return null;
-        var text = NativeHelpers.CfStringToManaged(result);
-        return OwnsCurrentClipboard(pasteboard) ? _echo.FilterText(text) : text;
+        return result == nint.Zero ? null : NativeHelpers.CfStringToManaged(result);
     }
 
-    public void SetText(string text)
+    // CopiedPrimary's readTextCopy, by pasteboard type
+    private static string? ReadTextCopy(nint pasteboard) =>
+        PasteboardTypes(pasteboard).Any(t => NotTextCopyTypes.Contains(t)) ? null : ReadText(pasteboard);
+
+    private static long ChangeCount(nint pasteboard) => NativeMethods.objc_msgSend_long(pasteboard, NativeMethods.sel_registerName("changeCount"));
+
+    public string? GetPrimaryText()
     {
-        _echo.TrackText(text);
-
         using var pool = new ObjcAutoreleasePool();
-        var pasteboard = GetGeneralPasteboard();
-        if (pasteboard == nint.Zero) return;
-
-        var clearSel = NativeMethods.sel_registerName("clearContents");
-        var changeCount = NativeMethods.objc_msgSend_long(pasteboard, clearSel);
-        WriteText(pasteboard, text);
-        Volatile.Write(ref _ownedChangeCount, changeCount);
+        return _primary.Read();
     }
 
-    // _storedPrimaryText mirrors an X11-style primary selection relayed from another peer — it is never
-    // written to the general NSPasteboard, so the pasteboard's ownership/changeCount says nothing about
-    // whether this value is stale. Gating it on OwnsCurrentClipboard() only happened to work when the
-    // most recent write was a SetClipboard call (which touches both at once); a plain local copy after
-    // that would advance the pasteboard's changeCount and make this spuriously return null.
-    public string? GetPrimaryText() => _storedPrimaryText;
-
-    public void SetPrimaryText(string text) => _storedPrimaryText = text;
+    public bool SetPrimaryText(string text)
+    {
+        using var pool = new ObjcAutoreleasePool();
+        return _primary.Relay(text);
+    }
 
     public byte[]? GetImagePng()
     {
@@ -115,20 +125,6 @@ public sealed class MacClipboardSync : IClipboardSync
         if (OwnsCurrentClipboard(pasteboard) && _echo.IsDuplicateImage(bytes)) return null;
 
         return bytes;
-    }
-
-    public void SetImagePng(byte[] pngData)
-    {
-        _echo.TrackImage(pngData);
-
-        using var pool = new ObjcAutoreleasePool();
-        var pasteboard = GetGeneralPasteboard();
-        if (pasteboard == nint.Zero) return;
-
-        var clearSel = NativeMethods.sel_registerName("clearContents");
-        var changeCount = NativeMethods.objc_msgSend_long(pasteboard, clearSel);
-        WriteImagePng(pasteboard, pngData);
-        Volatile.Write(ref _ownedChangeCount, changeCount);
     }
 
     public string? GetHtml()
@@ -185,41 +181,26 @@ public sealed class MacClipboardSync : IClipboardSync
         }
     }
 
-    public void SetClipboard(ClipboardSnapshot contents)
+    public bool SetClipboard(ClipboardSnapshot contents)
     {
-        var text = contents.Text;
-        var primaryText = contents.PrimaryText;
-        var imagePng = contents.ImagePng;
-        var html = contents.Html;
-        var rtf = contents.Rtf;
         using var pool = new ObjcAutoreleasePool();
-        try
+        return _primary.Write(contents.PrimaryText, leftAt =>
         {
-            if (text == null && primaryText == null && imagePng == null && html == null && rtf == null) return;
-
-            if (text != null) _echo.TrackText(text);
-            if (primaryText != null) _storedPrimaryText = primaryText;
-            if (imagePng != null) _echo.TrackImage(imagePng);
-            if (html != null) _echo.TrackHtml(html);
-            if (rtf != null) _echo.TrackRtf(rtf);
-
             var pasteboard = GetGeneralPasteboard();
-            if (pasteboard == nint.Zero) return;
-
-            // single clear, then write every representation atomically
-            var clearSel = NativeMethods.sel_registerName("clearContents");
-            var changeCount = NativeMethods.objc_msgSend_long(pasteboard, clearSel);
-
-            if (text != null) WriteText(pasteboard, text);
-            if (html != null) WriteHtml(pasteboard, html);
-            if (rtf != null) WriteRtf(pasteboard, rtf);
-            if (imagePng != null) WriteImagePng(pasteboard, imagePng);
-            Volatile.Write(ref _ownedChangeCount, changeCount);
-        }
-        catch (Exception ex)
-        {
-            _log.LogWarning(ex, "Failed to write clipboard");
-        }
+            if (pasteboard == nint.Zero) return false;
+            // single clear, then write every representation atomically; the count the clear leaves is ours, so a copy
+            // another app makes after it is still the user's
+            var cleared = NativeMethods.objc_msgSend_long(pasteboard, NativeMethods.sel_registerName("clearContents"));
+            leftAt(cleared);
+            Volatile.Write(ref _ownedChangeCount, cleared);
+            _echo.Track(contents);
+            ClipboardUtils.WriteAll(_log,
+                contents.Text is { } text ? () => WriteString(pasteboard, text, PasteboardTypeString) : null,
+                contents.Html is { } html ? () => WriteString(pasteboard, html, PasteboardTypeHtml) : null,
+                contents.Rtf is { } rtf ? () => WriteData(pasteboard, rtf, PasteboardTypeRtf) : null,
+                contents.ImagePng is { } png ? () => WriteData(pasteboard, png, PasteboardTypePng) : null);
+            return true; // the clear replaced it
+        });
     }
 
     public bool HasFileClipboard()
@@ -228,25 +209,26 @@ public sealed class MacClipboardSync : IClipboardSync
         try
         {
             var pasteboard = GetGeneralPasteboard();
-            if (pasteboard == nint.Zero) return false;
-            var types = NativeMethods.objc_msgSend_noarg(pasteboard, NativeMethods.sel_registerName("types"));
-            if (types == nint.Zero) return false;
-
-            var count = NativeMethods.objc_msgSend_long(types, NativeMethods.sel_registerName("count"));
-            var objectAtIndex = NativeMethods.sel_registerName("objectAtIndex:");
-            for (long i = 0; i < count; i++)
-            {
-                var type = NativeMethods.objc_msgSend_nuint(types, objectAtIndex, (nuint)i);
-                if (type == nint.Zero) continue;
-                var name = NativeHelpers.CfStringToManaged(type);
-                if (name is PasteboardTypeFileUrl or PasteboardTypeLegacyFileNames) return true;
-            }
-            return false;
+            return pasteboard != nint.Zero && PasteboardTypes(pasteboard).Any(t => FileTypes.Contains(t));
         }
         catch (Exception ex)
         {
             _log.LogWarning(ex, "Failed to inspect clipboard types");
             return false;
+        }
+    }
+
+    private static IEnumerable<string?> PasteboardTypes(nint pasteboard)
+    {
+        var types = NativeMethods.objc_msgSend_noarg(pasteboard, NativeMethods.sel_registerName("types"));
+        if (types == nint.Zero) yield break;
+
+        var count = NativeMethods.objc_msgSend_long(types, NativeMethods.sel_registerName("count"));
+        var objectAtIndex = NativeMethods.sel_registerName("objectAtIndex:");
+        for (long i = 0; i < count; i++)
+        {
+            var type = NativeMethods.objc_msgSend_nuint(types, objectAtIndex, (nuint)i);
+            if (type != nint.Zero) yield return NativeHelpers.CfStringToManaged(type);
         }
     }
 
@@ -260,65 +242,44 @@ public sealed class MacClipboardSync : IClipboardSync
     {
         var owned = Volatile.Read(ref _ownedChangeCount);
         if (owned < 0) return false;
-        return NativeMethods.objc_msgSend_long(pasteboard, NativeMethods.sel_registerName("changeCount")) == owned;
+        return ChangeCount(pasteboard) == owned;
     }
 
-    private static void WriteText(nint pasteboard, string text)
+    // setString:forType: and setData:forType: answer whether the pasteboard took it, as a BOOL: only its low byte is set
+    private static bool WriteString(nint pasteboard, string value, string type)
     {
-        var nsStr = NativeHelpers.MakeNsString(text);
-        var typeStr = NativeHelpers.MakeNsString(PasteboardTypeString);
-        var setSel = NativeMethods.sel_registerName("setString:forType:");
-        NativeMethods.objc_msgSend_2arg(pasteboard, setSel, nsStr, typeStr);
+        var nsStr = NativeHelpers.MakeNsString(value);
+        var typeStr = NativeHelpers.MakeNsString(type);
+        var taken = (byte)NativeMethods.objc_msgSend_2arg(pasteboard, NativeMethods.sel_registerName("setString:forType:"), nsStr, typeStr) != 0;
         NativeMethods.CFRelease(nsStr);
         NativeMethods.CFRelease(typeStr);
+        return taken;
     }
 
-    private static void WriteHtml(nint pasteboard, string html)
+    private static unsafe bool WriteData(nint pasteboard, byte[] bytes, string type)
     {
-        var nsStr = NativeHelpers.MakeNsString(html);
-        var typeStr = NativeHelpers.MakeNsString(PasteboardTypeHtml);
-        var setSel = NativeMethods.sel_registerName("setString:forType:");
-        NativeMethods.objc_msgSend_2arg(pasteboard, setSel, nsStr, typeStr);
-        NativeMethods.CFRelease(nsStr);
-        NativeMethods.CFRelease(typeStr);
-    }
-
-    private static unsafe void WriteRtf(nint pasteboard, byte[] rtf)
-    {
-        var nsDataClass = NativeMethods.objc_getClass("NSData");
-        var dataSel = NativeMethods.sel_registerName("dataWithBytes:length:");
         nint nsData;
-        fixed (byte* ptr = rtf)
-            nsData = NativeMethods.objc_msgSend_ptr_nuint(nsDataClass, dataSel, ptr, (nuint)rtf.Length);
-        if (nsData == nint.Zero) return;
+        fixed (byte* ptr = bytes)
+            nsData = NativeMethods.objc_msgSend_ptr_nuint(NativeMethods.objc_getClass("NSData"), NativeMethods.sel_registerName("dataWithBytes:length:"), ptr,
+                (nuint)bytes.Length);
+        if (nsData == nint.Zero) return false;
 
-        var typeStr = NativeHelpers.MakeNsString(PasteboardTypeRtf);
-        var setSel = NativeMethods.sel_registerName("setData:forType:");
-        NativeMethods.objc_msgSend_2arg(pasteboard, setSel, nsData, typeStr);
+        var typeStr = NativeHelpers.MakeNsString(type);
+        var taken = (byte)NativeMethods.objc_msgSend_2arg(pasteboard, NativeMethods.sel_registerName("setData:forType:"), nsData, typeStr) != 0;
         NativeMethods.CFRelease(typeStr);
+        return taken;
     }
 
-    private static unsafe void WriteImagePng(nint pasteboard, byte[] pngData)
-    {
-        var nsDataClass = NativeMethods.objc_getClass("NSData");
-        var dataSel = NativeMethods.sel_registerName("dataWithBytes:length:");
-        nint nsData;
-        fixed (byte* ptr = pngData)
-            nsData = NativeMethods.objc_msgSend_ptr_nuint(nsDataClass, dataSel, ptr, (nuint)pngData.Length);
-        if (nsData == nint.Zero) return;
-
-        var typeStr = NativeHelpers.MakeNsString(PasteboardTypePng);
-        var setSel = NativeMethods.sel_registerName("setData:forType:");
-        NativeMethods.objc_msgSend_2arg(pasteboard, setSel, nsData, typeStr);
-        NativeMethods.CFRelease(typeStr);
-    }
-
-    private static nint GetGeneralPasteboard()
+    private nint GetGeneralPasteboard()
     {
         var cls = NativeMethods.objc_getClass("NSPasteboard");
         if (cls == nint.Zero) return nint.Zero;
-        var sel = NativeMethods.sel_registerName("generalPasteboard");
-        return NativeMethods.objc_msgSend_noarg(cls, sel);
+        if (_pasteboardName == null) return NativeMethods.objc_msgSend_noarg(cls, NativeMethods.sel_registerName("generalPasteboard"));
+
+        var name = NativeHelpers.MakeNsString(_pasteboardName);
+        var pasteboard = NativeMethods.objc_msgSend(cls, NativeMethods.sel_registerName("pasteboardWithName:"), name);
+        NativeMethods.CFRelease(name);
+        return pasteboard;
     }
 
 }

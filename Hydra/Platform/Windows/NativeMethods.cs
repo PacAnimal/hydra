@@ -587,6 +587,14 @@ internal static partial class NativeMethods
 
     [LibraryImport(User32)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial uint GetClipboardSequenceNumber();
+
+    [LibraryImport(User32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial nint GetClipboardOwner();
+
+    [LibraryImport(User32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     internal static partial nint GetClipboardData(uint uFormat);
 
     [LibraryImport(User32)]

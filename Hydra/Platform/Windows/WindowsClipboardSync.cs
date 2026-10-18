@@ -2,6 +2,7 @@ using System.Drawing;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using System.Text;
 using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform.Windows;
@@ -13,10 +14,18 @@ public sealed class WindowsClipboardSync : IClipboardSync, IDisposable
     private static readonly uint CfPng = NativeMethods.RegisterClipboardFormat("PNG");
     private static readonly uint CfHtmlFormat = NativeMethods.RegisterClipboardFormat("HTML Format");
     private static readonly uint CfRtf = NativeMethods.RegisterClipboardFormat("Rich Text Format");
+    // how password managers mark a copy no clipboard monitor or history should keep
+    private static readonly uint CfExcludeFromMonitor = NativeMethods.RegisterClipboardFormat("ExcludeClipboardContentFromMonitorProcessing");
+    private static readonly uint CfCanIncludeInHistory = NativeMethods.RegisterClipboardFormat("CanIncludeInClipboardHistory");
+
+    // what GetImagePng reads as an image, in the order it tries them: the "PNG" registered format first (Chrome, Firefox,
+    // etc.), then CF_DIB; and the formats whose text is no text copy of the user's
+    private static readonly uint[] ImageFormats = [CfPng, NativeMethods.CF_DIB];
+    private static readonly uint[] NotTextCopyFormats = [.. ImageFormats, NativeMethods.CF_HDROP];
 
     private readonly ILogger<WindowsClipboardSync> _log;
     private ClipboardEchoFilter _echo;
-    private string? _storedPrimaryText;
+    private readonly CopiedPrimary _primary;
 
     // dedicated owner window for the clipboard — passing NULL to OpenClipboard makes EmptyClipboard
     // set a NULL owner, which per MSDN causes SetClipboardData to fail. A real HWND fixes that.
@@ -28,6 +37,7 @@ public sealed class WindowsClipboardSync : IClipboardSync, IDisposable
     {
         _log = log;
         CreateOwnerWindow();
+        _primary = new CopiedPrimary(() => NativeMethods.GetClipboardSequenceNumber(), ReadTextCopy, log);
     }
 
     // message-only window created once on the constructing (main) thread. No message pump is needed:
@@ -83,20 +93,7 @@ public sealed class WindowsClipboardSync : IClipboardSync, IDisposable
         if (!OpenClipboard()) return null;
         try
         {
-            var hMem = NativeMethods.GetClipboardData(NativeMethods.CF_UNICODETEXT);
-            if (hMem == nint.Zero) return null;
-
-            var ptr = NativeMethods.GlobalLock(hMem);
-            if (ptr == nint.Zero) return null;
-            try
-            {
-                var text = Marshal.PtrToStringUni(ptr);
-                return _echo.FilterText(text);
-            }
-            finally
-            {
-                NativeMethods.GlobalUnlock(hMem);
-            }
+            return _echo.FilterText(ReadOpenText());
         }
         finally
         {
@@ -104,15 +101,31 @@ public sealed class WindowsClipboardSync : IClipboardSync, IDisposable
         }
     }
 
-    public void SetText(string text)
+    private static string? ReadOpenText()
     {
-        _echo.TrackText(text);
+        var hMem = NativeMethods.GetClipboardData(NativeMethods.CF_UNICODETEXT);
+        if (hMem == nint.Zero) return null;
 
-        if (!OpenClipboard()) return;
+        var ptr = NativeMethods.GlobalLock(hMem);
+        if (ptr == nint.Zero) return null;
         try
         {
-            NativeMethods.EmptyClipboard();
-            WriteTextToOpenClipboard(text);
+            return Marshal.PtrToStringUni(ptr);
+        }
+        finally
+        {
+            NativeMethods.GlobalUnlock(hMem);
+        }
+    }
+
+    // CopiedPrimary's readTextCopy, by clipboard format; one attempt, since it runs under CopiedPrimary's gate: a busy
+    // clipboard is simply read again next time
+    private string? ReadTextCopy()
+    {
+        if (!NativeMethods.OpenClipboard(_ownerWindow)) throw new IOException("the clipboard is held by another app");
+        try
+        {
+            return NotTextCopyFormats.Any(NativeMethods.IsClipboardFormatAvailable) || IsConcealed() ? null : ReadOpenText();
         }
         finally
         {
@@ -120,48 +133,33 @@ public sealed class WindowsClipboardSync : IClipboardSync, IDisposable
         }
     }
 
-    public string? GetPrimaryText() => _storedPrimaryText;
+    private static bool IsConcealed()
+    {
+        if (NativeMethods.IsClipboardFormatAvailable(CfExcludeFromMonitor)) return true;
+        if (!NativeMethods.IsClipboardFormatAvailable(CfCanIncludeInHistory)) return false;
+        var allowed = ReadGlobalMemory(NativeMethods.GetClipboardData(CfCanIncludeInHistory));
+        return allowed is { Length: >= 4 } && BitConverter.ToUInt32(allowed) == 0;
+    }
 
-    public void SetPrimaryText(string text) => _storedPrimaryText = text;
+    public string? GetPrimaryText() => _primary.Read();
+
+    public bool SetPrimaryText(string text) => _primary.Relay(text);
 
     public byte[]? GetImagePng()
     {
         if (!OpenClipboard()) return null;
         try
         {
-            // try "PNG" registered format first (Chrome, Firefox, etc. — raw PNG bytes)
-            if (NativeMethods.IsClipboardFormatAvailable(CfPng))
+            foreach (var format in ImageFormats)
             {
-                var png = ReadGlobalMemory(NativeMethods.GetClipboardData(CfPng));
-                if (png != null)
-                {
-                    if (_echo.IsDuplicateImage(png)) return null;
-                    return png;
-                }
+                if (!NativeMethods.IsClipboardFormatAvailable(format)) continue;
+                var data = ReadGlobalMemory(NativeMethods.GetClipboardData(format));
+                if (data == null) continue;
+                // raw PNG bytes, else a device-independent bitmap converted to PNG
+                if (format != CfPng) return DibToPng(data);
+                return _echo.IsDuplicateImage(data) ? null : data;
             }
-
-            // fall back to CF_DIB (device-independent bitmap) → convert to PNG
-            if (!NativeMethods.IsClipboardFormatAvailable(NativeMethods.CF_DIB)) return null;
-            var dib = ReadGlobalMemory(NativeMethods.GetClipboardData(NativeMethods.CF_DIB));
-            if (dib == null) return null;
-
-            return DibToPng(dib);
-        }
-        finally
-        {
-            NativeMethods.CloseClipboard();
-        }
-    }
-
-    public void SetImagePng(byte[] pngData)
-    {
-        _echo.TrackImage(pngData);
-
-        if (!OpenClipboard()) return;
-        try
-        {
-            NativeMethods.EmptyClipboard();
-            WriteImageToOpenClipboard(pngData);
+            return null;
         }
         finally
         {
@@ -201,44 +199,46 @@ public sealed class WindowsClipboardSync : IClipboardSync, IDisposable
         }
     }
 
-    public void SetClipboard(ClipboardSnapshot contents)
+    public bool SetClipboard(ClipboardSnapshot contents)
     {
-        var text = contents.Text;
-        var primaryText = contents.PrimaryText;
-        var imagePng = contents.ImagePng;
-        var html = contents.Html;
-        var rtf = contents.Rtf;
-        if (text == null && primaryText == null && imagePng == null && html == null && rtf == null) return;
-
-        if (text != null) _echo.TrackText(text);
-        if (primaryText != null) _storedPrimaryText = primaryText;
-        if (imagePng != null) _echo.TrackImage(imagePng);
-        if (html != null) _echo.TrackHtml(html);
-        if (rtf != null) _echo.TrackRtf(rtf);
-
-        if (!OpenClipboard()) return;
-        try
+        return _primary.Write(contents.PrimaryText, leftAt =>
         {
-            // preserve a local file-copy (CF_HDROP) across the wipe: Hydra doesn't sync files, and the
-            // user's Ctrl+C'd files should survive a clipboard sync while they stay on this host.
-            var savedHdrop = NativeMethods.IsClipboardFormatAvailable(NativeMethods.CF_HDROP)
-                ? ReadGlobalMemory(NativeMethods.GetClipboardData(NativeMethods.CF_HDROP))
-                : null;
+            if (!OpenClipboard()) return false;
+            try
+            {
+                return WriteOpenClipboard(contents);
+            }
+            finally
+            {
+                NativeMethods.CloseClipboard();
+                // after closing, which moves the sequence number too; read before asking who owns the clipboard, so
+                // another app writing after either leaves it untaken, never taken as ours
+                var after = NativeMethods.GetClipboardSequenceNumber();
+                if (NativeMethods.GetClipboardOwner() == _ownerWindow) leftAt(after);
+            }
+        });
+    }
 
-            NativeMethods.EmptyClipboard();
+    private bool WriteOpenClipboard(ClipboardSnapshot contents)
+    {
+        // preserve a local file-copy (CF_HDROP) across the wipe: Hydra doesn't sync files, and the
+        // user's Ctrl+C'd files should survive a clipboard sync while they stay on this host.
+        var savedHdrop = NativeMethods.IsClipboardFormatAvailable(NativeMethods.CF_HDROP)
+            ? ReadGlobalMemory(NativeMethods.GetClipboardData(NativeMethods.CF_HDROP))
+            : null;
 
-            // image first (legacy image pasters pick the first supported format); rich before plain text
-            // so rich-aware apps prefer HTML/RTF over CF_UNICODETEXT.
-            if (imagePng != null) WriteImageToOpenClipboard(imagePng);
-            if (html != null) WriteGlobalMemory(CfHtmlFormat, NullTerminated(CfHtml.Wrap(html)));
-            if (rtf != null) WriteGlobalMemory(CfRtf, NullTerminated(rtf));
-            if (text != null) WriteTextToOpenClipboard(text);
-            if (savedHdrop != null) WriteGlobalMemory(NativeMethods.CF_HDROP, savedHdrop);
-        }
-        finally
-        {
-            NativeMethods.CloseClipboard();
-        }
+        if (!NativeMethods.EmptyClipboard()) return false;
+        _echo.Track(contents);
+
+        // image first (legacy image pasters pick the first supported format); rich before plain text
+        // so rich-aware apps prefer HTML/RTF over CF_UNICODETEXT.
+        ClipboardUtils.WriteAll(_log,
+            contents.ImagePng is { } png ? () => WriteImageToOpenClipboard(png) : null,
+            contents.Html is { } html ? () => WriteGlobalMemory(CfHtmlFormat, NullTerminated(CfHtml.Wrap(html))) : null,
+            contents.Rtf is { } rtf ? () => WriteGlobalMemory(CfRtf, NullTerminated(rtf)) : null,
+            contents.Text is { } text ? () => WriteGlobalMemory(NativeMethods.CF_UNICODETEXT, Encoding.Unicode.GetBytes(text + '\0')) : null);
+        if (savedHdrop != null) WriteGlobalMemory(NativeMethods.CF_HDROP, savedHdrop);
+        return true; // emptied, so replaced
     }
 
     private static byte[] NullTerminated(byte[] data) => [.. data, 0]; // text-based clipboard formats expect a NUL
@@ -251,34 +251,17 @@ public sealed class WindowsClipboardSync : IClipboardSync, IDisposable
         return len == data.Length ? data : data[..len];
     }
 
-    private static void WriteTextToOpenClipboard(string text)
-    {
-        // CF_UNICODETEXT requires null-terminated UTF-16; allocate (length + 1) chars
-        var byteCount = (nuint)((text.Length + 1) * 2);
-        var hMem = NativeMethods.GlobalAlloc(NativeMethods.GMEM_MOVEABLE, byteCount);
-        if (hMem == nint.Zero) return;
-
-        var ptr = NativeMethods.GlobalLock(hMem);
-        if (ptr == nint.Zero) { NativeMethods.GlobalFree(hMem); return; }
-
-        Marshal.Copy(text.ToCharArray(), 0, ptr, text.Length);
-        Marshal.WriteInt16(ptr + text.Length * 2, 0); // null terminator
-        NativeMethods.GlobalUnlock(hMem);
-
-        if (NativeMethods.SetClipboardData(NativeMethods.CF_UNICODETEXT, hMem) == nint.Zero)
-            NativeMethods.GlobalFree(hMem);
-    }
-
-    private void WriteImageToOpenClipboard(byte[] pngData)
+    private bool WriteImageToOpenClipboard(byte[] pngData)
     {
         // write as "PNG" registered format (raw bytes — modern apps prefer this, full fidelity + alpha)
-        WriteGlobalMemory(CfPng, pngData);
+        var png = WriteGlobalMemory(CfPng, pngData);
 
         // also write CF_DIBV5 (32bpp, preserves alpha). Windows auto-synthesizes CF_DIB and CF_BITMAP from
         // it for legacy apps (Paint/Office), so a single write covers both alpha-aware and legacy pasters.
         var dib = PngToDibV5(pngData);
         if (dib != null)
             WriteGlobalMemory(NativeMethods.CF_DIBV5, dib);
+        return png;
     }
 
     private static byte[]? ReadGlobalMemory(nint hMem)
@@ -301,19 +284,25 @@ public sealed class WindowsClipboardSync : IClipboardSync, IDisposable
         }
     }
 
-    private static void WriteGlobalMemory(uint format, byte[] data)
+    // whether the clipboard took it
+    private static bool WriteGlobalMemory(uint format, byte[] data)
     {
         var hMem = NativeMethods.GlobalAlloc(NativeMethods.GMEM_MOVEABLE | NativeMethods.GMEM_DDESHARE, (nuint)data.Length);
-        if (hMem == nint.Zero) return;
+        if (hMem == nint.Zero) return false;
 
         var ptr = NativeMethods.GlobalLock(hMem);
-        if (ptr == nint.Zero) { NativeMethods.GlobalFree(hMem); return; }
+        if (ptr == nint.Zero)
+        {
+            NativeMethods.GlobalFree(hMem);
+            return false;
+        }
 
         Marshal.Copy(data, 0, ptr, data.Length);
         NativeMethods.GlobalUnlock(hMem);
 
-        if (NativeMethods.SetClipboardData(format, hMem) == nint.Zero)
-            NativeMethods.GlobalFree(hMem);
+        if (NativeMethods.SetClipboardData(format, hMem) != nint.Zero) return true;
+        NativeMethods.GlobalFree(hMem);
+        return false;
     }
 
     // converts a PNG to a CF_DIBV5 blob (BITMAPV5HEADER + 32bpp BGRA, bottom-up) preserving alpha.
