@@ -37,7 +37,7 @@ public sealed class TlsInterceptor : IAsyncDisposable
     public string Url => $"https://127.0.0.1:{((IPEndPoint)_listener.LocalEndpoint).Port}";
 
     // the next intercepted connection's request line, or null for a refused handshake
-    public Task<string?> NextIntercepted(int timeoutMs = 15000) => _intercepted.Next(timeoutMs, "an intercepted connection");
+    public Task<string?> NextIntercepted() => _intercepted.Next("an intercepted connection");
 
     private async Task Accept()
     {

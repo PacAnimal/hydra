@@ -1,6 +1,7 @@
 using System.Net.WebSockets;
 using System.Text;
 using Cathedral.Styx;
+using Common;
 using Hydra.Relay;
 using Tests.Setup;
 
@@ -17,7 +18,7 @@ public class StyxUnmodifiedClientTests : StyxFixtureBase
     public async Task TwoHydraClients_OnAV2Network_ExchangeMessages()
     {
         var root = StyxTestServer.MintToken();
-        var key = StyxTestServer.GenerateEncryptionKey();
+        var key = NetworkConfig.NewEncryptionKey();
         await using var pair = await ClientPair.Start(
             HydraTestClient.Master(Factory, "sender", Blob(root.Narrow(StyxCaveat.Host("sender"), StyxCaveat.Id("s")), key)),
             HydraTestClient.Master(Factory, "receiver", Blob(root.Narrow(StyxCaveat.HostNot("sender"), StyxCaveat.Id("r")), key)));
@@ -46,7 +47,7 @@ public class StyxUnmodifiedClientTests : StyxFixtureBase
 
     // one end-to-end key for the whole network, as every member's blob carries
     private string Blob(StyxToken token, string encryptionKey) =>
-        new StyxBlob(Factory.Server.BaseAddress.ToString().TrimEnd('/'), encryptionKey, token.ToString()).Write();
+        new StyxBlob(StyxTestServer.ServerUrl(Factory), encryptionKey, token.ToString()).Write();
 
     // the completion record for an Authenticate sent over a raw WebSocket, as the firmware sends it
     private async Task<string> RawLogin(string authorization, string hostName)

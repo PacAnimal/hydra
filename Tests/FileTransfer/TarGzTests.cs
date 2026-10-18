@@ -173,7 +173,7 @@ public class TarGzStreamerTests
         await File.WriteAllBytesAsync(file, bytes);
         var chunks = new AwaitedCalls();
 
-        await TarGzStreamer.StreamAsync([file], (_, _, _) => chunks.Next(), NoFileStart, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
+        await TarGzStreamer.StreamAsync([file], (_, _, _) => chunks.Next(), NoFileStart, CancellationToken.None).WaitAsync(Bound);
 
         using (Assert.EnterMultipleScope())
         {

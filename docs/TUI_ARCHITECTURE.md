@@ -54,6 +54,7 @@ Local management uses a versioned, four-byte length-prefixed JSON protocol with 
 - No TCP management listener is opened.
 - The client validates the server protocol version and instance identity before using it.
 - Logs and snapshots are bounded and must never contain configuration secrets, clipboard content, file content, or captured input.
+- A message naming the user's files is logged with the FilePaths log event id, which the TUI log drops and a slave never forwards to its master. Filter by that id, never by a message's wording.
 
 Changing framing, endpoint identity, permissions, protocol versioning, or request limits requires focused management tests and platform-specific validation.
 

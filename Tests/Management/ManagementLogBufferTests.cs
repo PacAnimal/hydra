@@ -1,3 +1,4 @@
+using Hydra;
 using Hydra.Management;
 using Microsoft.Extensions.Logging;
 
@@ -15,8 +16,8 @@ public class ManagementLogBufferTests
 
         normal.LogInformation("Connected to relay");
         sensitive.LogInformation("selected /private/file");
-        routing.LogInformation(ManagementLogBuffer.FilePaths, "Copy hotkey: 1 file selected locally: /private/secret.txt");
-        routing.LogInformation(ManagementLogBuffer.FilePaths, "any wording at all: /private/other.txt");
+        routing.LogInformation(LogEvents.FilePaths, "Copy hotkey: 1 file selected locally: /private/secret.txt");
+        routing.LogInformation(LogEvents.FilePaths, "any wording at all: /private/other.txt");
         routing.LogInformation("Paste hotkey: 2 files from laptop → desktop");
         var page = buffer.Read(0);
 

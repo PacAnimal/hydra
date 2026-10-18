@@ -1,7 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
 using Cathedral.Styx;
-using Cathedral.Utils;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Styx;
@@ -115,7 +114,7 @@ public class StyxRevocationTests
     {
         await using var factory = Relay(Auth());
         await using var client = new TestStyxClient();
-        var v1 = await new SimpleAes(StyxTestServer.TestPassword).EncryptBase64(StyxToken.NewNetworkId(), CancellationToken.None);
+        var v1 = await StyxTestServer.GenerateAuthorization(StyxToken.NewNetworkId());
         Assert.That((await client.Connect(factory, v1, "a")).Authenticated, Is.False);
     }
 

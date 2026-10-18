@@ -1,5 +1,4 @@
 using Cathedral.Styx;
-using Cathedral.Utils;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using Styx;
@@ -96,7 +95,7 @@ public class V1TokenVerifierTests
     public async Task AVersion8Network_IsNeverAdmitted_AndDoesNotCountAsAGuess()
     {
         var (verifier, limiter, _) = NewSubject();
-        var token = await new SimpleAes(StyxTestServer.TestPassword).EncryptBase64(StyxToken.NewNetworkId(), CancellationToken.None);
+        var token = await StyxTestServer.GenerateAuthorization(StyxToken.NewNetworkId());
         for (var i = 0; i < FailureLimiter.MaxFailures + 1; i++)
             Assert.That(await verifier.Verify(token, Ip, CancellationToken.None), Is.Null);
         Assert.That(limiter.IsBlocked(Ip), Is.False);
@@ -119,7 +118,7 @@ public class V1TokenVerifierTests
     {
         var network = Guid.NewGuid();
         var token = await StyxTestServer.GenerateAuthorization(network);
-        var auth = new StyxAuth([], StyxTestServer.TestPassword, new HashSet<Guid> { network }, new HashSet<string>());
+        var auth = StyxAuth.V1Only(StyxTestServer.TestPassword) with { RevokedNetworks = new HashSet<Guid> { network } };
         var clock = new FakeTimeProvider();
         var v1 = new V1TokenVerifier(auth, new FailureLimiter(clock), clock, NullLogger<V1TokenVerifier>.Instance);
         var verifier = new TokenVerifier(auth, v1, clock);
@@ -139,7 +138,7 @@ public class V1TokenVerifierTests
         {
             var login = verifier.Verify(token, Ip, CancellationToken.None);
             clock.Advance(V1TokenVerifier.DerivationWait);
-            Assert.That(await login.WaitAsync(TimeSpan.FromSeconds(30)), Is.Null);
+            Assert.That(await login.WaitAsync(Bound), Is.Null);
             using (Assert.EnterMultipleScope())
             {
                 Assert.That(verifier.DerivationCount, Is.Zero);
@@ -184,7 +183,7 @@ public class V1TokenVerifierTests
     {
         var clock = new FakeTimeProvider();
         var limiter = new FailureLimiter(clock);
-        var auth = new StyxAuth([], password, new HashSet<Guid>(), new HashSet<string>());
+        var auth = StyxAuth.WithoutRevocations([], password);
         return new Subject(new V1TokenVerifier(auth, limiter, clock, NullLogger<V1TokenVerifier>.Instance), limiter, clock);
     }
 

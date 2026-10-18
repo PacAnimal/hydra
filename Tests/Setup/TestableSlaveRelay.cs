@@ -89,11 +89,14 @@ public sealed class TestableSlaveRelay : SlaveRelayConnection
     public void ClearSent() => _signals.Clear();
     public List<SentMessage> TakeAll() => _signals.TakeAll();
 
+    // the messages of one kind sent so far, decoded
+    public List<T> Sent<T>(MessageKind kind) => _signals.Sent<T>(kind);
+
     // completes once a message of this kind has been sent, for a reply worked out off the receive path
-    public Task WaitForSent(MessageKind kind, TimeSpan timeout) => _signals.WaitFor(kind, timeout);
+    public Task WaitForSent(MessageKind kind) => _signals.WaitFor(kind, TestBound.Bound);
 
     // completes once the relay has logged the slave in again
-    public Task NextAuthentication(TimeSpan timeout) => _authenticated.Next((int)timeout.TotalMilliseconds, "the slave to authenticate");
+    public Task NextAuthentication() => _authenticated.Next("the slave to authenticate");
 
     protected override TimeSpan ReconnectDelay => TimeSpan.Zero;
 
@@ -110,6 +113,12 @@ public sealed class TestableSlaveRelay : SlaveRelayConnection
     }
 
     protected override void OnSent(string[] targetHosts, byte[] payload) => _signals.Record(targetHosts, payload);
+
+    protected override void OnSentKey(string[] targetHosts, KeyEventMessage message) =>
+        OnSent(targetHosts, MessageSerializer.Encode(MessageKind.KeyEvent, message));
+
+    protected override void OnSentDelta(string[] targetHosts, int dx, int dy) =>
+        OnSent(targetHosts, MessageSerializer.Encode(MessageKind.MouseMoveDelta, new MouseMoveDeltaMessage(dx, dy)));
 
     private static SharedDeps MakeShared(IWorldState? worldState, IScreenSaverSync? screenSaverSync, Func<long>? clock = null)
     {

@@ -1,8 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
-using System.Text;
 using System.Text.Json;
-using Cathedral.Config;
 using Cathedral.Styx;
 using Common;
 using Tests.Setup;
@@ -103,10 +101,7 @@ public class StyxHttpTests : StyxFixtureBase
         var authorization = body.GetProperty("authorization").GetString()!;
 
         // build a NetworkConfig base64 string using the API-issued authorization
-        var key = StyxTestServer.GenerateEncryptionKey();
-        var styxServer = Factory.Server.BaseAddress.ToString().TrimEnd('/');
-        var config = new NetworkConfig(styxServer, key, authorization);
-        var configBase64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(config, SaneJson.Options)));
+        var configBase64 = new NetworkConfig(StyxTestServer.ServerUrl(Factory), NetworkConfig.NewEncryptionKey(), authorization).ToBlob();
 
         await using var client = HydraTestClient.Master(Factory, "api-test", configBase64);
         await client.StartReady();

@@ -2,7 +2,6 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using Common.DTO;
-using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Styx;
 using Tests.Setup;
@@ -11,27 +10,22 @@ namespace Tests.Styx;
 
 // every endpoint a stranger can call answers no sooner than its throttle, whatever the answer
 [TestFixture]
-public class ResponseThrottleTests
+public class ResponseThrottleTests : StyxFixtureBase
 {
     private StartedTimers _clock = null!;
-    private WebApplicationFactory<global::Styx.Program> _factory = null!;
+
+    // resolved per hub invocation and per request, so each test's throttles start on that test's clock
+    protected override void ConfigureRelay(IServiceCollection services) => services.AddTransient(_ => new ResponseThrottle(_clock));
 
     [SetUp]
-    public void SetUp()
-    {
-        _clock = new StartedTimers();
-        _factory = StyxTestServer.Create(configure: services => services.AddSingleton(new ResponseThrottle(_clock)));
-    }
-
-    [TearDown]
-    public async Task TearDown() => await _factory.DisposeAsync();
+    public void SetUp() => _clock = new StartedTimers();
 
     [TestCase(true)]
     [TestCase(false)]
     public async Task Authenticate(bool valid)
     {
         await using var client = new TestStyxClient();
-        await client.ConnectRaw(_factory);
+        await client.ConnectRaw(Factory);
         var authorization = valid ? await StyxTestServer.GenerateAuthorization(Guid.NewGuid()) : "not-an-authorization";
 
         var answer = client.Server!.Authenticate(new RelayLogin { Authorization = authorization, HostName = "throttled" });
@@ -43,7 +37,7 @@ public class ResponseThrottleTests
     [TestCase("wrong-password", HttpStatusCode.Unauthorized)]
     public async Task NetworkConfig(string password, HttpStatusCode expected)
     {
-        using var http = _factory.CreateClient();
+        using var http = Factory.CreateClient();
 
         var answer = http.PostAsJsonAsync("/api/network-config", new { Password = password });
 
@@ -53,7 +47,7 @@ public class ResponseThrottleTests
     [Test]
     public async Task Status()
     {
-        using var http = _factory.CreateClient();
+        using var http = Factory.CreateClient();
         http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", "not-an-authorization");
 
         var answer = http.GetAsync("/api/status");
@@ -66,7 +60,7 @@ public class ResponseThrottleTests
     [TestCase(false)]
     public async Task Status_WithAValidToken_IsAnsweredAtOnce(bool v1)
     {
-        using var http = _factory.CreateClient();
+        using var http = Factory.CreateClient();
         var token = v1 ? await StyxTestServer.GenerateAuthorization(Guid.NewGuid()) : StyxTestServer.MintToken().ToString();
         http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
@@ -78,7 +72,7 @@ public class ResponseThrottleTests
     // holds the answer one tick short of the throttle, then lets it through
     private async Task<T> ReleaseThrottle<T>(Task<T> answer, int seconds)
     {
-        var due = await _clock.Started.Next((int)Bound.TotalMilliseconds, "the throttle");
+        var due = await _clock.Started.Next("the throttle");
         Assert.That(due, Is.EqualTo(TimeSpan.FromSeconds(seconds)));
 
         _clock.Advance(due - TimeSpan.FromTicks(1));

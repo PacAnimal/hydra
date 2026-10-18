@@ -21,7 +21,7 @@ public static class Constants
     public const int PeerWriteDeadlineSeconds = 30;
     public const int MaxMessageMebiBytes = 32;
     // /relay runs a client's invocations one at a time, in the order they arrived. That is what keeps a pair of
-    // peers in order (Styx.md 5.2) for a client that does not wait for each Send to complete.
+    // peers in order (Styx.md §5.2) for a client that does not wait for each Send to complete.
     public const int MaxParallelInvocations = 1;
     // /relay/parallel promises no order. Each invocation in flight can hold a whole message, so its width times
     // MaxMessageMebiBytes is what one client, logged in or not, can pin.

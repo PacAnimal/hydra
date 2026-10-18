@@ -1,6 +1,6 @@
 import type {
   HydraProfile, HostConfig, NeighbourConfig, ScreenDefinition, ConfigConditions,
-  Direction, Mode, LogLevel, FormState, EmbeddedStyxConfig, EmbeddedStyxServerConfig, NetworkType,
+  Direction, Mode, LogLevel, UpdateChannel, FormState, EmbeddedStyxConfig, EmbeddedStyxServerConfig, NetworkType,
 } from '../types'
 import { inferLayoutFromHosts } from './layout'
 
@@ -42,6 +42,13 @@ function coerceLogLevel(v: unknown): LogLevel | undefined {
     if (direct) return direct
   }
   return undefined
+}
+
+// case-insensitive, as Hydra reads it
+function coerceUpdateChannel(v: unknown): UpdateChannel | undefined {
+  if (typeof v !== 'string') return undefined
+  const lower = v.toLowerCase()
+  return lower === 'stable' || lower === 'edge' ? lower : undefined
 }
 
 function optNum(v: unknown): number | undefined {
@@ -169,6 +176,7 @@ export function deserialize(json: string): FormState {
   return {
     name: optStr(root.name),
     autoUpdate: optBool(root.autoUpdate),
+    updateChannel: coerceUpdateChannel(root.updateChannel),
     managementListener: optBool(root.managementListener),
     logLevel: coerceLogLevel(root.logLevel),
     lockFile: optStr(root.lockFile),

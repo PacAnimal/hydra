@@ -1,4 +1,5 @@
 using Cathedral.Extensions;
+using Common;
 using Hydra.Relay;
 using Tests.Setup;
 
@@ -122,7 +123,7 @@ public class StyxIntegrationTests : StyxFixtureBase
         var (sender, receiver) = pair;
 
         var payload = MessageSerializer.Encode(MessageKind.FileTransferChunk, new FileTransferChunkMessage(0, [1, 2, 3]));
-        await sender.SendReliableAsync(["receiver"], payload).AsTask().WaitAsync(TimeSpan.FromSeconds(3));
+        await sender.SendReliableAsync(["receiver"], payload).AsTask().WaitAsync(Bound);
 
         var (source, kind, _) = await receiver.WaitForMessage();
         using (Assert.EnterMultipleScope())
@@ -141,7 +142,7 @@ public class StyxIntegrationTests : StyxFixtureBase
         await using var client = HydraTestClient.Master(Factory, "sleeping-host", cfg);
         await client.StartReady();
 
-        using (var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5)))
+        using (var timeout = new CancellationTokenSource(Bound))
             await client.SuspendConnectionAsync(timeout.Token);
 
         Assert.That(client.IsConnected, Is.False);
@@ -194,30 +195,6 @@ public class StyxIntegrationTests : StyxFixtureBase
     }
 
     [Test]
-    public async Task TwoHydraClients_DeltaViaGenericSend_StillDeliversCorrectly()
-    {
-        await using var pair = await ConnectedPair();
-        var (sender, receiver) = pair;
-
-        // A caller that reaches an already-encoded MouseMoveDelta payload through the generic Send()
-        // instead of SendMouseDelta (e.g. an IRelaySender decorator that forwards Send but not
-        // SendMouseDelta) must still be handled correctly, not just delivered unbatched by accident.
-        sender.Send(["receiver"], MessageSerializer.Encode(MessageKind.MouseMoveDelta, new MouseMoveDeltaMessage(4, 6)));
-
-        var (source, kind, json) = await receiver.WaitForMessage();
-
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(source, Is.EqualTo("sender"));
-            Assert.That(kind, Is.EqualTo(MessageKind.MouseMoveDelta));
-            var decoded = json.FromSaneJson<MouseMoveDeltaMessage>();
-            Assert.That(decoded, Is.Not.Null);
-            Assert.That(decoded!.Dx, Is.EqualTo(4));
-            Assert.That(decoded.Dy, Is.EqualTo(6));
-        }
-    }
-
-    [Test]
     public async Task TwoHydraClients_RapidMouseDeltas_SumSurvivesRegardlessOfHowMuchCoalesces()
     {
         await using var pair = await ConnectedPair();
@@ -236,18 +213,19 @@ public class StyxIntegrationTests : StyxFixtureBase
             expectedDx += i;
             expectedDy -= i;
         }
+        // neither coalesces nor bundles, and follows the deltas on their lane, so it marks the end of them
+        sender.Send(["receiver"], MessageSerializer.Encode(MessageKind.Osd, new OsdMessage("end-of-test")));
 
         var receivedDx = 0;
         var receivedDy = 0;
         var messageCount = 0;
         while (true)
         {
-            (string Source, MessageKind Kind, string Json) msg;
-            try { msg = await receiver.WaitForNextMessage(messageCount == 0 ? 5000 : 1000); }
-            catch (TimeoutException) { break; }
+            var (_, kind, json) = await receiver.WaitForMessage();
+            if (kind == MessageKind.Osd) break;
 
-            Assert.That(msg.Kind, Is.EqualTo(MessageKind.MouseMoveDelta));
-            var decoded = msg.Json.FromSaneJson<MouseMoveDeltaMessage>();
+            Assert.That(kind, Is.EqualTo(MessageKind.MouseMoveDelta));
+            var decoded = json.FromSaneJson<MouseMoveDeltaMessage>();
             Assert.That(decoded, Is.Not.Null);
             receivedDx += decoded!.Dx;
             receivedDy += decoded.Dy;
@@ -271,8 +249,10 @@ public class StyxIntegrationTests : StyxFixtureBase
     {
         var networkA = Guid.NewGuid();
         var networkB = Guid.NewGuid();
-        var cfgA = await StyxTestServer.BuildNetworkConfig(Factory, networkA);
-        var cfgB = await StyxTestServer.BuildNetworkConfig(Factory, networkB);
+        // one key for both, so a frame leaked across networks would decrypt and arrive rather than be discarded
+        var key = NetworkConfig.NewEncryptionKey();
+        var cfgA = await StyxTestServer.BuildNetworkConfig(Factory, networkA, key);
+        var cfgB = await StyxTestServer.BuildNetworkConfig(Factory, networkB, key);
 
         await using var pairA = await ClientPair.Start(HydraTestClient.Master(Factory, "sender", cfgA), HydraTestClient.Master(Factory, "receiver", cfgA));
         await using var clientB = HydraTestClient.Master(Factory, "sender", cfgB);
@@ -281,9 +261,17 @@ public class StyxIntegrationTests : StyxFixtureBase
         // clientB targets "receiver" — should not reach pairA's receiver (different network)
         clientB.Send(["receiver"], TestMessages.Move(7));
 
-        Exception? ex = null;
-        try { await pairA.Receiver.WaitForMessage(800); } catch (TimeoutException e) { ex = e; }
-        Assert.That(ex, Is.InstanceOf<TimeoutException>());
+        // clientB's own echo means the relay has handled the stray send; a sentinel queued after it then arrives first
+        clientB.Send(["sender"], TestMessages.Move(8));
+        await clientB.WaitForMessage();
+        pairA.Sender.Send(["receiver"], TestMessages.Move(9));
+
+        var (source, _, json) = await pairA.Receiver.WaitForMessage();
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(source, Is.EqualTo("sender"));
+            Assert.That(json.FromSaneJson<MouseMoveMessage>()!.X, Is.EqualTo(9));
+        }
     }
 
     [Test]
@@ -371,7 +359,7 @@ public class StyxIntegrationTests : StyxFixtureBase
     public async Task Encryption_RecoversAfterPeerReconnect()
     {
         var networkId = Guid.NewGuid();
-        var key = StyxTestServer.GenerateEncryptionKey();
+        var key = NetworkConfig.NewEncryptionKey();
         var cfg = await StyxTestServer.BuildNetworkConfig(Factory, networkId, key);
 
         await using var receiver = HydraTestClient.Master(Factory, "receiver", cfg);

@@ -266,7 +266,7 @@ element by element and case-sensitively.
 **Hostnames.** Hostname rules compare ordinally, ignoring case, exactly as the relay compares hostnames
 everywhere (§2). When a token carries any hostname caveat, the login's `hostName` must itself match the
 hostname grammar, so no lookalike, padding or format character can slip past a rule. **The relay never
-renames a peer**: a name the rules do not allow is refused (§5.1).
+substitutes another name** for one the rules do not allow: it refuses the login (§5.1).
 
 **Verification**, in order: the prefix; the bounds, encoding and grammar; a `kid` the relay holds; a
 version-8 network; the chain; revocations (§13); then `exp`. Every failure but the last is the generic
@@ -308,8 +308,8 @@ response { "authenticated": true|false, "message": "<text>"|null }
 `"Authorization and hostName are both required"`, `"Connection aborted"` — and is null on success. Clients
 SHOULD surface it and MUST NOT parse it.
 
-The relay never renames a peer. A `hostName` that a v2 token's hostname caveats do not allow is refused, so
-a client is always known by exactly the name it chose.
+A `hostName` that a v2 token's hostname caveats do not allow is refused; the relay never substitutes another
+name for it. Apart from the lowercasing of §2, a client is known by exactly the name it chose.
 
 Both members are mandatory, but omitting one is answered rather than punished: a login missing either
 member, under either hub protocol, returns `authenticated: false` with the reason above. A client never
@@ -504,7 +504,8 @@ base64 of a JSON object:
 ```
 
 Readers SHOULD match member names case-insensitively. Writers SHOULD emit exactly the form above (§14.3):
-some clients in the field parse it by hand and accept nothing else. `authorization` is opaque to a client
+some clients in the field parse it by hand and accept nothing else. This governs a blob handed to someone
+else; what a client keeps for itself may take any form. `authorization` is opaque to a client
 that only connects: it MUST NOT parse it, and a v2 token goes where a v1 token went. `encryptionKey` is **never transmitted to the relay** and
 has no meaning to it; it is carried here purely so that one blob provisions both relay access and
 whatever end-to-end key the application layered on top (§10). A client with no such layer MAY omit it.
@@ -631,8 +632,8 @@ message structure — is the application's to build. The relay carries bytes bet
 
 The relay refuses to start unless it can verify something (`RELAY_SIGNING_KEY`, `RELAY_SIGNING_PASSPHRASE` or
 `RELAY_PASSWORD`), and refuses a malformed key, a passphrase outside the rules of §13.1, the same key twice,
-two keys sharing a `kid`, the published test key or passphrase of §14.6, a `RELAY_PARALLEL_INVOCATIONS` that is
-not a whole number from 1 to 64. Every
+two keys sharing a `kid`, the published test key or passphrase of §14.6, a `RELAY_REVOKED_NETWORKS` entry that
+is not a UUID, or a `RELAY_PARALLEL_INVOCATIONS` that is not a whole number from 1 to 64. Every
 change to these is a restart, which drops every peer; that is also what makes a revocation complete.
 
 **Rotating the v2 key:** the first key mints and the rest only verify, and a passphrase's key comes first.
@@ -716,8 +717,8 @@ the relay ignoring case, so `hostNot=Admin` does exclude `admin`; `sub` values c
 
 ### 14.3 Network config blobs
 
-A blob (§9) is written in exactly one form, because some readers in the field parse it by hand and accept
-nothing else:
+A blob (§9) handed to anyone else is written in exactly one form, because some readers in the field parse it
+by hand and accept nothing else:
 
 - exactly the members `StyxServer`, `EncryptionKey`, `Authorization`, in that order, with no others;
 - compact JSON, no whitespace, UTF-8;

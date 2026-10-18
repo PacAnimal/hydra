@@ -1,3 +1,4 @@
+using Cathedral.Extensions;
 using Cathedral.Styx;
 
 namespace Styx.Services;
@@ -19,7 +20,7 @@ public sealed class TokenVerifier(StyxAuth auth, V1TokenVerifier v1, TimeProvide
 
     public async Task<TokenVerdict> Verify(string authorization, string remoteIp, CancellationToken cancel)
     {
-        if (authorization.StartsWith(StyxToken.Prefix, StringComparison.Ordinal)) return VerifyV2(authorization);
+        if (authorization.StartsWithOrdinal(StyxToken.Prefix)) return VerifyV2(authorization);
 
         var network = await v1.Verify(authorization, remoteIp, cancel);
         if (network is not { } id || auth.RevokedNetworks.Contains(id)) return TokenVerdict.Refused(InvalidAuthorization);

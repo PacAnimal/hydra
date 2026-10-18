@@ -8,7 +8,7 @@ namespace Tests.Setup;
 /// </summary>
 public sealed class InvocationProbe(string method) : IHubFilter
 {
-    private TaskCompletionSource? _hold;
+    private readonly Gate _gate = new();
     private Func<HubInvocationContext, ValueTask<bool>> _which = Everything;
     private readonly RunningCounter _running = new();
 
@@ -28,10 +28,10 @@ public sealed class InvocationProbe(string method) : IHubFilter
     public void Hold(Func<HubInvocationContext, ValueTask<bool>>? which = null)
     {
         _which = which ?? Everything;
-        _hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _gate.Hold();
     }
 
-    public void Release() => Interlocked.Exchange(ref _hold, null)?.TrySetResult();
+    public void Release() => _gate.Release();
 
     // forgets everything seen, for the next test on the same relay
     public void Reset()
@@ -53,10 +53,10 @@ public sealed class InvocationProbe(string method) : IHubFilter
         var arguments = context.HubMethodArguments.ToArray();
         try
         {
-            if (Volatile.Read(ref _hold) is { } hold && await _which(context))
+            if (_gate.IsHeld && await _which(context))
             {
                 Held.Push(arguments);
-                await hold.Task;
+                await _gate.Passed();
             }
 
             var pending = next(context);

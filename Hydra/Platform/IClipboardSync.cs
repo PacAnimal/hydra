@@ -37,7 +37,6 @@ public interface IClipboardSync
     bool CanUseEchoFallback() => true;
 
     // atomically clears and writes the given contents, never a selection alone, with the selection beside them, and says
-    // whether it replaced the clipboard. every platform implementation must override this — there is no safe default.
-    bool SetClipboard(ClipboardSnapshot contents) =>
-        throw new NotImplementedException($"{GetType().Name} must override SetClipboard");
+    // whether it replaced the clipboard
+    bool SetClipboard(ClipboardSnapshot contents);
 }

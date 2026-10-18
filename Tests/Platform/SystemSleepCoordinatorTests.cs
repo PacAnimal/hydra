@@ -55,7 +55,7 @@ public class SystemSleepCoordinatorTests
         var coordinator = Make(enabled: true, relay);
 
         var prepare = coordinator.PrepareForSleepAsync(CancellationToken.None);
-        await relay.SuspensionStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        await relay.SuspensionStarted.Task.WaitAsync(Bound);
         coordinator.ResumeAfterSleep();
         relay.AllowSuspensionToComplete.TrySetResult();
         await prepare;
@@ -76,7 +76,7 @@ public class SystemSleepCoordinatorTests
         var coordinator = Make(enabled: true, relay);
 
         var prepare = coordinator.PrepareForSleepAsync(CancellationToken.None);
-        await relay.SuspensionStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        await relay.SuspensionStarted.Task.WaitAsync(Bound);
         coordinator.BeginResumeAfterSleep();
         relay.AllowSuspensionToComplete.TrySetResult();
         await prepare;

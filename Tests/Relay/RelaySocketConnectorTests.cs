@@ -290,7 +290,7 @@ public class RelaySocketConnectorTests
             port,
             TimeSpan.FromMilliseconds(250),
             CancellationToken.None);
-        using var accepted = await accepting.WaitAsync(TimeSpan.FromSeconds(1));
+        using var accepted = await accepting.WaitAsync(Bound);
 
         using (Assert.EnterMultipleScope())
         {

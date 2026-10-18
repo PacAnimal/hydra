@@ -31,30 +31,12 @@ public class KeyBundleTests : StyxFixtureBase
     private const int ExpectedCapacity = 64;
 
     /// <summary>
-    /// One key, through whichever of the two entry points the case names.
-    ///
-    /// <para><b>Both, because production and these tests were using different ones.</b>
-    /// <c>InputRouter</c> forwards a keystroke through <c>SendKeyEvent</c>; every test here called
-    /// <c>Send</c> with an encoded payload. Measured: replacing <c>RelayConnection.SendKeyEvent</c>'s body
-    /// with a silent drop left <b>297</b> tests green — a master that types nothing, ever, with nothing to
-    /// say so. The two are meant to be one behaviour, and the only thing that keeps them one is asserting
-    /// every claim below against each.</para>
-    ///
-    /// <para><c>typed: true</c> is the production path.</para>
-    /// </summary>
-    private static void SendKey(bool typed, HydraTestClient sender, string[] targets, int n, KeyEventType type = KeyEventType.KeyDown)
-    {
-        if (typed) sender.SendKeyEvent(targets, TestMessages.KeyMessage(n, type));
-        else sender.Send(targets, TestMessages.Key(n, type));
-    }
-
-    /// <summary>
     /// Every key event that arrived, flattened out of whatever frames carried them, in arrival order.
     ///
     /// <para>Flattening is the point: a test must not care whether an event came alone or in a bundle of
     /// forty, only that it came, once, in its turn. That is exactly the property bundling must not change.</para>
     /// </summary>
-    private static List<(KeyEventType Type, char Character)> KeysIn(IEnumerable<(string Source, MessageKind Kind, string Json)> messages)
+    private static List<(KeyEventType Type, char Character)> KeysIn(IEnumerable<ReceivedMessage> messages)
     {
         var keys = new List<(KeyEventType, char)>();
         foreach (var (_, kind, json) in messages)
@@ -97,11 +79,11 @@ public class KeyBundleTests : StyxFixtureBase
     private static byte[] Sentinel() => MessageSerializer.Encode(MessageKind.Osd, new OsdMessage("end-of-test"));
 
     /// <summary>Every frame that carried key events, so a test can assert HOW they were packed.</summary>
-    private static List<(string Source, MessageKind Kind, string Json)> KeyFrames(IEnumerable<(string Source, MessageKind Kind, string Json)> frames) =>
+    private static List<ReceivedMessage> KeyFrames(IEnumerable<ReceivedMessage> frames) =>
         [.. frames.Where(f => f.Kind is MessageKind.KeyEvent or MessageKind.KeyEventBatch)];
 
     /// <summary>How many events one frame carried — 1 for a plain KeyEvent, N for a batch.</summary>
-    private static int EventsIn((string Source, MessageKind Kind, string Json) frame) =>
+    private static int EventsIn(ReceivedMessage frame) =>
         frame.Kind == MessageKind.KeyEvent ? 1 : JsonDocument.Parse(frame.Json).RootElement.GetProperty("events").GetArrayLength();
 
     /// <summary>
@@ -112,12 +94,12 @@ public class KeyBundleTests : StyxFixtureBase
     /// is slow" where these tests have to say "a key went missing". Losing keys must fail on the
     /// assertion, naming the sequence that arrived.</para>
     /// </summary>
-    private static async Task<List<(string Source, MessageKind Kind, string Json)>> ReadUntilSentinel(HydraTestClient receiver)
+    private static async Task<List<ReceivedMessage>> ReadUntilSentinel(HydraTestClient receiver)
     {
-        var frames = new List<(string Source, MessageKind Kind, string Json)>();
+        var frames = new List<ReceivedMessage>();
         while (true)
         {
-            var frame = await receiver.WaitForNextMessage();
+            var frame = await receiver.WaitForMessage();
             if (frame.Kind == MessageKind.Osd) return frames;
             frames.Add(frame);
         }
@@ -134,9 +116,8 @@ public class KeyBundleTests : StyxFixtureBase
     /// too, because a test that only checked the events would pass against an implementation that quietly
     /// stopped bundling — and then this whole change would be dead code nobody noticed.</para>
     /// </summary>
-    [TestCase(false)]
-    [TestCase(true)]
-    public async Task ABurstOfKeysArrivesCompleteAndInOrder(bool typed)
+    [Test]
+    public async Task ABurstOfKeysArrivesCompleteAndInOrder()
     {
         await using var pair = await ConnectedPair();
         var (sender, receiver) = pair;
@@ -147,7 +128,7 @@ public class KeyBundleTests : StyxFixtureBase
         var blocker = sender.SendReliableAsync([Receiver], TestMessages.Key(0)).AsTask();
         await sender.WaitUntilLaneHeld();
 
-        for (var i = 1; i <= count; i++) SendKey(typed, sender, [Receiver], i);
+        for (var i = 1; i <= count; i++) sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(i));
 
         sender.Send([Receiver], Sentinel());
         sender.ReleaseLane();
@@ -170,9 +151,8 @@ public class KeyBundleTests : StyxFixtureBase
     /// both halves of a keystroke are queued before either goes out. Deliver only the down and the key is
     /// held on the remote machine for ever.</para>
     /// </summary>
-    [TestCase(false)]
-    [TestCase(true)]
-    public async Task ADownAndItsUpInOneBundleBothArriveInOrder(bool typed)
+    [Test]
+    public async Task ADownAndItsUpInOneBundleBothArriveInOrder()
     {
         await using var pair = await ConnectedPair();
         var (sender, receiver) = pair;
@@ -181,8 +161,8 @@ public class KeyBundleTests : StyxFixtureBase
         var blocker = sender.SendReliableAsync([Receiver], TestMessages.Move(1)).AsTask();
         await sender.WaitUntilLaneHeld();
 
-        SendKey(typed, sender, [Receiver], 0);
-        SendKey(typed, sender, [Receiver], 0, KeyEventType.KeyUp);
+        sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(0));
+        sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(0, KeyEventType.KeyUp));
 
         sender.Send([Receiver], Sentinel());
         sender.ReleaseLane();
@@ -211,9 +191,8 @@ public class KeyBundleTests : StyxFixtureBase
     /// frame, never the input — an implementation that dropped the event which did not fit would pass a test
     /// that only counted frames.</para>
     /// </summary>
-    [TestCase(false)]
-    [TestCase(true)]
-    public async Task MoreKeysThanOneBundleHoldsSpillIntoTheNextWithoutLoss(bool typed)
+    [Test]
+    public async Task MoreKeysThanOneBundleHoldsSpillIntoTheNextWithoutLoss()
     {
         await using var pair = await ConnectedPair();
         var (sender, receiver) = pair;
@@ -225,7 +204,7 @@ public class KeyBundleTests : StyxFixtureBase
         var blocker = sender.SendReliableAsync([Receiver], TestMessages.Move(1)).AsTask();
         await sender.WaitUntilLaneHeld();
 
-        for (var i = 0; i < count; i++) SendKey(typed, sender, [Receiver], i);
+        for (var i = 0; i < count; i++) sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(i));
 
         sender.Send([Receiver], Sentinel());
         sender.ReleaseLane();
@@ -273,9 +252,9 @@ public class KeyBundleTests : StyxFixtureBase
         var blocker = sender.SendReliableAsync([Receiver], TestMessages.Key(25)).AsTask();
         await sender.WaitUntilLaneHeld();
 
-        sender.Send([Receiver], TestMessages.Key(0));
+        sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(0));
         sender.Send([Receiver], TestMessages.Move(7));
-        sender.Send([Receiver], TestMessages.Key(1));
+        sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(1));
 
         sender.Send([Receiver], Sentinel());
         sender.ReleaseLane();
@@ -306,9 +285,8 @@ public class KeyBundleTests : StyxFixtureBase
     /// returns, the first bundle has provably been read — and the key sent next is landing in exactly the gap
     /// that loses it. With the clear in place it starts a fresh bundle; without it, it vanishes.</para>
     /// </summary>
-    [TestCase(false)]
-    [TestCase(true)]
-    public async Task AKeySentAfterTheDrainTookTheBundleStillArrives(bool typed)
+    [Test]
+    public async Task AKeySentAfterTheDrainTookTheBundleStillArrives()
     {
         await using var pair = await ConnectedPair();
         var (sender, receiver) = pair;
@@ -316,11 +294,11 @@ public class KeyBundleTests : StyxFixtureBase
         sender.HoldLane(RelayLane.Input);
 
         // Read and snapshotted by the drain, which then parks — so the bundle behind it is spent.
-        SendKey(typed, sender, [Receiver], 0);
+        sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(0));
         await sender.WaitUntilLaneHeld();
 
         // Into the gap. This must NOT join the bundle that has already been read.
-        SendKey(typed, sender, [Receiver], 1);
+        sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(1));
 
         sender.Send([Receiver], Sentinel());
         sender.ReleaseLane();
@@ -353,9 +331,9 @@ public class KeyBundleTests : StyxFixtureBase
         var blocker = sender.SendReliableAsync([Receiver], TestMessages.Move(1)).AsTask();
         await sender.WaitUntilLaneHeld();
 
-        sender.Send([Receiver], TestMessages.Key(0));
+        sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(0));
         sender.SendMouseDelta([Receiver], 7, 9);
-        sender.Send([Receiver], TestMessages.Key(1));
+        sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(1));
 
         sender.Send([Receiver], Sentinel());
         sender.ReleaseLane();
@@ -388,9 +366,9 @@ public class KeyBundleTests : StyxFixtureBase
         var blocker = sender.SendReliableAsync([Receiver], TestMessages.Move(1)).AsTask();
         await sender.WaitUntilLaneHeld();
 
-        sender.Send([Receiver], TestMessages.Key(0));
+        sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(0));
         var between = sender.SendReliableAsync([Receiver], MessageSerializer.Encode(MessageKind.LockScreen, new LockScreenMessage(0))).AsTask();
-        sender.Send([Receiver], TestMessages.Key(1));
+        sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(1));
 
         sender.Send([Receiver], Sentinel());
         sender.ReleaseLane();
@@ -413,9 +391,8 @@ public class KeyBundleTests : StyxFixtureBase
     ///
     /// <para>A fixed seed, so a failure is reproducible rather than a story about one unlucky run.</para>
     /// </summary>
-    [TestCase(false)]
-    [TestCase(true)]
-    public async Task ARandomisedStreamOfKeysRoundTripsExactly(bool typed)
+    [Test]
+    public async Task ARandomisedStreamOfKeysRoundTripsExactly()
     {
         await using var pair = await ConnectedPair();
         var (sender, receiver) = pair;
@@ -431,7 +408,7 @@ public class KeyBundleTests : StyxFixtureBase
         {
             var type = random.Next(2) == 0 ? KeyEventType.KeyDown : KeyEventType.KeyUp;
             var n = random.Next(26);
-            SendKey(typed, sender, [Receiver], n, type);
+            sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(n, type));
             sent.Add((type, (char)('a' + n)));
         }
 
@@ -464,7 +441,7 @@ public class KeyBundleTests : StyxFixtureBase
         await sender.WaitUntilLaneHeld();
 
         sender.Send([Receiver], TestMessages.Move(3));
-        sender.Send([Receiver], TestMessages.Key(0));
+        sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(0));
         sender.Send([Receiver], TestMessages.Move(9));
 
         sender.Send([Receiver], Sentinel());
@@ -486,9 +463,8 @@ public class KeyBundleTests : StyxFixtureBase
     /// event provably goes through the bundling path rather than round it: this is <c>Snapshot</c>'s rule,
     /// not an accident of the drain being quick.</para>
     /// </summary>
-    [TestCase(false)]
-    [TestCase(true)]
-    public async Task ALoneKeyTravelsAsAPlainKeyEventNotABatchOfOne(bool typed)
+    [Test]
+    public async Task ALoneKeyTravelsAsAPlainKeyEventNotABatchOfOne()
     {
         await using var pair = await ConnectedPair();
         var (sender, receiver) = pair;
@@ -497,7 +473,7 @@ public class KeyBundleTests : StyxFixtureBase
         var blocker = sender.SendReliableAsync([Receiver], TestMessages.Move(1)).AsTask();
         await sender.WaitUntilLaneHeld();
 
-        SendKey(typed, sender, [Receiver], 0);
+        sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(0));
 
         sender.Send([Receiver], Sentinel());
         sender.ReleaseLane();
@@ -536,9 +512,9 @@ public class KeyBundleTests : StyxFixtureBase
         var blocker = sender.SendReliableAsync([Receiver], TestMessages.Move(1)).AsTask();
         await sender.WaitUntilLaneHeld();
 
-        sender.Send([Receiver], TestMessages.Key(0));
-        sender.Send([other], TestMessages.Key(1));
-        sender.Send([Receiver], TestMessages.Key(2));
+        sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(0));
+        sender.SendKeyEvent([other], TestMessages.KeyMessage(1));
+        sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(2));
 
         sender.Send([Receiver], Sentinel());
         sender.ReleaseLane();

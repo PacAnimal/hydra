@@ -183,7 +183,7 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     internal static partial uint GetDpiForSystem();
 
-    // EnumDisplayMonitors: classic DllImport for managed delegate marshaling
+    // the delegate is marshaled as a function pointer, valid only for the call
     [LibraryImport(User32, SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool EnumDisplayMonitors(nint hdc, nint lprcClip, MonitorEnumProc lpfnEnum, nint dwData);

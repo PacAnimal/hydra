@@ -43,31 +43,35 @@ public class StyxHub(IClientRegistry registry, IPeerBroadcaster peers, ITokenVer
         var throttle = throttler.Start(Constants.AuthThrottleSeconds, Context.ConnectionAborted);
         var remoteIp = RemoteIp;
 
+        async Task<RelayLoginResponse> Refuse(string? message)
+        {
+            await throttle;
+            return new RelayLoginResponse { Authenticated = false, Message = message };
+        }
+
         // a third-party client can send any shape of login it likes — refuse an incomplete one with an
         // answer it can act on, rather than failing somewhere in the paths below
         if (login is null || string.IsNullOrWhiteSpace(login.Authorization) || string.IsNullOrWhiteSpace(login.HostName))
         {
             log.LogWarning("Authentication rejected from {RemoteIp}: login is missing an authorization or a hostname", remoteIp);
-            await throttle;
-            return new RelayLoginResponse { Authenticated = false, Message = "Authorization and hostName are both required" };
+            return await Refuse("Authorization and hostName are both required");
         }
 
+        // the canonical form peers see the name in and address it by (Styx.md §2)
         var hostName = login.HostName.ToLowerInvariant();
         var verdict = await verifier.Verify(login.Authorization, remoteIp, Context.ConnectionAborted);
         if (verdict.Network is not { } network)
         {
             log.LogWarning("Authentication failed for \"{HostName}\" from {RemoteIp}: {Reason}", hostName, remoteIp, verdict.Failure);
-            await throttle;
-            return new RelayLoginResponse { Authenticated = false, Message = verdict.Failure };
+            return await Refuse(verdict.Failure);
         }
 
-        // the relay never renames a peer: clients use their own configured name in payloads and HMACs
+        // the rules judge the name as sent, grammar included; one they do not allow is refused, never rewritten into one they do
         if (verdict.Rules is { } rules && !rules.Allows(login.HostName))
         {
             log.LogWarning("Authentication refused for \"{HostName}\" from {RemoteIp} on network {Network}: the token does not allow the name",
                 hostName, remoteIp, network);
-            await throttle;
-            return new RelayLoginResponse { Authenticated = false, Message = HostNameNotAllowed };
+            return await Refuse(HostNameNotAllowed);
         }
 
         // kick same network+hostname duplicates and register atomically (one lock) so two concurrent

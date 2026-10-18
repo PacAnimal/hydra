@@ -1,8 +1,4 @@
-using System.Text;
-using System.Text.Json;
-using Cathedral.Config;
 using Cathedral.Styx;
-using Cathedral.Utils;
 using Common;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
@@ -53,9 +49,9 @@ public static class StyxTestServer
     public static StyxToken MintToken(Guid? network = null, params IEnumerable<StyxCaveat> caveats) =>
         StyxToken.Mint(TestKey, network ?? StyxToken.NewNetworkId(), caveats);
 
-    // generates a valid authorization blob for the given networkId, signed with the given password
-    public static async Task<string> GenerateAuthorization(Guid networkId, string password = TestPassword)
-        => await new SimpleAes(password).EncryptBase64(networkId, CancellationToken.None);
+    // a v1 authorization for the given network, under the test servers' password unless another is given
+    public static async Task<string> GenerateAuthorization(Guid networkId, string password = TestPassword) =>
+        await NetworkConfig.V1Authorization(password, networkId);
 
     // builds the base64-encoded NetworkConfig string that HydraConfig.NetworkConfig expects
     public static async Task<string> BuildNetworkConfig(
@@ -64,18 +60,10 @@ public static class StyxTestServer
         string? encryptionKey = null,
         string password = TestPassword)
     {
-        var key = encryptionKey ?? GenerateEncryptionKey();
         var authorization = await GenerateAuthorization(networkId, password);
-        var styxServer = factory.Server.BaseAddress.ToString().TrimEnd('/');
-        var config = new NetworkConfig(styxServer, key, authorization);
-        var json = JsonSerializer.Serialize(config, SaneJson.Options);
-        return Convert.ToBase64String(Encoding.UTF8.GetBytes(json));
+        return new NetworkConfig(ServerUrl(factory), encryptionKey ?? NetworkConfig.NewEncryptionKey(), authorization).ToBlob();
     }
 
-    // 128-char alphanumeric key, matching what the web UI generates
-    public static string GenerateEncryptionKey()
-    {
-        const string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-        return new string(Random.Shared.GetItems(chars.AsSpan(), 128));
-    }
+    // the test server's address, as a blob's StyxServer spells it
+    public static string ServerUrl(WebApplicationFactory<global::Styx.Program> factory) => factory.Server.BaseAddress.ToString().TrimEnd('/');
 }

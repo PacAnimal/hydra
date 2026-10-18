@@ -15,8 +15,7 @@ public static class StyxRelayExtensions
     // everything a relay host needs besides its listeners, logging and any endpoints of its own, shared by
     // the standalone server and the one embedded in Hydra. Only a host behind a proxy may believe forwarded headers:
     // anywhere else, any machine on a private network could name itself whatever address it liked
-    public static WebApplicationBuilder AddStyxRelay(this WebApplicationBuilder builder, StyxAuth auth, StyxOptions options, bool behindProxy,
-        TimeProvider? throttleClock = null)
+    public static WebApplicationBuilder AddStyxRelay(this WebApplicationBuilder builder, StyxAuth auth, StyxOptions options, bool behindProxy)
     {
         var services = builder.Services;
 
@@ -25,7 +24,7 @@ public static class StyxRelayExtensions
         services.AddStyxSignalR(options.ParallelInvocations);
 
         services.AddSingleton(options);
-        services.AddSingleton(new ResponseThrottle(throttleClock ?? TimeProvider.System));
+        services.AddSingleton(new ResponseThrottle(TimeProvider.System));
         services.AddSingleton<IClientRegistry, ClientRegistry>();
         services.AddSingleton<PeerWriter>();
         services.TryAddKeyedSingleton<TimeProvider>(typeof(PeerWriter), TimeProvider.System);

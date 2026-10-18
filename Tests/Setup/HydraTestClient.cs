@@ -50,17 +50,14 @@ public sealed class HydraTestClient : RelayConnection, IAsyncDisposable
 
     private readonly SemaphoreSlim _readySignal = new(0);
     private readonly NotificationQueue<string[]> _peers = new();
-    private readonly NotificationQueue<(string Source, MessageKind Kind, string Json)> _messages = new();
-    private readonly SemaphoreSlim _receiveSignal = new(0);
-    private readonly SemaphoreSlim _kickSignal = new(0);
+    private readonly NotificationQueue<ReceivedMessage> _messages = new();
+    private readonly NotificationQueue<string> _kicks = new();
     private readonly SemaphoreSlim _parkedSignal = new(0);
 
-    private (string Source, MessageKind Kind, string Json)? _lastMessage;
     private string? _kickReason;
 
     private volatile LaneGate? _gate;
 
-    public (string Source, MessageKind Kind, string Json)? LastMessage => _lastMessage;
     public string? KickReason => _kickReason;
 
     protected override TimeSpan ReconnectDelay => TimeSpan.Zero;
@@ -83,10 +80,10 @@ public sealed class HydraTestClient : RelayConnection, IAsyncDisposable
     public void HoldLane(RelayLane lane) => _gate = new LaneGate(lane);
 
     // blocks until a payload is parked on the lane HoldLane gated
-    public async Task WaitUntilLaneHeld(int timeoutMs = 15000)
+    public async Task WaitUntilLaneHeld()
     {
         var gate = _gate ?? throw new InvalidOperationException("no lane is held");
-        try { await gate.Held.Task.WaitAsync(TimeSpan.FromMilliseconds(timeoutMs)); }
+        try { await gate.Held.Task.WaitAsync(TestBound.Bound); }
         catch (TimeoutException) { throw new TimeoutException($"Timed out waiting for the {gate.Lane} lane to park"); }
     }
 
@@ -119,10 +116,8 @@ public sealed class HydraTestClient : RelayConnection, IAsyncDisposable
 
     protected override Task OnReceive(string sourceHost, MessageKind kind, ReadOnlyMemory<byte> body)
     {
-        var message = (sourceHost, kind, Encoding.UTF8.GetString(body.Span));
-        _lastMessage = message;
+        var message = new ReceivedMessage(sourceHost, kind, Encoding.UTF8.GetString(body.Span));
         _messages.Push(message);
-        _receiveSignal.Release();
         return Task.CompletedTask;
     }
 
@@ -135,21 +130,21 @@ public sealed class HydraTestClient : RelayConnection, IAsyncDisposable
     protected override Task OnKicked(string reason)
     {
         _kickReason = reason;
-        _kickSignal.Release();
+        _kicks.Push(reason);
         return Task.CompletedTask;
     }
 
     // blocks until _server and _encryption are set — use this as the connection-ready barrier
-    public async Task WaitForReady(int timeoutMs = 15000, CancellationToken cancel = default)
+    public async Task WaitForReady(CancellationToken cancel = default)
     {
-        if (!await _readySignal.WaitAsync(timeoutMs, cancel))
+        if (!await _readySignal.WaitAsync(TestBound.Bound, cancel))
             throw new TimeoutException("Timed out waiting for relay connection");
     }
 
     // blocks until the reconnect loop is parked on a suspension, after which it cannot connect until resumed
-    public async Task WaitUntilParked(int timeoutMs = 15000)
+    public async Task WaitUntilParked()
     {
-        if (!await _parkedSignal.WaitAsync(timeoutMs))
+        if (!await _parkedSignal.WaitAsync(TestBound.Bound))
             throw new TimeoutException("Timed out waiting for the suspended relay to park");
     }
 
@@ -161,31 +156,17 @@ public sealed class HydraTestClient : RelayConnection, IAsyncDisposable
     }
 
     // blocks until the next Peers broadcast arrives
-    public Task<string[]> WaitForPeers(int timeoutMs = 15000) => _peers.Next(timeoutMs, "peers update");
+    public Task<string[]> WaitForPeers() => _peers.Next("peers update");
 
-    public async Task<(string Source, MessageKind Kind, string Json)> WaitForMessage(int timeoutMs = 15000)
-    {
-        if (!await _receiveSignal.WaitAsync(timeoutMs))
-            throw new TimeoutException("Timed out waiting for message");
-        return _lastMessage!.Value;
-    }
+    // pops the next message in arrival order
+    public Task<ReceivedMessage> WaitForMessage() => _messages.Next("message");
 
-    // pops the next message in arrival order — unlike WaitForMessage/_lastMessage, a burst of several
-    // messages arriving before the test reads any of them is never collapsed down to just the last one.
-    public Task<(string Source, MessageKind Kind, string Json)> WaitForNextMessage(int timeoutMs = 15000) =>
-        _messages.Next(timeoutMs, "message");
-
-    public async Task<string> WaitForKick(int timeoutMs = 15000)
-    {
-        if (!await _kickSignal.WaitAsync(timeoutMs))
-            throw new TimeoutException("Timed out waiting for kick");
-        return _kickReason!;
-    }
+    public Task<string> WaitForKick() => _kicks.Next("kick");
 
     public async ValueTask DisposeAsync()
     {
         if (!_disposed.TrySet()) return;
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var cts = new CancellationTokenSource(Bound);
         try { await StopAsync(cts.Token); }
         catch { /* ignore stop errors in cleanup */ }
         Dispose();

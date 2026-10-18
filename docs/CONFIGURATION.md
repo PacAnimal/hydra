@@ -616,7 +616,7 @@ Remote hosts can connect with: embeddedStyx: {"server": "https://<your-ip>:5000"
 
 The embedded relay speaks only TLS, with no certificate to set up: it makes a new self-signed one on every start, and each machine checks that the relay knows the password before it trusts that certificate or sends anything else.
 
-The `embeddedStyx` property is also an alternative to `networkConfig` for any external Styx server — just point it at the server's `https://` URL and provide the password instead of copying a base64 string. That server needs a certificate your machines already trust, such as one from the reverse proxy in front of it.
+The `embeddedStyx` property is also an alternative to `networkConfig` for any external Styx server — just point it at the server's `https://` URL and provide the password instead of copying a base64 string. That server needs a certificate your machines already trust, such as one from the reverse proxy in front of it. The password is the relay's `RELAY_PASSWORD`, so this works only while that is set, and everyone connecting this way lands on the same network: anyone who knows the password can reach your machines. To keep groups of machines apart, give each its own `networkConfig` instead.
 
 ### Running standalone Styx
 
@@ -653,6 +653,26 @@ password offline, so make it long and random.
 
 An existing relay keeps accepting the configs it already issued for as long as `RELAY_PASSWORD` stays set; new
 networks are always issued in the newer format. See [Styx.md](../Styx.md) §13 for every setting.
+
+`mint` issues a config offline, from the key alone (`RELAY_SIGNING_KEY`, or `RELAY_SIGNING_PASSPHRASE`), with no relay running and no password:
+
+```bash
+docker run --rm -e RELAY_SIGNING_KEY=<key> ghcr.io/pacanimal/styx:latest mint --server https://styx.example.org --sub office --host-prefix office-
+```
+
+With `--server` it prints a config string for `networkConfig`; without, only the token. `--sub`, `--host-prefix`,
+`--host-not` and `--id` may each be given more than once:
+
+- `--network <uuid>` — the network to mint for, a version-8 UUID; a new one when left out
+- `--sub <name>` — a sub-network: machines on different sub-networks of one network cannot see each other
+- `--host <name>`, `--host-prefix <prefix>`, `--host-not <name>` — which hostnames the config may log in as
+- `--exp <unix seconds>` — when it stops working
+- `--id <id>` — a label `RELAY_REVOKED_IDS` can revoke it by
+- `--max-length <chars>` — refuse if the token would be longer
+- `--encryption-key <key>` — the key machines encrypt their traffic with; a random one when left out
+- `--max-blob <bytes>` — refuse if the config string would be larger
+
+[Styx.md](../Styx.md) §14 covers choosing these and the mistakes to avoid.
 
 `styx:latest` is built from `main`; `styx:edge` from the `edge` branch, for trying changes before they ship.
 

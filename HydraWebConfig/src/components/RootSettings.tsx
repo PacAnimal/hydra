@@ -1,10 +1,11 @@
-import type { FormState, LogLevel } from '../types'
+import type { FormState, LogLevel, RootSettingsPatch, UpdateChannel } from '../types'
 
 const LOG_LEVELS: LogLevel[] = ['trace', 'debug', 'info', 'warn', 'error', 'critical']
+const UPDATE_CHANNELS: UpdateChannel[] = ['stable', 'edge']
 
 interface Props {
   state: FormState
-  onChange: (patch: Partial<Pick<FormState, 'name' | 'autoUpdate' | 'managementListener' | 'logLevel' | 'lockFile' | 'logFile' | 'sessionLogFile'>>) => void
+  onChange: (patch: RootSettingsPatch) => void
 }
 
 export function RootSettings({ state, onChange }: Props) {
@@ -30,6 +31,16 @@ export function RootSettings({ state, onChange }: Props) {
             onChange={e => onChange({ logLevel: e.target.value as LogLevel })}
           >
             {LOG_LEVELS.map(l => <option key={l} value={l}>{l}</option>)}
+          </select>
+        </div>
+        <div className="field">
+          <label htmlFor="gs-updatechannel" title="edge follows prereleases built from the edge branch, and moves back onto a stable release once one overtakes them">Update Channel</label>
+          <select
+            id="gs-updatechannel"
+            value={state.updateChannel ?? 'stable'}
+            onChange={e => onChange({ updateChannel: e.target.value === 'stable' ? undefined : e.target.value as UpdateChannel })}
+          >
+            {UPDATE_CHANNELS.map(c => <option key={c} value={c}>{c}</option>)}
           </select>
         </div>
         <div className="field flex-grow">

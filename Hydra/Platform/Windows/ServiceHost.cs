@@ -46,12 +46,10 @@ internal static class ServiceHost
             services.AddSereneFileLogging(logPath, c => c.MinLogLevel = profile.LogLevel);
         }
         services.AddSingleton<IHydraProfile>(profile);
-        services.AddSingleton(sp =>
+        services.AddHostedSingleton(sp =>
             new SessionWatchdog(sp.GetRequiredService<ILogger<SessionWatchdog>>(), HydraArgs.SessionChildArguments(configPath)));
-        services.AddHostedService(sp => sp.GetRequiredService<SessionWatchdog>());
         services.AddHostedService<SasService>();
-        services.AddSingleton<SelfUpdater>();
-        services.AddHostedService(sp => sp.GetRequiredService<SelfUpdater>());
+        services.AddHostedSingleton<SelfUpdater>();
 
         var app = builder.Build();
 

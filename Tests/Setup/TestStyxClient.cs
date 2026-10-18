@@ -38,7 +38,7 @@ public sealed class TestStyxClient : IStyxClient, IAsyncDisposable
 
     // connect without authenticating — for testing unauthenticated behaviour
     public Task ConnectRaw(WebApplicationFactory<global::Styx.Program> factory, string path = global::Styx.Constants.RelayPath) =>
-        ConnectRaw(new HubConnectionBuilder().WithUrl($"{factory.Server.BaseAddress.ToString().TrimEnd('/')}{path}",
+        ConnectRaw(new HubConnectionBuilder().WithUrl($"{StyxTestServer.ServerUrl(factory)}{path}",
             options => options.UseTestServer(factory.Server)));
 
     // the same, against the embedded relay on a real socket, trusting its self-signed cert without the binding
@@ -62,7 +62,7 @@ public sealed class TestStyxClient : IStyxClient, IAsyncDisposable
         Server = _hub.CreateHubProxy<IStyxServer>();
     }
 
-    public Task<string[]> WaitForPeers(int timeoutMs = 5000) => _peers.Next(timeoutMs, "peers update");
+    public Task<string[]> WaitForPeers() => _peers.Next("peers update");
 
     // peers updates already received and not yet read; handlers run in arrival order, so this orders them against payloads
     public int PeersWaiting => _peers.Count;
@@ -78,20 +78,20 @@ public sealed class TestStyxClient : IStyxClient, IAsyncDisposable
     }
 
     // every message received, in arrival order
-    public Task<StyxReceived> WaitForReceive(int timeoutMs = 5000) => _received.Next(timeoutMs, "a received message");
+    public Task<StyxReceived> WaitForReceive() => _received.Next("a received message");
 
     // the payload of the next message received
-    public async Task<byte[]> NextReceived(int timeoutMs = 5000) => (await WaitForReceive(timeoutMs)).Payload;
+    public async Task<byte[]> NextReceived() => (await WaitForReceive()).Payload;
 
     // a non-blocking invocation, as Hydra's input lane sends: nothing comes back, and the next may go at once
     public Task SendWithoutWaiting(string[] targetHosts, byte[] payload) => _hub!.SendAsync(nameof(IStyxServer.Send), targetHosts, payload);
 
     // the relay dropped the connection
-    public Task<Exception?> WaitForClose(int timeoutMs = 5000) => _closed.Next(timeoutMs, "the connection to close");
+    public Task<Exception?> WaitForClose() => _closed.Next("the connection to close");
 
     public HubConnectionState State => _hub?.State ?? HubConnectionState.Disconnected;
 
-    public Task<string> WaitForKick(int timeoutMs = 5000) => _kicks.Next(timeoutMs, "a kick");
+    public Task<string> WaitForKick() => _kicks.Next("a kick");
 
     // IStyxClient
     public Task Receive(string sourceHost, string sourceIp, byte[] payload)

@@ -2,7 +2,6 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Cathedral.Styx;
-using Cathedral.Utils;
 using Styx;
 using Styx.Services;
 using Tests.Setup;
@@ -48,7 +47,7 @@ public class StyxV2Tests : StyxFixtureBase
     }
 
     [Test]
-    public async Task AHostCaveat_AdmitsOnlyThatName_InAnyCase_AndNeverRenames()
+    public async Task AHostCaveat_AdmitsOnlyThatName_InAnyCase_ReportedLowercase()
     {
         var token = StyxTestServer.MintToken(null, StyxCaveat.Host("player-1")).ToString();
         await using var allowed = new TestStyxClient();
@@ -147,7 +146,7 @@ public class StyxV2Tests : StyxFixtureBase
     [Test]
     public async Task AV1TokenForAVersion8Network_IsRefused()
     {
-        var v1 = await new SimpleAes(StyxTestServer.TestPassword).EncryptBase64(StyxToken.NewNetworkId(), CancellationToken.None);
+        var v1 = await StyxTestServer.GenerateAuthorization(StyxToken.NewNetworkId());
         await using var client = new TestStyxClient();
         Assert.That((await client.Connect(Factory, v1, "alpha")).Message, Is.EqualTo(TokenVerifier.InvalidAuthorization));
     }

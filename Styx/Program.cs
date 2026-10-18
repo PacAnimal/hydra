@@ -70,13 +70,9 @@ app.MapGet("/api/status", async (HttpContext http, ITokenVerifier verifier, ICli
     var throttle = throttler.Start(Constants.StatusThrottleSeconds, ct);
 
     var bearer = http.Request.Headers.Authorization.ToString();
-    var token = bearer.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) ? bearer["Bearer ".Length..] : "";
+    var token = bearer.StartsWithIgnoreCase("Bearer ") ? bearer["Bearer ".Length..] : "";
     var verdict = await verifier.Verify(token, ClientRegistry.RemoteIpOf(http), ct);
-    if (verdict.Network is not { } network)
-    {
-        await throttle;
-        return Results.Unauthorized();
-    }
+    if (verdict.Network is not { } network) return await Throttled(throttle, Results.Unauthorized());
 
     // a valid token's holder is answered at once; the throttle only slows guessing
     var clients = await registry.GetNetworkClients(network);
@@ -89,30 +85,19 @@ app.MapPost("/api/network-config", async (HttpContext http, NetworkConfigRequest
     var throttle = throttler.Start(Constants.NetworkConfigThrottleSeconds, ct);
 
     // nothing ever issues a v1 token, so without a key, or without the password to guard it, there is nothing here
-    if (!relayAuth.CreatesNetworks || relayAuth.V1Password is not { } password)
-    {
-        await throttle;
-        return Results.NotFound();
-    }
+    if (!relayAuth.CreatesNetworks || relayAuth.V1Password is not { } password) return await Throttled(throttle, Results.NotFound());
 
     var remoteIp = ClientRegistry.RemoteIpOf(http);
-    if (limiter.IsBlocked(remoteIp))
-    {
-        await throttle;
-        return Results.Unauthorized();
-    }
+    if (limiter.IsBlocked(remoteIp)) return await Throttled(throttle, Results.Unauthorized());
     if (!SecretMatches(request.Password, password))
     {
         limiter.RecordFailure(remoteIp);
-        await throttle;
-        return Results.Unauthorized();
+        return await Throttled(throttle, Results.Unauthorized());
     }
 
     var authorization = StyxToken.Mint(relayAuth.Keys[0], StyxToken.NewNetworkId()).ToString();
-    await throttle;
-    return Results.Ok(new NetworkConfigResponse(authorization));
+    return await Throttled(throttle, Results.Ok(new NetworkConfigResponse(authorization)));
 });
-
 
 if (app.Logger.IsEnabled(LogLevel.Information))
 {
@@ -126,6 +111,13 @@ if (StyxEnvironment.ParallelInvocationsWarning(parallelInvocations) is { } paral
 if (debugMessages) app.Logger.LogInformation("Message debug logging enabled");
 app.Run();
 return 0;
+
+// answers no sooner than the endpoint's throttle
+static async Task<IResult> Throttled(Task throttle, IResult result)
+{
+    await throttle;
+    return result;
+}
 
 // digests, so the comparison takes the same time whatever either length is
 static bool SecretMatches(string? given, string expected) =>

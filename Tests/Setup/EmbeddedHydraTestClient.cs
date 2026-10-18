@@ -16,14 +16,11 @@ public sealed class EmbeddedHydraTestClient(IHydraProfile profile, ILogger<Relay
     : RelayConnection(profile, log ?? TestLog.CreateLogger<RelayConnection>(), new WorldState()), IAsyncDisposable
 {
     private readonly SemaphoreSlim _readySignal = new(0);
-    private readonly SemaphoreSlim _peerSignal = new(0);
-    private readonly SemaphoreSlim _receiveSignal = new(0);
-    private readonly SemaphoreSlim _kickSignal = new(0);
+    private readonly NotificationQueue<string[]> _peers = new();
+    private readonly NotificationQueue<ReceivedMessage> _messages = new();
+    private readonly NotificationQueue<string> _kicks = new();
 
     private readonly ConcurrentQueue<Socket> _connectorSockets = new();
-    private volatile string[] _lastPeers = [];
-    private (string Source, MessageKind Kind, string Json)? _lastMessage;
-    private string? _kickReason;
 
     protected override TimeSpan ReconnectDelay => TimeSpan.Zero;
 
@@ -44,55 +41,38 @@ public sealed class EmbeddedHydraTestClient(IHydraProfile profile, ILogger<Relay
 
     protected override Task OnReceive(string sourceHost, MessageKind kind, ReadOnlyMemory<byte> body)
     {
-        _lastMessage = (sourceHost, kind, Encoding.UTF8.GetString(body.Span));
-        _receiveSignal.Release();
+        _messages.Push(new ReceivedMessage(sourceHost, kind, Encoding.UTF8.GetString(body.Span)));
         return Task.CompletedTask;
     }
 
     protected override Task OnPeers(string[] hostNames)
     {
-        _lastPeers = hostNames;
-        _peerSignal.Release();
+        _peers.Push(hostNames);
         return Task.CompletedTask;
     }
 
     protected override Task OnKicked(string reason)
     {
-        _kickReason = reason;
-        _kickSignal.Release();
+        _kicks.Push(reason);
         return Task.CompletedTask;
     }
 
-    public async Task WaitForReady(int timeoutMs = 15000)
+    public async Task WaitForReady()
     {
-        if (!await _readySignal.WaitAsync(timeoutMs))
+        if (!await _readySignal.WaitAsync(TestBound.Bound))
             throw new TimeoutException("Timed out waiting for relay connection");
     }
 
-    public async Task<string[]> WaitForPeers(int timeoutMs = 15000)
-    {
-        if (!await _peerSignal.WaitAsync(timeoutMs))
-            throw new TimeoutException("Timed out waiting for peers update");
-        return _lastPeers;
-    }
+    // each wait takes the next notification in arrival order, so two before a wait are never read as one
+    public Task<string[]> WaitForPeers() => _peers.Next("peers update");
 
-    public async Task<(string Source, MessageKind Kind, string Json)> WaitForMessage(int timeoutMs = 15000)
-    {
-        if (!await _receiveSignal.WaitAsync(timeoutMs))
-            throw new TimeoutException("Timed out waiting for message");
-        return _lastMessage!.Value;
-    }
+    public Task<ReceivedMessage> WaitForMessage() => _messages.Next("message");
 
-    public async Task<string> WaitForKick(int timeoutMs = 15000)
-    {
-        if (!await _kickSignal.WaitAsync(timeoutMs))
-            throw new TimeoutException("Timed out waiting for kick");
-        return _kickReason!;
-    }
+    public Task<string> WaitForKick() => _kicks.Next("kick");
 
     public async ValueTask DisposeAsync()
     {
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var cts = new CancellationTokenSource(Bound);
         try { await StopAsync(cts.Token); }
         catch { /* ignore stop errors in cleanup */ }
         Dispose();

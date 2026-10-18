@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react'
-import type { FormState, HydraProfile, HostConfig, NeighbourConfig, ScreenDefinition, ConfigConditions, LayoutItem } from '../types'
+import type { FormState, RootSettingsPatch, HydraProfile, HostConfig, NeighbourConfig, ScreenDefinition, ConfigConditions, LayoutItem } from '../types'
 import { newFormState, newHost, newNeighbour, newScreenDefinition, newProfile } from '../defaults'
 import { inferLayoutFromHosts, deriveHostsFromLayout } from '../utils/layout'
 import { deserialize } from '../utils/deserializer'
@@ -67,7 +67,7 @@ export function useHydraConfig() {
 
   const current = state.profiles[state.activeIndex] ?? state.profiles[0]
 
-  const updateRoot = useCallback((patch: Partial<Pick<FormState, 'name' | 'autoUpdate' | 'managementListener' | 'logLevel' | 'lockFile' | 'logFile' | 'sessionLogFile'>>) => {
+  const updateRoot = useCallback((patch: RootSettingsPatch) => {
     push(s => ({ ...s, ...patch }))
   }, [push])
 

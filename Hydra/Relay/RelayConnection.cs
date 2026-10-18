@@ -125,29 +125,9 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         {
             if (!CanEnqueue) return;
 
-            // Fallback for a key that reaches the generic Send() instead of SendKeyEvent, exactly as the
-            // delta branch below is for SendMouseDelta — decoded once here so it still bundles. InputRouter,
-            // the hot path, calls SendKeyEvent and hands over the event typed, with nothing to decode.
-            if (payload.Length > 0 && payload[0] == (byte)MessageKind.KeyEvent
-                && MessageSerializer.Decode(payload).Deserialize<KeyEventMessage>() is { } keyEvent)
-            {
-                EnqueueKey(targetHosts, keyEvent);
-                return;
-            }
-
             if (payload.Length > 0 && payload[0] == (byte)MessageKind.MouseMove)
             {
                 EnqueueAbsolute(targetHosts, payload);
-                return;
-            }
-
-            // Fallback for a delta that reaches the generic Send() instead of SendMouseDelta (e.g. an
-            // IRelaySender decorator that forwards Send but not SendMouseDelta) — decodes once here so it
-            // still coalesces instead of silently losing batching. InputRouter, the actual hot path, never
-            // hits this: it calls SendMouseDelta directly and never encodes/decodes at all to accumulate.
-            if (payload.Length > 0 && payload[0] == (byte)MessageKind.MouseMoveDelta && TryDecodeDelta(payload, out var dx, out var dy))
-            {
-                EnqueueDelta(targetHosts, dx, dy);
                 return;
             }
 
@@ -163,8 +143,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     // one key event, typed, so the open bundle absorbs it without decoding it inside the send-order lock
     public void SendKeyEvent(string[] targetHosts, KeyEventMessage message)
     {
-        var payload = MessageSerializer.Encode(MessageKind.KeyEvent, message);
-        OnSent(targetHosts, payload);
+        OnSentKey(targetHosts, message);
         lock (_sendOrderLock)
         {
             if (!CanEnqueue) return;
@@ -257,7 +236,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     // before a batch actually goes out.
     public void SendMouseDelta(string[] targetHosts, int dx, int dy)
     {
-        OnSent(targetHosts, MessageSerializer.Encode(MessageKind.MouseMoveDelta, new MouseMoveDeltaMessage(dx, dy)));
+        OnSentDelta(targetHosts, dx, dy);
         lock (_sendOrderLock)
         {
             if (!CanEnqueue) return;
@@ -394,6 +373,10 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     }
 
     protected virtual void OnSent(string[] targetHosts, byte[] payload) { }
+
+    // typed, so a keystroke or delta is never encoded just for a hook that does nothing
+    protected virtual void OnSentKey(string[] targetHosts, KeyEventMessage message) { }
+    protected virtual void OnSentDelta(string[] targetHosts, int dx, int dy) { }
 
     // IStyxClient
     public async Task Receive(string sourceHost, string sourceIp, byte[] payload)
@@ -921,38 +904,6 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         return true;
     }
 
-    // Test-only: production code no longer decodes bytes for delta coalescing (see SendMouseDelta) —
-    // this exists purely so tests can assert on the wire-encoded result of the same coalescing rules.
-    internal static bool TryCoalesceMovement(byte[] current, byte[] next, out byte[] combined)
-    {
-        combined = current;
-        if (current.Length == 0 || next.Length == 0 || current[0] != next[0]) return false;
-
-        if (current[0] == (byte)MessageKind.MouseMove)
-        {
-            combined = next;
-            return true;
-        }
-
-        if (current[0] != (byte)MessageKind.MouseMoveDelta) return false;
-        if (!TryDecodeDelta(current, out var dx1, out var dy1) || !TryDecodeDelta(next, out var dx2, out var dy2))
-            return false;
-
-        var movement = MovementBatch.CreateDelta([], dx1, dy1);
-        movement.TryAppendDelta([], dx2, dy2);
-        combined = movement.Snapshot();
-        return true;
-    }
-
-    private static bool TryDecodeDelta(byte[] payload, out int dx, out int dy)
-    {
-        dx = dy = 0;
-        if (MessageSerializer.Decode(payload).Bytes.TryDecodeBody<MouseMoveDeltaMessage>() is not { } delta) return false;
-        dx = delta.Dx;
-        dy = delta.Dy;
-        return true;
-    }
-
     /// <summary>
     /// Key events queued for one target while an earlier frame is still in flight, kept IN ORDER.
     ///
@@ -1000,7 +951,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     // keeps only the latest position, a delta accumulates — either way only one message crosses the
     // wire per burst instead of one per input event. Deltas arrive and stay as ints; only Snapshot()
     // ever encodes, once, right before the batch actually goes out.
-    private sealed class MovementBatch
+    internal sealed class MovementBatch
     {
         private readonly MessageKind _kind;
         private readonly string[] _targets;

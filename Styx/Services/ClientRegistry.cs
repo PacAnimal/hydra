@@ -1,3 +1,5 @@
+using Cathedral.Extensions;
+
 namespace Styx.Services;
 
 public interface IClientRegistry
@@ -38,9 +40,7 @@ public class ClientRegistry(ILogger<ClientRegistry> log) : IClientRegistry
 
     private readonly Lock _lock = new();
     private readonly Dictionary<string, ClientIdentity> _byConnection = [];
-    // hostnames compare OrdinalIgnoreCase, exactly as a token's hostname caveats do, so a name a caveat excludes can
-    // never land on the excluded peer's slot through a different case relation
-    private readonly Dictionary<(NetworkKey Network, string HostName), string> _byNetworkHost = new(HostKeyComparer.Instance);
+    private readonly Dictionary<HostKey, string> _byNetworkHost = [];
     private long _generation;
 
     public ValueTask Unregister(string connectionId)
@@ -67,7 +67,7 @@ public class ClientRegistry(ILogger<ClientRegistry> log) : IClientRegistry
     // the lock is held only for a lookup, so a relay send pays for an uncontended acquire at most
     public ValueTask<string?> GetConnectionId(NetworkKey network, string hostName)
     {
-        lock (_lock) return ValueTask.FromResult(_byNetworkHost.GetValueOrDefault((network, hostName)));
+        lock (_lock) return ValueTask.FromResult(_byNetworkHost.GetValueOrDefault(new HostKey(network, hostName)));
     }
 
     public ValueTask<ClientIdentity?> GetIdentity(string connectionId)
@@ -80,9 +80,8 @@ public class ClientRegistry(ILogger<ClientRegistry> log) : IClientRegistry
         RegistrationResult result;
         lock (_lock)
         {
-            // the same case-insensitive key Index evicts by, so every displaced connection is told it lost the name
             string? kicked = null;
-            if (_byNetworkHost.TryGetValue((network, hostName), out var previousConnectionId)
+            if (_byNetworkHost.TryGetValue(new HostKey(network, hostName), out var previousConnectionId)
                 && previousConnectionId != connectionId)
             {
                 kicked = previousConnectionId;
@@ -130,33 +129,27 @@ public class ClientRegistry(ILogger<ClientRegistry> log) : IClientRegistry
 
     private void Index(string connectionId, ClientIdentity identity)
     {
-        // A connection can re-authenticate in tests/third-party clients. Remove its previous reverse index
-        // before assigning the new identity so the O(1) host index never points at stale connection data.
+        // a connection that logs in again drops the name it held before
         Remove(connectionId);
-        var hostKey = (identity.Network, identity.HostName);
-        if (_byNetworkHost.TryGetValue(hostKey, out var previousConnectionId))
-            Remove(previousConnectionId);
         _byConnection[connectionId] = identity;
-        _byNetworkHost[hostKey] = connectionId;
+        _byNetworkHost[new HostKey(identity.Network, identity.HostName)] = connectionId;
     }
 
     private ClientIdentity? Remove(string connectionId)
     {
         if (!_byConnection.Remove(connectionId, out var old)) return null;
-        var key = (old.Network, old.HostName);
+        var key = new HostKey(old.Network, old.HostName);
         if (_byNetworkHost.GetValueOrDefault(key) == connectionId)
             _byNetworkHost.Remove(key);
         return old;
     }
 
-    private sealed class HostKeyComparer : IEqualityComparer<(NetworkKey Network, string HostName)>
+    // a name compares ignoring case, as a token's hostname caveats do: a Send names its targets in the sender's own
+    // spelling, and a name a caveat excludes can never reach the excluded peer's slot through another case relation
+    private readonly record struct HostKey(NetworkKey Network, string HostName)
     {
-        public static readonly HostKeyComparer Instance = new();
+        public bool Equals(HostKey other) => Network == other.Network && HostName.EqualsIgnoreCase(other.HostName);
 
-        public bool Equals((NetworkKey Network, string HostName) x, (NetworkKey Network, string HostName) y) =>
-            x.Network == y.Network && string.Equals(x.HostName, y.HostName, StringComparison.OrdinalIgnoreCase);
-
-        public int GetHashCode((NetworkKey Network, string HostName) obj) =>
-            HashCode.Combine(obj.Network, StringComparer.OrdinalIgnoreCase.GetHashCode(obj.HostName));
+        public override int GetHashCode() => HashCode.Combine(Network, StringComparer.OrdinalIgnoreCase.GetHashCode(HostName));
     }
 }

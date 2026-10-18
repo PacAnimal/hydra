@@ -1,8 +1,10 @@
 using Hydra.Config;
 using Hydra.Relay;
 using Microsoft.AspNetCore.Connections;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Styx;
 using Styx.Services;
 using System.Net;
 using System.Net.Security;
@@ -68,9 +70,14 @@ public class EmbeddedStyxTests
 
         var config = new EmbeddedStyxServerConfig { Port = _port, Password = TestPassword };
         _cts = new CancellationTokenSource();
-        _server = new EmbeddedStyxServer(config, _serverLog) { ThrottleClock = throttleClock ?? new InstantTimeProvider() };
+        _server = new EmbeddedStyxServer(config, _serverLog)
+        {
+            ConfigureRelay = services => services.AddSingleton(new ResponseThrottle(throttleClock ?? new InstantTimeProvider()))
+        };
 
         await _server.StartAsync(_cts.Token);
+
+        // longer than Bound: the listener can take longer than that to come up under load
         await _server.WaitForReady().WaitAsync(TimeSpan.FromSeconds(60));
     }
 
@@ -91,7 +98,7 @@ public class EmbeddedStyxTests
     {
         if (_server != null)
         {
-            using var stopCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            using var stopCts = new CancellationTokenSource(Bound);
             try { await _server.StopAsync(stopCts.Token); }
             catch { /* ignore */ }
             _server.Dispose();
@@ -161,12 +168,13 @@ public class EmbeddedStyxTests
     public async Task Auth_WrongPassword_CannotConnect()
     {
         // wrong password means the authorization token decrypts to the wrong value on the server side
-        await using var client = Client("test-host", await Blob("wrong-password"));
+        var log = new CapturingLog<RelayConnection>();
+        await using var client = Client("test-host", await Blob("wrong-password"), log);
         await client.StartAsync(CancellationToken.None);
 
-        Exception? ex = null;
-        try { await client.WaitForReady(1500); } catch (TimeoutException e) { ex = e; }
-        Assert.That(ex, Is.InstanceOf<TimeoutException>());
+        await log.WaitFor(e => e.Level == LogLevel.Warning && e.Message.Contains("refused this machine's proof"));
+
+        Assert.That(await _server!.GetClients(), Is.Empty);
     }
 
     // ─── messaging ───────────────────────────────────────────────────────────
@@ -304,7 +312,7 @@ public class EmbeddedStyxTests
             Assert.That(joined.StatusCode, Is.EqualTo(HttpStatusCode.OK));
 
         var guess = PostBinding(new byte[EmbeddedRelayTls.ProofLength], server: stranger);
-        await clock.Started.Next((int)Bound.TotalMilliseconds, "the guess's throttle");
+        await clock.Started.Next("the guess's throttle");
         using var again = await PostBinding(proofs.Client, server: peer).WaitAsync(Bound);
 
         clock.Advance(TimeSpan.FromSeconds(StyxConstants.AuthThrottleSeconds));
@@ -512,7 +520,7 @@ public class EmbeddedStyxTests
         // wait is satisfied by the TimeoutException the bound itself raises, so it passes whether readiness
         // faulted or hung.
         var ready = blocked.WaitForReady();
-        var settled = await Task.WhenAny(ready, Task.Delay(TimeSpan.FromSeconds(20)));
+        var settled = await Task.WhenAny(ready, Task.Delay(Bound));
 
         using (Assert.EnterMultipleScope())
         {

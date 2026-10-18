@@ -3,7 +3,6 @@ using Cathedral.Utils;
 using Hydra.Config;
 using Hydra.FileTransfer;
 using Hydra.Keyboard;
-using Hydra.Management;
 using Hydra.Mouse;
 using Hydra.Platform;
 using Hydra.Screen;
@@ -527,7 +526,7 @@ public class SlaveRelayConnection : RelayConnection
             else if (!result.FileManagerFocused)
                 _log.LogInformation("File selection query from {Host}: {Name} is not focused", sourceHost, _selectionDetector.FileManagerName);
             else if (result.Paths != null)
-                _log.LogInformation(ManagementLogBuffer.FilePaths, "File selection query from {Host}: {Count} {Files} selected: {Paths}",
+                _log.LogInformation(LogEvents.FilePaths, "File selection query from {Host}: {Count} {Files} selected: {Paths}",
                     sourceHost, result.Paths.Count, Pluralize.Of(result.Paths.Count, "file"), string.Join(", ", result.Paths));
             else
                 _log.LogInformation("File selection query from {Host}: no files selected", sourceHost);

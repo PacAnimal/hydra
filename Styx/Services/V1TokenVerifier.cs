@@ -1,6 +1,7 @@
 using Common;
 using System.Security.Cryptography;
 using System.Text.Json;
+using Cathedral.Extensions;
 using Cathedral.Utils;
 
 namespace Styx.Services;
@@ -92,6 +93,6 @@ public sealed class V1TokenVerifier(StyxAuth auth, FailureLimiter limiter, TimeP
     {
         encrypted = new byte[TokenBytes];
         return Convert.TryFromBase64String(authorization, encrypted, out var written) && written == TokenBytes
-            && Convert.ToBase64String(encrypted).Equals(authorization, StringComparison.Ordinal);
+            && Convert.ToBase64String(encrypted).EqualsOrdinal(authorization);
     }
 }

@@ -1,6 +1,6 @@
 using System.Globalization;
-using System.Security.Cryptography;
 using Cathedral.Styx;
+using Common;
 
 namespace Styx;
 
@@ -17,8 +17,6 @@ public static class StyxTools
                          [--host-not <name>]... [--exp <unix seconds>] [--id <id>]... [--max-length <chars>]
                          [--server <url> [--encryption-key <key>] [--max-blob <bytes>]]
         """;
-
-    private const string EncryptionKeyAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 
     public static bool IsCommand(string arg) => arg is "keygen" or "derive" or "mint";
 
@@ -101,7 +99,7 @@ public static class StyxTools
             return token.ToString();
         }
 
-        var blob = new StyxBlob(server, encryptionKey ?? RandomNumberGenerator.GetString(EncryptionKeyAlphabet, 128), token.ToString());
+        var blob = new StyxBlob(server, encryptionKey ?? NetworkConfig.NewEncryptionKey(), token.ToString());
         if (blob.ByteLength > maxBlob) throw new StyxTokenException($"The blob would be {blob.ByteLength} bytes, more than {maxBlob}");
         return blob.Write();
     }

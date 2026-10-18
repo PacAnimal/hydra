@@ -170,6 +170,10 @@ public class GuidedConfigDocumentTests
     }
 
     [Test]
+    public void ANumericUpdateChannelShowsAsItsName() =>
+        Assert.That(GuidedConfigDocument.Parse("""{"updateChannel":1,"profiles":[]}""").ReadRoot()[GuidedFields.UpdateChannel], Is.EqualTo(nameof(UpdateChannel.Edge)));
+
+    [Test]
     public void AnUndefinedNumericEnumValueShowsAsWritten() =>
         Assert.That(GuidedConfigDocument.Parse("""{"profiles":[{"clipboardSync":7}]}""").ReadProfile(0)[GuidedFields.ClipboardSync], Is.EqualTo("7"));
 
@@ -180,6 +184,7 @@ public class GuidedConfigDocumentTests
           "profile": "Home",
           "logLevel": "dbug",
           "autoUpdate": false,
+          "updateChannel": "Edge",
           "debugShield": true,
           "debugMouse": true,
           "profiles": [{
@@ -310,6 +315,28 @@ public class GuidedConfigDocumentTests
     }
 
     [Test]
+    public void AnUnknownUpdateChannelIsRefused()
+    {
+        var document = GuidedConfigDocument.Parse("""{"profiles":[]}""");
+        var root = document.ReadRoot();
+        root[GuidedFields.UpdateChannel] = "Nightly";
+
+        Assert.That(() => document.WriteRoot(root), Throws.InvalidOperationException.With.Message.EqualTo("Update Channel must be one of: Stable, Edge."));
+    }
+
+    [Test]
+    public void AnEmptyUpdateChannelLeavesTheDefaultToTheLoader()
+    {
+        var document = GuidedConfigDocument.Parse("""{"updateChannel":"Edge","profiles":[]}""");
+        var root = document.ReadRoot();
+        root[GuidedFields.UpdateChannel] = "";
+
+        document.WriteRoot(root);
+
+        Assert.That(document.ToJson(), Does.Not.Contain("updateChannel"));
+    }
+
+    [Test]
     public void AnEmptyClipboardSyncLeavesTheDefaultToTheLoader()
     {
         var document = GuidedConfigDocument.Parse("""{"profiles":[{"mode":"Slave","clipboardSync":"System"}]}""");
@@ -340,6 +367,7 @@ public class GuidedConfigDocumentTests
             Assert.That(file.Profile, Is.EqualTo("Home"));
             Assert.That(file.LogLevel, Is.EqualTo(Microsoft.Extensions.Logging.LogLevel.Debug));
             Assert.That(file.AutoUpdate, Is.False);
+            Assert.That(file.UpdateChannel, Is.EqualTo(UpdateChannel.Edge));
             Assert.That(file.DebugShield, Is.True);
             Assert.That(file.DebugMouse, Is.True);
             Assert.That(profile.ProfileName, Is.EqualTo("Home"));
@@ -373,6 +401,7 @@ public class GuidedConfigDocumentTests
         [GuidedFields.ProfileOverride] = "Home",
         [GuidedFields.LogLevel] = "dbug",
         [GuidedFields.AutoUpdate] = GuidedValues.Off,
+        [GuidedFields.UpdateChannel] = "Edge",
         [GuidedFields.DebugShield] = GuidedValues.On,
         [GuidedFields.DebugMouse] = GuidedValues.On,
         [GuidedFields.ProfileName] = "Home",

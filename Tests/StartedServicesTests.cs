@@ -66,7 +66,7 @@ public class StartedServicesTests
         try
         {
             // stopped before ExecuteAsync runs, BackgroundService cancels it unstarted and stops at once
-            await hung.Executing.WaitAsync(TimeSpan.FromSeconds(30));
+            await hung.Executing.WaitAsync(Bound);
             var thrown = Assert.ThrowsAsync<TimeoutException>(services.StopAll);
 
             Assert.That(thrown.Message, Does.Contain(nameof(TokenIgnoringService)));

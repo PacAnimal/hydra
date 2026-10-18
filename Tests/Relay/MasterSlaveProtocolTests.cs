@@ -2,12 +2,9 @@ using System.Text;
 using System.Text.Json;
 using Cathedral.Config;
 using Cathedral.Logging;
+using Hydra;
 using Hydra.Config;
-using Hydra.FileTransfer;
-using Hydra.Management;
-using Hydra.Platform;
 using Hydra.Relay;
-using Hydra.Screen;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Tests.Setup;
@@ -17,6 +14,11 @@ namespace Tests.Relay;
 [TestFixture]
 public class MasterSlaveProtocolTests
 {
+    private readonly StartedServices _services = new();
+
+    [TearDown]
+    public Task TearDown() => _services.StopAll();
+
     // -- MasterRelayConnection message filtering --
 
     [Test]
@@ -63,12 +65,8 @@ public class MasterSlaveProtocolTests
     public async Task SlaveLog_AppearsInMasterLoggerWithSlavePrefix()
     {
         var config = MakeConfig("slave-pc");
-        var relay = new FakeRelay();
         var logs = new LogCapture();
-        var platform = new FakePlatform();
-        var service = new InputRouter(platform, platform, config, relay, new FakeScreenDetector(), logs, NullLogger<InputRouter>.Instance, new NullScreenSaverSync(), new NullClipboardSync(),
-            FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification(), TransitionTestHelper.TestActivityTracker(config));
-        await service.StartAsync(CancellationToken.None);
+        var (_, relay, _) = await _services.Start(TransitionTestHelper.CreateService(profile: config, loggerFactory: logs));
 
         var msg = new SlaveLogMessage((int)LogLevel.Warning, "MyService", "something went wrong", null);
         await relay.FireMessageReceived("slave-pc", MessageKind.SlaveLog, JsonSerializer.Serialize(msg, SaneJson.Options));
@@ -80,28 +78,20 @@ public class MasterSlaveProtocolTests
             Assert.That(level, Is.EqualTo(LogLevel.Warning));
             Assert.That(message, Does.Contain("something went wrong"));
         }
-
-        await service.StopAsync(CancellationToken.None);
     }
 
     [Test]
     public async Task SlaveLog_WithException_IncludesExceptionInMasterLog()
     {
         var config = MakeConfig("slave-pc");
-        var relay = new FakeRelay();
         var logs = new LogCapture();
-        var platform = new FakePlatform();
-        var service = new InputRouter(platform, platform, config, relay, new FakeScreenDetector(), logs, NullLogger<InputRouter>.Instance, new NullScreenSaverSync(), new NullClipboardSync(),
-            FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification(), TransitionTestHelper.TestActivityTracker(config));
-        await service.StartAsync(CancellationToken.None);
+        var (_, relay, _) = await _services.Start(TransitionTestHelper.CreateService(profile: config, loggerFactory: logs));
 
         var msg = new SlaveLogMessage((int)LogLevel.Error, "Crasher", "boom", "System.Exception: kaboom");
         await relay.FireMessageReceived("slave-pc", MessageKind.SlaveLog, JsonSerializer.Serialize(msg, SaneJson.Options));
 
         var (_, _, message) = logs.Entries.Single(e => e.Category.StartsWith("slave:"));
         Assert.That(message, Does.Contain("kaboom"));
-
-        await service.StopAsync(CancellationToken.None);
     }
 
     // -- InputRouter MasterConfig gating --
@@ -110,24 +100,18 @@ public class MasterSlaveProtocolTests
     public async Task OnPeersChanged_SendsMasterConfigOnlyToConfiguredSlaves()
     {
         var config = MakeConfig("slave-pc");
-        var relay = new FakeRelay();
-        var service = MakeService(config, relay);
-        await service.StartAsync(CancellationToken.None);
+        var (_, relay, _) = await _services.Start(TransitionTestHelper.CreateService(profile: config));
 
         await relay.FirePeersChanged("slave-pc", "other-master");
 
         Assert.That(MasterConfigTargets(relay), Is.EqualTo(["slave-pc"]));
-
-        await service.StopAsync(CancellationToken.None);
     }
 
     [Test]
     public async Task OnPeersChanged_SendsMasterConfigAgainAfterSlaveReappears()
     {
         var config = MakeConfig("slave-pc");
-        var relay = new FakeRelay();
-        var service = MakeService(config, relay);
-        await service.StartAsync(CancellationToken.None);
+        var (_, relay, _) = await _services.Start(TransitionTestHelper.CreateService(profile: config));
 
         await relay.FirePeersChanged("slave-pc");
         await relay.FirePeersChanged();           // slave disappears
@@ -135,25 +119,19 @@ public class MasterSlaveProtocolTests
         await relay.FirePeersChanged("slave-pc"); // slave reappears
 
         Assert.That(MasterConfigTargets(relay), Is.EqualTo(["slave-pc"]));
-
-        await service.StopAsync(CancellationToken.None);
     }
 
     [Test]
     public async Task OnPeersChanged_DoesNotResendMasterConfigWhileSlaveStillConnected()
     {
         var config = MakeConfig("slave-pc");
-        var relay = new FakeRelay();
-        var service = MakeService(config, relay);
-        await service.StartAsync(CancellationToken.None);
+        var (_, relay, _) = await _services.Start(TransitionTestHelper.CreateService(profile: config));
 
         await relay.FirePeersChanged("slave-pc");
         relay.ClearSent();
         await relay.FirePeersChanged("slave-pc", "another-peer"); // slave still present
 
         Assert.That(MasterConfigTargets(relay), Is.Empty);
-
-        await service.StopAsync(CancellationToken.None);
     }
 
     // -- slave relay disconnect --
@@ -232,7 +210,7 @@ public class MasterSlaveProtocolTests
         var relay = new FakeRelay();
         var sender = new SlaveLogSender(relay, forwarder, state, NullLogger<SlaveLogSender>.Instance);
         await sender.StartAsync(CancellationToken.None);
-        await relay.WaitForSent(MessageKind.SlaveLog, TimeSpan.FromSeconds(5));
+        await relay.WaitForSent(MessageKind.SlaveLog);
         await sender.StopAsync(CancellationToken.None);
 
         var sent = relay.Snapshot().Where(s => s.Kind == MessageKind.SlaveLog).ToList();
@@ -254,7 +232,7 @@ public class MasterSlaveProtocolTests
         var relay = new FakeRelay();
         var sender = new SlaveLogSender(relay, forwarder, state, NullLogger<SlaveLogSender>.Instance);
         await sender.StartAsync(CancellationToken.None);
-        await relay.WaitForSent(MessageKind.SlaveLog, TimeSpan.FromSeconds(5));
+        await relay.WaitForSent(MessageKind.SlaveLog);
         await sender.StopAsync(CancellationToken.None);
 
         var sent = relay.Snapshot().Where(s => s.Kind == MessageKind.SlaveLog).ToList();
@@ -268,14 +246,14 @@ public class MasterSlaveProtocolTests
         var state = new WorldState();
         await state.AddMaster("master", new MasterConfigMessage(LogLevel.Information));
         var forwarder = new SlaveLogForwarder();
-        await forwarder.ForwardAsync(new LogEntry(LogLevel.Information, "Test", ManagementLogBuffer.FilePaths, "/Users/me/a.pdf", "/Users/me/a.pdf", null));
+        await forwarder.ForwardAsync(new LogEntry(LogLevel.Information, "Test", LogEvents.FilePaths, "/Users/me/a.pdf", "/Users/me/a.pdf", null));
         // entries go out in order, so this one arriving means the marked entry before it was already judged
         await forwarder.ForwardAsync(new LogEntry(LogLevel.Information, "Test", default, "plain msg", "plain msg", null));
 
         var relay = new FakeRelay();
         var sender = new SlaveLogSender(relay, forwarder, state, NullLogger<SlaveLogSender>.Instance);
         await sender.StartAsync(CancellationToken.None);
-        await relay.WaitForSent(MessageKind.SlaveLog, TimeSpan.FromSeconds(5));
+        await relay.WaitForSent(MessageKind.SlaveLog);
         await sender.StopAsync(CancellationToken.None);
 
         var sent = relay.Snapshot().Where(s => s.Kind == MessageKind.SlaveLog).ToList();
@@ -295,13 +273,6 @@ public class MasterSlaveProtocolTests
             Hosts = [new HostConfig { Name = "main" }, .. slaveNames.Select(n => new HostConfig { Name = n })],
         });
 
-    private static InputRouter MakeService(IHydraProfile profile, IRelaySender relay)
-    {
-        var p = new FakePlatform();
-        return new(p, p, profile, relay, new FakeScreenDetector(), NullLoggerFactory.Instance, NullLogger<InputRouter>.Instance, new NullScreenSaverSync(), new NullClipboardSync(),
-            FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification(), TransitionTestHelper.TestActivityTracker(profile));
-    }
-
     private static List<string> MasterConfigTargets(FakeRelay relay) =>
         [.. relay.Snapshot().Where(s => s.Kind == MessageKind.MasterConfig).SelectMany(s => s.Targets)];
 
@@ -318,21 +289,23 @@ public class MasterSlaveProtocolTests
 
     private sealed class LogCapture : ILoggerFactory
     {
-        public readonly List<(string Category, LogLevel Level, string Message)> Entries = [];
+        public readonly List<Entry> Entries = [];
 
         public ILogger CreateLogger(string categoryName) => new CaptureLogger(categoryName, Entries);
         public void AddProvider(ILoggerProvider provider) { }
         public void Dispose() { }
 
-        private sealed class CaptureLogger(string category, List<(string, LogLevel, string)> entries) : ILogger
+        private sealed class CaptureLogger(string category, List<Entry> entries) : ILogger
         {
             public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
             public bool IsEnabled(LogLevel logLevel) => true;
 
             public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
             {
-                entries.Add((category, logLevel, formatter(state, exception)));
+                entries.Add(new Entry(category, logLevel, formatter(state, exception)));
             }
         }
+
+        public sealed record Entry(string Category, LogLevel Level, string Message);
     }
 }

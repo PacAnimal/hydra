@@ -17,6 +17,16 @@ describe('validate', () => {
     expect(validate([p({ mode: 'Slave' })])).toHaveLength(0)
   })
 
+  it('errors on an http:// embeddedStyx server', () => {
+    const errors = validate([p({ networkType: 'embeddedStyx', embeddedStyx: { server: 'HTTP://10.0.0.1:5000', password: 'x' } })])
+    expect(errors.some(e => e.path === 'profiles[0].embeddedStyx.server')).toBe(true)
+  })
+
+  it('passes an https:// or scheme-less embeddedStyx server', () => {
+    expect(validate([p({ networkType: 'embeddedStyx', embeddedStyx: { server: 'https://10.0.0.1:5000', password: 'x' } })])).toHaveLength(0)
+    expect(validate([p({ networkType: 'embeddedStyx', embeddedStyx: { server: '10.0.0.1:5000', password: 'x' } })])).toHaveLength(0)
+  })
+
   it('errors when profileName is empty', () => {
     const errors = validate([p({ profileName: '' })])
     expect(errors.some(e => e.message.includes('profile name is required'))).toBe(true)

@@ -26,6 +26,16 @@ public class RemoteManagementTests
             Is.EqualTo("7b9cf80fb8a605ebf303d7c977dfc55745f15f52cfe4b1ea8403645a015df549"));
     }
 
+    // paired peers' stored secrets must still sign the same after an upgrade: unpadded base64url throughout
+    [Test]
+    public void RequestSignature_IsUnpaddedBase64UrlHmac()
+    {
+        var request = new RemoteWireRequest(1, Guid.Parse("00112233445566778899aabbccddeeff"), "controller", 123, "nonce", "config.get", "{}", "");
+
+        Assert.That(RemoteManagementCrypto.SignRequest(request, "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"),
+            Is.EqualTo("UN2VHZ8SloxLf6B52eXNliFiXF4xFRqdvILG8Sx6Ap4"));
+    }
+
     [Test]
     public void SignedRequest_RejectsPayloadTampering()
     {

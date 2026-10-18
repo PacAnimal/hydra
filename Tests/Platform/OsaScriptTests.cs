@@ -103,11 +103,11 @@ public class OsaScriptTests
         {
             var run = Task.Run(() => OsaScript.Run("/bin/sh", ["-c", $"echo $$ > '{fifo}'; exec sleep 60"], TimeSpan.FromSeconds(60), token));
             // opening a fifo blocks until the other end does, so the script is running once this returns
-            var pid = int.Parse(await Task.Run(() => File.ReadAllText(fifo)).WaitAsync(TimeSpan.FromSeconds(30)));
+            var pid = int.Parse(await Task.Run(() => File.ReadAllText(fifo)).WaitAsync(Bound));
 
             await cancel.CancelAsync();
 
-            Assert.CatchAsync<OperationCanceledException>(() => run.WaitAsync(TimeSpan.FromSeconds(30)), "the script ran on past the cancel");
+            Assert.CatchAsync<OperationCanceledException>(() => run.WaitAsync(Bound), "the script ran on past the cancel");
             Assert.Throws<ArgumentException>(() => Process.GetProcessById(pid).Dispose(), "the script outlived the cancel");
         }
         finally

@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Runtime.CompilerServices;
 using Cathedral.Styx;
 
@@ -15,7 +16,10 @@ public sealed record StyxAuth(
     IReadOnlySet<string> RevokedIds)
 {
     /// <summary>Hydra's embedded relay: v1 only, under the password every machine derives its token from.</summary>
-    public static StyxAuth V1Only(string password) => new([], password, new HashSet<Guid>(), new HashSet<string>());
+    public static StyxAuth V1Only(string password) => WithoutRevocations([], password);
+
+    public static StyxAuth WithoutRevocations(IReadOnlyList<byte[]> keys, string? v1Password) =>
+        new(keys, v1Password, FrozenSet<Guid>.Empty, FrozenSet<string>.Empty);
 
     public bool AcceptsV1 => !string.IsNullOrEmpty(V1Password);
 

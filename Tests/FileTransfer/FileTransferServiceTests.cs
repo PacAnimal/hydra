@@ -49,7 +49,7 @@ public class FileTransferServiceTests
             if (service.FileTransferOngoing) settled.TrySetException(new InvalidOperationException("the outcome was reported before the slot was released"));
             else settled.TrySetResult();
         };
-        return settled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        return settled.Task.WaitAsync(Bound);
     }
 
     // creates a service with an aggressive 100ms watchdog/accept timeout for timeout tests
@@ -475,7 +475,7 @@ public class FileTransferServiceTests
     {
         // InitiateSend runs RunSendAsync on Task.Run — wait until it produces FileTransferRequest
         _service.InitiateSend([CreateTempFile()], "slave", _relay, "my-machine");
-        await _relay.WaitForSent(MessageKind.FileTransferRequest, TimeSpan.FromSeconds(3));
+        await _relay.WaitForSent(MessageKind.FileTransferRequest);
 
         var (_, _, json) = _relay.Snapshot().First(m => m.Kind == MessageKind.FileTransferRequest);
         var msg = json.FromSaneJson<FileTransferRequestMessage>();
@@ -513,7 +513,7 @@ public class FileTransferServiceTests
         await File.WriteAllBytesAsync(path, bytes);
         var relay = new AwaitedSendRelay();
 
-        await _service.ExecuteStreamRequest([path], "target", relay).WaitAsync(TimeSpan.FromSeconds(5));
+        await _service.ExecuteStreamRequest([path], "target", relay).WaitAsync(Bound);
 
         using (Assert.EnterMultipleScope())
         {
@@ -533,13 +533,13 @@ public class FileTransferServiceTests
         var secondRelay = new GatedReliableRelay();
 
         var first = _service.ExecuteStreamRequest([path], "first-target", firstRelay);
-        await firstRelay.FirstReliableSend.WaitAsync(TimeSpan.FromSeconds(3));
+        await firstRelay.FirstReliableSend.WaitAsync(Bound);
         _service.Abort(firstRelay, "replace transfer");
 
         var second = _service.ExecuteStreamRequest([path], "second-target", secondRelay);
-        await secondRelay.FirstReliableSend.WaitAsync(TimeSpan.FromSeconds(3));
+        await secondRelay.FirstReliableSend.WaitAsync(Bound);
         firstRelay.ReleaseAll();
-        await first.WaitAsync(TimeSpan.FromSeconds(5));
+        await first.WaitAsync(Bound);
 
         using (Assert.EnterMultipleScope())
         {
@@ -550,7 +550,7 @@ public class FileTransferServiceTests
         }
 
         secondRelay.ReleaseAll();
-        await second.WaitAsync(TimeSpan.FromSeconds(5));
+        await second.WaitAsync(Bound);
     }
 
     [Test]
@@ -566,21 +566,21 @@ public class FileTransferServiceTests
         _dialog.OnSetCurrentFile = () =>
         {
             stalled.TrySetResult();
-            extracting.Task.Wait(TimeSpan.FromSeconds(10));
+            extracting.Task.Wait(Bound);
         };
         await Simulate(MessageKind.FileTransferRequest, new FileTransferRequestMessage());
         await Simulate(MessageKind.FileTransferStart, new FileTransferStartMessage(["random.bin"], totalSent));
 
         // held at its first file, the extractor stops reading, so a full chunk is left waiting on the pipe
         var chunk = Simulate(MessageKind.FileTransferChunk, new FileTransferChunkMessage(chunks[0].seq, chunks[0].data));
-        await stalled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await stalled.Task.WaitAsync(Bound);
         Assert.That(chunk.IsCompleted, Is.False, "the chunk was not waiting on the stalled extractor");
 
         // the cancel waits for the stalled extractor, so it runs aside while the chunk finishes
         var cancel = Task.Run(_dialog.TriggerCancel);
-        await chunk.WaitAsync(TimeSpan.FromSeconds(5));
+        await chunk.WaitAsync(Bound);
         extracting.SetResult();
-        await cancel.WaitAsync(TimeSpan.FromSeconds(5));
+        await cancel.WaitAsync(Bound);
 
         Assert.That(_dialog.ProgressUpdates, Is.Zero, "the cancelled receive's last chunk reported progress on a dialog it no longer owns");
     }

@@ -29,7 +29,7 @@ public class BindingGateTests
 
     private Task<BindingVerdict> Check(string remoteIp, Func<bool> proofMatches) => _gate.Check(remoteIp, proofMatches, CancellationToken.None);
 
-    private Task<TimeSpan> ThrottleStarted() => _clock.Started.Next((int)Bound.TotalMilliseconds, "a throttle");
+    private Task<TimeSpan> ThrottleStarted() => _clock.Started.Next("a throttle");
 
     private async Task Join(string remoteIp) => Assert.That(await Check(remoteIp, () => true).WaitAsync(Bound), Is.EqualTo(BindingVerdict.Proven));
 

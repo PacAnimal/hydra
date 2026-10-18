@@ -12,7 +12,7 @@ public class ManagementTransportTests
     {
         var configPath = Path.Combine(TestPaths.FreshFixtureRoot(nameof(ManagementTransportTests)), "transport.conf");
         var endpoint = ManagementEndpoint.ForConfig(configPath);
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var timeout = new CancellationTokenSource(Bound);
 
         Task server;
         Socket? listener = null;
@@ -52,7 +52,7 @@ public class ManagementTransportTests
     {
         var configPath = Path.Combine(TestPaths.FreshFixtureRoot(nameof(ManagementTransportTests)), "shutdown.conf");
         var endpoint = ManagementEndpoint.ForConfig(configPath);
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var timeout = new CancellationTokenSource(Bound);
 
         Task server;
         Socket? listener = null;

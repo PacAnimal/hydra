@@ -89,7 +89,7 @@ public class RelayAuthFailureTests
         await probe.StartAsync(CancellationToken.None);
 
         await probe.Clock.NextTimer();
-        await probe.PeersHandled.WaitAsync(TimeSpan.FromSeconds(15));
+        await probe.PeersHandled.WaitAsync(Bound);
         probe.Clock.TimeOut();
         await probe.Clock.NextTimer();
 
@@ -125,7 +125,7 @@ public class RelayAuthFailureTests
             return timer;
         }
 
-        internal Task<ITimer> NextTimer() => _timers.Next(15000, "an auth timer");
+        internal Task<ITimer> NextTimer() => _timers.Next("an auth timer");
         internal void TimeOut() => Advance(TimeSpan.FromSeconds(Constants.AuthTimeoutSeconds));
     }
 
@@ -171,7 +171,7 @@ public class RelayAuthFailureTests
 
         public async ValueTask DisposeAsync()
         {
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            using var cts = new CancellationTokenSource(Bound);
             await StopAsync(cts.Token);
             Dispose();
         }

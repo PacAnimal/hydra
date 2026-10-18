@@ -23,7 +23,7 @@ public class StyxDocumentationTests : StyxFixtureBase
     private string _directory = null!;
 
     protected override void ConfigureRelay(IServiceCollection services) =>
-        services.AddSingleton(new StyxAuth([Key], null, new HashSet<Guid>(), new HashSet<string>()));
+        services.AddSingleton(StyxAuth.WithoutRevocations([Key], null));
 
     [SetUp]
     public void FreshDirectory() => _directory = TestPaths.FreshFixtureRoot(nameof(StyxDocumentationTests));

@@ -267,7 +267,7 @@ public class StalledPeerTests : StyxFixtureBase
     // a Receive has joined this connection's queue
     private async Task QueuedFor(string connectionId, string what)
     {
-        while (await _queuedReceives.Next(5000, what) != connectionId) { }
+        while (await _queuedReceives.Next(what) != connectionId) { }
     }
 
     /// <summary>
@@ -309,7 +309,7 @@ public class StalledPeerTests : StyxFixtureBase
         {
             while (true)
             {
-                var parked = await _parked.Next(5000, "a Receive to park on the slow peer");
+                var parked = await _parked.Next("a Receive to park on the slow peer");
                 if (parked.Method == nameof(IStyxClient.Receive)) return parked;
                 parked.Take();
             }
@@ -324,15 +324,15 @@ public class StalledPeerTests : StyxFixtureBase
                 if (connectionId == _stalled)
                 {
                     synchronously = _synchronously;
-                    parked = new Parked(methodName, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+                    parked = new Parked(methodName);
                     _waiting.Add(parked);
                 }
             }
             if (parked != null)
             {
                 _parked.Push(parked);
-                if (synchronously) parked.Taken.Task.Wait(cancellationToken);
-                else await parked.Taken.Task.WaitAsync(cancellationToken);
+                if (synchronously) parked.Taken.Passed(cancellationToken).GetAwaiter().GetResult();
+                else await parked.Taken.Passed(cancellationToken);
             }
             await base.SendConnectionAsync(connectionId, methodName, args, cancellationToken);
         }
@@ -376,16 +376,16 @@ public class StalledPeerTests : StyxFixtureBase
     private sealed class RecordingLifetimeManager()
         : SharedHubLifetimeManager<StyxHub>(new DefaultHubLifetimeManager<StyxHub>(NullLogger<DefaultHubLifetimeManager<StyxHub>>.Instance))
     {
-        private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly Gate _writes = new(held: true);
         private readonly ConcurrentQueue<string> _written = new();
 
         public IEnumerable<string> Written => _written;
 
-        public void Release() => _release.TrySetResult();
+        public void Release() => _writes.Release();
 
         public override async Task SendConnectionAsync(string connectionId, string methodName, object?[] args, CancellationToken cancellationToken = default)
         {
-            await _release.Task;
+            await _writes.Passed(cancellationToken);
             _written.Enqueue(string.Join(",", (string[])args[0]!));
         }
     }
@@ -402,8 +402,10 @@ public class StalledPeerTests : StyxFixtureBase
         public override void Abort() { }
     }
 
-    private sealed record Parked(string Method, TaskCompletionSource Taken)
+    private sealed record Parked(string Method)
     {
-        public void Take() => Taken.TrySetResult();
+        public Gate Taken { get; } = new(held: true);
+
+        public void Take() => Taken.Release();
     }
 }

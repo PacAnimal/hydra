@@ -35,7 +35,6 @@ public class InputRouter(
     TimeProvider? timeProvider = null)
     : IHostedService
 {
-
     // How often a mouse position is sent to a slave, and therefore how long a batch of raw samples is
     // held before it is processed. Both come off the one number, so raising it moves them together.
     // Integer division truncates, so a rate that does not divide 1000 lands on the next rate up.
@@ -693,7 +692,7 @@ public class InputRouter(
         else if (result.Paths != null)
         {
             if (log.IsEnabled(LogLevel.Information))
-                log.LogInformation(ManagementLogBuffer.FilePaths, "Copy hotkey: {Count} {Files} selected locally: {Paths}",
+                log.LogInformation(LogEvents.FilePaths, "Copy hotkey: {Count} {Files} selected locally: {Paths}",
                     result.Paths.Count, Pluralize.Of(result.Paths.Count, "file"), string.Join(", ", result.Paths));
             _fileTransfer.SetCopyBuffer(profile.Name, result.Paths);
             ShowOsd(st, FileTransferService.CopiedMessage(result.Paths.Count));
@@ -942,8 +941,8 @@ public class InputRouter(
                     if (log.IsEnabled(LogLevel.Information))
                         log.LogInformation("Mission Control hotkey: sending to {Host}", st.Mouse.CurrentScreen.Host);
                     var host = st.Mouse.CurrentScreen.Host;
-                    relay.Send([host], MessageSerializer.Encode(MessageKind.KeyEvent, new KeyEventMessage(KeyEventType.KeyDown, KeyModifiers.None, null, SpecialKey.MissionControl)));
-                    relay.Send([host], MessageSerializer.Encode(MessageKind.KeyEvent, new KeyEventMessage(KeyEventType.KeyUp, KeyModifiers.None, null, SpecialKey.MissionControl)));
+                    relay.SendKeyEvent([host], new KeyEventMessage(KeyEventType.KeyDown, KeyModifiers.None, null, SpecialKey.MissionControl));
+                    relay.SendKeyEvent([host], new KeyEventMessage(KeyEventType.KeyUp, KeyModifiers.None, null, SpecialKey.MissionControl));
                 }
                 else if (hotkeyAction == HotkeyAction.PasteFiles)
                 {
@@ -966,7 +965,7 @@ public class InputRouter(
                         var targetHost = st.Mouse.IsOnVirtualScreen
                             ? st.Mouse.CurrentScreen.Host
                             : profile.Name;
-                        if (string.Equals(copyBuffer.SourceHost, targetHost, StringComparison.OrdinalIgnoreCase))
+                        if (copyBuffer.SourceHost.EqualsIgnoreCase(targetHost))
                         {
                             if (log.IsEnabled(LogLevel.Information))
                                 log.LogInformation("Paste hotkey: source and target are the same host ({Host}), nothing to do", targetHost);

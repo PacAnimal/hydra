@@ -29,11 +29,11 @@ public class RelayLaneTests : StyxFixtureBase
     /// <para>A sentinel is no help here, unlike everywhere else in these fixtures: with one queue it would
     /// be stuck behind the very item that is parked. Naming the expectation is all there is.</para>
     /// </summary>
-    private static async Task<(string Source, MessageKind Kind, string Json)> NextOrFail(HydraTestClient receiver, string what)
+    private static async Task<ReceivedMessage> NextOrFail(HydraTestClient receiver, string what)
     {
         try
         {
-            return await receiver.WaitForNextMessage();
+            return await receiver.WaitForMessage();
         }
         catch (TimeoutException)
         {
@@ -76,7 +76,7 @@ public class RelayLaneTests : StyxFixtureBase
         var sent = Enumerable.Range(0, count).Select(i => sender.SendReliableAsync(["receiver"], TestMessages.Move(i)).AsTask()).ToArray();
 
         var arrived = new List<int>();
-        for (var i = 0; i < count; i++) arrived.Add(PositionOf((await receiver.WaitForNextMessage()).Json));
+        for (var i = 0; i < count; i++) arrived.Add(PositionOf((await receiver.WaitForMessage()).Json));
         await Task.WhenAll(sent).WaitAsync(Bound);
 
         Assert.That(arrived, Is.EqualTo(Enumerable.Range(0, count)),
@@ -99,7 +99,7 @@ public class RelayLaneTests : StyxFixtureBase
         var sent = Enumerable.Range(0, count).Select(i => sender.SendReliableAsync(["receiver"], TestMessages.Chunk(i)).AsTask()).ToArray();
 
         var arrived = new List<int>();
-        for (var i = 0; i < count; i++) arrived.Add(SequenceOf((await receiver.WaitForNextMessage()).Json));
+        for (var i = 0; i < count; i++) arrived.Add(SequenceOf((await receiver.WaitForMessage()).Json));
         await Task.WhenAll(sent).WaitAsync(Bound);
 
         Assert.That(arrived, Is.EqualTo(Enumerable.Range(0, count)));
@@ -131,7 +131,7 @@ public class RelayLaneTests : StyxFixtureBase
         var bulk = new List<int>();
         for (var i = 0; i < count * 2; i++)
         {
-            var (_, kind, json) = await receiver.WaitForNextMessage();
+            var (_, kind, json) = await receiver.WaitForMessage();
             if (kind == MessageKind.FileTransferChunk) bulk.Add(SequenceOf(json));
             else input.Add(PositionOf(json));
         }
@@ -178,7 +178,7 @@ public class RelayLaneTests : StyxFixtureBase
 
         sender.ReleaseLane();
 
-        var (_, secondKind, _) = await receiver.WaitForNextMessage();
+        var (_, secondKind, _) = await receiver.WaitForMessage();
         Assert.That(secondKind, Is.EqualTo(MessageKind.FileTransferChunk), "and the chunk still arrives once released");
         await stalled.WaitAsync(Bound);
     }
@@ -212,7 +212,7 @@ public class RelayLaneTests : StyxFixtureBase
         var stream = new List<MessageKind>();
         while (stream.Count < chunks + 2)
         {
-            var (_, kind, _) = await receiver.WaitForNextMessage();
+            var (_, kind, _) = await receiver.WaitForMessage();
             if (kind is MessageKind.FileTransferStart or MessageKind.FileTransferChunk or MessageKind.FileTransferDone)
                 stream.Add(kind);
         }
@@ -292,7 +292,7 @@ public class RelayLaneTests : StyxFixtureBase
 
         var arrived = new List<MessageKind>();
         while (arrived.Count(k => k == MessageKind.KeyEvent) < 3)
-            arrived.Add((await receiver.WaitForNextMessage()).Kind);
+            arrived.Add((await receiver.WaitForMessage()).Kind);
 
         Assert.That(arrived.Count(k => k == MessageKind.MouseMove), Is.EqualTo(2),
             "the two moves merged across a keypress — the press would be delivered at the wrong position");

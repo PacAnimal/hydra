@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Security.Cryptography;
+using Cathedral.Extensions;
 using Cathedral.Styx;
 
 namespace Styx;
@@ -109,7 +110,7 @@ public static class StyxEnvironment
     }
 
     private static string[] ReadList(string? value) =>
-        (value ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        (value ?? "").SaneSplit(',');
 
     private static string? NullIfEmpty(string? value) => string.IsNullOrEmpty(value) ? null : value;
 }

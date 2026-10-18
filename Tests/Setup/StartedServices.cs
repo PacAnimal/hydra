@@ -10,13 +10,11 @@ namespace Tests.Setup;
 /// </summary>
 internal sealed class StartedServices
 {
-    private static readonly TimeSpan DefaultStopTimeout = TimeSpan.FromSeconds(30);
-
     private readonly List<IHostedService> _running = [];
     private readonly List<IAsyncDisposable> _owned = [];
     private readonly TimeSpan _stopTimeout;
 
-    internal StartedServices() : this(DefaultStopTimeout) { }
+    internal StartedServices() : this(Bound) { }
 
     // a stop that takes longer than this fails the teardown rather than hanging the run
     internal StartedServices(TimeSpan stopTimeout) => _stopTimeout = stopTimeout;

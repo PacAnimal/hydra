@@ -82,7 +82,7 @@ public class StyxRelayCompositionTests
         using var client = new TcpClient();
         await client.ConnectAsync(IPAddress.Loopback, address.Port);
 
-        Assert.That(await observed.Task.WaitAsync(TimeSpan.FromSeconds(30)), Is.True);
+        Assert.That(await observed.Task.WaitAsync(Bound), Is.True);
         await app.StopAsync();
     }
 

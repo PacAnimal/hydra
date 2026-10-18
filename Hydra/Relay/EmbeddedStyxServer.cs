@@ -20,6 +20,9 @@ public class EmbeddedStyxServer(EmbeddedStyxServerConfig config, ILogger<Embedde
     private readonly TaskCompletionSource _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private IClientRegistry? _registry;
 
+    // a test's replacements for relay services, registered after the relay's own
+    internal Action<IServiceCollection>? ConfigureRelay { get; init; }
+
     // completes when the relay is listening and faults when it could not start; always one or the other
     public Task WaitForReady() => _ready.Task;
     internal ValueTask<IReadOnlyList<ClientIdentity>> GetClients() => _registry?.GetAllIdentities()
@@ -73,9 +76,6 @@ public class EmbeddedStyxServer(EmbeddedStyxServerConfig config, ILogger<Embedde
         }
     }
 
-    // what times the hub's response throttle, so a test need not wait out a second per login
-    internal TimeProvider ThrottleClock { get; init; } = TimeProvider.System;
-
     /// <summary>
     /// Internal so a test can compose this host's options without starting it — it is the SECOND relay, and
     /// what it configures its hub with is invisible from the outside otherwise.
@@ -85,7 +85,8 @@ public class EmbeddedStyxServer(EmbeddedStyxServerConfig config, ILogger<Embedde
         var builder = WebApplication.CreateBuilder();
 
         // nothing proxies a Hydra's own relay, so the address a peer connects from is the only one it has
-        builder.AddStyxRelay(StyxAuth.V1Only(config.Password), new StyxOptions(false), behindProxy: false, ThrottleClock);
+        builder.AddStyxRelay(StyxAuth.V1Only(config.Password), new StyxOptions(false), behindProxy: false);
+        ConfigureRelay?.Invoke(builder.Services);
         builder.Services.AddSereneConsoleLogging();
         // the container makes the cert, so the app owns and disposes it, started or not; on Windows it holds a key container
         builder.Services.AddSingleton(_ => EmbeddedRelayTls.CreateCertificate());

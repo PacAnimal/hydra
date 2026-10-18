@@ -63,7 +63,7 @@ public class RelayDispatchTests : StyxFixtureBase
         // each completes once written to the transport, never waiting on the relay, so all of them are written before
         // the relay has finished the first
         for (var i = 0; i < count; i++) await sender.SendWithoutWaiting(["receiver"], [(byte)i]).WaitAsync(Bound);
-        await _sends.Held.Next(5000, "the first send to be parked in the hub");
+        await _sends.Held.Next("the first send to be parked in the hub");
         _sends.Release();
 
         var arrived = new List<int>();
@@ -87,7 +87,7 @@ public class RelayDispatchTests : StyxFixtureBase
         const int width = global::Styx.Constants.DefaultParallelInvocations;
         _sends.Hold();
         for (var i = 0; i <= width; i++) await sender.SendWithoutWaiting(["receiver"], [(byte)i]).WaitAsync(Bound);
-        for (var i = 0; i < width; i++) await _sends.Held.Next(5000, $"send {i + 1} of {width} to be parked in the hub at once");
+        for (var i = 0; i < width; i++) await _sends.Held.Next($"send {i + 1} of {width} to be parked in the hub at once");
         _sends.Release();
 
         var arrived = new List<int>();
@@ -111,11 +111,11 @@ public class RelayDispatchTests : StyxFixtureBase
         var (sender, receiver) = pair;
 
         _sends.Hold(async invocation => await HostOf(invocation) == "sender");
-        sender.Send(["receiver"], TestMessages.Key(1));
-        await _sends.Held.Next(5000, "the sender's frame to be parked in the hub");
+        sender.SendKeyEvent(["receiver"], TestMessages.KeyMessage(1));
+        await _sends.Held.Next("the sender's frame to be parked in the hub");
 
         sender.HoldLane(RelayLane.Input);
-        sender.Send(["receiver"], TestMessages.Key(2));
+        sender.SendKeyEvent(["receiver"], TestMessages.KeyMessage(2));
         await sender.WaitUntilLaneHeld();
 
         sender.ReleaseLane();
@@ -124,7 +124,7 @@ public class RelayDispatchTests : StyxFixtureBase
         var keys = new List<string?>();
         while (keys.Count < 2)
         {
-            var (_, kind, json) = await receiver.WaitForNextMessage();
+            var (_, kind, json) = await receiver.WaitForMessage();
             if (kind == MessageKind.KeyEvent) keys.Add(CharacterOf(json));
         }
         Assert.That(keys, Is.EqualTo(["b", "c"]));
@@ -143,10 +143,10 @@ public class RelayDispatchTests : StyxFixtureBase
 
         Verifier.Hold();
         var first = client.Server!.Authenticate(Login(network, "first"));
-        await Verifier.Entered.Next(5000, "the first login to reach the token check");
+        await Verifier.Entered.Next("the first login to reach the token check");
         var second = client.Server!.Authenticate(Login(network, "second"));
-        await _logins.Started.Next(5000, "the first login to start");
-        await _logins.Started.Next(5000, "the second login to start");
+        await _logins.Started.Next("the first login to start");
+        await _logins.Started.Next("the second login to start");
 
         Assert.That(Verifier.MostRunning, Is.EqualTo(1), "a second login on the same connection ran while the first was still being checked");
 
@@ -169,14 +169,14 @@ public class RelayDispatchTests : StyxFixtureBase
 
         Verifier.Hold();
         var first = client.Server!.Authenticate(Login(network, "first"));
-        await Verifier.Entered.Next(5000, "the first login to reach the token check");
+        await Verifier.Entered.Next("the first login to reach the token check");
         var second = client.Server!.Authenticate(Login(network, "second"));
-        await _logins.Started.Next(5000, "the first login to start");
-        await _logins.Started.Next(5000, "the second login to start, and wait its turn");
+        await _logins.Started.Next("the first login to start");
+        await _logins.Started.Next("the second login to start, and wait its turn");
 
         await client.DisposeAsync();
-        await _logins.Finished.Next(5000, "one login to end with its connection");
-        await _logins.Finished.Next(5000, "the other login to end with its connection");
+        await _logins.Finished.Next("one login to end with its connection");
+        await _logins.Finished.Next("the other login to end with its connection");
 
         // the client gave up on both when it stopped; WhenAny observes that without rethrowing it
         await Task.WhenAny(Task.WhenAll(first, second)).WaitAsync(Bound);
@@ -202,7 +202,7 @@ public class RelayDispatchTests : StyxFixtureBase
     private sealed class HeldVerifier(ITokenVerifier inner) : ITokenVerifier
     {
         private readonly RunningCounter _running = new();
-        private TaskCompletionSource? _hold;
+        private readonly Gate _gate = new();
 
         public NotificationQueue<string> Entered { get; private set; } = new();
         public int MostRunning => _running.MostRunning;
@@ -211,10 +211,10 @@ public class RelayDispatchTests : StyxFixtureBase
         {
             _running.Reset();
             Entered = new NotificationQueue<string>();
-            _hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _gate.Hold();
         }
 
-        public void Release() => Interlocked.Exchange(ref _hold, null)?.TrySetResult();
+        public void Release() => _gate.Release();
 
         public async Task<TokenVerdict> Verify(string authorization, string remoteIp, CancellationToken cancel)
         {
@@ -222,7 +222,7 @@ public class RelayDispatchTests : StyxFixtureBase
             try
             {
                 Entered.Push(authorization);
-                if (Volatile.Read(ref _hold) is { } hold) await hold.Task.WaitAsync(cancel);
+                await _gate.Passed(cancel);
                 return await inner.Verify(authorization, remoteIp, cancel);
             }
             finally

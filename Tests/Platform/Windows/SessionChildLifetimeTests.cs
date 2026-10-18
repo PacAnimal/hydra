@@ -17,7 +17,6 @@ namespace Tests.Platform.Windows;
 [SupportedOSPlatform("windows")]
 public class SessionChildLifetimeTests
 {
-    private static readonly TimeSpan Patience = TimeSpan.FromSeconds(10);
     private StopRecorder _lifetime = null!;
     private string _stopEventName = null!;
     private SafeFileHandle _stopEvent = null!;
@@ -55,7 +54,7 @@ public class SessionChildLifetimeTests
         await lifetime.StartAsync(CancellationToken.None);
         try
         {
-            Assert.That(await stampedOn.Task.WaitAsync(Patience), Is.Not.EqualTo("session-stop-watcher"));
+            Assert.That(await stampedOn.Task.WaitAsync(Bound), Is.Not.EqualTo("session-stop-watcher"));
         }
         finally { await lifetime.StopAsync(CancellationToken.None); }
     }
@@ -75,7 +74,7 @@ public class SessionChildLifetimeTests
         {
             Assert.That(stamped.Task.IsCompleted, Is.False, "stamped with nobody at the console");
             _user = "S-1-5-21-alice";
-            await stamped.Task.WaitAsync(Patience);
+            await stamped.Task.WaitAsync(Bound);
         }
         finally { await lifetime.StopAsync(CancellationToken.None); }
     }
@@ -98,9 +97,9 @@ public class SessionChildLifetimeTests
         await lifetime.StartAsync(CancellationToken.None);
         try
         {
-            await started.Task.WaitAsync(Patience);
+            await started.Task.WaitAsync(Bound);
             Win32Session.SignalEvent(_stopEvent);
-            await _lifetime.Stopped.WaitAsync(Patience);
+            await _lifetime.Stopped.WaitAsync(Bound);
         }
         finally
         {
@@ -123,10 +122,10 @@ public class SessionChildLifetimeTests
         });
 
         await lifetime.StartAsync(CancellationToken.None);
-        await started.Task.WaitAsync(Patience);
+        await started.Task.WaitAsync(Bound);
         await lifetime.StopAsync(CancellationToken.None);
 
-        await abandoned.Task.WaitAsync(Patience);
+        await abandoned.Task.WaitAsync(Bound);
     }
 
     [Test]
@@ -145,9 +144,9 @@ public class SessionChildLifetimeTests
         await lifetime.StartAsync(CancellationToken.None);
         try
         {
-            await stamped.Task.WaitAsync(Patience);
+            await stamped.Task.WaitAsync(Bound);
             Win32Session.SignalEvent(_stopEvent);
-            await _lifetime.Stopped.WaitAsync(Patience);
+            await _lifetime.Stopped.WaitAsync(Bound);
         }
         finally { await lifetime.StopAsync(CancellationToken.None); }
     }
@@ -169,7 +168,7 @@ public class SessionChildLifetimeTests
         try
         {
             // the first two lookups have been logged by the time the third is made
-            await thirdLookup.Task.WaitAsync(Patience);
+            await thirdLookup.Task.WaitAsync(Bound);
         }
         finally { await lifetime.StopAsync(CancellationToken.None); }
 
@@ -194,7 +193,7 @@ public class SessionChildLifetimeTests
         try
         {
             // the first three lookups have been made by the time the fourth is made
-            await fourthLookup.Task.WaitAsync(Patience);
+            await fourthLookup.Task.WaitAsync(Bound);
         }
         finally { await lifetime.StopAsync(CancellationToken.None); }
 

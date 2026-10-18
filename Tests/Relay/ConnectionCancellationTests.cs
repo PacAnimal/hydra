@@ -5,8 +5,6 @@ namespace Tests.Relay;
 [TestFixture]
 public class ConnectionCancellationTests
 {
-    private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(5);
-
     // a hub close cancels with CancelAsync, whose callbacks run later on the pool, and the attempt can end
     // before they do
     [Test]
@@ -19,7 +17,7 @@ public class ConnectionCancellationTests
         attempt.Dispose();
         await closing;
 
-        await released.WaitAsync(Timeout);
+        await released.WaitAsync(Bound);
     }
 
     // what makes the above hold whichever runs first: the ended attempt's token is still live
@@ -41,7 +39,7 @@ public class ConnectionCancellationTests
 
         attempt.Dispose();
 
-        await released.WaitAsync(Timeout);
+        await released.WaitAsync(Bound);
     }
 
     [Test]
@@ -53,7 +51,7 @@ public class ConnectionCancellationTests
 
         await app.CancelAsync();
 
-        await released.WaitAsync(Timeout);
+        await released.WaitAsync(Bound);
     }
 
     private static Task Released(CancellationToken token)

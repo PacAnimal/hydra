@@ -29,9 +29,9 @@ public sealed class CapturingLog<T>(LogLevel minimum = LogLevel.Trace) : ILogger
     }
 
     // the first entry matching, waiting for it to be logged
-    public async Task<CapturedEntry> WaitFor(Func<CapturedEntry, bool> match, int timeoutMs = 15000)
+    public async Task<CapturedEntry> WaitFor(Func<CapturedEntry, bool> match)
     {
-        using var timeout = new CancellationTokenSource(timeoutMs);
+        using var timeout = new CancellationTokenSource(TestBound.Bound);
         try
         {
             while (true)

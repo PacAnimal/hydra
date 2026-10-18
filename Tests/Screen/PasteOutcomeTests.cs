@@ -42,7 +42,7 @@ public class PasteOutcomeTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(_dialog.LastState, Is.EqualTo("completed"));
-            Assert.That(await _osd.Shown.Next(1000, "the paste OSD"), Is.EqualTo("Pasted!"));
+            Assert.That(await _osd.Shown.Next("the paste OSD"), Is.EqualTo("Pasted!"));
         }
     }
 
@@ -70,7 +70,7 @@ public class PasteOutcomeTests
     {
         var (_, relay, _) = await _services.Start(TransitionTestHelper.CreateService(osd: _osd, fileTransfer: _fileTransfer));
         _fileTransfer.InitiateSend([Path.Combine(_tempRoot, "a.txt")], "remote", relay, "home");
-        await relay.WaitForSent(MessageKind.FileTransferRequest, TimeSpan.FromSeconds(10));
+        await relay.WaitForSent(MessageKind.FileTransferRequest);
 
         await relay.FireMessageReceived("remote", MessageKind.FileTransferAccepted, "{}");
 
@@ -94,7 +94,7 @@ public class PasteOutcomeTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(_dialog.LastState, Is.EqualTo("completed"));
-            Assert.That(await _osd.Shown.Next(1000, "the paste OSD"), Is.EqualTo("Pasted!"));
+            Assert.That(await _osd.Shown.Next("the paste OSD"), Is.EqualTo("Pasted!"));
         }
     }
 
@@ -120,7 +120,7 @@ public class PasteOutcomeTests
     {
         var (_, relay, _) = await _services.Start(TransitionTestHelper.CreateService(osd: _osd, fileTransfer: _fileTransfer));
         _fileTransfer.InitiateSend([Path.Combine(_tempRoot, "a.txt")], "remote", relay, "home");
-        await relay.WaitForSent(MessageKind.FileTransferRequest, TimeSpan.FromSeconds(10));
+        await relay.WaitForSent(MessageKind.FileTransferRequest);
 
         await relay.FireMessageReceived("remote", MessageKind.FileTransferAbort, "{");
 

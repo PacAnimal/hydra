@@ -1,3 +1,4 @@
+using Cathedral.Extensions;
 using Microsoft.Extensions.Logging;
 
 namespace Hydra.Management;
@@ -5,9 +6,6 @@ namespace Hydra.Management;
 internal sealed class ManagementLogBuffer : ILoggerProvider
 {
     internal const int Capacity = 2000;
-
-    // marks a message naming the user's files, which this log never shows
-    internal static readonly EventId FilePaths = new(7001, nameof(FilePaths));
     private readonly Lock _lock = new();
     private readonly Queue<ManagementLogEntry> _entries = new(Capacity);
     private long _cursor;
@@ -24,9 +22,9 @@ internal sealed class ManagementLogBuffer : ILoggerProvider
 
     private void Add(LogLevel level, string category, EventId eventId, string message)
     {
-        if (category.Contains("FileTransfer", StringComparison.OrdinalIgnoreCase)
-            || category.Contains("Clipboard", StringComparison.OrdinalIgnoreCase)
-            || eventId == FilePaths)
+        if (category.ContainsIgnoreCase("FileTransfer")
+            || category.ContainsIgnoreCase("Clipboard")
+            || eventId == LogEvents.FilePaths)
             return;
 
         lock (_lock)

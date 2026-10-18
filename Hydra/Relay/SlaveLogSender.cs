@@ -1,5 +1,4 @@
 using Cathedral.Utils;
-using Hydra.Management;
 using Microsoft.Extensions.Logging;
 
 namespace Hydra.Relay;
@@ -23,8 +22,8 @@ public sealed class SlaveLogSender(IRelaySender relay, SlaveLogForwarder logForw
 
             if (!logForwarder.Reader.TryRead(out var entry)) continue;
 
-            // a message naming the user's files stays on this machine: a master too old to know the marker would show it
-            if (entry.EventId == ManagementLogBuffer.FilePaths) continue;
+            // a message naming the user's files stays here: SlaveLogMessage carries no event id to mark it by
+            if (entry.EventId == LogEvents.FilePaths) continue;
 
             var targets = masterConfigs
                 .Where(kv => entry.Level >= (kv.Value.LogLevel ?? LogLevel.Information))

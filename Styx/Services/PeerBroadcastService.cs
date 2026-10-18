@@ -57,27 +57,13 @@ public class PeerBroadcastService(IClientRegistry registry, PeerWriter writer, [
                 {
                     if (!CanCollapse(broadcast, next))
                     {
-                        await Deliver(broadcast);
+                        await BroadcastPeers(broadcast);
                         broadcast = next;
                     }
                 }
 
-                await Deliver(broadcast);
+                await BroadcastPeers(broadcast);
             }
-        }
-    }
-
-    // Whatever happens, whoever is waiting on this one is released — a caller blocked on a broadcast that
-    // failed must not be blocked forever.
-    private async Task Deliver(PeerBroadcast broadcast)
-    {
-        try
-        {
-            await BroadcastPeers(broadcast);
-        }
-        finally
-        {
-            broadcast.Done?.TrySetResult();
         }
     }
 
@@ -113,7 +99,6 @@ public class PeerBroadcastService(IClientRegistry registry, PeerWriter writer, [
                         client.ConnectionId, network);
                 }
             }).ToArray();
-            broadcast.Done?.TrySetResult();
 
             // every snapshot has its place in each peer's order already, so the next broadcast need not wait on delivery
             _ = WarnIfStillWaiting(sends, network);
@@ -121,6 +106,11 @@ public class PeerBroadcastService(IClientRegistry registry, PeerWriter writer, [
         catch (Exception ex)
         {
             log.LogError(ex, "Failed to broadcast peers for network {Network}", network);
+        }
+        finally
+        {
+            // a caller waiting on a broadcast that failed must not wait forever
+            broadcast.Done?.TrySetResult();
         }
     }
 

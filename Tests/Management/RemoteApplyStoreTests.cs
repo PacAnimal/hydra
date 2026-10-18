@@ -200,7 +200,7 @@ public class RemoteApplyStoreTests
         _ = await store.BeginAsync(current.Revision, candidate, CancellationToken.None);
 
         await _services.Start(store);
-        await lifetime.RestartRequested.WaitAsync(TimeSpan.FromSeconds(3));
+        await lifetime.RestartRequested.WaitAsync(Bound);
         await _services.StopAll();
 
         Assert.That(await File.ReadAllTextAsync(_configPath), Is.EqualTo(_original));
@@ -218,11 +218,11 @@ public class RemoteApplyStoreTests
         File.Delete(backupPath);
 
         await _services.Start(store);
-        await log.Failed.WaitAsync(TimeSpan.FromSeconds(5));
+        await log.Failed.WaitAsync(Bound);
         Assert.That(lifetime.RestartRequested.IsCompleted, Is.False);
         await File.WriteAllTextAsync(backupPath, _original);
 
-        await lifetime.RestartRequested.WaitAsync(TimeSpan.FromSeconds(5));
+        await lifetime.RestartRequested.WaitAsync(Bound);
         await _services.StopAll();
         Assert.That(await File.ReadAllTextAsync(_configPath), Is.EqualTo(_original));
     }

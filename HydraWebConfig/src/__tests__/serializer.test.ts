@@ -33,6 +33,16 @@ describe('serialize', () => {
     expect(json.logLevel).toBe('debug')
   })
 
+  it('omits updateChannel when stable (default)', () => {
+    expect(JSON.parse(serialize(state({ mode: 'Master' }))).updateChannel).toBeUndefined()
+    expect(JSON.parse(serialize(state({ mode: 'Master' }, { updateChannel: 'stable' }))).updateChannel).toBeUndefined()
+  })
+
+  it('includes updateChannel when edge', () => {
+    const json = JSON.parse(serialize(state({ mode: 'Master' }, { updateChannel: 'edge' })))
+    expect(json.updateChannel).toBe('edge')
+  })
+
   it('omits autoUpdate when true (default)', () => {
     const json = JSON.parse(serialize(state({ mode: 'Master' }, { autoUpdate: true })))
     expect(json.autoUpdate).toBeUndefined()

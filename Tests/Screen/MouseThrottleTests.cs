@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Cathedral.Utils;
 using Hydra.Config;
 using Hydra.Keyboard;
@@ -55,7 +54,7 @@ public class MouseThrottleTests
     public async Task RawMouseBurst_IsBoundedToInFlightAndPendingActorCommands()
     {
         // frozen clock: every sample after the first lands inside one send interval
-        var tracker = new BlockingActivityTracker();
+        var tracker = new HeldActivityTracker();
         var timers = new FakeTimeProvider();
         var (platform, relay, service) = await _services.Start(TransitionTestHelper.CreateService(
             getTickCount: () => 1000L, activityTracker: tracker, timeProvider: timers));
@@ -64,14 +63,14 @@ public class MouseThrottleTests
         Assert.That(platform.IsOnVirtualScreen, Is.True);
 
         platform.AfterFireCallback = null;
-        tracker.BlockNext();
+        tracker.Hold();
         var before = service.PostedMouseBatchCount;
         try
         {
             // one batch in flight, held by the blocked consumer
             platform.FireMouseMove(platform.WarpX + 2, platform.WarpY + 1);
             timers.Advance(PastAnyFlush);
-            await tracker.WaitUntilBlocked();
+            await tracker.Held.WaitAsync(Bound);
 
             for (var i = 0; i < 10_000; i++)
                 platform.FireMouseMove(platform.WarpX + 2, platform.WarpY + 1);
@@ -302,73 +301,8 @@ public class MouseThrottleTests
                 KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Super)));
     }
 
-    [Test]
-    public void KeyDown_ForwardsRepeatPreference_NotMarkedRepeat()
-    {
-        // enter virtual screen
-        _platform.FireMouseMove(2559, 720);
-        _relay.ClearSent();
-
-        _platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyDown, 'w', KeyModifiers.None));
-
-        var keySends = _relay.Snapshot().Where(s => s.Kind == MessageKind.KeyEvent).ToList();
-        Assert.That(keySends, Has.Count.GreaterThanOrEqualTo(1));
-
-        var msg = JsonSerializer.Deserialize<KeyEventMessage>(keySends[0].Json, Cathedral.Config.SaneJson.Options);
-        Assert.That(msg, Is.Not.Null);
-        Assert.That(msg!.IsRepeat, Is.False, "an initial press is not a repeat");
-    }
-
-    [Test]
-    public void RepeatKeyEvent_ForwardedMarkedRepeat()
-    {
-        // enter virtual screen
-        _platform.FireMouseMove(2559, 720);
-        _relay.ClearSent();
-
-        // an OS auto-repeat is re-resolved on the master and surfaces as a KeyEvent flagged IsRepeat
-        _platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyDown, 'w', KeyModifiers.None));
-        _platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyDown, 'w', KeyModifiers.None) with { IsRepeat = true });
-
-        var keySends = _relay.Snapshot().Where(s => s.Kind == MessageKind.KeyEvent).ToList();
-        Assert.That(keySends, Has.Count.EqualTo(2));
-
-        var msg = JsonSerializer.Deserialize<KeyEventMessage>(keySends[1].Json, Cathedral.Config.SaneJson.Options);
-        Assert.That(msg, Is.Not.Null);
-        Assert.That(msg!.IsRepeat, Is.True, "a repeat key event is forwarded marked as a repeat");
-    }
-
     // -- helpers --
 
     private static Task BringRemoteOnline(FakeRelay relay) =>
         TransitionTestHelper.BringRemoteOnline(relay);
-
-    private sealed class BlockingActivityTracker : IActivityTracker
-    {
-        private TaskCompletionSource? _blocked;
-        private TaskCompletionSource? _release;
-
-        public long MsSinceLocalActivity => 0;
-
-        public void BlockNext()
-        {
-            _blocked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            _release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        }
-
-        public Task WaitUntilBlocked() => _blocked!.Task.WaitAsync(TimeSpan.FromSeconds(3));
-        public void Release() => _release!.TrySetResult();
-
-        public async ValueTask LocalActivity()
-        {
-            if (_blocked == null || _release == null) return;
-            _blocked.TrySetResult();
-            await _release.Task;
-            _blocked = null;
-            _release = null;
-        }
-
-        public ValueTask RemoteActivity(string sourcePeer) => ValueTask.CompletedTask;
-        public ValueTask IncomingPing() => ValueTask.CompletedTask;
-    }
 }

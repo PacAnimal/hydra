@@ -19,9 +19,8 @@ namespace Tests.Relay;
 [TestFixture]
 public class SlaveSelectionConnectionTests
 {
-    private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(15);
     private const string Master = "master-pc";
-    private static readonly string Key = StyxTestServer.GenerateEncryptionKey();
+    private static readonly string Key = NetworkConfig.NewEncryptionKey();
     private static readonly QueryDuringSecondLogin Relay = new();
     private static WebApplicationFactory<global::Styx.Program>? _styx;
 
@@ -51,10 +50,10 @@ public class SlaveSelectionConnectionTests
         await slave.StartAsync(CancellationToken.None);
         try
         {
-            await slave.NextAuthentication(Timeout);
+            await slave.NextAuthentication();
             Assert.That(slave.RequestReconnect(), Is.True);
 
-            await finder.Queried.WaitAsync(Timeout);
+            await finder.Queried.WaitAsync(Bound);
 
             Assert.That(await NextFrom(master, MessageKind.FileSelectionResponse), Does.Contain("report.pdf"));
         }
@@ -73,14 +72,14 @@ public class SlaveSelectionConnectionTests
         await slave.StartAsync(CancellationToken.None);
         try
         {
-            await slave.NextAuthentication(Timeout);
+            await slave.NextAuthentication();
             Assert.That(slave.RequestReconnect(), Is.True);
-            await finder.Queried.WaitAsync(Timeout);
-            await slave.NextAuthentication(Timeout);
+            await finder.Queried.WaitAsync(Bound);
+            await slave.NextAuthentication();
 
             Assert.That(slave.RequestReconnect(), Is.True);
 
-            await finder.Cancelled.WaitAsync(Timeout);
+            await finder.Cancelled.WaitAsync(Bound);
         }
         finally
         {
@@ -99,13 +98,13 @@ public class SlaveSelectionConnectionTests
         await slave.StartAsync(CancellationToken.None);
         try
         {
-            await slave.NextAuthentication(Timeout);
+            await slave.NextAuthentication();
             Assert.That(slave.RequestReconnect(), Is.True);
-            await finder.Queried.WaitAsync(Timeout);
+            await finder.Queried.WaitAsync(Bound);
 
             drop.SetResult();
 
-            await finder.Cancelled.WaitAsync(Timeout);
+            await finder.Cancelled.WaitAsync(Bound);
         }
         finally
         {
@@ -125,15 +124,15 @@ public class SlaveSelectionConnectionTests
         await slave.StartAsync(CancellationToken.None);
         try
         {
-            await slave.NextAuthentication(Timeout);
+            await slave.NextAuthentication();
             Assert.That(slave.RequestReconnect(), Is.True);
-            await finder.Queried.WaitAsync(Timeout);
-            await slave.NextAuthentication(Timeout);
+            await finder.Queried.WaitAsync(Bound);
+            await slave.NextAuthentication();
             Assert.That(slave.RequestReconnect(), Is.True);
-            await finder.Cancelled.WaitAsync(Timeout);
-            await slave.NextAuthentication(Timeout);
+            await finder.Cancelled.WaitAsync(Bound);
+            await slave.NextAuthentication();
 
-            await slave.SimulateReceive(Master, MessageKind.FileSelectionQuery, "{}").WaitAsync(Timeout);
+            await slave.SimulateReceive(Master, MessageKind.FileSelectionQuery, "{}").WaitAsync(Bound);
 
             var (targets, _, json) = slave.Snapshot().Single(s => s.Kind == MessageKind.FileSelectionResponse);
             using (Assert.EnterMultipleScope())
@@ -153,14 +152,14 @@ public class SlaveSelectionConnectionTests
     {
         while (true)
         {
-            var (_, received, json) = await master.WaitForNextMessage((int)Timeout.TotalMilliseconds);
+            var (_, received, json) = await master.WaitForMessage();
             if (received == kind) return json;
         }
     }
 
     private static async Task Stop(TestableSlaveRelay slave)
     {
-        using var giveUp = new CancellationTokenSource(Timeout);
+        using var giveUp = new CancellationTokenSource(Bound);
         await slave.StopAsync(giveUp.Token);
     }
 

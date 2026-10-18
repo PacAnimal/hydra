@@ -65,7 +65,7 @@ public class RelayWakeRetryTests
 
         relay.BeginSystemWake(1);
 
-        await delay.WaitAsync(TimeSpan.FromSeconds(1));
+        await delay.WaitAsync(Bound);
     }
 
     [Test]
