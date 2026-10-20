@@ -89,6 +89,7 @@ Use `Esc` to close the TUI. It does not change Hydra's running state.
 - `sessionLogFile` — Windows service mode only: path to a file where the session child's log output is written. The service spawns a child process in the interactive session to run the input hooks and the relay, so this is the log that records what actually happened. Defaults to `logFile` with a `.session.log` extension, so it is only worth setting to move it elsewhere.
 - `logTruncate` — if `true`, truncate `logFile` and `sessionLogFile` to 0 bytes on each startup so they don't grow unbounded (default: `false`)
 - `autoUpdate` — `false` to disable automatic updates
+- `updateChannel` — `stable` (default) follows full releases; `edge` follows the newest release of any kind, including prereleases built from the `edge` branch, and moves back onto a stable release once one overtakes them. Testing ground only: switching back to `stable` does not downgrade, it waits for the next stable release
 - `lockFile` — path to a lock file to prevent multiple instances (default: none)
 - `profile` — force the named `profileName` regardless of conditions; intended for diagnosis and controlled overrides
 - `debugShield` — enable verbose cursor-shield diagnostics (default: `false`)
@@ -101,7 +102,7 @@ Use `Esc` to close the TUI. It does not change Hydra's running state.
 - `profileName` — name for this profile, logged at startup so you know which one is active (no duplicates allowed)
 - `mode` — `Master` or `Slave`
 - `networkConfig` — base64 relay config string from the Styx web UI; use this to connect to a standalone Styx server
-- `embeddedStyx` — connect to a Styx server using plain-text credentials: `{ "server": "http://<host>:<port>", "password": "<password>" }` — a more readable alternative to copying the base64 `networkConfig` blob
+- `embeddedStyx` — connect to a Styx server using plain-text credentials: `{ "server": "https://<host>:<port>", "password": "<password>" }` — a more readable alternative to copying the base64 `networkConfig` blob. Always TLS: an address with no scheme means `https://`, and `http://` is refused
 - `embeddedStyxServer` — run a Styx relay server embedded inside this Hydra process: `{ "port": <port>, "password": "<password>" }` — useful for home setups where you don't want a separate Styx container; the machine running this automatically connects to its own server, and other machines connect to it using `embeddedStyx`
 - `hosts` — list of host entries for the neighbour graph (master only; slaves don't need this)
 - `screenDefinitions` — per-screen scale config (slave only; reported to master via ScreenInfo)
@@ -109,7 +110,7 @@ Use `Esc` to close the TUI. It does not change Hydra's running state.
 - `relativeMouseScale` — fallback relative-mode speed multiplier for all screens on this slave; falls back to `mouseScale` when omitted (slave only)
 - `hideCursor` — hide the master's local cursor while it is inactive or routed remotely; an inactive cursor is hidden where it is and reappears there (master only; default: `false`)
 - `deadCorners` — pixel dead zone at screen corners where transitions are blocked (default `0`, `50` is a reasonable starting value). Scaled by the screen's mouseScale. Can also be set per-host to override.
-- `maxMouseHz` — how many mouse updates a second the master sends to a slave (master only; default `125`, range `1`–`1000`). This also sets how long raw samples are coalesced before they are processed, so the two stay in step. **Raising it costs CPU on the master**: a mouse reports roughly 900 samples a second, and each send is a relay round trip. The ceiling is the sample rate itself — at `1000` every sample a mouse reports is already sent on its own. Rates that do not divide 1000 evenly land on the next rate up, because the interval is whole milliseconds (`300` gives a 3ms interval, so 333 Hz).
+- `maxMouseHz` — how many mouse updates a second the master sends to a slave (master only; default `125`, range `1`–`1000`). This also sets how long raw samples are coalesced before they are processed, so the two stay in step. **Raising it costs CPU on the master**: a mouse commonly reports up to 1000 samples a second, and each one sent is a relay message. The ceiling is that rate — at `1000` every sample such a mouse reports is already sent on its own. Rates that do not divide 1000 evenly land on the next rate up, because the interval is whole milliseconds (`300` gives a 3ms interval, so 333 Hz).
 - `hotkeys` — rebind Hydra's hotkeys, as action name to an array of chords (master only; see [Customising hotkeys](#customising-hotkeys))
 - `remoteOnly` — `true` to forward all input to remote machines immediately at startup, with no local screen involved (see [Remote-only mode](#remote-only-mode))
 - `clipboardSync` — `Hydra` uses Hydra's cross-platform clipboard protocol (default). `System` makes a macOS master stand down for macOS peers so Universal Clipboard can operate without competing pasteboard writes; Hydra continues syncing with Windows and Linux peers.
@@ -117,7 +118,6 @@ Use `Esc` to close the TUI. It does not change Hydra's running state.
 - `allowSystemSleep` — `true` lets the operating system's normal idle policy put this machine fully to sleep. Hydra stops treating background peer activity as local activity, leaves the relay when a screen-count condition no longer matches, and closes the relay before OS suspend (default: `false`).
 - `screenLockPropagation` — propagate a Mac/Windows master's local lock to connected slaves (master only; default: `false`)
 - `accelerateMouseWheel` — apply the platform wheel-acceleration behavior (default: `true`)
-- `unicodeKeyRepeat` — repeat held printable keys through Unicode insertion where supported, avoiding the macOS press-and-hold accent UI (master preference; default: `true`)
 - `conditions` — optional object; if set, this profile only activates when **all** specified conditions are met (see [Network-aware config](#network-aware-config))
   - `ssid` — activates when connected to this WiFi network name (case-insensitive)
   - `screenCount` — activates when exactly this many screens are connected (integer ≥ 1)
@@ -441,13 +441,18 @@ When you move the cursor to a remote machine, Hydra pushes the local clipboard t
 
 For Mac-to-Mac peers already using Apple's Universal Clipboard, set `"clipboardSync": "System"` on the active master profile. Hydra then sends no clipboard hash, push, or pull messages for macOS peers, while retaining its normal clipboard sync for Windows and Linux peers. Hydra cannot detect whether both Macs share an Apple Account or whether Handoff is enabled, so this mode is explicit rather than automatic. It does not disable Hydra's separate file-transfer hotkeys.
 
-On macOS, a Finder clipboard containing file URLs is always preserved: Hydra neither treats it as an empty clipboard nor overwrites it with an automatic clipboard transition.
+On macOS and Windows, a clipboard holding copied files (from Finder or Explorer) is always preserved: Hydra neither treats it as an empty clipboard nor overwrites it with an automatic clipboard transition.
 
 Synced content:
 - **Plain text** — all platforms
+- **Formatted text (HTML)** — all platforms
+- **Formatted text (RTF)** — macOS and Windows; X11 has no standard RTF target, so Linux gets the HTML or plain text
 - **Images (PNG)** — all platforms; Windows also handles DIB format for compatibility with legacy apps
 
-Linux syncs both the `CLIPBOARD` selection and the X11 `PRIMARY` (middle-click) selection.
+Linux also syncs the X11 `PRIMARY` (middle-click) selection, beside the clipboard and independently of it. macOS and
+Windows have no such selection, so each keeps one for Hydra: the newest of a selection arriving from Linux and your
+own text copies. A text copy on a Mac or Windows machine therefore lands in both the clipboard and `PRIMARY` on
+Linux, while between Linux machines the two stay separate. Copies a password manager marks as concealed are left out.
 
 ## File transfer
 
@@ -494,7 +499,7 @@ When enabled, background activity reported by other Hydra peers no longer resets
 
 The pre-sleep notification is provided by IOKit on macOS, power-mode notifications on Windows, and `systemd-logind` on Linux. Linux uses a bounded delay inhibitor while Hydra closes the relay. If the platform notification service is unavailable, Hydra logs a warning and the operating system still controls whether the machine sleeps.
 
-This option intentionally disables Hydra-based remote wake while the machine is asleep. Operating-system wake sources such as Wake-on-LAN, Power Nap, network maintenance, USB devices, and scheduled wakes remain separate system settings. The default is `false` for backward compatibility and to preserve Hydra's existing always-reachable behaviour.
+This option intentionally disables Hydra-based remote wake while the machine is asleep. Operating-system wake sources such as Wake-on-LAN, Power Nap, network maintenance, USB devices, and scheduled wakes remain separate system settings. The default is `false`, so the machine stays reachable to Hydra's remote wake.
 
 ## Remote-only mode
 
@@ -592,7 +597,7 @@ On startup, Hydra logs how other machines should connect:
 
 ```
 Embedded Styx relay on port 5000
-Remote hosts can connect with: embeddedStyx: {"server": "http://<your-ip>:5000", "password": "<password>"}
+Remote hosts can connect with: embeddedStyx: {"server": "https://<your-ip>:5000", "password": "<password>"}
 ```
 
 **On each other machine** (master or slave), use `embeddedStyx` with your hub's IP and the same password — no need to copy a base64 blob:
@@ -603,42 +608,96 @@ Remote hosts can connect with: embeddedStyx: {"server": "http://<your-ip>:5000",
   "profiles": [
     {
       "mode": "Slave",
-      "embeddedStyx": { "server": "http://192.168.1.10:5000", "password": "my-secret" }
+      "embeddedStyx": { "server": "https://192.168.1.10:5000", "password": "my-secret" }
     }
   ]
 }
 ```
 
-The `embeddedStyx` property is also an alternative to `networkConfig` for any external Styx server — just point it at the server URL and provide the password instead of copying a base64 string.
+The embedded relay speaks only TLS, with no certificate to set up: it makes a new self-signed one on every start, and each machine checks that the relay knows the password before it trusts that certificate or sends anything else.
+
+The `embeddedStyx` property is also an alternative to `networkConfig` for any external Styx server — just point it at the server's `https://` URL and provide the password instead of copying a base64 string. That server needs a certificate your machines already trust, such as one from the reverse proxy in front of it. The password is the relay's `RELAY_PASSWORD`, so this works only while that is set, and everyone connecting this way lands on the same network: anyone who knows the password can reach your machines. To keep groups of machines apart, give each its own `networkConfig` instead.
 
 ### Running standalone Styx
 
+Generate the relay's key once, and keep it as a secret:
+
 ```bash
-docker run -e RELAY_PASSWORD=<secret> -p 5000:5000 ghcr.io/pacanimal/styx:latest
+docker run --rm ghcr.io/pacanimal/styx:latest keygen
 ```
+
+A key is 64 random bytes in base64, so any secure generator makes one just as well:
+
+```bash
+openssl rand -base64 64 | tr -d '\n'
+```
+```powershell
+$key = New-Object byte[] 64; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($key); [Convert]::ToBase64String($key)
+```
+
+Or set `RELAY_SIGNING_PASSPHRASE` instead of `RELAY_SIGNING_KEY`, and the relay derives its key from that. It must be one line
+of at least 64 characters, 16 of them different, and it is only as strong as it is unpredictable: anyone holding a
+token can test guesses at it offline, and the same guesses work against every relay. Use a long sentence nobody
+has ever written down, a long stretch of random hammering on the keyboard, or best of all a password manager's
+generator; never a quotation, a lyric or a name. `docker run --rm -i ghcr.io/pacanimal/styx:latest derive` prints
+the key a passphrase gives, reading the passphrase from standard input. [Styx.md](../Styx.md) §13.1 has the rules.
+
+Then run the relay with it, and with a password for creating networks:
+
+```bash
+docker run -e RELAY_SIGNING_KEY=<key> -e RELAY_PASSWORD=<password> -p 5000:5000 ghcr.io/pacanimal/styx:latest
+```
+
+`RELAY_PASSWORD` also makes the relay accept older configs, and each of those lets whoever holds it guess at the
+password offline, so make it long and random.
+
+An existing relay keeps accepting the configs it already issued for as long as `RELAY_PASSWORD` stays set; new
+networks are always issued in the newer format. See [Styx.md](../Styx.md) §13 for every setting.
+
+`mint` issues a config offline, from the key alone (`RELAY_SIGNING_KEY`, or `RELAY_SIGNING_PASSPHRASE`), with no relay running and no password:
+
+```bash
+docker run --rm -e RELAY_SIGNING_KEY=<key> ghcr.io/pacanimal/styx:latest mint --server https://styx.example.org --sub office --host-prefix office-
+```
+
+With `--server` it prints a config string for `networkConfig`; without, only the token. `--sub`, `--host-prefix`,
+`--host-not` and `--id` may each be given more than once:
+
+- `--network <uuid>` — the network to mint for, a version-8 UUID; a new one when left out
+- `--sub <name>` — a sub-network: machines on different sub-networks of one network cannot see each other
+- `--host <name>`, `--host-prefix <prefix>`, `--host-not <name>` — which hostnames the config may log in as
+- `--exp <unix seconds>` — when it stops working
+- `--id <id>` — a label `RELAY_REVOKED_IDS` can revoke it by
+- `--max-length <chars>` — refuse if the token would be longer
+- `--encryption-key <key>` — the key machines encrypt their traffic with; a random one when left out
+- `--max-blob <bytes>` — refuse if the config string would be larger
+
+[Styx.md](../Styx.md) §14 covers choosing these and the mistakes to avoid.
+
+`styx:latest` is built from `main`; `styx:edge` from the `edge` branch, for trying changes before they ship.
 
 Styx listens on port `5000` by default. Override with `LOCAL_PORT`:
 
 ```bash
-docker run -e RELAY_PASSWORD=<secret> -e LOCAL_PORT=8080 -p 8080:8080 ghcr.io/pacanimal/styx:latest
+docker run -e RELAY_SIGNING_KEY=<key> -e RELAY_PASSWORD=<password> -e LOCAL_PORT=8080 -p 8080:8080 ghcr.io/pacanimal/styx:latest
 ```
 
 Set `LOCAL_ONLY=true` to bind only to `127.0.0.1` and `::1` — useful when running behind a reverse proxy (HAProxy, nginx, Caddy, etc.) that terminates TLS and forwards to localhost:
 
 ```bash
-docker run -e RELAY_PASSWORD=<secret> -e LOCAL_ONLY=true -p 127.0.0.1:5000:5000 ghcr.io/pacanimal/styx:latest
+docker run -e RELAY_SIGNING_KEY=<key> -e RELAY_PASSWORD=<password> -e LOCAL_ONLY=true -p 127.0.0.1:5000:5000 ghcr.io/pacanimal/styx:latest
 ```
 
 Or build from source:
 
 ```bash
 docker build -f Styx/Dockerfile -t styx:local .
-docker run -e RELAY_PASSWORD=<secret> -p 5000:5000 styx:local
+docker run -e RELAY_SIGNING_KEY=<key> -e RELAY_PASSWORD=<password> -p 5000:5000 styx:local
 ```
 
 ### Generating a network config
 
-Open `http://<your-styx-host>:5000` in a browser, enter the relay password, and click **Generate**. Copy the config string.
+Open `http://<your-styx-host>:5000` in a browser, enter the relay password, and click **Generate**. Copy the config string. This needs the relay started with `RELAY_SIGNING_KEY` or `RELAY_SIGNING_PASSPHRASE` as well as `RELAY_PASSWORD`; without both it creates no networks.
 
 ### Connecting Hydra to a standalone Styx server
 

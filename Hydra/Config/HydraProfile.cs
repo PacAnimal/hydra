@@ -9,6 +9,7 @@ public interface IHydraProfile
     string Name { get; }
     LogLevel LogLevel { get; }
     bool AutoUpdate { get; }
+    UpdateChannel UpdateChannel { get; }
     bool DebugShield { get; }
     bool DebugMouse { get; }
     bool ManagementListener { get; }
@@ -29,7 +30,6 @@ public interface IHydraProfile
     bool AllowSystemSleep { get; }
     bool ScreenLockPropagation { get; }
     bool AccelerateMouseWheel { get; }
-    bool UnicodeKeyRepeat { get; }
     HotkeyBindings Hotkeys { get; }
     int? DeadCorners { get; }
 
@@ -40,18 +40,19 @@ public interface IHydraProfile
 
 public class HydraProfile(HydraConfigFile configFile, HydraConfig? activeProfile, string? networkConfigOverride = null) : IHydraProfile
 {
-    // A mouse reports around 900 samples a second and a slave cannot show more than its own refresh
+    // A mouse commonly reports up to 1000 samples a second and a slave cannot show more than its own refresh
     // rate, so the master coalesces them to this and sends the result. Raising it costs CPU on the
-    // MASTER — every send is a relay round trip and every interval is one actor command — which is
+    // MASTER — every send is a relay frame and every interval is one actor command — which is
     // why it is a number rather than an ambition.
     public const int DefaultMaxMouseHz = 125;
     public const int MaxConfigurableMouseHz = 1000;
 
     private readonly HydraConfig? _activeProfile = activeProfile;
 
-    public string Name { get; } = configFile.Name ?? Environment.MachineName.Split('.')[0];
+    public string Name { get; } = configFile.ResolvedName;
     public LogLevel LogLevel { get; } = configFile.LogLevel;
     public bool AutoUpdate { get; } = configFile.AutoUpdate;
+    public UpdateChannel UpdateChannel { get; } = configFile.UpdateChannel;
     public bool DebugShield { get; } = configFile.DebugShield;
     public bool DebugMouse { get; } = configFile.DebugMouse;
     public bool ManagementListener { get; } = configFile.ManagementListener;
@@ -71,7 +72,6 @@ public class HydraProfile(HydraConfigFile configFile, HydraConfig? activeProfile
     public bool AllowSystemSleep => _activeProfile?.AllowSystemSleep ?? false;
     public bool ScreenLockPropagation => _activeProfile?.ScreenLockPropagation ?? false;
     public bool AccelerateMouseWheel => _activeProfile?.AccelerateMouseWheel ?? true;
-    public bool UnicodeKeyRepeat => _activeProfile?.UnicodeKeyRepeat ?? true;
     public HotkeyBindings Hotkeys { get; } = HotkeyBindings.Build(activeProfile?.Hotkeys);
     public int? DeadCorners => _activeProfile?.DeadCorners;
 

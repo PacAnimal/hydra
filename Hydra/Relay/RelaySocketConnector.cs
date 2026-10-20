@@ -7,17 +7,17 @@ internal static class RelaySocketConnector
 {
     private static readonly TimeSpan AddressConnectTimeout = TimeSpan.FromSeconds(2);
 
-    internal static async Task<Socket> ConnectAsync(DnsEndPoint target, CancellationToken cancellationToken)
+    internal static async Task<Socket> Connect(DnsEndPoint target, CancellationToken cancellationToken)
     {
         var addresses = IPAddress.TryParse(target.Host, out var literal)
             ? [literal]
             : await Dns.GetHostAddressesAsync(target.Host, cancellationToken);
         if (addresses.Length > 1)
-            addresses = [.. await RelayAddressPreference.OrderAsync(addresses, target.Port, cancellationToken)];
-        return await ConnectAsync(addresses, target.Port, AddressConnectTimeout, cancellationToken);
+            addresses = [.. await RelayAddressPreference.Order(addresses, target.Port, cancellationToken)];
+        return await Connect(addresses, target.Port, AddressConnectTimeout, cancellationToken);
     }
 
-    internal static async Task<Socket> ConnectAsync(
+    internal static async Task<Socket> Connect(
         IEnumerable<IPAddress> addresses,
         int port,
         TimeSpan addressTimeout,

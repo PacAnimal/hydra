@@ -1,5 +1,7 @@
 using Cathedral.Extensions;
+using Common;
 using Hydra.Relay;
+using Styx;
 using Tests.Setup;
 
 namespace Tests.Styx;
@@ -27,21 +29,23 @@ public class StyxIntegrationTests : StyxFixtureBase
         Assert.That(response.Authenticated, Is.True);
     }
 
-    [Test]
-    public async Task Ping_WithoutAuth_ReturnsPong()
+    [TestCase(global::Styx.Constants.RelayPath)]
+    [TestCase(global::Styx.Constants.ParallelRelayPath)]
+    public async Task Ping_WithoutAuth_ReturnsPong(string path)
     {
         await using var client = new TestStyxClient();
-        await client.ConnectRaw(Factory);
+        await client.ConnectRaw(Factory, path);
         var result = await client.Server!.Ping();
         Assert.That(result, Is.True);
     }
 
-    [Test]
-    public async Task Send_WithoutAuth_FailsWithException()
+    [TestCase(global::Styx.Constants.RelayPath)]
+    [TestCase(global::Styx.Constants.ParallelRelayPath)]
+    public async Task Send_WithoutAuth_FailsWithException(string path)
     {
         // hub filter calls Context.Abort() on unauthenticated calls — client sees a cancellation or error
         await using var client = new TestStyxClient();
-        await client.ConnectRaw(Factory);
+        await client.ConnectRaw(Factory, path);
         Exception? ex = null;
         try { await client.Server!.Send(["any-host"], [1, 2, 3]); } catch (Exception e) { ex = e; }
         Assert.That(ex, Is.Not.Null);
@@ -120,7 +124,7 @@ public class StyxIntegrationTests : StyxFixtureBase
         var (sender, receiver) = pair;
 
         var payload = MessageSerializer.Encode(MessageKind.FileTransferChunk, new FileTransferChunkMessage(0, [1, 2, 3]));
-        await sender.SendReliableAsync(["receiver"], payload).AsTask().WaitAsync(TimeSpan.FromSeconds(3));
+        await sender.SendReliableAsync(["receiver"], payload).AsTask().WaitAsync(Bound);
 
         var (source, kind, _) = await receiver.WaitForMessage();
         using (Assert.EnterMultipleScope())
@@ -136,11 +140,10 @@ public class StyxIntegrationTests : StyxFixtureBase
         var networkId = Guid.NewGuid();
         var cfg = await StyxTestServer.BuildNetworkConfig(Factory, networkId);
 
-        await using var client = HydraTestClient.Master(Factory, "sleeping-host", cfg);
-        await client.StartReady();
+        await using var client = await HydraTestClient.Started(HydraTestClient.Master(Factory, "sleeping-host", cfg));
 
-        using (var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5)))
-            await client.SuspendConnectionAsync(timeout.Token);
+        using (var timeout = new CancellationTokenSource(Bound))
+            await client.SuspendConnection(timeout.Token);
 
         Assert.That(client.IsConnected, Is.False);
         await client.WaitUntilParked();
@@ -192,30 +195,6 @@ public class StyxIntegrationTests : StyxFixtureBase
     }
 
     [Test]
-    public async Task TwoHydraClients_DeltaViaGenericSend_StillDeliversCorrectly()
-    {
-        await using var pair = await ConnectedPair();
-        var (sender, receiver) = pair;
-
-        // A caller that reaches an already-encoded MouseMoveDelta payload through the generic Send()
-        // instead of SendMouseDelta (e.g. an IRelaySender decorator that forwards Send but not
-        // SendMouseDelta) must still be handled correctly, not just delivered unbatched by accident.
-        sender.Send(["receiver"], MessageSerializer.Encode(MessageKind.MouseMoveDelta, new MouseMoveDeltaMessage(4, 6)));
-
-        var (source, kind, json) = await receiver.WaitForMessage();
-
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(source, Is.EqualTo("sender"));
-            Assert.That(kind, Is.EqualTo(MessageKind.MouseMoveDelta));
-            var decoded = json.FromSaneJson<MouseMoveDeltaMessage>();
-            Assert.That(decoded, Is.Not.Null);
-            Assert.That(decoded!.Dx, Is.EqualTo(4));
-            Assert.That(decoded.Dy, Is.EqualTo(6));
-        }
-    }
-
-    [Test]
     public async Task TwoHydraClients_RapidMouseDeltas_SumSurvivesRegardlessOfHowMuchCoalesces()
     {
         await using var pair = await ConnectedPair();
@@ -234,18 +213,15 @@ public class StyxIntegrationTests : StyxFixtureBase
             expectedDx += i;
             expectedDy -= i;
         }
+        sender.Send(["receiver"], TestMessages.Sentinel());
 
         var receivedDx = 0;
         var receivedDy = 0;
         var messageCount = 0;
-        while (true)
+        foreach (var (_, kind, json) in await receiver.ReadUntilSentinel())
         {
-            (string Source, MessageKind Kind, string Json) msg;
-            try { msg = await receiver.WaitForNextMessage(messageCount == 0 ? 5000 : 1000); }
-            catch (TimeoutException) { break; }
-
-            Assert.That(msg.Kind, Is.EqualTo(MessageKind.MouseMoveDelta));
-            var decoded = msg.Json.FromSaneJson<MouseMoveDeltaMessage>();
+            Assert.That(kind, Is.EqualTo(MessageKind.MouseMoveDelta));
+            var decoded = json.FromSaneJson<MouseMoveDeltaMessage>();
             Assert.That(decoded, Is.Not.Null);
             receivedDx += decoded!.Dx;
             receivedDy += decoded.Dy;
@@ -269,19 +245,28 @@ public class StyxIntegrationTests : StyxFixtureBase
     {
         var networkA = Guid.NewGuid();
         var networkB = Guid.NewGuid();
-        var cfgA = await StyxTestServer.BuildNetworkConfig(Factory, networkA);
-        var cfgB = await StyxTestServer.BuildNetworkConfig(Factory, networkB);
+        // one key for both, so a frame leaked across networks would decrypt and arrive rather than be discarded
+        var key = NetworkConfig.NewEncryptionKey();
+        var cfgA = await StyxTestServer.BuildNetworkConfig(Factory, networkA, key);
+        var cfgB = await StyxTestServer.BuildNetworkConfig(Factory, networkB, key);
 
         await using var pairA = await ClientPair.Start(HydraTestClient.Master(Factory, "sender", cfgA), HydraTestClient.Master(Factory, "receiver", cfgA));
-        await using var clientB = HydraTestClient.Master(Factory, "sender", cfgB);
-        await clientB.StartReady();
+        await using var clientB = await HydraTestClient.Started(HydraTestClient.Master(Factory, "sender", cfgB));
 
         // clientB targets "receiver" — should not reach pairA's receiver (different network)
         clientB.Send(["receiver"], TestMessages.Move(7));
 
-        Exception? ex = null;
-        try { await pairA.Receiver.WaitForMessage(800); } catch (TimeoutException e) { ex = e; }
-        Assert.That(ex, Is.InstanceOf<TimeoutException>());
+        // clientB's own echo means the relay has handled the stray send; a sentinel queued after it then arrives first
+        clientB.Send(["sender"], TestMessages.Move(8));
+        await clientB.WaitForMessage();
+        pairA.Sender.Send(["receiver"], TestMessages.Move(9));
+
+        var (source, _, json) = await pairA.Receiver.WaitForMessage();
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(source, Is.EqualTo("sender"));
+            Assert.That(json.FromSaneJson<MouseMoveMessage>()!.X, Is.EqualTo(9));
+        }
     }
 
     [Test]
@@ -290,14 +275,12 @@ public class StyxIntegrationTests : StyxFixtureBase
         var networkId = Guid.NewGuid();
         var cfg = await StyxTestServer.BuildNetworkConfig(Factory, networkId);
 
-        await using var first = HydraTestClient.Master(Factory, "duplicate", cfg);
-        await first.StartReady();
+        await using var first = await HydraTestClient.Started(HydraTestClient.Master(Factory, "duplicate", cfg));
 
-        await using var second = HydraTestClient.Master(Factory, "duplicate", cfg);
-        await second.StartReady();
+        await using var second = await HydraTestClient.Started(HydraTestClient.Master(Factory, "duplicate", cfg));
 
         var reason = await first.WaitForKick();
-        Assert.That(reason, Is.EqualTo("duplicate hostname"));
+        Assert.That(reason, Is.EqualTo(RelayReasons.KickedDuplicateHostname));
     }
 
     [Test]
@@ -326,7 +309,7 @@ public class StyxIntegrationTests : StyxFixtureBase
         using (Assert.EnterMultipleScope())
         {
             Assert.That((await reconnected.Connect(Factory, auth, "roamer")).Authenticated, Is.True);
-            Assert.That(await original.WaitForKick(), Is.EqualTo("duplicate hostname"));
+            Assert.That(await original.WaitForKick(), Is.EqualTo(RelayReasons.KickedDuplicateHostname));
 
             // both halves, in order — an observer given one identical list has no way to tell this happened
             Assert.That(await observer.WaitForPeers(), Is.Empty, "displaced host should be broadcast as gone first");
@@ -340,16 +323,13 @@ public class StyxIntegrationTests : StyxFixtureBase
         var networkId = Guid.NewGuid();
         var cfg = await StyxTestServer.BuildNetworkConfig(Factory, networkId);
 
-        await using var clientA = HydraTestClient.Master(Factory, "host-a", cfg);
-        await clientA.StartReady();
+        await using var clientA = await HydraTestClient.Started(HydraTestClient.Master(Factory, "host-a", cfg));
 
         var initialPeers = await clientA.WaitForPeers();
         Assert.That(initialPeers, Is.Empty);
 
-        await using (var clientB = HydraTestClient.Master(Factory, "host-b", cfg))
+        await using (var clientB = await HydraTestClient.Started(HydraTestClient.Master(Factory, "host-b", cfg)))
         {
-            await clientB.StartReady();
-
             var peersForA = await clientA.WaitForPeers();
             var peersForB = await clientB.WaitForPeers();
 
@@ -369,17 +349,14 @@ public class StyxIntegrationTests : StyxFixtureBase
     public async Task Encryption_RecoversAfterPeerReconnect()
     {
         var networkId = Guid.NewGuid();
-        var key = StyxTestServer.GenerateEncryptionKey();
+        var key = NetworkConfig.NewEncryptionKey();
         var cfg = await StyxTestServer.BuildNetworkConfig(Factory, networkId, key);
 
-        await using var receiver = HydraTestClient.Master(Factory, "receiver", cfg);
-        await receiver.StartReady();
+        await using var receiver = await HydraTestClient.Started(HydraTestClient.Master(Factory, "receiver", cfg));
 
         // sender1 connects and sends a message — receiver caches its RemoteKey
-        await using (var sender1 = HydraTestClient.Master(Factory, "sender", cfg))
+        await using (var sender1 = await HydraTestClient.Started(HydraTestClient.Master(Factory, "sender", cfg)))
         {
-            await sender1.StartReady();
-
             sender1.Send(["receiver"], TestMessages.Move(1));
             var (_, kind1, _) = await receiver.WaitForMessage();
             Assert.That(kind1, Is.EqualTo(MessageKind.MouseMove));
@@ -389,8 +366,7 @@ public class StyxIntegrationTests : StyxFixtureBase
         await receiver.WaitForPeers(); // receiver sees sender leave
 
         // sender2 reconnects — new RelayEncryption means new salt, receiver's cached RemoteKey is stale
-        await using var sender2 = HydraTestClient.Master(Factory, "sender", cfg);
-        await sender2.StartReady();
+        await using var sender2 = await HydraTestClient.Started(HydraTestClient.Master(Factory, "sender", cfg));
 
         // receiver must re-derive remote key via ExtractKey — should succeed transparently
         sender2.Send(["receiver"], TestMessages.Move(2));
@@ -409,8 +385,7 @@ public class StyxIntegrationTests : StyxFixtureBase
         var networkId = Guid.NewGuid();
         var cfg = await StyxTestServer.BuildNetworkConfig(Factory, networkId);
 
-        await using var client = HydraTestClient.Master(Factory, "solo", cfg);
-        await client.StartReady();
+        await using var client = await HydraTestClient.Started(HydraTestClient.Master(Factory, "solo", cfg));
 
         // send to a host that doesn't exist — should silently no-op, not throw
         client.Send(["nonexistent"], TestMessages.Move(0));

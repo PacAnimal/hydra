@@ -6,7 +6,7 @@ using MessagePack.Resolvers;
 namespace Tests.Styx;
 
 // Styx.md documents the encoding of everything crossing the hub, and third parties implement against it.
-// New hub methods are free to use Cathedral's richer encodings (enums as name strings, Guids as raw bytes),
+// New hub methods are free to use richer encodings (enums as name strings, Guids as raw bytes),
 // but the types already on the wire must keep encoding the way the document says, so an implementation that
 // has shipped keeps working. These tests compare the hub's options against a plain contractless resolver —
 // the encoding Styx.md describes — for every type that crosses today.
@@ -27,8 +27,11 @@ public class StyxWireFormatTests
             $"{what} no longer encodes the way Styx.md documents");
 
     [Test]
-    public void RelayLogin_EncodesAsDocumented() =>
+    public void RelayLogin_EncodesAsDocumented()
+    {
         AssertEncodesAsDocumented(new RelayLogin { Authorization = new string('t', 176), HostName = "alpha-box" }, "RelayLogin");
+        AssertEncodesAsDocumented(new RelayLogin { Authorization = "styx2." + new string('t', 68), HostName = "alpha-box" }, "RelayLogin with a v2 token");
+    }
 
     [Test]
     public void RelayLoginResponse_EncodesAsDocumented()
@@ -60,6 +63,7 @@ public class StyxWireFormatTests
         AssertEncodesAsDocumented(true, "Ping result");
         AssertEncodesAsDocumented("127.0.0.1", "GetMyIp result");
         AssertEncodesAsDocumented("duplicate hostname", "Kicked reason");
+        AssertEncodesAsDocumented("authorization expired", "Kicked reason on expiry");
     }
 
     // Styx.md §3.3: a messagepack client reads PascalCase response members

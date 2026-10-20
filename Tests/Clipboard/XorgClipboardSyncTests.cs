@@ -6,21 +6,12 @@ using Tests.Setup;
 
 namespace Tests.Clipboard;
 
-// End-to-end X11 selection-protocol tests for XorgClipboardSync. These drive the real
-// Xlib code against a live X server (Xvfb) and use xclip as the peer so we can assert the
-// exact wire bytes — in particular that STRING is ISO-8859-1 while UTF8_STRING is UTF-8.
-//
-// They self-skip unless on Linux with a live DISPLAY (see RequireX11), so libX11 never loads on
-// macOS/Windows and a plain `dotnet test` is safe everywhere. They actually execute under Xvfb:
-// the test-linux CI job (dotnet test under xvfb-run) and run-tests.sh linux. Sequential by design:
-// the CLIPBOARD selection is a single global resource.
+// the real Xlib code against Xvfb, with xclip as the peer; sequential, since CLIPBOARD is global
 [TestFixture]
 [Category("Linux")]
 [NonParallelizable]
 public class XorgClipboardSyncTests
 {
-    // discovered everywhere but only runnable on Linux with a live X server. Skip (don't fail) elsewhere,
-    // and skip BEFORE touching XorgClipboardSync so libX11 is never loaded on macOS/Windows.
     [OneTimeSetUp]
     public void RequireX11() => X11Required.OrIgnore();
 
@@ -38,7 +29,7 @@ public class XorgClipboardSyncTests
     public void Serve_String_IsLatin1_Utf8String_IsUtf8()
     {
         using var owner = new XorgClipboardSync();
-        owner.SetText("café");
+        owner.SetClipboard(new ClipboardSnapshot("café", null, null));
 
         using (Assert.EnterMultipleScope())
         {
@@ -63,9 +54,9 @@ public class XorgClipboardSyncTests
     [Test]
     public void Serve_ImagePng()
     {
-        var png = new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3, 4, 5 };
+        var png = TestImages.Png;
         using var owner = new XorgClipboardSync();
-        owner.SetImagePng(png);
+        owner.SetClipboard(new ClipboardSnapshot(null, null, png));
 
         Assert.That(XclipRead("image/png"), Is.EqualTo(png));
     }
@@ -94,7 +85,7 @@ public class XorgClipboardSyncTests
     [Test]
     public void Read_ImagePng_FromForeignOwner()
     {
-        var png = new byte[] { 0x89, 0x50, 0x4E, 0x47, 9, 8, 7, 6 };
+        var png = TestImages.Png;
         XclipWrite("image/png", png);
 
         using var reader = new XorgClipboardSync();
@@ -121,11 +112,116 @@ public class XorgClipboardSyncTests
         }
     }
 
+    // -- PRIMARY: a selection of its own, read as it stands even when Hydra set it --
+
+    [Test]
+    public void Primary_SetByHydra_ReadsBackAsIs()
+    {
+        using var owner = new XorgClipboardSync();
+        owner.SetPrimaryText("selected");
+
+        Assert.That(owner.GetPrimaryText(), Is.EqualTo("selected"));
+    }
+
+    [Test]
+    public void Primary_FromForeignOwner()
+    {
+        using var reader = new XorgClipboardSync();
+        XclipWrite("UTF8_STRING", Encoding.UTF8.GetBytes("highlighted"), "primary");
+
+        Assert.That(reader.GetPrimaryText(), Is.EqualTo("highlighted"));
+    }
+
+    [Test]
+    public void Primary_AlreadyHeldElsewhere_IsLeftWithItsOwner()
+    {
+        // taking PRIMARY back with the same text would clear the owner's highlight
+        using var owner = new XorgClipboardSync();
+        using var receiver = new XorgClipboardSync();
+        owner.SetPrimaryText("highlighted");
+        XclipRead("UTF8_STRING", "primary"); // barrier: the server has the owner
+
+        receiver.SetPrimaryText("highlighted");
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(owner.OwnsPrimary, Is.True);
+            Assert.That(receiver.OwnsPrimary, Is.False);
+        }
+    }
+
+    [Test]
+    public void SetClipboard_ServesClipboardAndPrimarySeparately()
+    {
+        using var owner = new XorgClipboardSync();
+        owner.SetClipboard(new ClipboardSnapshot("copied", "selected", null));
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(XclipRead("UTF8_STRING"), Is.EqualTo(Encoding.UTF8.GetBytes("copied")));
+            Assert.That(XclipRead("UTF8_STRING", "primary"), Is.EqualTo(Encoding.UTF8.GetBytes("selected")));
+        }
+    }
+
+    // a late answer to a text read that already gave up: its data in its own property, or its refusal
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task Read_IgnoresANotifyForAnotherTarget(bool refusal)
+    {
+        var owner = NativeMethods.XOpenDisplay(null);
+        try
+        {
+            var window = NativeMethods.XCreateSimpleWindow(owner, NativeMethods.XDefaultRootWindow(owner), 0, 0, 1, 1, 0, nint.Zero, nint.Zero);
+            var clipboard = NativeMethods.XInternAtom(owner, "CLIPBOARD", false);
+            _ = NativeMethods.XSetSelectionOwner(owner, clipboard, window, NativeMethods.CurrentTime);
+            Assert.That(NativeMethods.XGetSelectionOwner(owner, clipboard), Is.EqualTo(window));
+
+            using var reader = new XorgClipboardSync();
+            var read = Task.Run(reader.GetImagePng);
+
+            // the read's request has reached us, so it is waiting for an answer
+            var answered = Task.Run(() =>
+            {
+                _ = NativeMethods.XNextEvent(owner, out var request);
+                Assert.That(request.Type, Is.EqualTo(NativeMethods.SelectionRequest));
+
+                var staleProperty = refusal ? nint.Zero : NativeMethods.XInternAtom(owner, "HYDRA_CLIPBOARD", false);
+                Notify(owner, request, NativeMethods.XInternAtom(owner, "UTF8_STRING", false), staleProperty);
+                var png = TestImages.Png;
+                _ = NativeMethods.XChangeProperty(owner, request.SelectionRequestRequestor, request.SelectionRequestProperty,
+                    request.SelectionRequestTarget, 8, NativeMethods.PropModeReplace, png, png.Length);
+                Notify(owner, request, request.SelectionRequestTarget, request.SelectionRequestProperty);
+            });
+
+            await answered.WaitAsync(Bound);
+            Assert.That(await read.WaitAsync(Bound), Is.EqualTo(TestImages.Png));
+        }
+        finally
+        {
+            _ = NativeMethods.XCloseDisplay(owner);
+        }
+    }
+
+    private static void Notify(nint display, XEvent request, nint target, nint property)
+    {
+        var notify = default(XEvent);
+        notify.Type = NativeMethods.SelectionNotify;
+        notify.SendEvent = 1;
+        notify.EventDisplay = display;
+        notify.SelectionNotifyRequestor = request.SelectionRequestRequestor;
+        notify.SelectionNotifySelection = request.SelectionRequestSelection;
+        notify.SelectionNotifyTarget = target;
+        notify.SelectionNotifyProperty = property;
+        notify.SelectionNotifyTime = request.SelectionRequestTime;
+        _ = NativeMethods.XSendEvent(display, request.SelectionRequestRequestor, false, nint.Zero, ref notify);
+        _ = NativeMethods.XFlush(display);
+    }
+
     // -- xclip helpers (raw bytes in/out) --
 
-    private static byte[] XclipRead(string target)
+    private static byte[] XclipRead(string target, string selection = "clipboard")
     {
-        using var p = Process.Start(new ProcessStartInfo("xclip", $"-selection clipboard -o -t {target}")
+        using var p = Process.Start(new ProcessStartInfo("xclip", $"-selection {selection} -o -t {target}")
         {
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -136,9 +232,9 @@ public class XorgClipboardSyncTests
         return ms.ToArray();
     }
 
-    private static void XclipWrite(string target, byte[] data)
+    private static void XclipWrite(string target, byte[] data, string selection = "clipboard")
     {
-        using var p = Process.Start(new ProcessStartInfo("xclip", $"-selection clipboard -i -t {target}")
+        using var p = Process.Start(new ProcessStartInfo("xclip", $"-selection {selection} -i -t {target}")
         {
             RedirectStandardInput = true,
             RedirectStandardError = true,

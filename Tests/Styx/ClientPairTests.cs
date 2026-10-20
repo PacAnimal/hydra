@@ -24,7 +24,7 @@ public class ClientPairTests : StyxFixtureBase
         using var giveUp = new CancellationTokenSource();
         var starting = ClientPair.Start(sender, receiver, giveUp.Token);
 
-        Assert.That(await observer.WaitForPeers(15000), Is.EqualTo(["sender"]));
+        Assert.That(await observer.WaitForPeers(), Is.EqualTo(["sender"]));
         await giveUp.CancelAsync();
 
         Assert.That(async () => await starting, Throws.InstanceOf<OperationCanceledException>());
@@ -32,7 +32,7 @@ public class ClientPairTests : StyxFixtureBase
         {
             Assert.That(sender.Disposed, Is.True, "the client that had connected was left running");
             Assert.That(receiver.Disposed, Is.True, "the client still trying to log in was left running");
-            Assert.That(await observer.WaitForPeers(15000), Is.Empty, "the relay still has the connected client");
+            Assert.That(await observer.WaitForPeers(), Is.Empty, "the relay still has the connected client");
         }
     }
 }

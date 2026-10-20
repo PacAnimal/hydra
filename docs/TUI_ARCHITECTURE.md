@@ -54,6 +54,7 @@ Local management uses a versioned, four-byte length-prefixed JSON protocol with 
 - No TCP management listener is opened.
 - The client validates the server protocol version and instance identity before using it.
 - Logs and snapshots are bounded and must never contain configuration secrets, clipboard content, file content, or captured input.
+- A message naming the user's files is logged with the FilePaths log event id, which the TUI log drops and a slave never forwards to its master. Filter by that id, never by a message's wording.
 
 Changing framing, endpoint identity, permissions, protocol versioning, or request limits requires focused management tests and platform-specific validation.
 
@@ -108,8 +109,7 @@ Restart, shutdown, or start changes must preserve the owning supervisor's semant
 - Unsupported controls are shown honestly rather than emulated with unsafe platform guesses.
 - The TUI must restore the terminal cleanly after normal exit and failures.
 - Colour is unconditional. Terminal.Gui already paints borders, the active tab and the status bar in 24-bit
-  colour, so a switch would only ever hide colour that carries meaning — which is what the retired `--color`
-  flag did, gating the single state-bearing colour while every decorative one stayed on.
+  colour, so a switch would only ever hide colour that carries meaning.
 - On the connection line, only the state marker is tinted: green connected, orange connecting, red stopped.
   The detail beside it — version, host, profile — is equally true whichever state the link is in, so it
   takes the status bar's teal and stays out of the way. That needs two `Label`s, because a `Label` carries

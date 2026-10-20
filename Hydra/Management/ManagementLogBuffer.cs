@@ -1,3 +1,4 @@
+using Cathedral.Extensions;
 using Microsoft.Extensions.Logging;
 
 namespace Hydra.Management;
@@ -19,11 +20,11 @@ internal sealed class ManagementLogBuffer : ILoggerProvider
             return new ManagementLogPage(_cursor, _dropped, [.. _entries.Where(e => e.Cursor > afterCursor)]);
     }
 
-    private void Add(LogLevel level, string category, string message)
+    private void Add(LogLevel level, string category, EventId eventId, string message)
     {
-        if (category.Contains("FileTransfer", StringComparison.OrdinalIgnoreCase)
-            || category.Contains("Clipboard", StringComparison.OrdinalIgnoreCase)
-            || message.Contains("file(s) selected", StringComparison.OrdinalIgnoreCase))
+        if (category.ContainsIgnoreCase("FileTransfer")
+            || category.ContainsIgnoreCase("Clipboard")
+            || eventId == LogEvents.FilePaths)
             return;
 
         lock (_lock)
@@ -48,7 +49,7 @@ internal sealed class ManagementLogBuffer : ILoggerProvider
             if (!IsEnabled(logLevel)) return;
             var message = formatter(state, exception);
             if (exception != null) message = $"{message}: {exception.GetType().Name}: {exception.Message}";
-            owner.Add(logLevel, category, message);
+            owner.Add(logLevel, category, eventId, message);
         }
     }
 }

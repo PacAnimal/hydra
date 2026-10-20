@@ -22,6 +22,9 @@ public sealed class SlaveLogSender(IRelaySender relay, SlaveLogForwarder logForw
 
             if (!logForwarder.Reader.TryRead(out var entry)) continue;
 
+            // a message naming the user's files stays here: SlaveLogMessage carries no event id to mark it by
+            if (entry.EventId == LogEvents.FilePaths) continue;
+
             var targets = masterConfigs
                 .Where(kv => entry.Level >= (kv.Value.LogLevel ?? LogLevel.Information))
                 .Select(kv => kv.Key)
@@ -30,8 +33,7 @@ public sealed class SlaveLogSender(IRelaySender relay, SlaveLogForwarder logForw
             if (targets.Length == 0) continue;
 
             var msg = new SlaveLogMessage((int)entry.Level, entry.Category, entry.OriginalMessage, entry.Exception?.ToString());
-            var payload = MessageSerializer.Encode(MessageKind.SlaveLog, msg);
-            relay.Send(targets, payload);
+            relay.Send(targets, MessageKind.SlaveLog, msg);
         }
     }
 }

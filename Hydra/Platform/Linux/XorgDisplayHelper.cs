@@ -1,10 +1,28 @@
 using System.Runtime.InteropServices;
+using Hydra.Mouse;
 using Hydra.Screen;
 
 namespace Hydra.Platform.Linux;
 
 internal static class XorgDisplayHelper
 {
+    // X11 pointer buttons, 4-7 being the wheel (up, down, left, right)
+    private static readonly Dictionary<MouseButton, uint> X11Buttons = new()
+    {
+        [MouseButton.Left] = 1,
+        [MouseButton.Middle] = 2,
+        [MouseButton.Right] = 3,
+        [MouseButton.Extra1] = 8,
+        [MouseButton.Extra2] = 9,
+    };
+    private static readonly Dictionary<uint, MouseButton> ButtonsByX11 = X11Buttons.ToDictionary(b => b.Value, b => b.Key);
+
+    // zero for a button X11 has no number for
+    internal static uint X11Button(MouseButton button) => X11Buttons.GetValueOrDefault(button);
+
+    // any button past the known ones reads as the last extra
+    internal static MouseButton ButtonOf(uint x11Button) => ButtonsByX11.GetValueOrDefault(x11Button, MouseButton.Extra2);
+
     internal static ScreenPoint? CursorPosition(nint display, nint rootWindow)
     {
         if (display == nint.Zero) return null;

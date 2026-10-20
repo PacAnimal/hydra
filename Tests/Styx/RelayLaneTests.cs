@@ -1,7 +1,4 @@
 using Hydra.Relay;
-using Microsoft.AspNetCore.SignalR;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Options;
 using Tests.Setup;
 
 namespace Tests.Styx;
@@ -21,36 +18,10 @@ namespace Tests.Styx;
 [TestFixture]
 public class RelayLaneTests : StyxFixtureBase
 {
-    /// <summary>
-    /// The next message, or a failure that NAMES what never came.
-    ///
-    /// <para>The two tests using this are about a message arriving WHILE another is parked, so the
-    /// regression they guard against shows up as nothing arriving at all — and a bare read reports that as
-    /// "Timed out waiting for message", which says something is slow rather than that the two lanes have
-    /// become one queue again. Measured: with the lanes collapsed both failed on that bare timeout.</para>
-    ///
-    /// <para>A sentinel is no help here, unlike everywhere else in these fixtures: with one queue it would
-    /// be stuck behind the very item that is parked. Naming the expectation is all there is.</para>
-    /// </summary>
-    private static async Task<(string Source, MessageKind Kind, string Json)> NextOrFail(HydraTestClient receiver, string what)
-    {
-        try
-        {
-            return await receiver.WaitForNextMessage();
-        }
-        catch (TimeoutException)
-        {
-            Assert.Fail(what);
-            throw;
-        }
-    }
+    // the X of a MouseMove, which is how an input message carries its position in the burst
+    private static int PositionOf(ReceivedMessage message) => message.As<MouseMoveMessage>().X;
 
-    /// <summary>The X of a MouseMove, which is how an input message carries its position in the burst.</summary>
-    private static int PositionOf(string json) =>
-        System.Text.Json.JsonDocument.Parse(json).RootElement.GetProperty("x").GetInt32();
-
-    private static int SequenceOf(string json) =>
-        System.Text.Json.JsonDocument.Parse(json).RootElement.GetProperty("sequence").GetInt32();
+    private static int SequenceOf(ReceivedMessage message) => message.As<FileTransferChunkMessage>().Sequence;
 
     // ── ordering is not weakened ─────────────────────────────────────────────────────────────────
 
@@ -79,7 +50,7 @@ public class RelayLaneTests : StyxFixtureBase
         var sent = Enumerable.Range(0, count).Select(i => sender.SendReliableAsync(["receiver"], TestMessages.Move(i)).AsTask()).ToArray();
 
         var arrived = new List<int>();
-        for (var i = 0; i < count; i++) arrived.Add(PositionOf((await receiver.WaitForNextMessage()).Json));
+        for (var i = 0; i < count; i++) arrived.Add(PositionOf(await receiver.WaitForMessage()));
         await Task.WhenAll(sent).WaitAsync(Bound);
 
         Assert.That(arrived, Is.EqualTo(Enumerable.Range(0, count)),
@@ -102,7 +73,7 @@ public class RelayLaneTests : StyxFixtureBase
         var sent = Enumerable.Range(0, count).Select(i => sender.SendReliableAsync(["receiver"], TestMessages.Chunk(i)).AsTask()).ToArray();
 
         var arrived = new List<int>();
-        for (var i = 0; i < count; i++) arrived.Add(SequenceOf((await receiver.WaitForNextMessage()).Json));
+        for (var i = 0; i < count; i++) arrived.Add(SequenceOf(await receiver.WaitForMessage()));
         await Task.WhenAll(sent).WaitAsync(Bound);
 
         Assert.That(arrived, Is.EqualTo(Enumerable.Range(0, count)));
@@ -134,9 +105,9 @@ public class RelayLaneTests : StyxFixtureBase
         var bulk = new List<int>();
         for (var i = 0; i < count * 2; i++)
         {
-            var (_, kind, json) = await receiver.WaitForNextMessage();
-            if (kind == MessageKind.FileTransferChunk) bulk.Add(SequenceOf(json));
-            else input.Add(PositionOf(json));
+            var message = await receiver.WaitForMessage();
+            if (message.Kind == MessageKind.FileTransferChunk) bulk.Add(SequenceOf(message));
+            else input.Add(PositionOf(message));
         }
 
         await Task.WhenAll(sent).WaitAsync(Bound);
@@ -174,14 +145,13 @@ public class RelayLaneTests : StyxFixtureBase
 
         sender.Send(["receiver"], TestMessages.Move(1));
 
-        var (_, kind, _) = await NextOrFail(receiver,
-            "nothing arrived at all while the chunk was parked — the keystroke is queued behind it, so the lanes are one queue again");
+        var (_, kind, _) = await receiver.WaitForMessage("the keystroke sent while a chunk was parked (if it never comes, the lanes are one queue again)");
         Assert.That(kind, Is.EqualTo(MessageKind.MouseMove),
             "the keystroke was sent second and must arrive first — the whole point of taking bulk off the input lane");
 
         sender.ReleaseLane();
 
-        var (_, secondKind, _) = await receiver.WaitForNextMessage();
+        var (_, secondKind, _) = await receiver.WaitForMessage();
         Assert.That(secondKind, Is.EqualTo(MessageKind.FileTransferChunk), "and the chunk still arrives once released");
         await stalled.WaitAsync(Bound);
     }
@@ -189,7 +159,7 @@ public class RelayLaneTests : StyxFixtureBase
     /// <summary>
     /// The stream's own three kinds keep their order even while input floods the other lane — they share a
     /// lane precisely so this holds. A Start that lost its race with chunk 0 would be dropped in silence by
-    /// <c>HandleFileTransferChunkAsync</c>'s null-extractor guard; a Done that overtook the last chunk would
+    /// <c>HandleFileTransferChunk</c>'s null-extractor guard; a Done that overtook the last chunk would
     /// truncate the transfer and fail its hash.
     /// </summary>
     [Test]
@@ -215,7 +185,7 @@ public class RelayLaneTests : StyxFixtureBase
         var stream = new List<MessageKind>();
         while (stream.Count < chunks + 2)
         {
-            var (_, kind, _) = await receiver.WaitForNextMessage();
+            var (_, kind, _) = await receiver.WaitForMessage();
             if (kind is MessageKind.FileTransferStart or MessageKind.FileTransferChunk or MessageKind.FileTransferDone)
                 stream.Add(kind);
         }
@@ -244,10 +214,9 @@ public class RelayLaneTests : StyxFixtureBase
         var held = sender.SendReliableAsync(["receiver"], TestMessages.Chunk(1)).AsTask();
         await sender.WaitUntilLaneHeld();
 
-        sender.Send(["receiver"], MessageSerializer.Encode(MessageKind.FileTransferAbort, new FileTransferAbortMessage("cancelled")));
+        sender.Send(["receiver"], MessageKind.FileTransferAbort, new FileTransferAbortMessage("cancelled"));
 
-        var (_, kind, _) = await NextOrFail(receiver,
-            "the abort never arrived while the chunk it cancels was parked — it is queued behind the backlog it exists to stop");
+        var (_, kind, _) = await receiver.WaitForMessage("the abort sent while the chunk it cancels was parked (if it never comes, it is queued behind it)");
         Assert.That(kind, Is.EqualTo(MessageKind.FileTransferAbort));
 
         sender.ReleaseLane();
@@ -276,28 +245,16 @@ public class RelayLaneTests : StyxFixtureBase
 
         // Park the input drain on something ahead of everything below, so nothing is read while the batch
         // is being built and the close is the ONLY thing that can separate the two moves.
-        sender.HoldLane(RelayLane.Input);
-        var blocker = sender.SendReliableAsync(["receiver"], TestMessages.Key(9)).AsTask();
-        await sender.WaitUntilLaneHeld();
+        Task? separator = null;
+        await sender.BehindParkedLane(RelayLane.Input, "receiver", TestMessages.Key(9), () =>
+        {
+            sender.Send(["receiver"], TestMessages.Move(1));
+            separator = sender.SendReliableAsync(["receiver"], TestMessages.Key(0)).AsTask();
+            sender.Send(["receiver"], TestMessages.Move(2));
+        });
+        await separator!.WaitAsync(Bound);
 
-        sender.Send(["receiver"], TestMessages.Move(1));
-        var separator = sender.SendReliableAsync(["receiver"], TestMessages.Key(0)).AsTask();
-        sender.Send(["receiver"], TestMessages.Move(2));
-
-        // A SENTINEL, so the count is read off what actually arrived. Waiting for a fixed number of
-        // messages would make a merge — which produces one FEWER — fail by timing out on a message that
-        // was never coming, and a timeout says "something is slow" where this needs to say "the moves
-        // merged". It is enqueued last and cannot coalesce, so it is always the final arrival.
-        var sentinel = sender.SendReliableAsync(["receiver"], TestMessages.Key(1)).AsTask();
-
-        sender.ReleaseLane();
-        await Task.WhenAll(blocker, separator, sentinel).WaitAsync(Bound);
-
-        var arrived = new List<MessageKind>();
-        while (arrived.Count(k => k == MessageKind.KeyEvent) < 3)
-            arrived.Add((await receiver.WaitForNextMessage()).Kind);
-
-        Assert.That(arrived.Count(k => k == MessageKind.MouseMove), Is.EqualTo(2),
+        Assert.That((await receiver.ReadUntilSentinel()).Count(m => m.Kind == MessageKind.MouseMove), Is.EqualTo(2),
             "the two moves merged across a keypress — the press would be delivered at the wrong position");
     }
 
@@ -336,14 +293,14 @@ public class RelayLaneTests : StyxFixtureBase
         // never unwinds, the iteration never ends, and this call waits for ever — turning the regression
         // this test exists for into a wedged run rather than a failure.
         using var bound = new CancellationTokenSource(Bound);
-        await sender.SuspendConnectionAsync(bound.Token);
+        await sender.SuspendConnection(bound.Token);
 
         foreach (var (task, where) in new[] { (parked, "parked in the lane"), (behind, "queued behind it") })
         {
-            var settled = await Task.WhenAny(task, Task.Delay(Bound));
+            var settled = await Settles(task);
             using (Assert.EnterMultipleScope())
             {
-                Assert.That(settled, Is.SameAs(task), $"a caller {where} was left waiting on a send that can never happen");
+                Assert.That(settled, Is.True, $"a caller {where} was left waiting on a send that can never happen");
                 Assert.That(task.IsCompletedSuccessfully, Is.False, $"the payload {where} never left, so it must not report success");
             }
         }
@@ -352,33 +309,22 @@ public class RelayLaneTests : StyxFixtureBase
     }
 
     /// <summary>
-    /// The relay must dispatch at least as many of one connection's invocations at once as that connection
-    /// has lanes.
-    ///
-    /// <para><b>Nothing else in this file can see this.</b> Every lane test here parks on the client's own
-    /// encrypt gate, so they all stay green with the relay dispatching one invocation at a time — and at
-    /// one, a 256 KiB chunk's invocation occupies the only slot and the keystroke behind it is not even
-    /// dispatched. That is the head-of-line blocking this whole change removed, rebuilt at the relay, with
-    /// the client-side split still looking perfectly correct.</para>
-    ///
-    /// <para>Counted from <c>RelayLane</c> rather than written as 2, so adding a third lane fails here
-    /// instead of quietly re-introducing the stall.</para>
+    /// The relay runs one invocation at a time per client on <c>/relay</c>: the input lane does not wait for each Send,
+    /// so that is what keeps its frames in order. <c>RelayDispatchTests</c> shows the behaviour; this pins the setting.
     ///
     /// <para><b>Read off the SERVER THIS FIXTURE RUNS, never off the constant and never off a hand-built
-    /// collection.</b> Two weaker forms were tried and both were defeated. Comparing the constant with the
-    /// lane count is a constant against a constant — hardcoding the hub to 1 left the suite green. Building
-    /// a fresh <c>ServiceCollection</c> and calling <c>AddStyxSignalR</c> on it pins the HELPER, not the
-    /// host: one <c>services.Configure&lt;HubOptions&gt;</c> in <c>Styx/Program.cs</c> after that call put
-    /// the real relay at one invocation per client with the suite still green. Only the options the running
-    /// host composed can answer this, because the last <c>Configure</c> wins and anything may add one —
-    /// <c>EmbeddedStyxServer</c> already does, to attach its auth filter.</para>
+    /// collection.</b> A constant against a constant passes whatever the host does, and a fresh
+    /// <c>ServiceCollection</c> pins the helper rather than the host: anything configuring <c>HubOptions</c> after the
+    /// relay's own wiring wins, and only the options the running host composed can tell.</para>
     /// </summary>
     [Test]
-    public void TheRelayDispatchesAtLeastAsManyInvocationsAsAPeerHasLanes()
+    public void TheRelayRunsOneInvocationAtATimeOnItsOrderedPath()
     {
-        var configured = Factory.Services.GetRequiredService<IOptions<HubOptions>>().Value.MaximumParallelInvocationsPerClient;
-
-        Assert.That(configured, Is.GreaterThanOrEqualTo(Enum.GetValues<RelayLane>().Length),
-            "a lane's invocation is not finished until the hub method returns, so fewer slots than lanes means a lane waits for another lane's frame to be delivered");
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(RelayWidths.OrderedPath(Factory.Services), Is.All.EqualTo(1),
+                "the input lane does not wait for each Send, so only one invocation at a time keeps its frames in order");
+            Assert.That(RelayWidths.ParallelPath(Factory.Services), Is.EqualTo(global::Styx.Constants.DefaultParallelInvocations));
+        }
     }
 }

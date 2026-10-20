@@ -19,9 +19,9 @@ public class TransactionalConfigStoreTests
     public async Task Save_ValidatesAndUpdatesRevision()
     {
         var store = new TransactionalConfigStore(new HydraRuntimeInfo(_path, DateTimeOffset.UtcNow));
-        var before = await store.ReadAsync();
+        var before = await store.Read();
 
-        var after = await store.SaveAsync(before.Revision, Valid("Work"), CancellationToken.None);
+        var after = await store.Save(before.Revision, Valid("Work"), CancellationToken.None);
 
         using (Assert.EnterMultipleScope())
         {
@@ -51,9 +51,9 @@ public class TransactionalConfigStoreTests
         const UnixFileMode expected = UnixFileMode.UserRead | UnixFileMode.UserWrite;
         File.SetUnixFileMode(_path, expected);
         var store = new TransactionalConfigStore(new HydraRuntimeInfo(_path, DateTimeOffset.UtcNow));
-        var before = await store.ReadAsync();
+        var before = await store.Read();
 
-        await store.SaveAsync(before.Revision, Valid("Work"), CancellationToken.None);
+        await store.Save(before.Revision, Valid("Work"), CancellationToken.None);
 
         Assert.That(File.GetUnixFileMode(_path), Is.EqualTo(expected));
     }
@@ -62,10 +62,10 @@ public class TransactionalConfigStoreTests
     public async Task Save_RejectsConcurrentEditWithoutOverwriting()
     {
         var store = new TransactionalConfigStore(new HydraRuntimeInfo(_path, DateTimeOffset.UtcNow));
-        var before = await store.ReadAsync();
+        var before = await store.Read();
         File.WriteAllText(_path, Valid("External"));
 
-        Assert.That(async () => await store.SaveAsync(before.Revision, Valid("TUI"), CancellationToken.None),
+        Assert.That(async () => await store.Save(before.Revision, Valid("TUI"), CancellationToken.None),
             Throws.InvalidOperationException.With.Message.Contains("changed outside"));
         Assert.That(File.ReadAllText(_path), Does.Contain("External"));
     }
@@ -74,9 +74,9 @@ public class TransactionalConfigStoreTests
     public async Task Save_RejectsInvalidJsonWithoutOverwriting()
     {
         var store = new TransactionalConfigStore(new HydraRuntimeInfo(_path, DateTimeOffset.UtcNow));
-        var before = await store.ReadAsync();
+        var before = await store.Read();
 
-        Assert.That(async () => await store.SaveAsync(before.Revision, "{ broken", CancellationToken.None),
+        Assert.That(async () => await store.Save(before.Revision, "{ broken", CancellationToken.None),
             Throws.InvalidOperationException);
         Assert.That(File.ReadAllText(_path), Is.EqualTo(before.Json));
     }
@@ -87,7 +87,7 @@ public class TransactionalConfigStoreTests
           "profiles": [{
             "profileName": "{{profile}}",
             "mode": "Slave",
-            "embeddedStyx": { "server": "http://127.0.0.1:5000", "password": "test" }
+            "embeddedStyx": { "server": "https://127.0.0.1:5000", "password": "test" }
           }]
         }
         """;
@@ -110,23 +110,12 @@ public class TransactionalConfigStoreTests
         var writer = new TransactionalConfigStore(runtime);
         var reader = new TransactionalConfigStore(runtime);
 
-        var reading = new CancellationTokenSource();
-        // The TOKEN is captured, not the source, so the loop cannot touch a disposed one however the awaits
-        // below unwind.
-        var token = reading.Token;
-        var reads = Task.Run(async () =>
+        await using (ConcurrentReader.Start(async () => await reader.Read(CancellationToken.None)))
         {
-            while (!token.IsCancellationRequested)
-                await reader.ReadAsync(CancellationToken.None);
-        }, CancellationToken.None);
-
-        var document = await writer.ReadAsync();
-        for (var i = 0; i < 15; i++)
-            document = await writer.SaveAsync(document.Revision, Valid($"Desk{i}"), CancellationToken.None);
-
-        await reading.CancelAsync();
-        await reads;
-        reading.Dispose();
+            var document = await writer.Read();
+            for (var i = 0; i < 15; i++)
+                document = await writer.Save(document.Revision, Valid($"Desk{i}"), CancellationToken.None);
+        }
 
         Assert.That(await File.ReadAllTextAsync(_path), Does.Contain("Desk14"),
             "a save was lost while another instance was reading — on Windows the reader's handle refuses the replace");
@@ -192,7 +181,7 @@ public class TransactionalConfigStoreTests
                 {
                     Assert.That(attempt, Is.LessThan(200),
                         $"{name} never landed in 200 attempts — a save is being refused for a reason retrying cannot fix");
-                    var current = await store.ReadAsync();
+                    var current = await store.Read();
                     // Appended to the host NAME: an edit that accumulates and stays valid. Adding profiles
                     // does not — only one may be default — and the point here is concurrency, not schema.
                     const string marker = "\"name\": \"";
@@ -201,7 +190,7 @@ public class TransactionalConfigStoreTests
                     var next = string.Concat(current.Json.AsSpan(0, end), ".", name, current.Json.AsSpan(end));
                     try
                     {
-                        await store.SaveAsync(current.Revision, next, CancellationToken.None);
+                        await store.Save(current.Revision, next, CancellationToken.None);
                         break;
                     }
                     catch (InvalidOperationException ex) when (ex.Message.Contains("changed outside"))

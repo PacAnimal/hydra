@@ -12,13 +12,13 @@ internal static partial class RelayAddressPreference
 {
     private static readonly TimeSpan PreferenceQueryTimeout = TimeSpan.FromSeconds(2);
 
-    internal static async Task<IReadOnlyList<IPAddress>> OrderAsync(
+    internal static async Task<IReadOnlyList<IPAddress>> Order(
         IReadOnlyList<IPAddress> addresses,
         int port,
         CancellationToken cancellationToken) =>
-        await OrderAsync(addresses, address => FindRouteInterface(address, port), InterfacePreferenceCache.Shared.GetAsync, cancellationToken);
+        await Order(addresses, address => FindRouteInterface(address, port), InterfacePreferenceCache.Shared.Get, cancellationToken);
 
-    internal static async Task<IReadOnlyList<IPAddress>> OrderAsync(
+    internal static async Task<IReadOnlyList<IPAddress>> Order(
         IReadOnlyList<IPAddress> addresses,
         Func<IPAddress, string?> interfaceResolver,
         Func<CancellationToken, Task<IReadOnlyDictionary<string, int>>> preferencesQuery,
@@ -60,7 +60,7 @@ internal static partial class RelayAddressPreference
             : int.MaxValue;
     }
 
-    internal static async Task<IReadOnlyDictionary<string, int>> QueryInterfacePreferencesAsync(
+    internal static async Task<IReadOnlyDictionary<string, int>> QueryInterfacePreferences(
         CancellationToken cancellationToken)
     {
         using var queryCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -69,15 +69,15 @@ internal static partial class RelayAddressPreference
         {
             if (OperatingSystem.IsMacOS())
             {
-                var output = await RunAsync("/usr/sbin/networksetup", ["-listnetworkserviceorder"], queryCancellation.Token);
+                var output = await Run("/usr/sbin/networksetup", ["-listnetworkserviceorder"], queryCancellation.Token);
                 return output == null ? EmptyPreferences() : ParseMacServiceOrder(output);
             }
 
             if (OperatingSystem.IsLinux())
             {
                 var ip = File.Exists("/usr/sbin/ip") ? "/usr/sbin/ip" : File.Exists("/sbin/ip") ? "/sbin/ip" : "ip";
-                var ipv4 = await RunAsync(ip, ["-o", "route", "show", "default"], queryCancellation.Token);
-                var ipv6 = await RunAsync(ip, ["-o", "-6", "route", "show", "default"], queryCancellation.Token);
+                var ipv4 = await Run(ip, ["-o", "route", "show", "default"], queryCancellation.Token);
+                var ipv6 = await Run(ip, ["-o", "-6", "route", "show", "default"], queryCancellation.Token);
                 return ParseLinuxDefaultRoutes(string.Join('\n', ipv4, ipv6));
             }
 
@@ -93,8 +93,7 @@ internal static partial class RelayAddressPreference
         }
         catch (Exception)
         {
-            // Preference discovery is advisory. DNS ordering and the per-address connection fallback remain
-            // available if a platform command is missing, restricted, or returns an unexpected result.
+            // advisory: DNS order and the per-address fallback still apply
         }
 
         return EmptyPreferences();
@@ -178,7 +177,7 @@ internal static partial class RelayAddressPreference
         return result;
     }
 
-    private static async Task<string?> RunAsync(
+    private static async Task<string?> Run(
         string executable,
         IReadOnlyList<string> arguments,
         CancellationToken cancellationToken)
@@ -211,9 +210,7 @@ internal static partial class RelayAddressPreference
             }
             catch (Exception)
             {
-                // Best-effort cleanup — the process may have exited between HasExited and Kill, or
-                // Kill itself may fail for other reasons. Either way this must not replace the
-                // cancellation being propagated below with an unrelated exception from the cleanup.
+                // best effort: must not replace the cancellation rethrown below
             }
             throw;
         }

@@ -15,6 +15,8 @@ internal sealed class RemoteManagementService(
     IHydraLifetimeController lifetime,
     ILogger<RemoteManagementService> log) : IHostedService
 {
+    internal static readonly CommandResult Confirmed = new(true, "Remote configuration confirmed.");
+
     private readonly ConcurrentDictionary<Guid, PendingRequest> _pending = new();
 
     public Task StartAsync(CancellationToken cancellationToken)
@@ -32,50 +34,50 @@ internal sealed class RemoteManagementService(
         return Task.CompletedTask;
     }
 
-    internal async Task<RemotePairResult> PairAsync(RemotePairRequest pair, CancellationToken cancel)
+    internal async Task<RemotePairResult> Pair(RemotePairRequest pair, CancellationToken cancel)
     {
-        var (controllerId, controllerSecret) = await store.CreateTargetCredentialAsync(cancel);
+        var (controllerId, controllerSecret) = await store.CreateTargetCredential(cancel);
         var payload = new RemotePairPayload(pair.PairingCode, controllerSecret);
-        var response = await InvokeAsync(pair.Host, controllerId, pair.PairingCode, RemoteOperations.Pair, payload, controllerSecret, cancel);
+        var response = await Invoke(pair.Host, controllerId, pair.PairingCode, RemoteOperations.Pair, payload, controllerSecret, cancel);
         var result = ManagementJson.Deserialize<RemotePairResult>(response);
         if (result.Paired)
-            await store.SaveTargetAsync(pair.Host, controllerSecret, cancel);
+            await store.SaveTarget(pair.Host, controllerSecret, cancel);
         return result;
     }
 
-    internal async Task<RemoteConfigDocument> GetConfigAsync(string host, CancellationToken cancel)
+    internal async Task<RemoteConfigDocument> GetConfig(string host, CancellationToken cancel)
     {
-        var response = await InvokeAuthorizedAsync(host, RemoteOperations.ConfigGet, new { }, cancel);
+        var response = await InvokeAuthorized(host, RemoteOperations.ConfigGet, new { }, cancel);
         return ManagementJson.Deserialize<RemoteConfigDocument>(response) with { Host = host };
     }
 
-    internal async Task<ConfigValidation> ValidateConfigAsync(RemoteValidateRequest request, CancellationToken cancel)
+    internal async Task<ConfigValidation> ValidateConfig(RemoteValidateRequest request, CancellationToken cancel)
     {
-        var response = await InvokeAuthorizedAsync(request.Host, RemoteOperations.ConfigValidate, request.Json, cancel);
+        var response = await InvokeAuthorized(request.Host, RemoteOperations.ConfigValidate, request.Json, cancel);
         return ManagementJson.Deserialize<ConfigValidation>(response);
     }
 
-    internal async Task<RemoteApplyAccepted> ApplyConfigAsync(RemoteApplyRequest request, CancellationToken cancel)
+    internal async Task<RemoteApplyAccepted> ApplyConfig(RemoteApplyRequest request, CancellationToken cancel)
     {
-        var response = await InvokeAuthorizedAsync(request.Host, RemoteOperations.ConfigApply,
+        var response = await InvokeAuthorized(request.Host, RemoteOperations.ConfigApply,
             new RemoteApplyPayload(request.ExpectedRevision, request.Json), cancel);
         return ManagementJson.Deserialize<RemoteApplyAccepted>(response);
     }
 
-    internal async Task ConfirmConfigAsync(RemoteConfirmRequest request, CancellationToken cancel)
+    internal async Task ConfirmConfig(RemoteConfirmRequest request, CancellationToken cancel)
     {
-        _ = await InvokeAuthorizedAsync(request.Host, RemoteOperations.ConfigConfirm,
+        _ = await InvokeAuthorized(request.Host, RemoteOperations.ConfigConfirm,
             new RemoteConfirmPayload(request.TransactionId, request.ExpectedRevision), cancel);
     }
 
-    private async Task<string> InvokeAuthorizedAsync<T>(string host, string operation, T payload, CancellationToken cancel)
+    private async Task<string> InvokeAuthorized<T>(string host, string operation, T payload, CancellationToken cancel)
     {
-        var (controllerId, secret) = await store.GetTargetAsync(host, cancel)
+        var (controllerId, secret) = await store.GetTarget(host, cancel)
             ?? throw new InvalidOperationException($"Remote host '{host}' is not paired.");
-        return await InvokeAsync(host, controllerId, secret, operation, payload, secret, cancel);
+        return await Invoke(host, controllerId, secret, operation, payload, secret, cancel);
     }
 
-    private async Task<string> InvokeAsync<T>(string host, string controllerId, string signingSecret,
+    private async Task<string> Invoke<T>(string host, string controllerId, string signingSecret,
         string operation, T payload, string responseSecret, CancellationToken cancel)
     {
         var request = new RemoteWireRequest(
@@ -160,20 +162,20 @@ internal sealed class RemoteManagementService(
             catch { return; }
             if (!RemoteManagementCrypto.VerifyRequest(request, pair.PairingCode))
                 return;
-            if (!await store.ConsumePairingCodeAsync(pair.PairingCode, CancellationToken.None))
+            if (!await store.ConsumePairingCode(pair.PairingCode, CancellationToken.None))
             {
                 await SendResponse(sourceHost, request.RequestId, pair.ControllerSecret, true,
                     ManagementJson.Serialize(new RemotePairResult(false, "The pairing code is invalid, expired, or already used.")), null);
                 return;
             }
             secret = pair.ControllerSecret;
-            await store.SaveControllerAsync(request.ControllerId, secret, CancellationToken.None);
+            await store.SaveController(request.ControllerId, secret, CancellationToken.None);
         }
         else
         {
-            secret = await store.GetControllerSecretAsync(request.ControllerId, CancellationToken.None);
+            secret = await store.GetControllerSecret(request.ControllerId, CancellationToken.None);
             if (secret == null || !RemoteManagementCrypto.VerifyRequest(request, secret)
-                || !await store.RememberRequestAsync(request.ControllerId, request.Nonce, request.TimestampUnixMs, CancellationToken.None)) return;
+                || !await store.RememberRequest(request.ControllerId, request.Nonce, request.TimestampUnixMs, CancellationToken.None)) return;
         }
 
         try
@@ -199,34 +201,34 @@ internal sealed class RemoteManagementService(
 
     /// <summary>
     /// <b>The config lock is RELEASED before the apply state is read, and these must not be merged into one
-    /// scope.</b> <c>BeginAsync</c> takes the two in the opposite order — its own lock, then the config lock
-    /// through <c>SaveAsync</c> — so holding both here at once is the one arrangement that could cycle. A
+    /// scope.</b> <c>Begin</c> takes the two in the opposite order — its own lock, then the config lock
+    /// through <c>Save</c> — so holding both here at once is the one arrangement that could cycle. A
     /// snapshot consistent across the two would have to be built some other way.
     /// </summary>
     private async Task<RemoteConfigDocument> ReadMaskedConfig(string sourceHost)
     {
-        var document = await config.ReadAsync();
-        return new RemoteConfigDocument(sourceHost, document.Revision, ConfigSecretMask.Mask(document.Json), await apply.GetStateAsync());
+        var document = await config.Read();
+        return new RemoteConfigDocument(sourceHost, document.Revision, ConfigSecretMask.Mask(document.Json), await apply.GetState());
     }
 
     private async Task<ConfigValidation> ValidateMaskedConfig(string payloadJson)
     {
         var edited = ManagementJson.Deserialize<string>(payloadJson);
-        var source = await config.ReadAsync();
+        var source = await config.Read();
         return TransactionalConfigStore.Validate(ConfigSecretMask.Restore(edited, source.Json));
     }
 
     private async Task<RemoteApplyAccepted> BeginApply(string payloadJson)
     {
         var payload = ManagementJson.Deserialize<RemoteApplyPayload>(payloadJson);
-        return await apply.BeginAsync(payload.ExpectedRevision, payload.Json, CancellationToken.None);
+        return await apply.Begin(payload.ExpectedRevision, payload.Json, CancellationToken.None);
     }
 
     private async Task<string> ConfirmApply(string payloadJson)
     {
         var payload = ManagementJson.Deserialize<RemoteConfirmPayload>(payloadJson);
-        await apply.ConfirmAsync(payload.TransactionId, payload.ExpectedRevision, CancellationToken.None);
-        return ManagementJson.Serialize(new CommandResult(true, "Remote configuration confirmed."));
+        await apply.Confirm(payload.TransactionId, payload.ExpectedRevision, CancellationToken.None);
+        return ManagementJson.Serialize(Confirmed);
     }
 
     private async Task SendResponse(string host, Guid requestId, string secret, bool success, string? json, string? error)

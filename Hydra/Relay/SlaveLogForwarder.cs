@@ -20,5 +20,5 @@ public sealed class SlaveLogForwarder
 
     public ChannelReader<LogEntry> Reader => _channel.Reader;
 
-    public ValueTask ForwardAsync(LogEntry entry) => _channel.Writer.WriteAsync(entry);
+    public ValueTask Forward(LogEntry entry) => _channel.Writer.WriteAsync(entry);
 }

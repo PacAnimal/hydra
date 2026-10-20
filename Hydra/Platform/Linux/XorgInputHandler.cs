@@ -63,8 +63,7 @@ public sealed class XorgInputHandler : IPlatformInput
             preGrab: () =>
             {
                 ResetHeldKeys();
-                _ = NativeMethods.XMapWindow(_display, _inputSink);
-                _ = NativeMethods.XRaiseWindow(_display, _inputSink);
+                RaiseInputSink();
                 _ = NativeMethods.XFlush(_display);
             },
             grab: () =>
@@ -93,8 +92,7 @@ public sealed class XorgInputHandler : IPlatformInput
         _pointer = new XGrabSession("Pointer", _grabLock, log,
             preGrab: () =>
             {
-                _ = NativeMethods.XMapWindow(_display, _inputSink);
-                _ = NativeMethods.XRaiseWindow(_display, _inputSink);
+                RaiseInputSink();
                 _ = NativeMethods.XFlush(_display);
             },
             grab: () =>
@@ -114,10 +112,6 @@ public sealed class XorgInputHandler : IPlatformInput
             });
     }
 
-
-    // X11 requires no special accessibility permission (unlike macOS)
-    public bool IsAccessibilityTrusted() => true;
-
     public void WarpCursor(int x, int y)
     {
         // SYSLIB1054: return value intentionally discarded (X error codes are advisory only)
@@ -130,8 +124,7 @@ public sealed class XorgInputHandler : IPlatformInput
     public ValueTask HideCursor()
     {
         if (_cursorHidden) return ValueTask.CompletedTask;
-        _ = NativeMethods.XMapWindow(_display, _inputSink);
-        _ = NativeMethods.XRaiseWindow(_display, _inputSink);
+        RaiseInputSink();
         NativeMethods.XFixesHideCursor(_display, _rootWindow);
         _ = NativeMethods.XFlush(_display);
         _cursorHidden = true;
@@ -300,9 +293,8 @@ public sealed class XorgInputHandler : IPlatformInput
                     // Raw motion is grab-immune (unlike a cooked/selected event), so this is the only
                     // reliable way to track the local cursor while another app holds an active grab
                     // (window drag, drag-and-drop, a scrollbar).
-                    _ = NativeMethods.XQueryPointer(_display, _rootWindow,
-                        out _, out _, out var rootX, out var rootY, out _, out _, out _);
-                    _onMouseMove?.Invoke(rootX, rootY);
+                    if (XorgDisplayHelper.CursorPosition(_display, _rootWindow) is { } pos)
+                        _onMouseMove?.Invoke(pos.X, pos.Y);
                 }
             }
             else if (ev.XCookieEvType is NativeMethods.XI_RawButtonPress or NativeMethods.XI_RawButtonRelease)
@@ -316,24 +308,16 @@ public sealed class XorgInputHandler : IPlatformInput
                 {
                     var scroll = btn switch
                     {
-                        4 => new MouseScrollEvent(0, 120),   // scroll up
-                        5 => new MouseScrollEvent(0, -120),  // scroll down
-                        6 => new MouseScrollEvent(-120, 0),  // scroll left
-                        _ => new MouseScrollEvent(120, 0),   // scroll right (7)
+                        4 => new MouseScrollEvent(0, MouseScrollEvent.Notch),   // scroll up
+                        5 => new MouseScrollEvent(0, -MouseScrollEvent.Notch),  // scroll down
+                        6 => new MouseScrollEvent(-MouseScrollEvent.Notch, 0),  // scroll left
+                        _ => new MouseScrollEvent(MouseScrollEvent.Notch, 0),   // scroll right (7)
                     };
                     if (isDown) _onMouseScroll?.Invoke(scroll);  // only fire on press (scroll has no up)
                 }
                 else
                 {
-                    var button = btn switch
-                    {
-                        1 => MouseButton.Left,
-                        2 => MouseButton.Middle,
-                        3 => MouseButton.Right,
-                        8 => MouseButton.Extra1,
-                        _ => MouseButton.Extra2,
-                    };
-                    _onMouseButton?.Invoke(new MouseButtonEvent(button, isDown));
+                    _onMouseButton?.Invoke(new MouseButtonEvent(XorgDisplayHelper.ButtonOf((uint)btn), isDown));
                 }
             }
         }
@@ -397,6 +381,12 @@ public sealed class XorgInputHandler : IPlatformInput
         {
             maskHandle.Free();
         }
+    }
+
+    private void RaiseInputSink()
+    {
+        _ = NativeMethods.XMapWindow(_display, _inputSink);
+        _ = NativeMethods.XRaiseWindow(_display, _inputSink);
     }
 
     // full-screen InputOnly OverrideRedirect window — absorbs pointer hover events while on virtual screen,

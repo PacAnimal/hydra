@@ -199,19 +199,16 @@ internal sealed class DesktopInputDispatcher : IDisposable
                     {
                         if (next is MoveMouseCommand later) { m = later; continue; }
                         // hit a non-move command: flush our latest move first, then handle it
-                        if (ExecuteMoveMouse(m.Dx, m.Dy) == 0)
-                            _log.LogWarning("SendInput(mouse move) failed (error {Error})", Marshal.GetLastWin32Error());
+                        ExecuteMoveMouse(m.Dx, m.Dy).WarnIfFailed(_log, "mouse move");
                         Execute(next);
                         return;
                     }
-                    if (ExecuteMoveMouse(m.Dx, m.Dy) == 0)
-                        _log.LogWarning("SendInput(mouse move) failed (error {Error})", Marshal.GetLastWin32Error());
+                    ExecuteMoveMouse(m.Dx, m.Dy).WarnIfFailed(_log, "mouse move");
                     break;
                 }
             case MoveMouseRelativeCommand m:
                 {
-                    if (ExecuteMoveMouseRelative(m.Dx, m.Dy) == 0)
-                        _log.LogWarning("SendInput(mouse relative) failed (error {Error})", Marshal.GetLastWin32Error());
+                    ExecuteMoveMouseRelative(m.Dx, m.Dy).WarnIfFailed(_log, "mouse relative");
                     break;
                 }
             case RestoreMouseSettingsCommand r:
@@ -227,14 +224,12 @@ internal sealed class DesktopInputDispatcher : IDisposable
                 }
             case InjectKeyCommand k:
                 {
-                    if (ExecuteInjectKey(k.Msg) == 0)
-                        _log.LogWarning("SendInput(key) failed (error {Error})", Marshal.GetLastWin32Error());
+                    ExecuteInjectKey(k.Msg).WarnIfFailed(_log, "key");
                     break;
                 }
             case InjectMouseButtonCommand b:
                 {
-                    if (ExecuteInjectMouseButton(b.Msg) == 0)
-                        _log.LogWarning("SendInput(mouse button) failed (error {Error})", Marshal.GetLastWin32Error());
+                    ExecuteInjectMouseButton(b.Msg).WarnIfFailed(_log, "mouse button");
                     break;
                 }
             case InjectMouseScrollCommand s:
@@ -245,31 +240,15 @@ internal sealed class DesktopInputDispatcher : IDisposable
         }
     }
 
-    private static unsafe uint ExecuteMoveMouse(int dx, int dy)
-    {
-        var input = new INPUT
-        {
-            type = NativeMethods.INPUT_MOUSE,
-            mi = new MOUSEINPUT
-            {
-                dx = dx,
-                dy = dy,
-                dwFlags = NativeMethods.MOUSEEVENTF_MOVE | NativeMethods.MOUSEEVENTF_ABSOLUTE | NativeMethods.MOUSEEVENTF_VIRTUALDESK,
-            },
-        };
-        return NativeMethods.SendInput(1, &input, sizeof(INPUT));
-    }
+    private static uint ExecuteMoveMouse(int dx, int dy) =>
+        InputSender.Send(InputSender.MouseInput(
+            NativeMethods.MOUSEEVENTF_MOVE | NativeMethods.MOUSEEVENTF_ABSOLUTE | NativeMethods.MOUSEEVENTF_VIRTUALDESK, dx, dy));
 
-    private unsafe uint ExecuteMoveMouseRelative(int dx, int dy)
+    private uint ExecuteMoveMouseRelative(int dx, int dy)
     {
         EnsureFlatRelativeMouseSettings();
 
-        var input = new INPUT
-        {
-            type = NativeMethods.INPUT_MOUSE,
-            mi = new MOUSEINPUT { dx = dx, dy = dy, dwFlags = NativeMethods.MOUSEEVENTF_MOVE },
-        };
-        var result = NativeMethods.SendInput(1, &input, sizeof(INPUT));
+        var result = InputSender.Send(InputSender.MouseInput(NativeMethods.MOUSEEVENTF_MOVE, dx, dy));
         Interlocked.Exchange(ref _lastRelativeMoveTick, Environment.TickCount64);
         ScheduleRelativeRestore(RelativeSettingsIdleMs);
         return result;
@@ -335,7 +314,7 @@ internal sealed class DesktopInputDispatcher : IDisposable
     private static bool SetMouseSpeed(int speed) =>
         NativeMethods.SystemParametersInfo(NativeMethods.SPI_SETMOUSESPEED, 0, speed, 0);
 
-    private unsafe uint ExecuteInjectKey(KeyEventMessage msg)
+    private uint ExecuteInjectKey(KeyEventMessage msg)
     {
         var isUp = msg.Type == KeyEventType.KeyUp;
 
@@ -382,50 +361,33 @@ internal sealed class DesktopInputDispatcher : IDisposable
                     {
                         // first shortcut key: batch Win down + key down atomically
                         _winInjected = true;
-                        var inputs = stackalloc INPUT[2];
-                        inputs[0] = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = _bufferedWinVk, dwFlags = NativeMethods.KEYEVENTF_EXTENDEDKEY } };
-                        inputs[1] = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = vk } };
-                        return NativeMethods.SendInput(2, inputs, sizeof(INPUT));
+                        return InputSender.Send(InputSender.KeyInput(_bufferedWinVk, NativeMethods.KEYEVENTF_EXTENDEDKEY), InputSender.KeyInput(vk));
                     }
                     // Win already injected: just send the key
-                    var input = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = vk } };
-                    return NativeMethods.SendInput(1, &input, sizeof(INPUT));
+                    return InputSender.Key(vk);
                 }
                 else
                 {
                     if (_winKeyDown) _winUsedAsModifier = true;
-                    var flags = isUp ? NativeMethods.KEYEVENTF_KEYUP : 0u;
-                    var input = new INPUT
-                    {
-                        type = NativeMethods.INPUT_KEYBOARD,
-                        ki = new KEYBDINPUT { wVk = vk, dwFlags = flags },
-                    };
-                    return NativeMethods.SendInput(1, &input, sizeof(INPUT));
+                    return InputSender.Key(vk, UpFlag(isUp));
                 }
             }
             else
             {
-                // AltGr or unmappable char — send down+up atomically to avoid VK_PACKET overlap.
-                // all KEYEVENTF_UNICODE events share VK_PACKET; overlapping downs for different chars
-                // cause Windows to retype the first char's scan code instead of the second.
+                // AltGr or unmappable char — sent as a down+up pair (UnicodeTap).
                 // don't flush Win for AltGr chars (they're not Win+key shortcuts), but DO mark Win
                 // as used if Super is in mods — prevents a spurious Start menu tap on Win release.
                 if (_winKeyDown && !isAltGr) FlushWin(isUp);
                 if (_winKeyDown && isAltGr && isSuper) _winUsedAsModifier = true;
                 if (isUp) return 1; // already released with the paired down event
-                var inputs = stackalloc INPUT[2];
-                inputs[0] = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = 0, wScan = ch, dwFlags = NativeMethods.KEYEVENTF_UNICODE } };
-                inputs[1] = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = 0, wScan = ch, dwFlags = NativeMethods.KEYEVENTF_UNICODE | NativeMethods.KEYEVENTF_KEYUP } };
-                return NativeMethods.SendInput(2, inputs, sizeof(INPUT));
+                return InputSender.UnicodeTap(ch);
             }
         }
         else if (msg.Key is SpecialKey.MoveToBeginningOfLine or SpecialKey.MoveToEndOfLine)
         {
             var vk = msg.Key == SpecialKey.MoveToBeginningOfLine ? WinVirtualKey.Home : WinVirtualKey.End;
             if (_winKeyDown) FlushWin(isUp);
-            var flags = (isUp ? NativeMethods.KEYEVENTF_KEYUP : 0u) | NativeMethods.KEYEVENTF_EXTENDEDKEY;
-            var input = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = (ushort)vk, dwFlags = flags } };
-            return NativeMethods.SendInput(1, &input, sizeof(INPUT));
+            return InputSender.Key(vk, UpFlag(isUp) | NativeMethods.KEYEVENTF_EXTENDEDKEY);
         }
         else if (msg.Key == SpecialKey.MissionControl)
         {
@@ -433,51 +395,40 @@ internal sealed class DesktopInputDispatcher : IDisposable
             {
                 if (_winKeyDown) { _winUsedAsModifier = true; _winKeyDown = false; }
                 // Win+Tab = Task View
-                var inputs = stackalloc INPUT[4];
-                inputs[0] = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = WinVirtualKey.LWin, dwFlags = NativeMethods.KEYEVENTF_EXTENDEDKEY } };
-                inputs[1] = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = WinVirtualKey.Tab } };
-                inputs[2] = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = WinVirtualKey.Tab, dwFlags = NativeMethods.KEYEVENTF_KEYUP } };
-                inputs[3] = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = WinVirtualKey.LWin, dwFlags = NativeMethods.KEYEVENTF_EXTENDEDKEY | NativeMethods.KEYEVENTF_KEYUP } };
-                return NativeMethods.SendInput(4, inputs, sizeof(INPUT));
+                return InputSender.Send(
+                    InputSender.KeyInput(WinVirtualKey.LWin, NativeMethods.KEYEVENTF_EXTENDEDKEY),
+                    InputSender.KeyInput(WinVirtualKey.Tab),
+                    InputSender.KeyInput(WinVirtualKey.Tab, NativeMethods.KEYEVENTF_KEYUP),
+                    InputSender.KeyInput(WinVirtualKey.LWin, NativeMethods.KEYEVENTF_EXTENDEDKEY | NativeMethods.KEYEVENTF_KEYUP));
             }
         }
         else if (msg.Key == SpecialKey.AltGr)
         {
             // AltGr on Windows = synthetic LCtrl + RMenu. send both so apps that check
             // GetKeyState(VK_CONTROL) or look for the Ctrl+Alt combination see the correct state.
-            var lCtrlFlags = isUp ? NativeMethods.KEYEVENTF_KEYUP : 0u;
-            var rMenuFlags = (isUp ? NativeMethods.KEYEVENTF_KEYUP : 0u) | NativeMethods.KEYEVENTF_EXTENDEDKEY;
-            var inputs = stackalloc INPUT[2];
-            inputs[0] = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = WinVirtualKey.LControl, dwFlags = lCtrlFlags } };
-            inputs[1] = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = WinVirtualKey.RMenu, dwFlags = rMenuFlags } };
-            return NativeMethods.SendInput(2, inputs, sizeof(INPUT));
+            return InputSender.Send(
+                InputSender.KeyInput(WinVirtualKey.LControl, UpFlag(isUp)),
+                InputSender.KeyInput(WinVirtualKey.RMenu, UpFlag(isUp) | NativeMethods.KEYEVENTF_EXTENDEDKEY));
         }
         else if (msg.Key == SpecialKey.KP_Enter)
         {
             // numpad enter = VK_RETURN + extended key
             if (_winKeyDown) FlushWin(isUp);
-            var flags = (isUp ? NativeMethods.KEYEVENTF_KEYUP : 0u) | NativeMethods.KEYEVENTF_EXTENDEDKEY;
-            var input = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = WinVirtualKey.Return, dwFlags = flags } };
-            return NativeMethods.SendInput(1, &input, sizeof(INPUT));
+            return InputSender.Key(WinVirtualKey.Return, UpFlag(isUp) | NativeMethods.KEYEVENTF_EXTENDEDKEY);
         }
         else if (msg.Key is SpecialKey.KP_Tab or SpecialKey.KP_Space)
         {
             // no dedicated numpad Tab/Space VK on Windows — inject as regular Tab/Space
             if (_winKeyDown) FlushWin(isUp);
             var vkTabSpace = msg.Key == SpecialKey.KP_Tab ? WinVirtualKey.Tab : WinVirtualKey.Space;
-            var flags = isUp ? NativeMethods.KEYEVENTF_KEYUP : 0u;
-            var input = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = (ushort)vkTabSpace, dwFlags = flags } };
-            return NativeMethods.SendInput(1, &input, sizeof(INPUT));
+            return InputSender.Key(vkTabSpace, UpFlag(isUp));
         }
         else if (msg.Key == SpecialKey.KP_Equal)
         {
             // no dedicated numpad = key on Windows; inject as unicode down+up
             if (_winKeyDown) FlushWin(isUp);
             if (isUp) return 1;
-            var inputs = stackalloc INPUT[2];
-            inputs[0] = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = 0, wScan = '=', dwFlags = NativeMethods.KEYEVENTF_UNICODE } };
-            inputs[1] = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = 0, wScan = '=', dwFlags = NativeMethods.KEYEVENTF_UNICODE | NativeMethods.KEYEVENTF_KEYUP } };
-            return NativeMethods.SendInput(2, inputs, sizeof(INPUT));
+            return InputSender.UnicodeTap('=');
         }
         else if (msg.Key is { } key && WinSpecialKeyMap.Instance.Reverse.TryGetValue(key, out var vk))
         {
@@ -502,10 +453,7 @@ internal sealed class DesktopInputDispatcher : IDisposable
                     {
                         // bare win tap — win was never injected, so inject down+up now to open start menu
                         _winInjected = false;
-                        var inputs = stackalloc INPUT[2];
-                        inputs[0] = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = (ushort)vk, dwFlags = NativeMethods.KEYEVENTF_EXTENDEDKEY } };
-                        inputs[1] = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = (ushort)vk, dwFlags = NativeMethods.KEYEVENTF_EXTENDEDKEY | NativeMethods.KEYEVENTF_KEYUP } };
-                        return NativeMethods.SendInput(2, inputs, sizeof(INPUT));
+                        return InputSender.VkTap((int)vk, NativeMethods.KEYEVENTF_EXTENDEDKEY);
                     }
                     _winUsedAsModifier = false;
                     if (!_winInjected) return 1; // Win was never logically injected (e.g. Win+L handled it directly)
@@ -517,52 +465,43 @@ internal sealed class DesktopInputDispatcher : IDisposable
             // flush buffered Win key before injecting a non-Win special key
             if (_winKeyDown && !isWin) FlushWin(isUp);
 
-            var flags = isUp ? NativeMethods.KEYEVENTF_KEYUP : 0u;
+            var flags = UpFlag(isUp);
             if (ExtendedKeys.Contains(vk))
                 flags |= NativeMethods.KEYEVENTF_EXTENDEDKEY;
-
-            var input = new INPUT
-            {
-                type = NativeMethods.INPUT_KEYBOARD,
-                ki = new KEYBDINPUT { wVk = (ushort)vk, dwFlags = flags },
-            };
-            return NativeMethods.SendInput(1, &input, sizeof(INPUT));
+            return InputSender.Key((int)vk, flags);
         }
 
         return 1; // nothing to inject
     }
 
-    // injects LWin down (if not already injected) and marks it as used as a modifier.
-    // called whenever a key arrives while _winKeyDown is set, to flush the buffered Win press.
+    private static uint UpFlag(bool isUp) => isUp ? NativeMethods.KEYEVENTF_KEYUP : 0u;
+
     private void SyncLockState(KeyModifiers mods)
     {
         SyncLockKey(WinVirtualKey.Capital, want: (mods & KeyModifiers.CapsLock) != 0, extendedKey: false);
         SyncLockKey(WinVirtualKey.Numlock, want: (mods & KeyModifiers.NumLock) != 0, extendedKey: true);
     }
 
-    private unsafe void SyncLockKey(int vk, bool want, bool extendedKey)
+    private void SyncLockKey(int vk, bool want, bool extendedKey)
     {
         var have = (NativeMethods.GetKeyState(vk) & 0x01) != 0;
         if (have == want) return;
-        var flags = extendedKey ? NativeMethods.KEYEVENTF_EXTENDEDKEY : 0u;
-        var inputs = stackalloc INPUT[2];
-        inputs[0] = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = (ushort)vk, dwFlags = flags } };
-        inputs[1] = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = (ushort)vk, dwFlags = flags | NativeMethods.KEYEVENTF_KEYUP } };
-        _ = NativeMethods.SendInput(2, inputs, sizeof(INPUT));
+        InputSender.VkTap(vk, extendedKey ? NativeMethods.KEYEVENTF_EXTENDEDKEY : 0u).WarnIfFailed(_log, "lock key");
     }
 
-    private unsafe void FlushWin(bool isUp)
+    // injects the buffered Win down (unless a shortcut already did) and marks Win as used as a modifier.
+    // called whenever a key arrives while _winKeyDown is set, to flush the buffered Win press.
+    private void FlushWin(bool isUp)
     {
         if (!_winUsedAsModifier && !isUp)
         {
-            var wi = new INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = _bufferedWinVk, dwFlags = NativeMethods.KEYEVENTF_EXTENDEDKEY } };
-            _ = NativeMethods.SendInput(1, &wi, sizeof(INPUT));
+            InputSender.Key(_bufferedWinVk, NativeMethods.KEYEVENTF_EXTENDEDKEY).WarnIfFailed(_log, "Win");
             _winInjected = true;
         }
         _winUsedAsModifier = true;
     }
 
-    private static unsafe uint ExecuteInjectMouseButton(MouseButtonMessage msg)
+    private static uint ExecuteInjectMouseButton(MouseButtonMessage msg)
     {
         var (downFlag, upFlag, mouseData) = msg.Button switch
         {
@@ -575,41 +514,15 @@ internal sealed class DesktopInputDispatcher : IDisposable
         };
         if (downFlag == 0) return 1;
 
-        var input = new INPUT
-        {
-            type = NativeMethods.INPUT_MOUSE,
-            mi = new MOUSEINPUT
-            {
-                dwFlags = msg.IsPressed ? downFlag : upFlag,
-                mouseData = mouseData,
-            },
-        };
-        return NativeMethods.SendInput(1, &input, sizeof(INPUT));
+        return InputSender.Send(InputSender.MouseInput(msg.IsPressed ? downFlag : upFlag, mouseData: mouseData));
     }
 
-    private unsafe void ExecuteInjectMouseScroll(MouseScrollMessage msg)
+    private void ExecuteInjectMouseScroll(MouseScrollMessage msg)
     {
         if (msg.YDelta != 0)
-        {
-            var input = new INPUT
-            {
-                type = NativeMethods.INPUT_MOUSE,
-                mi = new MOUSEINPUT { dwFlags = NativeMethods.MOUSEEVENTF_WHEEL, mouseData = (uint)msg.YDelta },
-            };
-            if (NativeMethods.SendInput(1, &input, sizeof(INPUT)) == 0)
-                _log.LogWarning("SendInput(scroll y) failed (error {Error})", Marshal.GetLastWin32Error());
-        }
-
+            InputSender.Send(InputSender.MouseInput(NativeMethods.MOUSEEVENTF_WHEEL, mouseData: (uint)msg.YDelta)).WarnIfFailed(_log, "scroll y");
         if (msg.XDelta != 0)
-        {
-            var input = new INPUT
-            {
-                type = NativeMethods.INPUT_MOUSE,
-                mi = new MOUSEINPUT { dwFlags = NativeMethods.MOUSEEVENTF_HWHEEL, mouseData = (uint)msg.XDelta },
-            };
-            if (NativeMethods.SendInput(1, &input, sizeof(INPUT)) == 0)
-                _log.LogWarning("SendInput(scroll x) failed (error {Error})", Marshal.GetLastWin32Error());
-        }
+            InputSender.Send(InputSender.MouseInput(NativeMethods.MOUSEEVENTF_HWHEEL, mouseData: (uint)msg.XDelta)).WarnIfFailed(_log, "scroll x");
     }
 
     // resolves a char to a VK+shift pair without using the active layout, for shortcut injection only.

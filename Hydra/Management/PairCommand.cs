@@ -23,7 +23,7 @@ internal static class PairCommand
         string code;
         try
         {
-            code = await new RemoteManagementStore(configPath).CreatePairingCodeAsync();
+            code = await new RemoteManagementStore(configPath).CreatePairingCode();
         }
         catch (UnauthorizedAccessException ex)
         {
@@ -37,7 +37,7 @@ internal static class PairCommand
             await error.WriteLineAsync("If another process still holds that file open, try again once it has let go.");
             return 1;
         }
-        await output.WriteLineAsync("Enter this one-time code in the controlling Hydra TUI within 10 minutes:");
+        await output.WriteLineAsync($"Enter this one-time code in the controlling Hydra TUI within {RemoteManagementStore.PairingLifetime.TotalMinutes:0} minutes:");
         await output.WriteLineAsync(code);
         return 0;
     }

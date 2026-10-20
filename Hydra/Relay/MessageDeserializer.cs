@@ -23,10 +23,10 @@ internal static class MessageDeserializer
     }
 
     // as TryDecodeBody, logging a warning when a malformed or JSON-null body yields nothing
-    internal static T? ParseMessage<T>(this ReadOnlyMemory<byte> body, ILogger log, string context) where T : class
+    internal static T? ParseMessage<T>(this ReadOnlyMemory<byte> body, ILogger log, string sourceHost) where T : class
     {
         var result = body.TryDecodeBody<T>();
-        if (result == null) log.LogWarning("Failed to deserialize {Type} ({Context}) — dropping", typeof(T).Name, context);
+        if (result == null) log.LogWarning("Failed to deserialize {Type} from {Host} — dropping", typeof(T).Name, sourceHost);
         return result;
     }
 }

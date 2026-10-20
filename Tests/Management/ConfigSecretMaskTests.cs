@@ -2,6 +2,7 @@ using System.Text.Json.Nodes;
 using Cathedral.Extensions;
 using Hydra.Config;
 using Hydra.Management;
+using static Tests.Setup.ConfigJson;
 
 namespace Tests.Management;
 
@@ -12,7 +13,7 @@ public class ConfigSecretMaskTests
           "unknown": { "keep": true },
           "profiles": [{
             "networkConfig": "relay-secret",
-            "embeddedStyx": { "server": "http://localhost:5000", "password": "password-secret" }
+            "embeddedStyx": { "server": "https://localhost:5000", "password": "password-secret" }
           }]
         }
         """;
@@ -51,7 +52,7 @@ public class ConfigSecretMaskTests
     [Test]
     public void Restore_PutsBackTheValueTheLoaderUses_WhenKeysDifferOnlyInCase()
     {
-        const string source = """{"profiles":[{"mode":"Slave","networkConfig":"shadowed","NetworkConfig":"effective"}]}""";
+        var source = AsFile("""[{"mode":"Slave","networkConfig":"shadowed","NetworkConfig":"effective"}]""");
 
         var restored = ConfigSecretMask.Restore(ConfigSecretMask.Mask(source), source);
 

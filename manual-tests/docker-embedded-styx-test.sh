@@ -116,7 +116,7 @@ cat > "$CONF_DIR/slave.conf" <<'EOF'
   "name": "slave",
   "profiles": [{
     "mode": "Slave",
-    "embeddedStyx": { "server": "http://hydra-test-master:5000", "password": "test-secret" }
+    "embeddedStyx": { "server": "https://hydra-test-master:5000", "password": "test-secret" }
   }]
 }
 EOF

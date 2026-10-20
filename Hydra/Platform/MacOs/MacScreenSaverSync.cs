@@ -54,17 +54,14 @@ public sealed class MacScreenSaverSync : SimpleHostedService, IScreenSaverSync
             }
         };
 
-        var nameStart = NativeHelpers.MakeNsString(DidStart);
-        var nameStop = NativeHelpers.MakeNsString(DidStop);
+        using var nameStart = new NsString(DidStart);
+        using var nameStop = new NsString(DidStop);
 
         // use a stable observer pointer (1 / 2) to distinguish the two registrations on removal
         NativeMethods.CFNotificationCenterAddObserver(_center, 1, _callback, nameStart, nint.Zero,
             NativeMethods.CFNotificationSuspensionBehaviorDeliverImmediately);
         NativeMethods.CFNotificationCenterAddObserver(_center, 2, _callback, nameStop, nint.Zero,
             NativeMethods.CFNotificationSuspensionBehaviorDeliverImmediately);
-
-        NativeMethods.CFRelease(nameStart);
-        NativeMethods.CFRelease(nameStop);
     }
 
     protected override Task OnShutdown(CancellationToken cancel)
@@ -72,12 +69,10 @@ public sealed class MacScreenSaverSync : SimpleHostedService, IScreenSaverSync
         if (_center == nint.Zero) return Task.CompletedTask;
         _log.LogInformation("Stopped watching for screensaver notifications");
 
-        var nameStart = NativeHelpers.MakeNsString(DidStart);
-        var nameStop = NativeHelpers.MakeNsString(DidStop);
-        NativeMethods.CFNotificationCenterRemoveObserver(_center, 1, nameStart, nint.Zero);
-        NativeMethods.CFNotificationCenterRemoveObserver(_center, 2, nameStop, nint.Zero);
-        NativeMethods.CFRelease(nameStart);
-        NativeMethods.CFRelease(nameStop);
+        using (var nameStart = new NsString(DidStart))
+            NativeMethods.CFNotificationCenterRemoveObserver(_center, 1, nameStart, nint.Zero);
+        using (var nameStop = new NsString(DidStop))
+            NativeMethods.CFNotificationCenterRemoveObserver(_center, 2, nameStop, nint.Zero);
 
         _callback = null;
         _center = nint.Zero;
@@ -89,16 +84,15 @@ public sealed class MacScreenSaverSync : SimpleHostedService, IScreenSaverSync
     private static bool IsScreenLocked()
     {
         uint rootEntry = 0;
-        nint consoleUsersKey = nint.Zero;
         nint consoleUsersArray = nint.Zero;
-        nint screenLockedKey = nint.Zero;
+        using var consoleUsersKey = new NsString("IOConsoleUsers");
+        using var screenLockedKey = new NsString("CGSSessionScreenIsLocked");
 
         try
         {
             rootEntry = NativeMethods.IORegistryGetRootEntry(0);
             if (rootEntry == 0) return false;
 
-            consoleUsersKey = NativeHelpers.MakeNsString("IOConsoleUsers");
             consoleUsersArray = NativeMethods.IORegistryEntryCreateCFProperty(rootEntry, consoleUsersKey, nint.Zero, 0);
             if (consoleUsersArray == nint.Zero) return false;
 
@@ -107,7 +101,6 @@ public sealed class MacScreenSaverSync : SimpleHostedService, IScreenSaverSync
             var userDict = NativeMethods.CFArrayGetValueAtIndex(consoleUsersArray, 0);
             if (userDict == nint.Zero) return false;
 
-            screenLockedKey = NativeHelpers.MakeNsString("CGSSessionScreenIsLocked");
             var lockedRef = NativeMethods.CFDictionaryGetValue(userDict, screenLockedKey);
             if (lockedRef == nint.Zero) return false;
 
@@ -115,8 +108,6 @@ public sealed class MacScreenSaverSync : SimpleHostedService, IScreenSaverSync
         }
         finally
         {
-            if (consoleUsersKey != nint.Zero) NativeMethods.CFRelease(consoleUsersKey);
-            if (screenLockedKey != nint.Zero) NativeMethods.CFRelease(screenLockedKey);
             if (consoleUsersArray != nint.Zero) NativeMethods.CFRelease(consoleUsersArray);
             if (rootEntry != 0) _ = NativeMethods.IOObjectRelease(rootEntry);
         }
@@ -125,24 +116,14 @@ public sealed class MacScreenSaverSync : SimpleHostedService, IScreenSaverSync
     public void LockScreen()
     {
         _log.LogInformation("Locking screen (ctrl+cmd+q)");
-        var src = NativeMethods.CGEventSourceCreate(NativeMethods.KCGEventSourceStateCombinedSessionState);
-        const ulong flags = NativeMethods.KCGEventFlagMaskControl | NativeMethods.KCGEventFlagMaskCommand;
-        const ushort qKeyCode = 12;  // Q key
-        var down = NativeMethods.CGEventCreateKeyboardEvent(src, qKeyCode, true);
-        var up = NativeMethods.CGEventCreateKeyboardEvent(src, qKeyCode, false);
-        if (down != nint.Zero)
+        const ushort qKeyCode = 12; // kVK_ANSI_Q
+        foreach (var isDown in new[] { true, false })
         {
-            NativeMethods.CGEventSetFlags(down, flags);
-            NativeMethods.CGEventPost(NativeMethods.KCGHidEventTap, down);
-            NativeMethods.CFRelease(down);
+            var evt = NativeMethods.CGEventCreateKeyboardEvent(NativeHelpers.EventSource, qKeyCode, isDown);
+            if (evt == nint.Zero) continue;
+            NativeMethods.CGEventSetFlags(evt, NativeMethods.KCGEventFlagMaskControl | NativeMethods.KCGEventFlagMaskCommand);
+            NativeHelpers.PostAndRelease(evt);
         }
-        if (up != nint.Zero)
-        {
-            NativeMethods.CGEventSetFlags(up, flags);
-            NativeMethods.CGEventPost(NativeMethods.KCGHidEventTap, up);
-            NativeMethods.CFRelease(up);
-        }
-        if (src != nint.Zero) NativeMethods.CFRelease(src);
     }
 
     public void Activate()
@@ -157,15 +138,8 @@ public sealed class MacScreenSaverSync : SimpleHostedService, IScreenSaverSync
     {
         _log.LogInformation("Deactivating screensaver");
         // a synthetic mouse move dismisses the screensaver reliably
-        var src = NativeMethods.CGEventSourceCreate(NativeMethods.KCGEventSourceStateCombinedSessionState);
-        var evt = NativeMethods.CGEventCreateMouseEvent(src, NativeMethods.KCGEventMouseMoved,
-            new CGPoint { X = 0, Y = 0 }, 0);
-        if (evt != nint.Zero)
-        {
-            NativeMethods.CGEventPost(NativeMethods.KCGHidEventTap, evt);
-            NativeMethods.CFRelease(evt);
-        }
-        if (src != nint.Zero) NativeMethods.CFRelease(src);
+        NativeHelpers.PostAndRelease(NativeMethods.CGEventCreateMouseEvent(NativeHelpers.EventSource, NativeMethods.KCGEventMouseMoved,
+            new CGPoint { X = 0, Y = 0 }, 0));
     }
 
     public void ResetIdleTimer()
@@ -173,26 +147,20 @@ public sealed class MacScreenSaverSync : SimpleHostedService, IScreenSaverSync
         // IOPMAssertionDeclareUserActivity doesn't reset the HID idle timer; only a real CGEvent through KCGHidEventTap does.
         // use KCGEventFlagsChanged (a keyboard event) instead of a mouse move so apps that hide the cursor
         // (e.g. WezTerm during typing) don't see it flash back. carry current modifier flags so it's a no-op to keyboard state.
-        var src = NativeMethods.CGEventSourceCreate(NativeMethods.KCGEventSourceStateCombinedSessionState);
-        var flags = NativeMethods.CGEventSourceFlagsState(NativeMethods.KCGEventSourceStateCombinedSessionState);
-        var evt = NativeMethods.CGEventCreateKeyboardEvent(src, 0, false);
-        if (evt != nint.Zero)
-        {
-            NativeMethods.CGEventSetType(evt, NativeMethods.KCGEventFlagsChanged);
-            NativeMethods.CGEventSetFlags(evt, flags);
-            NativeMethods.CGEventPost(NativeMethods.KCGHidEventTap, evt);
-            NativeMethods.CFRelease(evt);
-        }
-        if (src != nint.Zero) NativeMethods.CFRelease(src);
+        var evt = NativeMethods.CGEventCreateKeyboardEvent(NativeHelpers.EventSource, 0, false);
+        if (evt == nint.Zero) return;
+        NativeMethods.CGEventSetType(evt, NativeMethods.KCGEventFlagsChanged);
+        NativeMethods.CGEventSetFlags(evt, NativeMethods.CGEventSourceFlagsState(NativeMethods.KCGEventSourceStateCombinedSessionState));
+        NativeHelpers.PostAndRelease(evt);
     }
 
     public void WakeDisplay()
     {
         // ResetIdleTimer's synthetic HID event alone does not power a slept display back on — that needs
         // IOPMAssertionDeclareUserActivity. Do both: wake the panel, then poke the idle timer so it stays on.
-        var name = NativeHelpers.MakeNsString("Hydra remote input");
-        var result = NativeMethods.IOPMAssertionDeclareUserActivity(name, NativeMethods.KIOPMUserActiveLocal, out _);
-        NativeMethods.CFRelease(name);
+        int result;
+        using (var name = new NsString("Hydra remote input"))
+            result = NativeMethods.IOPMAssertionDeclareUserActivity(name, NativeMethods.KIOPMUserActiveLocal, out _);
         if (result != 0) _log.LogWarning("IOPMAssertionDeclareUserActivity failed ({Result})", result);
         ResetIdleTimer();
     }

@@ -4,7 +4,6 @@ using Common.DTO;
 using Common.Interfaces;
 using Hydra.FileTransfer;
 using Hydra.Relay;
-using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.DependencyInjection;
 using Tests.Setup;
@@ -17,26 +16,44 @@ namespace Tests.Relay;
 /// abandoned rather than answered into the next.
 /// </summary>
 [TestFixture]
-public class SlaveSelectionConnectionTests
+public class SlaveSelectionConnectionTests : StyxFixtureBase
 {
-    private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(15);
     private const string Master = "master-pc";
-    private static readonly string Key = StyxTestServer.GenerateEncryptionKey();
-    private static readonly QueryDuringSecondLogin Relay = new();
-    private static WebApplicationFactory<global::Styx.Program>? _styx;
+    private static readonly string Key = NetworkConfig.NewEncryptionKey();
+    private readonly QueryDuringSecondLogin _relay = new();
+    private readonly StartedServices _services = new();
+    private readonly List<GatedFileSelectionDetector> _finders = [];
+    private readonly List<Gate> _drops = [];
+    private readonly List<TestableSlaveRelay> _slaves = [];
 
-    [OneTimeSetUp]
-    public static void OneTimeSetUp()
+    protected override void ConfigureRelay(IServiceCollection services) =>
+        services.Configure<HubOptions>(options => options.AddFilter(_relay));
+
+    // a held query or login would keep its slave from stopping
+    [TearDown]
+    public async Task TearDown()
     {
-        _styx = StyxTestServer.Create(configure: services =>
-            services.Configure<HubOptions>(options => options.AddFilter(Relay)));
-        _ = _styx.Server;
+        foreach (var drop in _drops) drop.Release();
+        foreach (var finder in _finders) finder.Release(new FileSelectionResult(true, []));
+        _drops.Clear();
+        _finders.Clear();
+        try
+        {
+            await _services.StopAll();
+        }
+        finally
+        {
+            foreach (var slave in _slaves) slave.Dispose();
+            _slaves.Clear();
+        }
     }
 
-    [OneTimeTearDown]
-    public static async Task OneTimeTearDown()
+    private async Task<TestableSlaveRelay> StartSlave(string cfg, GatedFileSelectionDetector finder)
     {
-        if (_styx != null) await _styx.DisposeAsync();
+        _finders.Add(finder);
+        var slave = new TestableSlaveRelay(Factory, cfg, finder);
+        _slaves.Add(slave);
+        return await _services.Start(slave);
     }
 
     [Test]
@@ -44,75 +61,48 @@ public class SlaveSelectionConnectionTests
     {
         var finder = new GatedFileSelectionDetector();
         finder.Release(new FileSelectionResult(true, ["/Users/me/report.pdf"]));
-        var cfg = await StyxTestServer.BuildNetworkConfig(_styx!, Guid.NewGuid(), Key);
-        await using var master = HydraTestClient.Master(_styx!, Master, cfg);
-        await master.StartReady();
-        using var slave = new TestableSlaveRelay(_styx!, cfg, finder);
-        await slave.StartAsync(CancellationToken.None);
-        try
-        {
-            await slave.NextAuthentication(Timeout);
-            Assert.That(slave.RequestReconnect(), Is.True);
+        var cfg = await StyxTestServer.BuildNetworkConfig(Factory, Guid.NewGuid(), Key);
+        await using var master = await HydraTestClient.Started(HydraTestClient.Master(Factory, Master, cfg));
+        var slave = await StartSlave(cfg, finder);
+        await slave.NextAuthentication();
+        Assert.That(slave.RequestReconnect(), Is.True);
 
-            await finder.Queried.WaitAsync(Timeout);
+        await finder.Queried.WaitAsync(Bound);
 
-            Assert.That(await NextFrom(master, MessageKind.FileSelectionResponse), Does.Contain("report.pdf"));
-        }
-        finally
-        {
-            await Stop(slave);
-        }
+        Assert.That(await master.WaitForMessage(MessageKind.FileSelectionResponse), Does.Contain("report.pdf"));
     }
 
     [Test]
     public async Task ConnectionDroppingDuringAQuery_CancelsIt()
     {
         var finder = new GatedFileSelectionDetector();
-        var cfg = await StyxTestServer.BuildNetworkConfig(_styx!, Guid.NewGuid(), Key);
-        using var slave = new TestableSlaveRelay(_styx!, cfg, finder);
-        await slave.StartAsync(CancellationToken.None);
-        try
-        {
-            await slave.NextAuthentication(Timeout);
-            Assert.That(slave.RequestReconnect(), Is.True);
-            await finder.Queried.WaitAsync(Timeout);
-            await slave.NextAuthentication(Timeout);
+        var cfg = await StyxTestServer.BuildNetworkConfig(Factory, Guid.NewGuid(), Key);
+        var slave = await StartSlave(cfg, finder);
+        await slave.NextAuthentication();
+        Assert.That(slave.RequestReconnect(), Is.True);
+        await finder.Queried.WaitAsync(Bound);
+        await slave.NextAuthentication();
 
-            Assert.That(slave.RequestReconnect(), Is.True);
+        Assert.That(slave.RequestReconnect(), Is.True);
 
-            await finder.Cancelled.WaitAsync(Timeout);
-        }
-        finally
-        {
-            finder.Release(new FileSelectionResult(true, []));
-            await Stop(slave);
-        }
+        await finder.Cancelled.WaitAsync(Bound);
     }
 
     [Test]
     public async Task RelayDroppingTheLoginDuringAQuery_CancelsIt()
     {
         var finder = new GatedFileSelectionDetector();
-        var cfg = await StyxTestServer.BuildNetworkConfig(_styx!, Guid.NewGuid(), Key);
-        var drop = Relay.HoldSecondLogin(NetworkConfig.Parse(cfg).Authorization);
-        using var slave = new TestableSlaveRelay(_styx!, cfg, finder);
-        await slave.StartAsync(CancellationToken.None);
-        try
-        {
-            await slave.NextAuthentication(Timeout);
-            Assert.That(slave.RequestReconnect(), Is.True);
-            await finder.Queried.WaitAsync(Timeout);
+        var cfg = await StyxTestServer.BuildNetworkConfig(Factory, Guid.NewGuid(), Key);
+        var drop = _relay.HoldSecondLogin(NetworkConfig.Parse(cfg).Authorization);
+        _drops.Add(drop);
+        var slave = await StartSlave(cfg, finder);
+        await slave.NextAuthentication();
+        Assert.That(slave.RequestReconnect(), Is.True);
+        await finder.Queried.WaitAsync(Bound);
 
-            drop.SetResult();
+        drop.Release();
 
-            await finder.Cancelled.WaitAsync(Timeout);
-        }
-        finally
-        {
-            drop.TrySetResult();
-            finder.Release(new FileSelectionResult(true, []));
-            await Stop(slave);
-        }
+        await finder.Cancelled.WaitAsync(Bound);
     }
 
     // the earlier connection's query can no longer answer, so the master's new one must not wait on it
@@ -120,48 +110,24 @@ public class SlaveSelectionConnectionTests
     public async Task QueryFromTheSameMasterWhileAnEarlierConnectionsRuns_IsAnsweredCopyInProgress()
     {
         var finder = new GatedFileSelectionDetector(ignoresCancellation: true);
-        var cfg = await StyxTestServer.BuildNetworkConfig(_styx!, Guid.NewGuid(), Key);
-        using var slave = new TestableSlaveRelay(_styx!, cfg, finder);
-        await slave.StartAsync(CancellationToken.None);
-        try
+        var cfg = await StyxTestServer.BuildNetworkConfig(Factory, Guid.NewGuid(), Key);
+        var slave = await StartSlave(cfg, finder);
+        await slave.NextAuthentication();
+        Assert.That(slave.RequestReconnect(), Is.True);
+        await finder.Queried.WaitAsync(Bound);
+        await slave.NextAuthentication();
+        Assert.That(slave.RequestReconnect(), Is.True);
+        await finder.Cancelled.WaitAsync(Bound);
+        await slave.NextAuthentication();
+
+        await slave.SimulateReceive(Master, MessageKind.FileSelectionQuery, "{}").WaitAsync(Bound);
+
+        var (targets, _, json) = slave.Sent.Of(MessageKind.FileSelectionResponse).Single();
+        using (Assert.EnterMultipleScope())
         {
-            await slave.NextAuthentication(Timeout);
-            Assert.That(slave.RequestReconnect(), Is.True);
-            await finder.Queried.WaitAsync(Timeout);
-            await slave.NextAuthentication(Timeout);
-            Assert.That(slave.RequestReconnect(), Is.True);
-            await finder.Cancelled.WaitAsync(Timeout);
-            await slave.NextAuthentication(Timeout);
-
-            await slave.SimulateReceive(Master, MessageKind.FileSelectionQuery, "{}").WaitAsync(Timeout);
-
-            var (targets, _, json) = slave.Snapshot().Single(s => s.Kind == MessageKind.FileSelectionResponse);
-            using (Assert.EnterMultipleScope())
-            {
-                Assert.That(targets, Is.EqualTo([Master]));
-                Assert.That(json, Does.Contain(FileSelectionResult.InProgressMessage));
-            }
+            Assert.That(targets, Is.EqualTo([Master]));
+            Assert.That(json, Does.Contain(FileSelectionResult.InProgressMessage));
         }
-        finally
-        {
-            finder.Release(new FileSelectionResult(true, []));
-            await Stop(slave);
-        }
-    }
-
-    private static async Task<string> NextFrom(HydraTestClient master, MessageKind kind)
-    {
-        while (true)
-        {
-            var (_, received, json) = await master.WaitForNextMessage((int)Timeout.TotalMilliseconds);
-            if (received == kind) return json;
-        }
-    }
-
-    private static async Task Stop(TestableSlaveRelay slave)
-    {
-        using var giveUp = new CancellationTokenSource(Timeout);
-        await slave.StopAsync(giveUp.Token);
     }
 
     // sends each network's slave a selection query from the master while it logs in for the second time;
@@ -169,10 +135,9 @@ public class SlaveSelectionConnectionTests
     private sealed class QueryDuringSecondLogin : IHubFilter
     {
         private readonly ConcurrentDictionary<string, int> _logins = new();
-        private readonly ConcurrentDictionary<string, TaskCompletionSource> _held = new();
+        private readonly ConcurrentDictionary<string, Gate> _held = new();
 
-        public TaskCompletionSource HoldSecondLogin(string authorization) =>
-            _held.GetOrAdd(authorization, _ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+        public Gate HoldSecondLogin(string authorization) => _held.GetOrAdd(authorization, _ => new Gate(held: true));
 
         public async ValueTask<object?> InvokeMethodAsync(HubInvocationContext context, Func<HubInvocationContext, ValueTask<object?>> next)
         {
@@ -183,7 +148,7 @@ public class SlaveSelectionConnectionTests
                 await context.Hub.Clients.Caller.SendAsync(nameof(IStyxClient.Receive), Master, "127.0.0.1", query, context.Context.ConnectionAborted);
                 if (_held.TryGetValue(login.Authorization, out var drop))
                 {
-                    await drop.Task;
+                    await drop.Passed();
                     context.Context.Abort();
                     throw new HubException("dropped by the relay");
                 }

@@ -31,10 +31,10 @@ internal sealed class MockManagementClient : IManagementClient
         }
         """;
 
-    public Task<ServerHello> HelloAsync(CancellationToken cancel = default) =>
+    public Task<ServerHello> Hello(CancellationToken cancel = default) =>
         Task.FromResult(new ServerHello(ManagementProtocol.Version, "0.0.0-demo", "demo", Environment.ProcessId));
 
-    public Task<HydraStatusSnapshot> GetStatusAsync(CancellationToken cancel = default)
+    public Task<HydraStatusSnapshot> GetStatus(CancellationToken cancel = default)
     {
         // fixed offset so "uptime"/"connected for" read as an established, already-busy session
         // rather than a process that just started, without the numbers drifting out of proportion
@@ -84,7 +84,7 @@ internal sealed class MockManagementClient : IManagementClient
                 LockedToScreen: false, ConfinedToScreen: false, RelativeMouse: false)));
     }
 
-    public Task<ManagementLogPage> GetLogsAsync(long after, CancellationToken cancel = default)
+    public Task<ManagementLogPage> GetLogs(long after, CancellationToken cancel = default)
     {
         var now = DateTimeOffset.UtcNow;
         List<ManagementLogEntry> entries =
@@ -100,37 +100,34 @@ internal sealed class MockManagementClient : IManagementClient
         return Task.FromResult(new ManagementLogPage(entries.Count, 0, page));
     }
 
-    public Task<ConfigDocument> GetConfigAsync(CancellationToken cancel = default) =>
+    public Task<ConfigDocument> GetConfig(CancellationToken cancel = default) =>
         Task.FromResult(new ConfigDocument("~/hydra.conf", "demo0000", DemoConfigJson));
 
-    public Task<ConfigValidation> ValidateConfigAsync(string json, CancellationToken cancel = default) =>
-        Task.FromResult(new ConfigValidation(true));
-
-    public Task<ConfigDocument> SaveConfigAsync(SaveConfigRequest request, CancellationToken cancel = default) =>
+    public Task<ConfigDocument> SaveConfig(SaveConfigRequest request, CancellationToken cancel = default) =>
         Task.FromResult(new ConfigDocument("~/hydra.conf", "demo0001", request.Json));
 
-    public Task<CommandResult> ReconnectRelayAsync(CancellationToken cancel = default) =>
+    public Task<CommandResult> ReconnectRelay(CancellationToken cancel = default) =>
         Task.FromResult(new CommandResult(true, "Relay reconnect requested. (demo mode — nothing actually happened)"));
 
-    public Task<CommandResult> RestartHydraAsync(CancellationToken cancel = default) =>
+    public Task<CommandResult> RestartHydra(CancellationToken cancel = default) =>
         Task.FromResult(new CommandResult(true, "Hydra restart requested. (demo mode — nothing actually happened)"));
 
-    public Task<CommandResult> ShutdownHydraAsync(CancellationToken cancel = default) =>
+    public Task<CommandResult> ShutdownHydra(CancellationToken cancel = default) =>
         Task.FromResult(new CommandResult(true, "Hydra shutdown requested. (demo mode — nothing actually happened)"));
 
-    public Task<RemotePairResult> PairRemoteAsync(RemotePairRequest request, CancellationToken cancel = default) =>
+    public Task<RemotePairResult> PairRemote(RemotePairRequest request, CancellationToken cancel = default) =>
         Task.FromResult(new RemotePairResult(true, $"Paired with {request.Host}. (demo mode)"));
 
-    public Task<RemoteConfigDocument> GetRemoteConfigAsync(string host, CancellationToken cancel = default) =>
+    public Task<RemoteConfigDocument> GetRemoteConfig(string host, CancellationToken cancel = default) =>
         Task.FromResult(new RemoteConfigDocument(host, "demo0000", DemoConfigJson, null));
 
-    public Task<ConfigValidation> ValidateRemoteConfigAsync(RemoteValidateRequest request, CancellationToken cancel = default) =>
+    public Task<ConfigValidation> ValidateRemoteConfig(RemoteValidateRequest request, CancellationToken cancel = default) =>
         Task.FromResult(new ConfigValidation(true));
 
-    public Task<RemoteApplyAccepted> ApplyRemoteConfigAsync(RemoteApplyRequest request, CancellationToken cancel = default) =>
+    public Task<RemoteApplyAccepted> ApplyRemoteConfig(RemoteApplyRequest request, CancellationToken cancel = default) =>
         Task.FromResult(new RemoteApplyAccepted(Guid.NewGuid(), "demo0001", DateTimeOffset.UtcNow + RemoteApplyStore.ConfirmationWindow,
             "Candidate saved. (demo mode — nothing actually happened)"));
 
-    public Task<CommandResult> ConfirmRemoteConfigAsync(RemoteConfirmRequest request, CancellationToken cancel = default) =>
+    public Task<CommandResult> ConfirmRemoteConfig(RemoteConfirmRequest request, CancellationToken cancel = default) =>
         Task.FromResult(new CommandResult(true, "Remote configuration confirmed. (demo mode)"));
 }

@@ -4,19 +4,7 @@ using System.Runtime.Versioning;
 
 namespace Hydra.Platform;
 
-/// <summary>
-/// Raises this process above the scheduler's default. Input latency is the whole product: a cursor that
-/// stutters on a loaded machine is indistinguishable from a broken link, and the default treatment for a
-/// background service — launchd throttles an unclassified agent's CPU and I/O outright — is exactly wrong
-/// for a process whose only job is to deliver a keystroke now.
-/// </summary>
-/// <remarks>
-/// Deliberately stops short of the top of the scale. Realtime on Windows, or nice -20, would pre-empt the
-/// very threads that deliver our events (WindowServer, Xorg, the kernel's input path), and a spinning
-/// realtime process is one the user cannot escape with the mouse — which is the one tool we have taken
-/// responsibility for. High / nice -10 clears compilers, VMs, browsers and containers, which is what the
-/// machine is actually busy with.
-/// </remarks>
+// raises this process to High / nice -10: short of realtime, which would pre-empt the threads that deliver our events
 internal static partial class ProcessPriority
 {
     internal const int UnixNice = -10;
@@ -55,10 +43,8 @@ internal static partial class ProcessPriority
 
     private static string RaiseUnix()
     {
-        // lowering the nice value is privileged: root (Linux under systemd, and the Windows service's
-        // Unix equivalents) gets it outright. An unprivileged macOS agent does not — there launchd is
-        // the one that can, from the Nice key AgentCommands writes into the plist, and this call then
-        // only has to match a value we already hold, which is permitted.
+        // lowering the nice value is privileged: root gets it outright, and a macOS agent already holds
+        // it from the Nice key AgentPlist writes, which this call is then permitted to match
         if (SetPriority(PrioProcess, 0, UnixNice) == 0)
             return $"nice {UnixNice}";
 

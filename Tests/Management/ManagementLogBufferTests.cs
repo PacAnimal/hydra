@@ -1,3 +1,4 @@
+using Hydra;
 using Hydra.Management;
 using Microsoft.Extensions.Logging;
 
@@ -6,7 +7,7 @@ namespace Tests.Management;
 public class ManagementLogBufferTests
 {
     [Test]
-    public void CapturesInformationAndFiltersSensitiveCategories()
+    public void CapturesInformationAndFiltersSensitiveCategories_AndFilePathMessages()
     {
         using var buffer = new ManagementLogBuffer();
         var normal = buffer.CreateLogger("Hydra.Relay");
@@ -15,15 +16,16 @@ public class ManagementLogBufferTests
 
         normal.LogInformation("Connected to relay");
         sensitive.LogInformation("selected /private/file");
-        routing.LogInformation("Copy hotkey: 1 file(s) selected locally: /private/secret.txt");
+        routing.LogInformation(LogEvents.FilePaths, "Copy hotkey: 1 file selected locally: /private/secret.txt");
+        routing.LogInformation(LogEvents.FilePaths, "any wording at all: /private/other.txt");
+        routing.LogInformation("Paste hotkey: 2 files from laptop → desktop");
         var page = buffer.Read(0);
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(page.Entries, Has.Count.EqualTo(1));
-            Assert.That(page.Entries[0].Message, Is.EqualTo("Connected to relay"));
+            Assert.That(page.Entries.Select(entry => entry.Message), Is.EqualTo(["Connected to relay", "Paste hotkey: 2 files from laptop → desktop"]));
             Assert.That(page.Entries[0].Category, Is.EqualTo("Hydra.Relay"));
-            Assert.That(page.Entries.Select(entry => entry.Message), Has.None.Contains("/private/secret.txt"));
+            Assert.That(page.Entries.Select(entry => entry.Message), Has.None.Contains("/private/"));
         }
     }
 

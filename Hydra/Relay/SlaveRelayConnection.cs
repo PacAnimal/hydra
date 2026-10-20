@@ -13,13 +13,10 @@ namespace Hydra.Relay;
 public class SlaveRelayConnection : RelayConnection
 {
     private readonly IPlatformOutput _output;
-    private readonly ILogger<RelayConnection> _log;
-    private readonly IHydraProfile _profile;
     private readonly IScreenDetector _screens;
-    private readonly IWorldState _peerState;
     private readonly ICursorHider _cursorHider;
     private readonly IScreenSaverSync _screenSaverSync;
-    private readonly IClipboardSync _clipboardSync;
+    private readonly ClipboardSlave _clipboard;
     private readonly FileTransferService _fileTransfer;
     private readonly IFileSelectionDetector _selectionDetector;
     private readonly IOsdNotification _osd;
@@ -36,27 +33,14 @@ public class SlaveRelayConnection : RelayConnection
     // who the running query answers; kept after it ends, since only the next holder of _selectionQuery replaces it
     private volatile SelectionQueryOrigin? _selectionQueryOrigin;
 
-    // fallback clipboard when Get* returns null because we own the selection (echo suppression)
-    private ClipboardSnapshot? _lastPushed;
-
     // cached screen layout for synchronous mouse move handling (avoids async overhead on the relay hot path)
     private volatile LocalScreenSnapshot? _cachedScreens;
 
     // set true only after OnAuthenticated completes — guards cursor hide until the slave is fully ready
     private volatile bool _isReady;
 
-    // masters whose cursor is currently on this slave's screen
-    // masters whose cursor is currently on this slave's screen. Mutated from SignalR receive handlers AND
-    // from OnDisconnected/OnPeers (a different task), so guard it — an unsynchronized HashSet torn between
-    // those threads can throw or corrupt. Access only via the helpers below.
-    private readonly HashSet<string> _onScreenMasters = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Lock _onScreenMastersLock = new();
-
-    private bool IsOnScreenMaster(string host) { lock (_onScreenMastersLock) return _onScreenMasters.Contains(host); }
-    private void AddOnScreenMaster(string host) { lock (_onScreenMastersLock) _onScreenMasters.Add(host); }
-    private bool RemoveOnScreenMaster(string host) { lock (_onScreenMastersLock) return _onScreenMasters.Remove(host); }
-    private void ClearOnScreenMasters() { lock (_onScreenMastersLock) _onScreenMasters.Clear(); }
-    private int OnScreenMasterCount { get { lock (_onScreenMastersLock) return _onScreenMasters.Count; } }
+    // masters whose cursor is currently on this slave's screen; receive handlers and OnDisconnected/OnPeers both change it
+    private readonly ConcurrentHashSet<string> _onScreenMasters = new([], StringComparer.OrdinalIgnoreCase);
 
     private readonly IActivityTracker _activityTracker;
 
@@ -64,13 +48,10 @@ public class SlaveRelayConnection : RelayConnection
         : base(profile, log, peerState)
     {
         _output = output;
-        _log = log;
-        _profile = profile;
         _screens = screens;
-        _peerState = peerState;
         _cursorHider = cursorHider;
         _screenSaverSync = screenSaverSync;
-        _clipboardSync = clipboardSync;
+        _clipboard = new ClipboardSlave(clipboardSync, log);
         _fileTransfer = fileTransfer;
         _selectionDetector = selectionDetector;
         _osd = osd;
@@ -83,17 +64,16 @@ public class SlaveRelayConnection : RelayConnection
             // Hold on to the awake snapshot and say nothing; the wake path refreshes and re-announces.
             if (_dormancy.IsDormant)
             {
-                if (_log.IsEnabled(LogLevel.Debug))
-                    _log.LogDebug("Dormant: ignoring screen change to {Count} screen(s)", snapshot.Screens.Count);
+                if (Log.IsEnabled(LogLevel.Debug))
+                    Log.LogDebug("Dormant: ignoring screen change to {Count} {Screens}", snapshot.Screens.Count, Pluralize.Of(snapshot.Screens.Count, "screen"));
                 return;
             }
             _cachedScreens = snapshot;
-            var masters = await _peerState.GetMasters();
+            var masters = await PeerState.GetMasters();
             if (masters.Length > 0)
             {
-                _log.LogInformation("Slave screen configuration changed — re-sending screen info");
-                foreach (var master in masters)
-                    SendScreenInfo(master, snapshot.Entries);
+                Log.LogInformation("Slave screen configuration changed — re-sending screen info");
+                AnnounceScreens(masters, snapshot);
             }
         };
 
@@ -105,27 +85,24 @@ public class SlaveRelayConnection : RelayConnection
         {
             var snapshot = await _screens.Get(ConnectionToken);
             _cachedScreens = snapshot;
-            if (_log.IsEnabled(LogLevel.Information))
-                _log.LogInformation("Woke from dormancy — local screens: {Count}", snapshot.Screens.Count);
-            foreach (var master in await _peerState.GetMasters())
-                SendScreenInfo(master, snapshot.Entries);
+            if (Log.IsEnabled(LogLevel.Information))
+                Log.LogInformation("Woke from dormancy — local screens: {Count}", snapshot.Screens.Count);
+            AnnounceScreens(await PeerState.GetMasters(), snapshot);
         };
     }
 
-    // the geometry we advertise to masters: live while awake, the last awake snapshot while dormant. A
-    // dormant machine is still a normal, fully-sized peer as far as its masters are concerned — it is
-    // refusing input, not shrinking — and a master told otherwise rebuilds its layout around the phantom
-    // and drags a parked cursor off us.
+    private void AnnounceScreens(string[] masters, LocalScreenSnapshot snapshot)
+    {
+        foreach (var master in masters)
+            SendScreenInfo(master, snapshot.Entries);
+    }
+
+    // live while awake, the last awake snapshot while dormant: dormant means refusing input, not shrinking
     private async ValueTask<LocalScreenSnapshot> AdvertisedScreens()
     {
         if (_dormancy.IsDormant && _cachedScreens is { } lastAwake) return lastAwake;
 
-        // ON THE CONNECTION'S TOKEN. ScreenDetector completes its readiness only once Detect() has succeeded
-        // once, and Detect() throwing — an X server restart, a display hot-unplugged — leaves it retrying
-        // every two seconds with readiness still unset. Awaited with no token, from OnAuthenticated, that is
-        // a slave which never finishes authenticating, never starts either drain, and never drops the
-        // connection: silent and permanent. The token does not fix the detector; it stops one wedged
-        // subsystem taking the relay down with it.
+        // connection token: a wedged detector must not hold the login
         var snapshot = await _screens.Get(ConnectionToken);
         _cachedScreens = snapshot;
         return snapshot;
@@ -136,14 +113,14 @@ public class SlaveRelayConnection : RelayConnection
         _isReady = false;
         if (!_output.IsAccessibilityTrusted())
         {
-            _log.LogWarning("Output injection permission not granted — open System Settings › Privacy & Security › Accessibility and enable Hydra, then Hydra will continue automatically.");
+            Log.LogWarning("Output injection permission not granted — open System Settings › Privacy & Security › Accessibility and enable Hydra, then Hydra will continue automatically.");
             await _output.WaitForAccessibilityTrusted(ConnectionToken);
             if (ConnectionToken.IsCancellationRequested) return;
-            _log.LogInformation("Accessibility permission granted");
+            Log.LogInformation("Accessibility permission granted");
         }
         var snapshot = await AdvertisedScreens();
-        if (_log.IsEnabled(LogLevel.Information))
-            _log.LogInformation("Local screens: {Count}", snapshot.Screens.Count);
+        if (Log.IsEnabled(LogLevel.Information))
+            Log.LogInformation("Local screens: {Count}", snapshot.Screens.Count);
         _isReady = true;
     }
 
@@ -157,93 +134,91 @@ public class SlaveRelayConnection : RelayConnection
                 await HandleMasterConfig(sourceHost, body);
                 break;
             case MessageKind.MouseMove:
-                HandleInputMessage<MouseMoveMessage>(body, kind, sourceHost, move =>
+                HandleInputMessage<MouseMoveMessage>(body, sourceHost, move =>
                 {
-                    if (_profile.DebugMouse && _log.IsEnabled(LogLevel.Information))
-                        _log.LogInformation("[mouse] move from {Host}: screen={Screen} x={X} y={Y}", sourceHost, move.Screen, move.X, move.Y);
+                    if (Profile.DebugMouse && Log.IsEnabled(LogLevel.Information))
+                        Log.LogInformation("[mouse] move from {Host}: screen={Screen} x={X} y={Y}", sourceHost, move.Screen, move.X, move.Y);
                     MoveToCachedScreen(move.Screen, move.X, move.Y);
                 });
                 break;
             case MessageKind.KeyEvent:
                 {
-                    var keyMsg = body.ParseMessage<KeyEventMessage>(_log, kind.ToString());
+                    var keyMsg = body.ParseMessage<KeyEventMessage>(Log, sourceHost);
                     if (keyMsg != null)
                         await ApplyKeyEvents(sourceHost, [keyMsg]);
                     break;
                 }
             case MessageKind.KeyEventBatch:
                 {
-                    // IN ORDER, and every one of them. The master only sends this because we advertised it,
-                    // and it bundles precisely those events that a single frame would have had to send one
-                    // at a time — so a partial application here is a key left down on this machine.
-                    var batch = body.ParseMessage<KeyEventBatchMessage>(_log, kind.ToString());
+                    // in order, every one: a partial application leaves a key down
+                    var batch = body.ParseMessage<KeyEventBatchMessage>(Log, sourceHost);
                     if (batch is { Events.Length: > 0 })
                         await ApplyKeyEvents(sourceHost, batch.Events);
                     break;
                 }
             case MessageKind.MouseMoveDelta:
-                HandleInputMessage<MouseMoveDeltaMessage>(body, kind, sourceHost, delta =>
+                HandleInputMessage<MouseMoveDeltaMessage>(body, sourceHost, delta =>
                 {
-                    if (_profile.DebugMouse && _log.IsEnabled(LogLevel.Information))
-                        _log.LogInformation("[mouse] delta from {Host}: dx={Dx} dy={Dy}", sourceHost, delta.Dx, delta.Dy);
+                    if (Profile.DebugMouse && Log.IsEnabled(LogLevel.Information))
+                        Log.LogInformation("[mouse] delta from {Host}: dx={Dx} dy={Dy}", sourceHost, delta.Dx, delta.Dy);
                     _output.MoveMouseRelative(delta.Dx, delta.Dy);
                 });
                 break;
             case MessageKind.MouseButton:
                 {
-                    var button = body.ParseMessage<MouseButtonMessage>(_log, kind.ToString());
+                    var button = body.ParseMessage<MouseButtonMessage>(Log, sourceHost);
                     if (button != null)
                         await HandleMouseButton(sourceHost, button);
                     break;
                 }
             case MessageKind.MouseScroll:
-                HandleInputMessage<MouseScrollMessage>(body, kind, sourceHost, _output.InjectMouseScroll);
+                HandleInputMessage<MouseScrollMessage>(body, sourceHost, _output.InjectMouseScroll);
                 break;
             case MessageKind.EnterScreen:
                 {
-                    var enter = body.ParseMessage<EnterScreenMessage>(_log, kind.ToString());
+                    var enter = body.ParseMessage<EnterScreenMessage>(Log, sourceHost);
                     if (enter != null)
                     {
                         if (!_dormancy.IsDormant) MoveToCachedScreen(enter.Screen, enter.X, enter.Y);
-                        AddOnScreenMaster(sourceHost);
+                        _onScreenMasters.Add(sourceHost);
                         _cursorHider.Show();
                     }
                     break;
                 }
             case MessageKind.LeaveScreen:
                 await ReleaseAll();
-                RemoveOnScreenMaster(sourceHost);
-                if (OnScreenMasterCount == 0 && _isReady)
+                _onScreenMasters.Remove(sourceHost);
+                if (!_onScreenMasters.Any() && _isReady)
                     _cursorHider.Hide();
                 break;
             case MessageKind.ScreensaverSync:
                 {
-                    var ss = body.ParseMessage<ScreensaverSyncMessage>(_log, kind.ToString());
+                    var ss = body.ParseMessage<ScreensaverSyncMessage>(Log, sourceHost);
                     if (ss != null)
                     {
-                        if (_log.IsEnabled(LogLevel.Information))
-                            _log.LogInformation("Screensaver sync from {Host}: active={Active}", sourceHost, ss.Active);
+                        if (Log.IsEnabled(LogLevel.Information))
+                            Log.LogInformation("Screensaver sync from {Host}: active={Active}", sourceHost, ss.Active);
                         if (ss.Active) _screenSaverSync.Activate();
                         else _screenSaverSync.Deactivate();
                     }
                     break;
                 }
             case MessageKind.ActivityPing:
-                if (_log.IsEnabled(LogLevel.Debug))
-                    _log.LogDebug("Activity ping from {Host} — poking local idle timer", sourceHost);
+                if (Log.IsEnabled(LogLevel.Debug))
+                    Log.LogDebug("Activity ping from {Host} — poking local idle timer", sourceHost);
                 await _activityTracker.IncomingPing();
                 break;
             case MessageKind.LockScreen:
                 {
-                    var lockMsg = body.ParseMessage<LockScreenMessage>(_log, kind.ToString());
+                    var lockMsg = body.ParseMessage<LockScreenMessage>(Log, sourceHost);
                     if (lockMsg == null) break;
-                    if (_log.IsEnabled(LogLevel.Information))
-                        _log.LogInformation("Lock screen request from {Host} (master idle {Ms}ms)", sourceHost, lockMsg.MillisecondsSinceLastInput);
+                    if (Log.IsEnabled(LogLevel.Information))
+                        Log.LogInformation("Lock screen request from {Host} (master idle {Ms}ms)", sourceHost, lockMsg.MillisecondsSinceLastInput);
                     var msSinceLocalActivity = _activityTracker.MsSinceLocalActivity;
                     if (msSinceLocalActivity < lockMsg.MillisecondsSinceLastInput)
                     {
-                        if (_log.IsEnabled(LogLevel.Information))
-                            _log.LogInformation("Skipping lock — local input detected ({Ms:F0}ms ago < {Gap}ms since master input)",
+                        if (Log.IsEnabled(LogLevel.Information))
+                            Log.LogInformation("Skipping lock — local input detected ({Ms:F0}ms ago < {Gap}ms since master input)",
                                 msSinceLocalActivity, lockMsg.MillisecondsSinceLastInput);
                         break;
                     }
@@ -252,57 +227,28 @@ public class SlaveRelayConnection : RelayConnection
                 }
             case MessageKind.ClipboardHash:
                 {
-                    var hashMsg = body.ParseMessage<ClipboardHashMessage>(_log, kind.ToString());
-                    if (hashMsg != null)
-                    {
-                        var slaveClip = ClipboardUtils.ReadWithFallback(_clipboardSync, _lastPushed, _log, "hash check");
-                        if (ClipboardUtils.ClipboardHash(slaveClip) != hashMsg.Hash)
-                        {
-                            if (_log.IsEnabled(LogLevel.Debug))
-                                _log.LogDebug("Clipboard hash from {Host}: differs, requesting push", sourceHost);
-                            Send([sourceHost], MessageSerializer.Encode(MessageKind.ClipboardPullRequest, new ClipboardPullRequestMessage()));
-                        }
-                        else if (_log.IsEnabled(LogLevel.Debug))
-                        {
-                            _log.LogDebug("Clipboard hash from {Host}: matches, skipping", sourceHost);
-                        }
-                    }
+                    var hashMsg = body.ParseMessage<ClipboardHashMessage>(Log, sourceHost);
+                    if (hashMsg != null && _clipboard.OnHash(hashMsg, sourceHost) != PushNeed.None)
+                        this.Send(sourceHost, MessageKind.ClipboardPullRequest, new ClipboardPullRequestMessage());
                     break;
                 }
             case MessageKind.ClipboardPush:
                 {
-                    var push = body.ParseMessage<ClipboardPushMessage>(_log, kind.ToString());
+                    var push = body.ParseMessage<ClipboardPushMessage>(Log, sourceHost);
                     if (push != null)
-                    {
-                        if (_log.IsEnabled(LogLevel.Debug))
-                            _log.LogDebug("Clipboard push from {Host}: text={TextLen}, primary={PrimaryLen}, image={ImageLen}",
-                                sourceHost, push.Text.Length, push.PrimaryText?.Length, push.ImagePng?.Length);
-                        var validated = ClipboardUtils.ValidateFields(push.Text, push.PrimaryText, push.ImagePng, push.Html, push.Rtf, _log, "push", sourceHost);
-                        if (ClipboardUtils.TrySetClipboardPreservingFiles(_clipboardSync, validated, _log, $"push from {sourceHost}"))
-                            _lastPushed = validated;
-                    }
+                        _clipboard.OnPush(push, sourceHost);
                     break;
                 }
             case MessageKind.ClipboardPull:
                 {
-                    var pull = body.ParseMessage<ClipboardPullMessage>(_log, kind.ToString());
-                    var pullClip = ClipboardUtils.ReadWithFallback(_clipboardSync, _lastPushed, _log, "pull response");
-                    if (pull?.MasterHash.HasValue == true && ClipboardUtils.ClipboardHash(pullClip) == pull.MasterHash.Value)
-                    {
-                        if (_log.IsEnabled(LogLevel.Debug))
-                            _log.LogDebug("Clipboard pull to {Host}: unchanged, skipping full response", sourceHost);
-                        Send([sourceHost], MessageSerializer.Encode(MessageKind.ClipboardPullResponse, new ClipboardPullResponseMessage(null, Unchanged: true)));
-                        break;
-                    }
-                    if (_log.IsEnabled(LogLevel.Debug))
-                        _log.LogDebug("Clipboard pull to {Host}: text={TextLen}, primary={PrimaryLen}, image={ImageLen}",
-                            sourceHost, pullClip.Text?.Length, pullClip.PrimaryText?.Length, pullClip.ImagePng?.Length);
-                    Send([sourceHost], MessageSerializer.Encode(MessageKind.ClipboardPullResponse, new ClipboardPullResponseMessage(pullClip.Text, pullClip.PrimaryText, pullClip.ImagePng, Html: pullClip.Html, Rtf: pullClip.Rtf)));
+                    var pull = body.ParseMessage<ClipboardPullMessage>(Log, sourceHost);
+                    if (pull != null)
+                        this.Send(sourceHost, MessageKind.ClipboardPullResponse, _clipboard.OnPull(pull, sourceHost));
                     break;
                 }
             case MessageKind.Osd:
                 {
-                    var osdMsg = body.ParseMessage<OsdMessage>(_log, kind.ToString());
+                    var osdMsg = body.ParseMessage<OsdMessage>(Log, sourceHost);
                     if (osdMsg != null) _osd.Show(osdMsg.Text);
                     break;
                 }
@@ -311,8 +257,8 @@ public class SlaveRelayConnection : RelayConnection
                     var connection = ConnectionToken;
                     if (!_selectionQuery.Wait(0))
                     {
-                        if (_log.IsEnabled(LogLevel.Information))
-                            _log.LogInformation("File selection query from {Host} dropped: the previous one is still running", sourceHost);
+                        if (Log.IsEnabled(LogLevel.Information))
+                            Log.LogInformation("File selection query from {Host} dropped: the previous one is still running", sourceHost);
                         // the master takes its host's first answer, so a double press must leave that to the running query
                         if (_selectionQueryOrigin?.Is(sourceHost, connection) != true)
                             AnswerSelectionQuery(sourceHost, FileSelectionResult.InProgressMessage);
@@ -323,14 +269,14 @@ public class SlaveRelayConnection : RelayConnection
                     {
                         HandleFileSelectionQuery(sourceHost, connection);
                         return Task.CompletedTask;
-                    }, _log);
+                    }, Log);
                     break;
                 }
             case MessageKind.FileStreamRequest:
                 await HandleFileStreamRequest(sourceHost, body);
                 break;
             case var _ when FileTransferService.IsFileTransferMessage(kind):
-                if (await _fileTransfer.OnMessageAsync(sourceHost, kind, body, this))
+                if (await _fileTransfer.OnMessage(sourceHost, kind, body, this))
                     _osd.Show(FileTransferService.PastedOsd);
                 break;
             default:
@@ -342,27 +288,27 @@ public class SlaveRelayConnection : RelayConnection
     protected override async Task OnDisconnected()
     {
         _fileTransfer.Abort(this, "relay disconnected");
-        var masters = await _peerState.GetMasters();
-        ClearOnScreenMasters();
+        var masters = await PeerState.GetMasters();
+        _onScreenMasters.Clear();
         await ReleaseAll();
         if (masters.Length > 0)
             _cursorHider.Show();
-        await _peerState.PruneMasters([]);
-        _log.LogWarning("Relay connection lost — cursor restored on slave");
+        await PeerState.PruneMasters([]);
+        Log.LogWarning("Relay connection lost — cursor restored on slave");
     }
 
     protected override async Task OnPeers(string[] hostNames)
     {
         var current = new HashSet<string>(hostNames, StringComparer.OrdinalIgnoreCase);
-        var before = await _peerState.GetMasters();
-        await _peerState.PruneMasters(current);
-        var after = await _peerState.GetMasters();
+        var before = await PeerState.GetMasters();
+        await PeerState.PruneMasters(current);
+        var after = await PeerState.GetMasters();
         var afterSet = new HashSet<string>(after, StringComparer.OrdinalIgnoreCase);
         var anyMasterLeft = false;
         var anyOnScreenMasterLeft = false;
         foreach (var departed in before.Where(h => !afterSet.Contains(h)))
         {
-            if (RemoveOnScreenMaster(departed))
+            if (_onScreenMasters.Remove(departed))
                 anyOnScreenMasterLeft = true;
             anyMasterLeft = true;
         }
@@ -372,7 +318,7 @@ public class SlaveRelayConnection : RelayConnection
         {
             if (after.Length == 0)
                 _cursorHider.Show();
-            else if (OnScreenMasterCount == 0 && _isReady)
+            else if (!_onScreenMasters.Any() && _isReady)
                 _cursorHider.Hide();
         }
         // abort any transfer whose peer has left (e.g. a slave→slave send whose target vanished) so it
@@ -381,33 +327,26 @@ public class SlaveRelayConnection : RelayConnection
         await base.OnPeers(hostNames);
     }
 
-    // messages that mean a human is doing something. We are only dormant because the user stepped away and
-    // the displays slept, so any of these says they are back — including ActivityPing, which a master only
-    // sends off the back of real local input. The ping usually arrives first, while they are still working
-    // on the master and have not reached for us yet.
+    // messages that mean a human is back, ActivityPing included (a master sends it only on real local input)
     private static bool IsWakeSignal(MessageKind kind) => kind is
         MessageKind.MouseMove or MessageKind.MouseMoveDelta or MessageKind.MouseButton or
         MessageKind.MouseScroll or MessageKind.KeyEvent or MessageKind.KeyEventBatch or
         MessageKind.EnterScreen or MessageKind.ActivityPing;
 
-    // returns true when the message must not reach the normal handlers. Dormant means we stay on the relay
-    // but touch nothing locally: input is refused rather than injected, and everything else is discarded.
-    // MasterConfig, LeaveScreen and EnterScreen fall through so peer, held-key and on-screen bookkeeping
-    // is still correct once we wake.
+    // true when the message must not reach its handler; what falls through keeps the bookkeeping right for the wake
     private bool DropWhileDormant(string sourceHost, MessageKind kind)
     {
         if (IsWakeSignal(kind))
         {
             OnActivityWhileDormant(sourceHost, kind);
-            // EnterScreen still runs: we must know a master is parked on us when we wake, or the local
-            // cursor stays hidden under a remote pointer. Only its cursor move is suppressed, in the handler.
+            // EnterScreen still runs, minus its cursor move, so we know a master is parked on us when we wake
             return kind != MessageKind.EnterScreen;
         }
         if (kind is MessageKind.MasterConfig or MessageKind.LeaveScreen
             or MessageKind.LatencyProbe or MessageKind.LatencyProbeResponse
             or MessageKind.RemoteManagementRequest or MessageKind.RemoteManagementResponse) return false;
-        if (_log.IsEnabled(LogLevel.Debug))
-            _log.LogDebug("Dormant: refused {Kind} from {Host}", kind, sourceHost);
+        if (Log.IsEnabled(LogLevel.Debug))
+            Log.LogDebug("Dormant: refused {Kind} from {Host}", kind, sourceHost);
         if (kind == MessageKind.FileSelectionQuery)
             AnswerSelectionQuery(sourceHost, FileSelectionResult.UnavailableMessage);
         return true;
@@ -415,42 +354,36 @@ public class SlaveRelayConnection : RelayConnection
 
     // the master keeps its copy pending until the query is answered, so one we drop still gets a reply
     private void AnswerSelectionQuery(string sourceHost, string message) =>
-        Send([sourceHost], MessageSerializer.Encode(MessageKind.FileSelectionResponse, new FileSelectionResponseMessage(null, message)));
+        this.Send(sourceHost, MessageKind.FileSelectionResponse, new FileSelectionResponseMessage(null, message));
 
-    // activity keeps arriving for as long as its owner is at their desk, so this doubles as a retry if the
-    // first attempt to light the displays didn't take. Only the first one starts the clock — otherwise a
-    // master moving its mouse would keep pushing the deadline out and we would never hand the cursor back.
+    // every activity retries the wake, but only the first starts the deadline, or input would keep pushing it out
     private void OnActivityWhileDormant(string sourceHost, MessageKind kind)
     {
         if (_dormancy.RequestWake())
         {
-            if (_log.IsEnabled(LogLevel.Information))
-                _log.LogInformation("Activity from {Host} while dormant — restoring displays; {Seconds}s to match the profile or we leave the relay",
+            if (Log.IsEnabled(LogLevel.Information))
+                Log.LogInformation("Activity from {Host} while dormant — restoring displays; {Seconds}s to match the profile or we leave the relay",
                     sourceHost, DormancyState.WakeDeadline.TotalSeconds);
         }
-        else if (_log.IsEnabled(LogLevel.Debug))
-            _log.LogDebug("Dormant: refused {Kind} from {Host}", kind, sourceHost);
+        else if (Log.IsEnabled(LogLevel.Debug))
+            Log.LogDebug("Dormant: refused {Kind} from {Host}", kind, sourceHost);
         WakeDisplay();
     }
 
-    // one attempt per second: input arrives in floods, and the displays need a moment to come back and
-    // fire the screen change that has NetworkWatcher re-check the conditions and lift dormancy.
-    private const long WakeThrottleMs = 1000;
-    private long _lastWakeTicks;
+    // input arrives in floods, and the displays need a moment to come back
+    private static readonly TimeSpan WakeInterval = TimeSpan.FromSeconds(1);
+    private readonly IntervalGate _wake = new(WakeInterval);
 
     private void WakeDisplay()
     {
-        var now = Environment.TickCount64;
-        var last = Interlocked.Read(ref _lastWakeTicks);
-        if (now - last < WakeThrottleMs) return;
-        if (Interlocked.CompareExchange(ref _lastWakeTicks, now, last) != last) return;
-        _screenSaverSync.WakeDisplay();
+        if (_wake.TryEnter())
+            _screenSaverSync.WakeDisplay();
     }
 
     // parses and dispatches an input event; shows cursor if the master is actively on screen
-    private void HandleInputMessage<T>(ReadOnlyMemory<byte> body, MessageKind kind, string sourceHost, Action<T> handler) where T : class
+    private void HandleInputMessage<T>(ReadOnlyMemory<byte> body, string sourceHost, Action<T> handler) where T : class
     {
-        var msg = body.ParseMessage<T>(_log, kind.ToString());
+        var msg = body.ParseMessage<T>(Log, sourceHost);
         if (msg == null) return;
         ShowCursorFor(sourceHost);
         handler(msg);
@@ -458,7 +391,7 @@ public class SlaveRelayConnection : RelayConnection
 
     private void ShowCursorFor(string sourceHost)
     {
-        if (IsOnScreenMaster(sourceHost))
+        if (_onScreenMasters.Contains(sourceHost))
             _cursorHider.Show();
     }
 
@@ -487,14 +420,11 @@ public class SlaveRelayConnection : RelayConnection
     private async Task HandleKeyEvent(KeyEventMessage msg)
     {
         var label = msg.Character.HasValue ? $" '{msg.Character}'" : msg.Key.HasValue ? $" {msg.Key}" : "";
-        if (_log.IsEnabled(LogLevel.Debug))
-            _log.LogDebug("Key: {Type}{Label} mods={Modifiers}", msg.Type, label, msg.Modifiers);
+        if (Log.IsEnabled(LogLevel.Debug))
+            Log.LogDebug("Key: {Type}{Label} mods={Modifiers}", msg.Type, label, msg.Modifiers);
 
-        // repeats are master-driven: each OS auto-repeat is re-resolved with live modifier/dead-key state on
-        // the master and injected here as-is. a repeat implies the key is held on the master, so track it too
-        // (Add is idempotent) — this covers a master entering the screen mid-hold, where the slave never saw
-        // the initial press and the legacy physical re-press path would otherwise leave the key untracked and
-        // stuck on screen leave. injection runs under the lock so it serialises with release-all.
+        // a repeat is injected as-is and leaves the key held (Add is idempotent); injecting under the lock serialises
+        // with release-all
         var heldKey = (msg.Character, msg.Key);
         using (await _heldLock.WaitForDisposable())
         {
@@ -516,8 +446,8 @@ public class SlaveRelayConnection : RelayConnection
         }
         catch (OperationCanceledException) when (connection.IsCancellationRequested)
         {
-            if (_log.IsEnabled(LogLevel.Information))
-                _log.LogInformation("File selection query from {Host} abandoned: its connection dropped", sourceHost);
+            if (Log.IsEnabled(LogLevel.Information))
+                Log.LogInformation("File selection query from {Host} abandoned: its connection dropped", sourceHost);
             return;
         }
         finally
@@ -533,15 +463,15 @@ public class SlaveRelayConnection : RelayConnection
     {
         if (_fileTransfer.FileTransferOngoing)
         {
-            if (_log.IsEnabled(LogLevel.Information))
-                _log.LogInformation("File selection query from {Host} refused: transfer already in progress", sourceHost);
+            if (Log.IsEnabled(LogLevel.Information))
+                Log.LogInformation("File selection query from {Host} refused: transfer already in progress", sourceHost);
             return MessageSerializer.Encode(MessageKind.FileTransferBusy, new FileTransferBusyMessage());
         }
         if (!_selectionDetector.IsFileTransferSupported)
         {
-            if (_log.IsEnabled(LogLevel.Information))
-                _log.LogInformation("File selection query from {Host}: file transfer not supported on this platform", sourceHost);
-            return MessageSerializer.Encode(MessageKind.FileSelectionResponse, new FileSelectionResponseMessage(null, "Action not supported"));
+            if (Log.IsEnabled(LogLevel.Information))
+                Log.LogInformation("File selection query from {Host}: file transfer not supported on this platform", sourceHost);
+            return MessageSerializer.Encode(MessageKind.FileSelectionResponse, new FileSelectionResponseMessage(null, FileTransferService.NotSupportedOsd));
         }
         FileSelectionResult result;
         try
@@ -550,38 +480,23 @@ public class SlaveRelayConnection : RelayConnection
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _log.LogError(ex, "File selection query from {Host} failed", sourceHost);
+            Log.LogError(ex, "File selection query from {Host} failed", sourceHost);
             result = FileSelectionResult.Failure;
         }
-        if (_log.IsEnabled(LogLevel.Information))
-        {
-            if (result.Failed)
-                _log.LogInformation("File selection query from {Host}: could not ask {Name}", sourceHost, _selectionDetector.FileManagerName);
-            else if (!result.FileManagerFocused)
-                _log.LogInformation("File selection query from {Host}: {Name} is not focused", sourceHost, _selectionDetector.FileManagerName);
-            else if (result.Paths != null)
-                _log.LogInformation("File selection query from {Host}: {Count} file(s) selected: {Paths}",
-                    sourceHost, result.Paths.Count, string.Join(", ", result.Paths));
-            else
-                _log.LogInformation("File selection query from {Host}: no files selected", sourceHost);
-        }
-        // the master shows whatever text it is given, so a failure travels the not-focused field and needs no wire change
-        var message = result.Failed ? FileSelectionResult.FailedMessage
-            : result.FileManagerFocused ? null
-            : $"{_selectionDetector.FileManagerName} is not focused";
-        return MessageSerializer.Encode(MessageKind.FileSelectionResponse, new FileSelectionResponseMessage(result.Paths?.ToArray(), message));
+        result.Log(Log, $"File selection query from {sourceHost}", _selectionDetector.FileManagerName);
+        return MessageSerializer.Encode(MessageKind.FileSelectionResponse, result.ToResponse(_selectionDetector.FileManagerName));
     }
 
     private Task HandleFileStreamRequest(string sourceHost, ReadOnlyMemory<byte> body)
     {
         if (_fileTransfer.FileTransferOngoing)
         {
-            if (_log.IsEnabled(LogLevel.Information))
-                _log.LogInformation("Stream request from {Host} refused: transfer already in progress", sourceHost);
-            Send([sourceHost], MessageSerializer.Encode(MessageKind.FileTransferBusy, new FileTransferBusyMessage()));
+            if (Log.IsEnabled(LogLevel.Information))
+                Log.LogInformation("Stream request from {Host} refused: transfer already in progress", sourceHost);
+            this.Send(sourceHost, MessageKind.FileTransferBusy, new FileTransferBusyMessage());
             return Task.CompletedTask;
         }
-        var req = body.ParseMessage<FileStreamRequestMessage>(_log, MessageKind.FileStreamRequest.ToString());
+        var req = body.ParseMessage<FileStreamRequestMessage>(Log, sourceHost);
         if (req != null)
             _ = _fileTransfer.ExecuteStreamRequest(req.Paths, req.TargetHost, this);
         return Task.CompletedTask;
@@ -602,10 +517,10 @@ public class SlaveRelayConnection : RelayConnection
 
     private async Task HandleMasterConfig(string masterHost, ReadOnlyMemory<byte> body)
     {
-        var config = body.DecodeBody<MasterConfigMessage>() ?? new MasterConfigMessage(null);
-        var before = await _peerState.GetMasters();
-        await _peerState.AddMaster(masterHost, config);
-        var after = await _peerState.GetMasters();
+        if (body.ParseMessage<MasterConfigMessage>(Log, masterHost) is not { } config) return;
+        var before = await PeerState.GetMasters();
+        await PeerState.AddMaster(masterHost, config);
+        var after = await PeerState.GetMasters();
         if (after.Length > before.Length && after.Length == 1 && _isReady)
             _cursorHider.Hide();
         var snapshot = await AdvertisedScreens();
@@ -624,20 +539,10 @@ public class SlaveRelayConnection : RelayConnection
 
     private void SendScreenInfo(string masterHost, List<ScreenInfoEntry> entries)
     {
-        if (_log.IsEnabled(LogLevel.Information))
-            _log.LogInformation("Sending screen info to {Master}: {Count} screen(s)", masterHost, entries.Count);
-        var platform = DetectLocalPlatform();
-        // What this build can do. A master that hears nothing assumes nothing, which is what makes a
-        // capability safe to add to one end first — see PeerCapabilities.
-        var payload = MessageSerializer.Encode(MessageKind.ScreenInfo, new ScreenInfoMessage(entries, platform, PeerCapabilities.Advertise()));
-        Send([masterHost], payload);
+        if (Log.IsEnabled(LogLevel.Information))
+            Log.LogInformation("Sending screen info to {Master}: {Count} {Screens}", masterHost, entries.Count, Pluralize.Of(entries.Count, "screen"));
+        this.Send(masterHost, MessageKind.ScreenInfo, new ScreenInfoMessage(entries, PeerPlatforms.Local));
     }
-
-    private static PeerPlatform DetectLocalPlatform() =>
-        OperatingSystem.IsLinux() ? PeerPlatform.Linux :
-        OperatingSystem.IsMacOS() ? PeerPlatform.MacOs :
-        OperatingSystem.IsWindows() ? PeerPlatform.Windows :
-        PeerPlatform.Unknown;
 
     private sealed record SelectionQueryOrigin(string Host, CancellationToken Connection)
     {

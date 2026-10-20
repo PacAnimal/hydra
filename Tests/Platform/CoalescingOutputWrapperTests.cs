@@ -175,7 +175,7 @@ public class CoalescingOutputWrapperTests
         var wrapper = new CoalescingOutputWrapper(inner, runDrainThread: true,
             shutdownTimeout: TimeSpan.FromMilliseconds(50));
         wrapper.InjectKey(new KeyEventMessage(KeyEventType.KeyDown, KeyModifiers.None, 'a', null));
-        Assert.That(inner.Entered.Wait(TimeSpan.FromSeconds(1)), Is.True);
+        Assert.That(inner.Entered.Wait(Bound), Is.True);
 
         var started = Stopwatch.GetTimestamp();
         wrapper.Dispose();
@@ -183,13 +183,13 @@ public class CoalescingOutputWrapperTests
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(elapsed, Is.LessThan(TimeSpan.FromSeconds(1)));
+            Assert.That(elapsed, Is.LessThan(Bound));
             Assert.That(inner.Disposed.IsSet, Is.False,
                 "native output must remain owned by the worker while an action is still executing");
         }
 
         inner.Release.Set();
-        Assert.That(inner.Disposed.Wait(TimeSpan.FromSeconds(1)), Is.True);
+        Assert.That(inner.Disposed.Wait(Bound), Is.True);
     }
 
     [Test]

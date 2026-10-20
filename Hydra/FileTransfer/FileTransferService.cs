@@ -1,5 +1,6 @@
 using ByteSizeLib;
 using Cathedral.Extensions;
+using Cathedral.Utils;
 using Hydra.Relay;
 using Microsoft.Extensions.Logging;
 
@@ -13,9 +14,11 @@ public sealed class FileTransferService : IDisposable
     private readonly Lock _lock = new();
 
     private const double SpeedMinElapsedSec = 0.5;  // avoid nonsense speed values in the first half-second
+    // how long a transfer may go without a reply or a chunk before it is abandoned
+    private static readonly TimeSpan WatchdogTimeout = TimeSpan.FromSeconds(30);
     private const int WatchdogDisposalWaitMs = 1000;  // how long to wait for in-flight watchdog callback on cleanup
 
-    private readonly int _watchdogTimeoutMs;
+    private readonly TimeProvider _clock;
 
     // abort reason sent when the receiver has no file manager window open — checked by master for OSD routing
     public const string ReasonNoFolder = "no folder to paste into";
@@ -23,9 +26,17 @@ public sealed class FileTransferService : IDisposable
     // shown for an abort that arrives without a readable reason
     public const string ReasonUnknown = "no reason given";
 
+    private const string ReasonUserCancelled = "user cancelled";
+    private const string ReasonTimedOut = "transfer timed out";
+
     // OSD on the paste target: once it has accepted the transfer, then once the files are in place
     public const string PastingOsd = "Pasting…";
     public const string PastedOsd = "Pasted!";
+
+    // OSD for a copy or paste that cannot start
+    public const string InProgressOsd = "Transfer in progress";
+    public const string InvalidTargetOsd = "Invalid paste target";
+    public const string NotSupportedOsd = "Action not supported";
 
     // copy buffer (set on copy hotkey; consumed on paste hotkey)
     private FileCopyState? _copyBuffer;
@@ -41,45 +52,50 @@ public sealed class FileTransferService : IDisposable
     private string? _coordSourceHost;
     private string[]? _coordSourcePaths;
     private IRelaySender? _coordRelay;
-    private Timer? _coordWatchdog; // fires if the target never replies, so a vanished peer can't wedge FileTransferOngoing
+    private ITimer? _coordWatchdog; // fires if the target never replies, so a vanished peer can't wedge FileTransferOngoing
     private int _coordGeneration;  // bumped on every clear; a stale watchdog callback checks it so it can't clear a newer coordination
 
     // receiver side
     private ReceiverTransfer? _receiver;
-    private IRelaySender? _recvRelay;
 
     // true while any transfer is in flight (sending, receiving, or coordinating)
-    public bool FileTransferOngoing { get { lock (_lock) return _sendCts != null || _receiver != null || _coordTargetHost != null; } }
+    public bool FileTransferOngoing { get { lock (_lock) return OngoingLocked; } }
 
     // true if we are currently sending to the given host (case 1)
-    public bool IsSendingTo(string host) { lock (_lock) return _sendTargetHost != null && _sendTargetHost.EqualsIgnoreCase(host); }
+    public bool IsSendingTo(string host) { lock (_lock) return SendingToLocked(host); }
 
     // true if we are currently receiving from the given host (case 2: master is target)
-    public bool IsReceivingFrom(string host) { lock (_lock) return _receiver != null && _receiver.SourceHost.EqualsIgnoreCase(host); }
+    public bool IsReceivingFrom(string host) { lock (_lock) return ReceivingFromLocked(host); }
 
     // true if we are coordinating a slave→slave transfer that the given target host accepted/aborted (case 3)
-    public bool IsCoordinatingTransferTo(string targetHost) { lock (_lock) return _coordTargetHost != null && _coordTargetHost.EqualsIgnoreCase(targetHost); }
+    public bool IsCoordinatingTransferTo(string targetHost) { lock (_lock) return CoordinatingLocked(targetHost); }
+
+    // caller must hold _lock
+    private bool OngoingLocked => _sendCts != null || _receiver != null || _coordTargetHost != null;
+    private bool SendingToLocked(string host) => _sendTargetHost != null && _sendTargetHost.EqualsIgnoreCase(host);
+    private bool ReceivingFromLocked(string host) => _receiver != null && _receiver.SourceHost.EqualsIgnoreCase(host);
+    private bool CoordinatingLocked(string host) => _coordTargetHost != null && _coordTargetHost.EqualsIgnoreCase(host);
 
     // stores source host + paths from the last copy hotkey press
-    public void SetCopyBuffer(string sourceHost, List<string> paths)
+    public void SetCopyBuffer(string sourceHost, IReadOnlyCollection<string> paths)
     {
         lock (_lock) _copyBuffer = new FileCopyState(sourceHost, [.. paths]);
         if (_log.IsEnabled(LogLevel.Information))
-            _log.LogInformation("Copy buffer set: {Count} item(s) from {Host}", paths.Count, sourceHost);
+            _log.LogInformation("Copy buffer set: {Count} {Items} from {Host}", paths.Count, Pluralize.Of(paths.Count, "item"), sourceHost);
     }
 
-    // called when a FileSelectionResponse arrives for a remote copy; returns the OSD text to display
+    // the OSD text for a copy of count items
+    internal static string CopiedMessage(int count) => $"{count} {Pluralize.Of(count, "item")} copied";
+
+    // what a copy-hotkey press found, local or remote; returns the OSD text to display
     public string HandleSelectionResponse(string sourceHost, FileSelectionResponseMessage msg)
     {
-        if (msg.NotFocusedMessage != null)
-            return msg.NotFocusedMessage;
+        if (msg.Message != null)
+            return msg.Message;
         if (msg.Paths is { Length: > 0 })
         {
-            lock (_lock) _copyBuffer = new FileCopyState(sourceHost, msg.Paths);
-            if (_log.IsEnabled(LogLevel.Information))
-                _log.LogInformation("Copy buffer set from {Host}: {Count} item(s)", sourceHost, msg.Paths.Length);
-            var n = msg.Paths.Length;
-            return $"{n} {(n == 1 ? "item" : "items")} copied";
+            SetCopyBuffer(sourceHost, msg.Paths);
+            return CopiedMessage(msg.Paths.Length);
         }
         // the latest copy wins even when empty, as a local one does
         ClearCopyBuffer();
@@ -91,18 +107,19 @@ public sealed class FileTransferService : IDisposable
     public FileCopyState? GetCopyBuffer() { lock (_lock) return _copyBuffer; }
     public void ClearCopyBuffer() { lock (_lock) _copyBuffer = null; }
 
-    private static double CalcSpeed(long startTick, long bytes)
+    private double CalcSpeed(long startTimestamp, long bytes)
     {
-        var elapsed = (Environment.TickCount64 - startTick) / 1000.0;
+        var elapsed = _clock.GetElapsedTime(startTimestamp).TotalSeconds;
         return elapsed > SpeedMinElapsedSec ? bytes / elapsed : 0;
     }
 
-    private void TryClearReceiver(out ReceiverTransfer? receiver, out IRelaySender? recvRelay)
+    private ReceiverTransfer? TryClearReceiver()
     {
         lock (_lock)
         {
-            receiver = _receiver; _receiver = null;
-            recvRelay = _recvRelay; _recvRelay = null;
+            var receiver = _receiver;
+            _receiver = null;
+            return receiver;
         }
     }
 
@@ -125,15 +142,15 @@ public sealed class FileTransferService : IDisposable
     // A cancelled send releases the slot before its async worker has necessarily reached finally. Only the
     // operation that still owns the slot may clear it; otherwise an old worker can dispose a replacement send.
     // A null expected releases whichever send holds the slot. Returns null if nothing was released.
-    private ReleasedSend? ReleaseSendSlot(CancellationTokenSource? expected, bool cancel)
+    private ReleasedPeer? ReleaseSendSlot(CancellationTokenSource? expected, bool cancel)
     {
         CancellationTokenSource cts;
-        ReleasedSend released;
+        ReleasedPeer released;
         lock (_lock)
         {
             if (_sendCts == null || (expected != null && !ReferenceEquals(_sendCts, expected))) return null;
             cts = _sendCts;
-            released = new ReleasedSend(_sendTargetHost, _sendRelay);
+            released = new ReleasedPeer(_sendTargetHost!, _sendRelay!);
             _sendCts = null;
             _sendTargetHost = null;
             _sendRelay = null;
@@ -165,7 +182,7 @@ public sealed class FileTransferService : IDisposable
         try
         {
             var names = paths.Select(Path.GetFileName).Where(n => n != null).Cast<string>().ToArray();
-            prepared = new PreparedSend(paths, names, TarGzStreamer.ComputeTotalBytes(paths), Environment.TickCount64);
+            prepared = new PreparedSend(paths, names, TarGzStreamer.ComputeTotalBytes(paths), _clock.GetTimestamp());
         }
         catch (Exception ex)
         {
@@ -185,19 +202,18 @@ public sealed class FileTransferService : IDisposable
         if (ReleaseSendSlot(claim.Owner, cancel: false) != null) _dialog.Close();
     }
 
-    // clears coordinator state and returns the target host + relay (null if not coordinating)
-    private (string? target, IRelaySender? relay) TryClearCoordinator()
+    // clears coordinator state and returns the target it was coordinating (null if not coordinating)
+    private ReleasedPeer? TryClearCoordinator()
     {
         lock (_lock)
         {
-            var target = _coordTargetHost;
-            var relay = _coordRelay;
+            var released = _coordTargetHost != null ? new ReleasedPeer(_coordTargetHost, _coordRelay!) : null;
             ClearCoordinatorLocked();
-            return (target, relay);
+            return released;
         }
     }
 
-    // clears all coordinator state and stops the watchdog. caller must hold _lock.
+    // clears all coordinator state and stops the watchdog
     private void ClearCoordinatorLocked()
     {
         _coordTargetHost = null;
@@ -231,12 +247,13 @@ public sealed class FileTransferService : IDisposable
     // void and then falsely reports "complete"; a receiver/coordinator would hang until its own watchdog.
     public void AbortIfPeerGone(IReadOnlyCollection<string> currentPeers, IRelaySender relay)
     {
+        bool Gone(string? host) => host != null && !currentPeers.Contains(host, StringComparer.OrdinalIgnoreCase);
         string? gone = null;
         lock (_lock)
         {
-            if (_sendTargetHost != null && !ContainsHost(currentPeers, _sendTargetHost)) gone = _sendTargetHost;
-            else if (_receiver != null && !ContainsHost(currentPeers, _receiver.SourceHost)) gone = _receiver.SourceHost;
-            else if (_coordTargetHost != null && !ContainsHost(currentPeers, _coordTargetHost)) gone = _coordTargetHost;
+            if (Gone(_sendTargetHost)) gone = _sendTargetHost;
+            else if (Gone(_receiver?.SourceHost)) gone = _receiver!.SourceHost;
+            else if (Gone(_coordTargetHost)) gone = _coordTargetHost;
         }
         if (gone != null)
         {
@@ -244,13 +261,6 @@ public sealed class FileTransferService : IDisposable
                 _log.LogInformation("Aborting transfer — peer '{Host}' left", gone);
             Abort(relay, $"peer '{gone}' left");
         }
-    }
-
-    private static bool ContainsHost(IReadOnlyCollection<string> hosts, string host)
-    {
-        foreach (var h in hosts)
-            if (h.EqualsIgnoreCase(host)) return true;
-        return false;
     }
 
     public static bool IsFileTransferMessage(MessageKind kind) => kind is
@@ -264,9 +274,9 @@ public sealed class FileTransferService : IDisposable
         bool matchesSend, matchesReceive, matchesCoord;
         lock (_lock)
         {
-            matchesSend = _sendTargetHost != null && _sendTargetHost.EqualsIgnoreCase(busyHost);
-            matchesReceive = _receiver != null && _receiver.SourceHost.EqualsIgnoreCase(busyHost);
-            matchesCoord = _coordTargetHost != null && _coordTargetHost.EqualsIgnoreCase(busyHost);
+            matchesSend = SendingToLocked(busyHost);
+            matchesReceive = ReceivingFromLocked(busyHost);
+            matchesCoord = CoordinatingLocked(busyHost);
         }
 
         if (matchesSend && ReleaseSendSlot(null, cancel: true) != null)
@@ -287,8 +297,7 @@ public sealed class FileTransferService : IDisposable
 
         if (matchesReceive)
         {
-            TryClearReceiver(out var receiver, out _);
-            if (receiver != null) CleanupReceiver(receiver);
+            if (TryClearReceiver() is { } receiver) CleanupReceiver(receiver);
             _dialog.Close();
             if (_log.IsEnabled(LogLevel.Information))
                 _log.LogInformation("Source {Host} refused to stream: busy", busyHost);
@@ -303,12 +312,12 @@ public sealed class FileTransferService : IDisposable
     internal static FileTransferService Null() =>
         new(new NullFileTransferDialog(), new NullDropTargetResolver(), Microsoft.Extensions.Logging.Abstractions.NullLogger<FileTransferService>.Instance);
 
-    public FileTransferService(IFileTransferDialog dialog, IDropTargetResolver dropTargetResolver, ILogger<FileTransferService> log, int watchdogTimeoutMs = 30_000)
+    public FileTransferService(IFileTransferDialog dialog, IDropTargetResolver dropTargetResolver, ILogger<FileTransferService> log, TimeProvider? clock = null)
     {
         _dialog = dialog;
         _dropTargetResolver = dropTargetResolver;
         _log = log;
-        _watchdogTimeoutMs = watchdogTimeoutMs;
+        _clock = clock ?? TimeProvider.System;
         // subscribe once — reads current state on each cancel click
         dialog.CancelRequested += HandleCancelRequested;
     }
@@ -316,42 +325,26 @@ public sealed class FileTransferService : IDisposable
     // called when relay disconnects or peer departs during an active transfer
     public void Abort(IRelaySender? relay, string reason)
     {
-        TryClearReceiver(out ReceiverTransfer? receiver, out IRelaySender? recvRelay);
-        var send = ReleaseSendSlot(null, cancel: true);
-        var (coordTarget, coordRelay) = TryClearCoordinator();
-
-        var effectiveSendRelay = relay ?? send?.Relay;
-        if (effectiveSendRelay != null && send?.TargetHost != null)
-            SendTo(effectiveSendRelay, send.TargetHost, MessageKind.FileTransferAbort, new FileTransferAbortMessage(reason));
-
-        var effectiveCoordRelay = relay ?? coordRelay;
-        if (effectiveCoordRelay != null && coordTarget != null)
-            SendTo(effectiveCoordRelay, coordTarget, MessageKind.FileTransferAbort, new FileTransferAbortMessage(reason));
-
-        if (receiver != null)
-        {
-            var effectiveRecvRelay = relay ?? recvRelay;
-            if (effectiveRecvRelay != null)
-                SendTo(effectiveRecvRelay, receiver.SourceHost, MessageKind.FileTransferAbort, new FileTransferAbortMessage(reason));
-            CleanupReceiver(receiver);
-        }
-
+        var receiver = TryClearReceiver();
+        foreach (var peer in new[] { ReleaseSendSlot(null, cancel: true), TryClearCoordinator(), receiver?.Peer })
+            if (peer != null) SendAbort(relay ?? peer.Relay, peer.Host, reason);
+        if (receiver != null) CleanupReceiver(receiver);
         _dialog.Close();
     }
 
     // true when this message completed a receive, its files in place
-    public async Task<bool> OnMessageAsync(string sourceHost, MessageKind kind, ReadOnlyMemory<byte> body, IRelaySender relay)
+    public async Task<bool> OnMessage(string sourceHost, MessageKind kind, ReadOnlyMemory<byte> body, IRelaySender relay)
     {
         switch (kind)
         {
             case MessageKind.FileTransferRequest: HandleFileTransferRequest(sourceHost, body, relay); break;
             case MessageKind.FileTransferStart: HandleFileTransferStart(sourceHost, body); break;
-            case MessageKind.FileTransferChunk: await HandleFileTransferChunkAsync(sourceHost, body); break;
-            case MessageKind.FileTransferDone: return await HandleFileTransferDoneAsync(sourceHost, body, relay);
+            case MessageKind.FileTransferChunk: await HandleFileTransferChunk(sourceHost, body); break;
+            case MessageKind.FileTransferDone: return await HandleFileTransferDone(sourceHost, body, relay);
             case MessageKind.FileTransferAbort: HandleFileTransferAbort(sourceHost, body); break;
             case MessageKind.FileTransferAccepted:
                 {
-                    // case 1: master was sending — unblock RunSendAsync to start chunk flow
+                    // case 1: master was sending — unblock RunSend to start chunk flow
                     TaskCompletionSource<bool>? tcs;
                     // case 3: master was coordinating — tell source slave to start streaming
                     string? coordSource; string[]? coordPaths; string? coordTarget;
@@ -379,7 +372,7 @@ public sealed class FileTransferService : IDisposable
 
     private void HandleFileTransferRequest(string sourceHost, ReadOnlyMemory<byte> body, IRelaySender relay)
     {
-        var msg = body.ParseMessage<FileTransferRequestMessage>(_log, $"from {sourceHost}");
+        var msg = body.ParseMessage<FileTransferRequestMessage>(_log, sourceHost);
         if (msg == null) return;
 
         if (FileTransferOngoing)
@@ -393,7 +386,7 @@ public sealed class FileTransferService : IDisposable
         var destFolder = _dropTargetResolver.GetPasteDirectory();
         if (string.IsNullOrEmpty(destFolder))
         {
-            SendTo(relay, sourceHost, MessageKind.FileTransferAbort, new FileTransferAbortMessage(ReasonNoFolder));
+            SendAbort(relay, sourceHost, ReasonNoFolder);
             _log.LogWarning("Transfer from {Host}: no valid paste destination — no file manager window is active", sourceHost);
             return;
         }
@@ -409,7 +402,7 @@ public sealed class FileTransferService : IDisposable
 
     private void HandleFileTransferStart(string sourceHost, ReadOnlyMemory<byte> body)
     {
-        var msg = body.ParseMessage<FileTransferStartMessage>(_log, $"from {sourceHost}");
+        var msg = body.ParseMessage<FileTransferStartMessage>(_log, sourceHost);
         if (msg == null) return;
 
         ReceiverTransfer? receiver;
@@ -424,12 +417,12 @@ public sealed class FileTransferService : IDisposable
         receiver.TotalBytes = msg.TotalBytes;
         _dialog.ShowTransferring(receiver.ToTransferInfo());
         if (_log.IsEnabled(LogLevel.Information))
-            _log.LogInformation("Transfer start from {Host}: {Count} file(s), {Total} bytes", sourceHost, msg.FileNames.Length, msg.TotalBytes);
+            _log.LogInformation("Transfer start from {Host}: {Count} {Files}, {Total} bytes", sourceHost, msg.FileNames.Length, Pluralize.Of(msg.FileNames.Length, "file"), msg.TotalBytes);
     }
 
-    private async Task HandleFileTransferChunkAsync(string sourceHost, ReadOnlyMemory<byte> body)
+    private async Task HandleFileTransferChunk(string sourceHost, ReadOnlyMemory<byte> body)
     {
-        var chunk = body.ParseMessage<FileTransferChunkMessage>(_log, $"from {sourceHost}");
+        var chunk = body.ParseMessage<FileTransferChunkMessage>(_log, sourceHost);
         if (chunk == null) return;
         var (sequence, data) = (chunk.Sequence, chunk.Data);
         ReceiverTransfer? receiver;
@@ -441,25 +434,25 @@ public sealed class FileTransferService : IDisposable
             return;
         }
 
-        try { await receiver.Extractor.WriteChunkAsync(data); }
+        try { await receiver.Extractor.WriteChunk(data); }
         catch (Exception e) when (e is InvalidOperationException or ObjectDisposedException) { return; } // pipe completed (cleanup raced with this chunk)
         receiver.TouchWatchdog();
         var extracted = receiver.Extractor.BytesExtracted;
-        var speed = CalcSpeed(receiver.TransferStartTick, receiver.Extractor.BytesReceived);
+        var speed = CalcSpeed(receiver.TransferStart, receiver.Extractor.BytesReceived);
         if (OwnsReceive(receiver)) _dialog.UpdateProgress(extracted, speed);
         if (_log.IsEnabled(LogLevel.Debug))
             _log.LogDebug("Chunk #{Seq} from {Host}: {Bytes} bytes", sequence, sourceHost, data.Length);
     }
 
-    private async Task<bool> HandleFileTransferDoneAsync(string sourceHost, ReadOnlyMemory<byte> body, IRelaySender relay)
+    private async Task<bool> HandleFileTransferDone(string sourceHost, ReadOnlyMemory<byte> body, IRelaySender relay)
     {
-        var msg = body.ParseMessage<FileTransferDoneMessage>(_log, $"from {sourceHost}");
+        var msg = body.ParseMessage<FileTransferDoneMessage>(_log, sourceHost);
 
         ReceiverTransfer? receiver;
         lock (_lock)
         {
             receiver = _receiver;
-            if (_receiver != null && _receiver.SourceHost.EqualsIgnoreCase(sourceHost)) { _receiver = null; _recvRelay = null; }
+            if (ReceivingFromLocked(sourceHost)) _receiver = null;
             else receiver = null;
         }
         if (receiver == null) return false;
@@ -470,25 +463,22 @@ public sealed class FileTransferService : IDisposable
             return false;
         }
 
-        return await FinalizeReceivingAsync(receiver, msg, relay);
+        return await FinalizeReceiving(receiver, msg, relay);
     }
 
     private void HandleFileTransferAbort(string sourceHost, ReadOnlyMemory<byte> body)
     {
-        var reason = body.ParseMessage<FileTransferAbortMessage>(_log, $"from {sourceHost}")?.Reason;
+        var reason = body.ParseMessage<FileTransferAbortMessage>(_log, sourceHost)?.Reason;
         if (string.IsNullOrEmpty(reason)) reason = ReasonUnknown;
 
         bool relevant;
         lock (_lock)
         {
-            relevant =
-                (_sendTargetHost != null && _sendTargetHost.EqualsIgnoreCase(sourceHost)) ||
-                (_receiver != null && _receiver.SourceHost.EqualsIgnoreCase(sourceHost)) ||
-                (_coordTargetHost != null && _coordTargetHost.EqualsIgnoreCase(sourceHost));
+            var coordinating = CoordinatingLocked(sourceHost);
+            relevant = SendingToLocked(sourceHost) || ReceivingFromLocked(sourceHost) || coordinating;
 
             // clear coordinator state if target aborted
-            if (_coordTargetHost != null && _coordTargetHost.EqualsIgnoreCase(sourceHost))
-                ClearCoordinatorLocked();
+            if (coordinating) ClearCoordinatorLocked();
         }
 
         if (!relevant)
@@ -505,8 +495,7 @@ public sealed class FileTransferService : IDisposable
             _dialog.Close();
             return;
         }
-        TryClearReceiver(out var receiver, out _);
-        if (receiver == null) return;
+        if (TryClearReceiver() is not { } receiver) return;
         CleanupReceiver(receiver);
         _dialog.ShowError($"Transfer aborted: {reason}");
         _log.LogWarning("Transfer aborted by {Host}: {Reason}", sourceHost, reason);
@@ -518,27 +507,18 @@ public sealed class FileTransferService : IDisposable
     {
         if (ReleaseSendSlot(null, cancel: true) is { } send)
         {
-            if (send.TargetHost != null && send.Relay != null)
-                SendTo(send.Relay, send.TargetHost, MessageKind.FileTransferAbort, new FileTransferAbortMessage("user cancelled"));
+            SendAbort(send.Relay, send.Host, ReasonUserCancelled);
             _dialog.Close();
             _log.LogInformation("Transfer send cancelled by user");
             return;
         }
 
-        TryClearReceiver(out var receiver, out var recvRelay);
-        if (receiver == null) return;
+        if (TryClearReceiver() is not { } receiver) return;
 
         CleanupReceiver(receiver);
         _dialog.Close();
-
-        var effectiveRelay = recvRelay;
-        if (effectiveRelay != null)
-        {
-            SendTo(effectiveRelay, receiver.SourceHost, MessageKind.FileTransferAbort, new FileTransferAbortMessage("user cancelled"));
-            _log.LogInformation("Transfer receive cancelled by user");
-        }
-        else
-            _log.LogInformation("Transfer receive cancelled by user (pending — no relay yet)");
+        SendAbort(receiver.Relay, receiver.SourceHost, ReasonUserCancelled);
+        _log.LogInformation("Transfer receive cancelled by user");
     }
 
     // orchestrates a paste; returns false if master is the target and has no valid paste directory.
@@ -575,7 +555,7 @@ public sealed class FileTransferService : IDisposable
         // case 3: slave→slave — tell target to expect data from sourceHost; on accept, tell source to stream
         lock (_lock)
         {
-            if (_sendCts != null || _receiver != null || _coordTargetHost != null)
+            if (OngoingLocked)
             {
                 _log.LogWarning("Paste: transfer already in progress");
                 return true;
@@ -587,7 +567,7 @@ public sealed class FileTransferService : IDisposable
             // watchdog: if the target never replies (Accepted/Busy/Abort), clear the coordinator state so a
             // vanished peer can't leave FileTransferOngoing stuck true and block all future transfers.
             var gen = _coordGeneration;
-            _coordWatchdog = new Timer(_ => CoordinatorTimedOut(gen, targetHost), null, _watchdogTimeoutMs, Timeout.Infinite);
+            _coordWatchdog = _clock.CreateTimer(_ => CoordinatorTimedOut(gen, targetHost), null, WatchdogTimeout, Timeout.InfiniteTimeSpan);
         }
         SendTo(relay, targetHost, MessageKind.FileTransferRequest, new FileTransferRequestMessage(SourceHost: sourceHost));
         if (_log.IsEnabled(LogLevel.Information))
@@ -604,7 +584,7 @@ public sealed class FileTransferService : IDisposable
 
         var prepared = TryPrepareSend([.. paths], claim, ex =>
         {
-            SendTo(relay, targetHost, MessageKind.FileTransferAbort, new FileTransferAbortMessage(ex.Message));
+            SendAbort(relay, targetHost, ex.Message);
             _dialog.ShowError($"Transfer failed: {ex.Message}");
             _log.LogWarning(ex, "ExecuteStreamRequest pre-stream setup failed");
         });
@@ -612,7 +592,7 @@ public sealed class FileTransferService : IDisposable
 
         try
         {
-            await RunSendCoreAsync(prepared, targetHost, relay, claim);
+            await RunSendCore(prepared, targetHost, relay, claim);
         }
         finally
         {
@@ -634,24 +614,24 @@ public sealed class FileTransferService : IDisposable
         });
         if (prepared == null) return;
 
-        _ = Task.Run(() => RunSendAsync(prepared, targetHost, localHost, relay, claim));
+        _ = Task.Run(() => RunSend(prepared, targetHost, localHost, relay, claim));
     }
 
-    private async Task RunSendAsync(PreparedSend prepared, string targetHost, string localHost, IRelaySender relay, SendClaim claim)
+    private async Task RunSend(PreparedSend prepared, string targetHost, string localHost, IRelaySender relay, SendClaim claim)
     {
         var cancel = claim.Token;
         try
         {
             var sourceHost = string.IsNullOrEmpty(localHost) ? null : localHost;
             // send request first — receiver validates its paste dir and sends Accepted before we stream
-            relay.Send([targetHost], MessageSerializer.Encode(MessageKind.FileTransferRequest, new FileTransferRequestMessage(SourceHost: sourceHost)));
+            relay.Send(targetHost, MessageKind.FileTransferRequest, new FileTransferRequestMessage(SourceHost: sourceHost));
 
             // wait for receiver to accept before streaming
             TaskCompletionSource<bool>? acceptTcs;
             lock (_lock) acceptTcs = _sendAcceptTcs;
-            if (acceptTcs != null) await acceptTcs.Task.WaitAsync(TimeSpan.FromMilliseconds(_watchdogTimeoutMs), cancel);
+            if (acceptTcs != null) await acceptTcs.Task.WaitAsync(WatchdogTimeout, _clock, cancel);
 
-            await RunSendCoreAsync(prepared, targetHost, relay, claim);
+            await RunSendCore(prepared, targetHost, relay, claim);
         }
         catch (OperationCanceledException)
         {
@@ -662,7 +642,7 @@ public sealed class FileTransferService : IDisposable
             _log.LogWarning("Transfer timed out waiting for {Target} to respond", targetHost);
             if (ReleaseSendSlot(claim.Owner, cancel: false) != null)
             {
-                SendTo(relay, targetHost, MessageKind.FileTransferAbort, new FileTransferAbortMessage("transfer timed out"));
+                SendAbort(relay, targetHost, ReasonTimedOut);
                 _dialog.ShowError("Transfer failed: destination did not respond");
             }
         }
@@ -681,18 +661,18 @@ public sealed class FileTransferService : IDisposable
     // handles cancellation and generic errors internally, releasing the slot before reporting any outcome so
     // whoever sees it may start the next transfer, and reporting nothing if the slot was no longer ours;
     // callers' own finally cleanup covers everything else.
-    private async Task RunSendCoreAsync(PreparedSend prepared, string targetHost, IRelaySender relay, SendClaim claim)
+    private async Task RunSendCore(PreparedSend prepared, string targetHost, IRelaySender relay, SendClaim claim)
     {
-        var (paths, names, totalBytes, startTick) = prepared;
+        var (paths, names, totalBytes, startTimestamp) = prepared;
         var cancel = claim.Token;
         long totalSent = 0;
         try
         {
             // a send cancelled before it began must not open a stream its abort has already closed
             cancel.ThrowIfCancellationRequested();
-            relay.Send([targetHost], MessageSerializer.Encode(MessageKind.FileTransferStart, new FileTransferStartMessage(names, totalBytes)));
+            relay.Send(targetHost, MessageKind.FileTransferStart, new FileTransferStartMessage(names, totalBytes));
 
-            var sha = await TarGzStreamer.StreamAsync(paths, async (data, seq, uncompressedBytes) =>
+            var sha = await TarGzStreamer.Compress(paths, async (data, seq, uncompressedBytes) =>
             {
                 cancel.ThrowIfCancellationRequested();
                 await relay.SendReliableAsync(
@@ -700,7 +680,7 @@ public sealed class FileTransferService : IDisposable
                     MessageSerializer.Encode(MessageKind.FileTransferChunk, new FileTransferChunkMessage(seq, data)),
                     cancel);
                 totalSent += data.Length;
-                if (OwnsSendSlot(claim)) _dialog.UpdateProgress(uncompressedBytes, CalcSpeed(startTick, totalSent));
+                if (OwnsSendSlot(claim)) _dialog.UpdateProgress(uncompressedBytes, CalcSpeed(startTimestamp, totalSent));
                 if (_log.IsEnabled(LogLevel.Debug))
                     _log.LogDebug("Sent chunk #{Seq}: {Bytes} bytes", seq, data.Length);
             }, name =>
@@ -708,7 +688,7 @@ public sealed class FileTransferService : IDisposable
                 if (OwnsSendSlot(claim)) _dialog.SetCurrentFile(name);
             }, cancel);
 
-            relay.Send([targetHost], MessageSerializer.Encode(MessageKind.FileTransferDone, new FileTransferDoneMessage(totalSent, sha)));
+            relay.Send(targetHost, MessageKind.FileTransferDone, new FileTransferDoneMessage(totalSent, sha));
             if (_log.IsEnabled(LogLevel.Information))
                 _log.LogInformation("Transfer complete: {Bytes} compressed bytes sent", ByteSize.FromBytes(totalSent));
             if (ReleaseSendSlot(claim.Owner, cancel: false) != null) _dialog.ShowCompleted();
@@ -722,17 +702,17 @@ public sealed class FileTransferService : IDisposable
             _log.LogWarning(ex, "Transfer failed");
             if (ReleaseSendSlot(claim.Owner, cancel: false) != null)
             {
-                SendTo(relay, targetHost, MessageKind.FileTransferAbort, new FileTransferAbortMessage(ex.Message));
+                SendAbort(relay, targetHost, ex.Message);
                 _dialog.ShowError($"Transfer failed: {ex.Message}");
             }
         }
     }
 
-    private async Task<bool> FinalizeReceivingAsync(ReceiverTransfer receiver, FileTransferDoneMessage msg, IRelaySender relay)
+    private async Task<bool> FinalizeReceiving(ReceiverTransfer receiver, FileTransferDoneMessage msg, IRelaySender relay)
     {
         try
         {
-            await receiver.Extractor!.CompleteAsync();
+            await receiver.Extractor!.Complete();
             var actualHash = receiver.Extractor.GetHash();
             var bytesReceived = receiver.Extractor.BytesReceived;
             var hashMatch = actualHash.SequenceEqual(msg.Sha256);
@@ -765,29 +745,28 @@ public sealed class FileTransferService : IDisposable
     private void FailReceive(ReceiverTransfer receiver, IRelaySender relay, string reason)
     {
         CleanupReceiver(receiver);
-        SendTo(relay, receiver.SourceHost, MessageKind.FileTransferAbort, new FileTransferAbortMessage(reason));
+        SendAbort(relay, receiver.SourceHost, reason);
         _dialog.ShowError($"Transfer failed: {reason}");
     }
 
-    private void AbortReceive(IRelaySender relay, ReceiverTransfer expected, string reason)
+    private void AbortReceive(ReceiverTransfer expected, string reason)
     {
         lock (_lock)
         {
             if (_receiver != expected) return;
             _receiver = null;
-            _recvRelay = null;
         }
         CleanupReceiver(expected, fromWatchdog: true);
-        SendTo(relay, expected.SourceHost, MessageKind.FileTransferAbort, new FileTransferAbortMessage(reason));
+        SendAbort(expected.Relay, expected.SourceHost, reason);
         _dialog.ShowError($"Transfer aborted: {reason}");
     }
 
     // shared receiver setup; dialog is shown later from HandleFileTransferStart when names/total are known
     private void SetupReceiverInternal(string sourceHost, string destFolder, IRelaySender relay)
     {
-        var newReceiver = new ReceiverTransfer(sourceHost, [], 0, _watchdogTimeoutMs);
+        var newReceiver = new ReceiverTransfer(sourceHost, relay, _clock);
         ReceiverTransfer? existing;
-        lock (_lock) { existing = _receiver; _receiver = newReceiver; _recvRelay = relay; }
+        lock (_lock) { existing = _receiver; _receiver = newReceiver; }
         if (existing != null) CleanupReceiver(existing);
         var tempDir = TransferTempDir();
         CleanupTempDir(tempDir);
@@ -802,15 +781,13 @@ public sealed class FileTransferService : IDisposable
             recv.Extractor = extractor;
             recv.TempDir = tempDir;
             recv.DestFolder = destFolder;
-            recv.TransferStartTick = Environment.TickCount64;
+            recv.TransferStart = _clock.GetTimestamp();
             recv.TouchWatchdog();
-            _recvRelay = relay;
-            var watchdogRelay = relay;
-            recv.Watchdog = new Timer(_ =>
+            recv.Watchdog = _clock.CreateTimer(_ =>
             {
                 if (newReceiver.WatchdogExpired())
-                    AbortReceive(watchdogRelay, newReceiver, "transfer timed out");
-            }, null, TimeSpan.FromMilliseconds(_watchdogTimeoutMs), TimeSpan.FromMilliseconds(_watchdogTimeoutMs));
+                    AbortReceive(newReceiver, ReasonTimedOut);
+            }, null, WatchdogTimeout, WatchdogTimeout);
         }
     }
 
@@ -818,24 +795,23 @@ public sealed class FileTransferService : IDisposable
     {
         if (receiver.Watchdog is { } watchdog)
         {
+            // from anywhere but its own callback, waits for a callback in flight
             if (fromWatchdog)
                 watchdog.Dispose();
             else
-            {
-                using var done = new ManualResetEvent(false);
-                watchdog.Dispose(done);
-                done.WaitOne(WatchdogDisposalWaitMs);
-            }
+                watchdog.DisposeAsync().AsTask().Wait(WatchdogDisposalWaitMs);
         }
         receiver.Dispose();
         if (receiver.TempDir != null)
             CleanupTempDir(receiver.TempDir);
     }
 
-    private void SendTo(IRelaySender relay, string host, MessageKind kind, object msg)
+    private void SendAbort(IRelaySender relay, string host, string reason) =>
+        SendTo(relay, host, MessageKind.FileTransferAbort, new FileTransferAbortMessage(reason));
+
+    private void SendTo<T>(IRelaySender relay, string host, MessageKind kind, T msg)
     {
-        var payload = MessageSerializer.Encode(kind, msg);
-        try { relay.Send([host], payload); }
+        try { relay.Send(host, kind, msg); }
         catch (Exception ex) { _log.LogWarning(ex, "SendTo failed"); }
     }
 
@@ -855,28 +831,31 @@ public sealed class FileTransferService : IDisposable
 
     public sealed record FileCopyState(string SourceHost, string[] Paths);
 
-    private sealed record ReleasedSend(string? TargetHost, IRelaySender? Relay);
+    // the peer a released transfer was with, and the relay that reaches it
+    private sealed record ReleasedPeer(string Host, IRelaySender Relay);
 
     private sealed record SendClaim(CancellationTokenSource Owner, CancellationToken Token);
 
-    private sealed record PreparedSend(List<string> Paths, string[] Names, long TotalBytes, long StartTick);
+    private sealed record PreparedSend(List<string> Paths, string[] Names, long TotalBytes, long StartTimestamp);
 
-    private sealed class ReceiverTransfer(string sourceHost, string[] fileNames, long totalBytes, long watchdogTimeoutMs) : IDisposable
+    private sealed class ReceiverTransfer(string sourceHost, IRelaySender relay, TimeProvider clock) : IDisposable
     {
-        private long _lastChunkTick = Environment.TickCount64;
+        private long _lastChunk = clock.GetTimestamp();
 
         public string SourceHost { get; } = sourceHost;
-        public string[] FileNames { get; set; } = fileNames;
-        public long TotalBytes { get; set; } = totalBytes;
+        public IRelaySender Relay { get; } = relay;
+        public ReleasedPeer Peer => new(SourceHost, Relay);
+        public string[] FileNames { get; set; } = [];
+        public long TotalBytes { get; set; }
         public TarGzExtractor? Extractor { get; set; }
         public string? TempDir { get; set; }
         public string? DestFolder { get; set; }
-        public long TransferStartTick { get; set; }
-        public Timer? Watchdog { get; set; }
+        public long TransferStart { get; set; }
+        public ITimer? Watchdog { get; set; }
         public CancellationTokenSource Cts { get; } = new();
 
-        public void TouchWatchdog() => Interlocked.Exchange(ref _lastChunkTick, Environment.TickCount64);
-        public bool WatchdogExpired() => Environment.TickCount64 - Interlocked.Read(ref _lastChunkTick) > watchdogTimeoutMs;
+        public void TouchWatchdog() => Interlocked.Exchange(ref _lastChunk, clock.GetTimestamp());
+        public bool WatchdogExpired() => clock.GetElapsedTime(Interlocked.Read(ref _lastChunk)) >= WatchdogTimeout;
         public FileTransferInfo ToTransferInfo() => new(FileNames, TotalBytes, IsSender: false);
 
         public void Dispose()

@@ -1,3 +1,4 @@
+using Cathedral.Utils;
 using Common.DTO;
 using Common.Interfaces;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -15,70 +16,95 @@ public sealed class TestStyxClient : IStyxClient, IAsyncDisposable
 {
     private HubConnection? _hub;
     private IDisposable? _registration;
+    private readonly Toggle _disposed = new();
 
     private readonly NotificationQueue<string[]> _peers = new();
-    private readonly SemaphoreSlim _receiveSignal = new(0);
-    private readonly SemaphoreSlim _kickSignal = new(0);
+    private readonly NotificationQueue<StyxReceived> _received = new();
+    private readonly NotificationQueue<string> _kicks = new();
+    private readonly NotificationQueue<Exception?> _closed = new();
 
     public IStyxServer? Server { get; private set; }
-    public (string Source, string SourceIp, byte[] Payload)? LastReceived { get; private set; }
     public string? KickReason { get; private set; }
 
     // connect and authenticate — returns the auth response for the caller to inspect
     public async Task<RelayLoginResponse> Connect(
         WebApplicationFactory<global::Styx.Program> factory,
         string authorization,
-        string hostName)
+        string hostName,
+        string path = global::Styx.Constants.RelayPath)
     {
-        await ConnectRaw(factory);
+        await ConnectRaw(factory, path);
         return await Server!.Authenticate(new RelayLogin { Authorization = authorization, HostName = hostName });
     }
 
     // connect without authenticating — for testing unauthenticated behaviour
-    public Task ConnectRaw(WebApplicationFactory<global::Styx.Program> factory) =>
-        ConnectRaw(new HubConnectionBuilder().WithUrl($"{factory.Server.BaseAddress}relay",
+    public Task ConnectRaw(WebApplicationFactory<global::Styx.Program> factory, string path = global::Styx.Constants.RelayPath) =>
+        ConnectRaw(new HubConnectionBuilder().WithUrl($"{StyxTestServer.ServerUrl(factory)}{path}",
             options => options.UseTestServer(factory.Server)));
 
-    // the same, against a relay listening on a real socket, such as the embedded one
-    public Task ConnectRaw(string serverUrl) => ConnectRaw(new HubConnectionBuilder().WithUrl($"{serverUrl}/relay"));
+    // the same, against the embedded relay on a real socket, trusting its self-signed cert without the binding
+    public Task ConnectRaw(string serverUrl) => ConnectRaw(new HubConnectionBuilder().WithUrl($"{serverUrl}/relay", options =>
+    {
+        options.HttpMessageHandlerFactory = _ => new HttpClientHandler { ServerCertificateCustomValidationCallback = (_, _, _, _) => true };
+        options.WebSocketConfiguration = ws => ws.RemoteCertificateValidationCallback = (_, _, _, _) => true;
+    }));
 
     private async Task ConnectRaw(IHubConnectionBuilder builder)
     {
         _hub = builder.AddMessagePackProtocol().Build();
+        _hub.Closed += error =>
+        {
+            _closed.Push(error);
+            return Task.CompletedTask;
+        };
 
         await _hub.StartAsync();
         _registration = _hub.Register<IStyxClient>(this);
         Server = _hub.CreateHubProxy<IStyxServer>();
     }
 
-    public Task<string[]> WaitForPeers(int timeoutMs = 5000) => _peers.Next(timeoutMs, "peers update");
+    public Task<string[]> WaitForPeers() => _peers.Next("peers update");
 
-    public async Task<(string Source, string SourceIp, byte[] Payload)> WaitForReceive(int timeoutMs = 5000)
+    // peers updates already received and not yet read; handlers run in arrival order, so this orders them against payloads
+    public int PeersWaiting => _peers.Count;
+
+    // the first snapshot equal to the expected one, since the relay may announce intermediate memberships first
+    public async Task<string[]> WaitForPeers(string[] expected, bool anyOrder = false)
     {
-        if (!await _receiveSignal.WaitAsync(timeoutMs))
-            throw new TimeoutException("Timed out waiting for message");
-        return LastReceived!.Value;
+        while (true)
+        {
+            var peers = await WaitForPeers();
+            if (anyOrder ? peers.Order().SequenceEqual(expected.Order()) : peers.SequenceEqual(expected)) return peers;
+        }
     }
 
-    public async Task<string> WaitForKick(int timeoutMs = 5000)
-    {
-        if (!await _kickSignal.WaitAsync(timeoutMs))
-            throw new TimeoutException("Timed out waiting for kick");
-        return KickReason!;
-    }
+    // every message received, in arrival order
+    public Task<StyxReceived> WaitForReceive() => _received.Next("a received message");
+
+    // the payload of the next message received
+    public async Task<byte[]> NextReceived() => (await WaitForReceive()).Payload;
+
+    // a non-blocking invocation, as Hydra's input lane sends: nothing comes back, and the next may go at once
+    public Task SendWithoutWaiting(string[] targetHosts, byte[] payload) => _hub!.SendAsync(nameof(IStyxServer.Send), targetHosts, payload);
+
+    // the relay dropped the connection
+    public Task<Exception?> WaitForClose() => _closed.Next("the connection to close");
+
+    public HubConnectionState State => _hub?.State ?? HubConnectionState.Disconnected;
+
+    public Task<string> WaitForKick() => _kicks.Next("a kick");
 
     // IStyxClient
     public Task Receive(string sourceHost, string sourceIp, byte[] payload)
     {
-        LastReceived = (sourceHost, sourceIp, payload);
-        _receiveSignal.Release();
+        _received.Push(new StyxReceived(sourceHost, sourceIp, payload));
         return Task.CompletedTask;
     }
 
     public Task Kicked(string reason)
     {
         KickReason = reason;
-        _kickSignal.Release();
+        _kicks.Push(reason);
         return Task.CompletedTask;
     }
 
@@ -88,8 +114,10 @@ public sealed class TestStyxClient : IStyxClient, IAsyncDisposable
         return Task.CompletedTask;
     }
 
-    public async ValueTask DisposeAsync()
+    // stops the connection mid-test; disposal afterwards is a no-op
+    public async Task Drop()
     {
+        if (!_disposed.TrySet()) return;
         _registration?.Dispose();
         if (_hub != null)
         {
@@ -97,4 +125,8 @@ public sealed class TestStyxClient : IStyxClient, IAsyncDisposable
             await _hub.DisposeAsync();
         }
     }
+
+    public async ValueTask DisposeAsync() => await Drop();
 }
+
+public sealed record StyxReceived(string Source, string SourceIp, byte[] Payload);

@@ -90,6 +90,11 @@ export function validate(profiles: HydraProfile[], name?: string): ValidationErr
       })
     })
 
+    // the embedded relay only speaks TLS, so Hydra refuses an http:// server
+    if (p.networkType === 'embeddedStyx' && p.embeddedStyx?.server.trim().toLowerCase().startsWith('http://')) {
+      errors.push({ path: `profiles[${i}].embeddedStyx.server`, message: 'embeddedStyx server must be https:// (or have no scheme)' })
+    }
+
     if (p.conditions?.screenCount !== undefined && p.conditions.screenCount < 1) {
       errors.push({ path: `profiles[${i}].conditions.screenCount`, message: 'screenCount must be at least 1' })
     }

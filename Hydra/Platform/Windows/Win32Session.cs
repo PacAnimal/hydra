@@ -24,7 +24,6 @@ internal sealed class ChildProcess(SafeProcessHandle handle, uint pid) : IDispos
 internal static partial class Win32Session
 {
     internal const uint NoSession = uint.MaxValue;
-    internal const uint Infinite = 0xFFFFFFFF;
 
     // -- session --
 
@@ -142,15 +141,9 @@ internal static partial class Win32Session
         return handle.IsInvalid ? null : handle;
     }
 
-    internal static void SignalGlobalEvent(string name)
-    {
-        using var handle = OpenGlobalEvent(name);
-        if (handle != null) SetEventHandle(handle);
-    }
-
     internal static bool SignalEvent(SafeHandle handle) => SetEventHandle(handle);
 
-    internal static bool ResetGlobalEvent(SafeHandle handle) => ResetEventHandle(handle);
+    internal static bool ResetEvent(SafeHandle handle) => ResetEventHandle(handle);
 
     internal static bool WaitForEvent(SafeHandle handle, uint timeoutMs)
         => WaitForSingleObject(handle, timeoutMs) == 0; // WAIT_OBJECT_0

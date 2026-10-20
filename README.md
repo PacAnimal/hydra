@@ -22,7 +22,7 @@
 | **Cross-layout keyboard (types 'å' correctly on a US slave)** | ✅ | ❌ | ❌ | ❌ | ❌ |
 | **Headless Linux / Raspberry Pi forwarder (no display server)** | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Cross-machine file transfer | ✅ macOS + Windows | ✅ Windows + macOS | ❌ | ❌ | ❌ |
-| Clipboard sync (text + images) | ✅ | ✅ | ✅ | partial | partial |
+| Clipboard sync (text, rich text, images) | ✅ | ✅ | ✅ | partial | partial |
 | Active development (2026) | ✅ | ✅ | ✅ | partial | ❌ |
 
 ---
@@ -139,7 +139,7 @@ Create `hydra.conf` next to the binary on **each machine**.
   "name": "laptop",
   "profiles": [{
     "mode": "Slave",
-    "embeddedStyx": { "server": "http://192.168.1.10:5000", "password": "secret" }
+    "embeddedStyx": { "server": "https://192.168.1.10:5000", "password": "secret" }
   }]
 }
 ```
@@ -176,7 +176,7 @@ The easiest way to set up multi-machine layouts, Styx relay configs, and network
 - **Per-screen scale** — control cursor speed on each remote screen
 - Full keyboard forwarding including dead keys and special characters — resolved on the master using its keyboard layout
 - Mouse button and scroll forwarding
-- **Clipboard sync** — text and images synced automatically when switching machines (all platforms)
+- **Clipboard sync** — text, rich text and images synced automatically when switching machines (all platforms), plus Linux's middle-click selection
 - **File transfer** — cross-machine copy/paste of files and folders via hotkey (macOS and Windows)
 - **Media key forwarding** — volume, playback, brightness keys forwarded to the active machine
 - **Screensaver sync** — activating the screensaver on the master locks all connected slaves

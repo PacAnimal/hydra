@@ -1,17 +1,23 @@
 using System.Diagnostics;
 using System.Runtime.Versioning;
 using Hydra.Platform.MacOs;
+using Tests.Setup;
 
 namespace Tests.Platform;
 
 [TestFixture]
 public class OsaScriptTests
 {
+    private string _root = null!;
+
     [OneTimeSetUp]
     public void RequireMacOs()
     {
         if (!OperatingSystem.IsMacOS()) Assert.Ignore("macOS-only: osascript");
     }
+
+    [SetUp]
+    public void SetUp() => _root = TestPaths.FreshFixtureRoot(nameof(OsaScriptTests));
 
     [Test]
     [SupportedOSPlatform("macos")]
@@ -48,7 +54,7 @@ public class OsaScriptTests
     public void Run_DoesNotWaitOnADescendantStillHoldingTheOutputAfterTheKill()
     {
         // the backgrounded sleep is orphaned, so the tree kill misses it and it keeps the stdout pipe open
-        var pidFile = Path.Combine(Path.GetTempPath(), $"osascript-test-{Guid.NewGuid():N}.pid");
+        var pidFile = Path.Combine(_root, "orphan.pid");
         var stopwatch = Stopwatch.StartNew();
         try
         {
@@ -71,7 +77,7 @@ public class OsaScriptTests
     [SupportedOSPlatform("macos")]
     public void Run_DoesNotWaitOnADescendantStillHoldingTheOutputAfterANormalExit()
     {
-        var pidFile = Path.Combine(Path.GetTempPath(), $"osascript-test-{Guid.NewGuid():N}.pid");
+        var pidFile = Path.Combine(_root, "orphan.pid");
         var stopwatch = Stopwatch.StartNew();
         try
         {
@@ -94,26 +100,19 @@ public class OsaScriptTests
     [SupportedOSPlatform("macos")]
     public async Task Run_KillsTheScriptWhenCancelled()
     {
-        var fifo = Path.Combine(Path.GetTempPath(), $"osascript-test-{Guid.NewGuid():N}.fifo");
+        var fifo = Path.Combine(_root, "script.fifo");
         using (var mkfifo = Process.Start("/usr/bin/mkfifo", [fifo]))
             await mkfifo.WaitForExitAsync();
         using var cancel = new CancellationTokenSource();
         var token = cancel.Token;
-        try
-        {
-            var run = Task.Run(() => OsaScript.Run("/bin/sh", ["-c", $"echo $$ > '{fifo}'; exec sleep 60"], TimeSpan.FromSeconds(60), token));
-            // opening a fifo blocks until the other end does, so the script is running once this returns
-            var pid = int.Parse(await Task.Run(() => File.ReadAllText(fifo)).WaitAsync(TimeSpan.FromSeconds(30)));
+        var run = Task.Run(() => OsaScript.Run("/bin/sh", ["-c", $"echo $$ > '{fifo}'; exec sleep 60"], TimeSpan.FromSeconds(60), token));
+        // opening a fifo blocks until the other end does, so the script is running once this returns
+        var pid = int.Parse(await Task.Run(() => File.ReadAllText(fifo)).WaitAsync(Bound));
 
-            await cancel.CancelAsync();
+        await cancel.CancelAsync();
 
-            Assert.CatchAsync<OperationCanceledException>(() => run.WaitAsync(TimeSpan.FromSeconds(30)), "the script ran on past the cancel");
-            Assert.Throws<ArgumentException>(() => Process.GetProcessById(pid).Dispose(), "the script outlived the cancel");
-        }
-        finally
-        {
-            File.Delete(fifo);
-        }
+        Assert.CatchAsync<OperationCanceledException>(() => run.WaitAsync(Bound), "the script ran on past the cancel");
+        Assert.Throws<ArgumentException>(() => Process.GetProcessById(pid).Dispose(), "the script outlived the cancel");
     }
 
     [Test]
@@ -131,6 +130,5 @@ public class OsaScriptTests
             try { Process.GetProcessById(pid).Kill(); }
             catch (Exception ex) when (ex is ArgumentException or InvalidOperationException) { } // already gone
         }
-        File.Delete(pidFile);
     }
 }

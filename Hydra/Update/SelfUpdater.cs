@@ -59,16 +59,20 @@ internal sealed class SelfUpdater(IHydraProfile profile, ILogger<SelfUpdater> lo
 
     private async Task CheckAndUpdate(CancellationToken cancel)
     {
-        var current = CurrentVersion();
+        var current = Version.Parse(HydraVersion.Current);
+        var channel = profile.UpdateChannel;
         if (log.IsEnabled(LogLevel.Information))
-            log.LogInformation("Checking for updates (current: {Version})", current);
+            log.LogInformation("Checking for updates (current: {Version}, channel: {Channel})", current, channel);
 
-        var json = await Http.GetStringAsync($"https://api.github.com/repos/{Repo}/releases/latest", cancel);
-        using var doc = JsonDocument.Parse(json);
-        var root = doc.RootElement;
-
-        var tag = root.GetProperty("tag_name").GetString() ?? "0.0.0";
-        var latest = Version.Parse(tag.TrimStart('v'));
+        // edge takes the highest version among recent releases, prereleases included, so it moves on to a
+        // stable release once one overtakes the edge builds
+        var edge = channel == UpdateChannel.Edge;
+        using var doc = JsonDocument.Parse(await Http.GetStringAsync($"https://api.github.com/repos/{Repo}/releases{(edge ? "?per_page=30" : "/latest")}", cancel));
+        if ((edge ? Newest(doc.RootElement) : doc.RootElement) is not { } root || TagVersion(root) is not { } latest)
+        {
+            log.LogWarning("No release found on the {Channel} channel", channel);
+            return;
+        }
 
         if (latest <= current)
         {
@@ -109,6 +113,8 @@ internal sealed class SelfUpdater(IHydraProfile profile, ILogger<SelfUpdater> lo
         await DownloadAndApply(downloadUrl, cancel);
     }
 
+    private static string ExeName => OperatingSystem.IsWindows() ? "Hydra.exe" : "Hydra";
+
     private async Task DownloadAndApply(string url, CancellationToken cancel)
     {
         var exePath = Environment.ProcessPath
@@ -116,8 +122,7 @@ internal sealed class SelfUpdater(IHydraProfile profile, ILogger<SelfUpdater> lo
         var appDir = Path.GetDirectoryName(exePath)
             ?? throw new InvalidOperationException("cannot determine app directory");
 
-        var exeName = OperatingSystem.IsWindows() ? "Hydra.exe" : "Hydra";
-        var tmpPath = Path.Combine(appDir, exeName + ".tmp");
+        var tmpPath = Path.Combine(appDir, ExeName + ".tmp");
 
         // stream: http → gzip → tar → .tmp file
         using var downloadCancel = CancellationTokenSource.CreateLinkedTokenSource(cancel);
@@ -133,14 +138,14 @@ internal sealed class SelfUpdater(IHydraProfile profile, ILogger<SelfUpdater> lo
         TarEntry? entry;
         while ((entry = await tar.GetNextEntryAsync(cancellationToken: downloadCancel.Token)) != null)
         {
-            if (Path.GetFileName(entry.Name) != exeName || entry.DataStream == null) continue;
+            if (Path.GetFileName(entry.Name) != ExeName || entry.DataStream == null) continue;
             await using var tmp = File.Create(tmpPath);
             await entry.DataStream.CopyToAsync(tmp, downloadCancel.Token);
             break;
         }
 
         if (!File.Exists(tmpPath))
-            throw new InvalidOperationException($"'{exeName}' not found in archive");
+            throw new InvalidOperationException($"'{ExeName}' not found in archive");
 
         // stop child before swapping — prevents file-lock conflicts in service mode
         if (StopChild != null)
@@ -152,7 +157,8 @@ internal sealed class SelfUpdater(IHydraProfile profile, ILogger<SelfUpdater> lo
             // Windows can't overwrite a running exe, so rename it aside then move the new one in — two
             // non-atomic steps. Retry the second move to ride out transient AV/indexer locks on the fresh
             // file; if it still fails, roll the old exe back so the install is never left with NO Hydra.exe.
-            File.Move(exePath, exePath + ".old");
+            var oldPath = exePath + ".old";
+            File.Move(exePath, oldPath);
             try
             {
                 for (var attempt = 0; ; attempt++)
@@ -165,8 +171,8 @@ internal sealed class SelfUpdater(IHydraProfile profile, ILogger<SelfUpdater> lo
             {
                 try
                 {
-                    if (!File.Exists(exePath) && File.Exists(exePath + ".old"))
-                        File.Move(exePath + ".old", exePath); // restore — never leave the install with no exe
+                    if (!File.Exists(exePath) && File.Exists(oldPath))
+                        File.Move(oldPath, exePath); // restore — never leave the install with no exe
                 }
                 catch { /* best-effort restore */ }
                 throw;
@@ -178,13 +184,7 @@ internal sealed class SelfUpdater(IHydraProfile profile, ILogger<SelfUpdater> lo
             var mode = File.GetUnixFileMode(exePath);
             File.SetUnixFileMode(exePath, mode | UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute);
 
-            if (OperatingSystem.IsMacOS())
-            {
-                Platform.MacOs.AgentCommands.Codesign(exePath, "com.cathedral.hydra");
-                var shieldPath = Path.Combine(appDir, "Resources", "MacShield", "hydra-shield.app");
-                if (Directory.Exists(shieldPath))
-                    Platform.MacOs.AgentCommands.Codesign(shieldPath, "com.cathedral.hydra.shield");
-            }
+            if (OperatingSystem.IsMacOS()) Platform.MacOs.AgentCommands.CodesignApp(exePath);
         }
 
         log.LogInformation("Update applied, restarting");
@@ -210,8 +210,7 @@ internal sealed class SelfUpdater(IHydraProfile profile, ILogger<SelfUpdater> lo
 
         // only clear .old backups once the real binary is present again — never destroy the last
         // recovery copy while Hydra.exe is missing (e.g. after an interrupted Windows swap)
-        var exeName = OperatingSystem.IsWindows() ? "Hydra.exe" : "Hydra";
-        if (File.Exists(Path.Combine(appDir, exeName)))
+        if (File.Exists(Path.Combine(appDir, ExeName)))
             foreach (var file in Directory.EnumerateFiles(appDir, "*.old"))
                 TryDelete(file);
     }
@@ -222,7 +221,23 @@ internal sealed class SelfUpdater(IHydraProfile profile, ILogger<SelfUpdater> lo
         catch { /* best effort */ }
     }
 
-    private static Version CurrentVersion() => Version.Parse(HydraVersion.Current);
+    // the highest-versioned release that is not a draft
+    internal static JsonElement? Newest(JsonElement releases)
+    {
+        JsonElement? newest = null;
+        Version? best = null;
+        foreach (var release in releases.EnumerateArray())
+        {
+            if (release.TryGetProperty("draft", out var draft) && draft.GetBoolean()) continue;
+            if (TagVersion(release) is not { } version || version <= best) continue;
+            newest = release;
+            best = version;
+        }
+        return newest;
+    }
+
+    internal static Version? TagVersion(JsonElement release) =>
+        release.TryGetProperty("tag_name", out var tag) && Version.TryParse(tag.GetString()?.TrimStart('v'), out var version) ? version : null;
 
     private static string? Rid()
     {

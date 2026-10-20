@@ -1,5 +1,6 @@
 using Hydra.Config;
 using Hydra.Screen;
+using static Tests.Setup.ConfigJson;
 
 namespace Tests.Config;
 
@@ -18,9 +19,7 @@ public class HydraConfigTests
         new(ssids ?? [], screenCount, isPluggedIn);
 
     // minimum relay config — injected into profile JSON objects that need it
-    private const string Relay = ",\"embeddedStyx\":{\"server\":\"http://localhost:5000\",\"password\":\"test\"}";
-
-    private static string AsFile(string profilesJson) => $$"""{"profiles":{{profilesJson}}}""";
+    private const string Relay = ",\"embeddedStyx\":{\"server\":\"https://localhost:5000\",\"password\":\"test\"}";
 
     [Test]
     public void ClipboardSync_DefaultsToHydra_AndParsesSystem()
@@ -36,11 +35,43 @@ public class HydraConfigTests
     }
 
     [Test]
+    public void UpdateChannel_DefaultsToStable_AndParsesEdgeInAnyCase()
+    {
+        var profiles = $$"""[{"mode":"Master"{{Relay}}}]""";
+        var defaults = HydraConfigFile.Parse(AsFile(profiles), "test.conf");
+        var edge = HydraConfigFile.Parse($$"""{"updateChannel":"edge","profiles":{{profiles}}}""", "test.conf");
+        var upper = HydraConfigFile.Parse($$"""{"updateChannel":"Edge","profiles":{{profiles}}}""", "test.conf");
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(defaults.UpdateChannel, Is.EqualTo(UpdateChannel.Stable));
+            Assert.That(edge.UpdateChannel, Is.EqualTo(UpdateChannel.Edge));
+            Assert.That(upper.UpdateChannel, Is.EqualTo(UpdateChannel.Edge));
+        }
+    }
+
+    [Test]
+    public void UpdateChannel_RejectsUnknownChannel()
+    {
+        var json = $$"""{"updateChannel":"nightly","profiles":[{"mode":"Master"{{Relay}}}]}""";
+
+        Assert.That(() => HydraConfigFile.Parse(json, "test.conf"), Throws.Exception);
+    }
+
+    [Test]
     public void ClipboardSync_RejectsUnknownMode()
     {
         var json = AsFile($$"""[{"mode":"Master","clipboardSync":"Automatic"{{Relay}}}]""");
 
         Assert.That(() => HydraConfig.ParseAndValidate(json), Throws.Exception);
+    }
+
+    [Test]
+    public void EmbeddedStyx_RejectsPlainHttp()
+    {
+        var json = AsFile("""[{"mode":"Master","embeddedStyx":{"server":"HTTP://localhost:5000","password":"test"}}]""");
+
+        Assert.That(() => HydraConfig.ParseAndValidate(json), Throws.InvalidOperationException.With.Message.Contains("https://"));
     }
 
     [Test]
@@ -250,6 +281,29 @@ public class HydraConfigTests
             Assert.That(HydraConfigFile.IsRetryableStartupFailure(new System.Text.Json.JsonException()), Is.True);
             Assert.That(HydraConfigFile.IsRetryableStartupFailure(new InvalidOperationException()), Is.True);
             Assert.That(HydraConfigFile.IsRetryableStartupFailure(new NullReferenceException()), Is.False);
+        }
+    }
+
+    [Test]
+    public void Beside_ResolvesARelativeSettingAgainstTheConfigDirectory_AndKeepsARootedOne()
+    {
+        var dir = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "hydra-beside"));
+        var configPath = Path.Combine(dir, "hydra.conf");
+        var rooted = Path.Combine(Path.GetTempPath(), "elsewhere.log");
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(HydraConfigFile.Beside(configPath, "hydra.log"), Is.EqualTo(Path.Combine(dir, "hydra.log")));
+            Assert.That(HydraConfigFile.Beside(configPath, rooted), Is.EqualTo(Path.GetFullPath(rooted)));
+        }
+    }
+
+    [Test]
+    public void ResolvedName_IsTheConfiguredName_ElseTheMachineNameWithoutDomain()
+    {
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(new HydraConfigFile { Name = "desk" }.ResolvedName, Is.EqualTo("desk"));
+            Assert.That(new HydraConfigFile().ResolvedName, Is.EqualTo(Environment.MachineName.Split('.')[0]));
         }
     }
 

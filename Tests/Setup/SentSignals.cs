@@ -1,3 +1,5 @@
+using System.Text.Json;
+using Cathedral.Config;
 using Hydra.Relay;
 
 namespace Tests.Setup;
@@ -30,6 +32,16 @@ public sealed class SentSignals
         lock (_awaited) return [.. _sent];
     }
 
+    // the messages of one kind sent so far, optionally only those sent to a host
+    public List<SentMessage> Of(MessageKind kind, string? host = null) =>
+        [.. Snapshot().Where(s => s.Kind == kind && (host is null || s.Targets.Contains(host)))];
+
+    // as above, decoded
+    public List<T> Of<T>(MessageKind kind, string? host = null) => [.. Of(kind, host).Select(s => JsonSerializer.Deserialize<T>(s.Json, SaneJson.Options)!)];
+
+    // every host a message of this kind went to, in send order
+    public List<string> TargetsOf(MessageKind kind) => [.. Of(kind).SelectMany(s => s.Targets)];
+
     // everything sent so far, cleared in the same step so nothing sent in between is lost
     public List<SentMessage> TakeAll()
     {
@@ -47,14 +59,14 @@ public sealed class SentSignals
     }
 
     // completes once a message of this kind has been sent
-    public Task WaitFor(MessageKind kind, TimeSpan timeout)
+    public Task WaitFor(MessageKind kind)
     {
         lock (_awaited)
         {
             if (_sent.Any(s => s.Kind == kind)) return Task.CompletedTask;
             var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             _awaited.Add(new AwaitedSend(kind, signal));
-            return signal.Task.WaitAsync(timeout);
+            return signal.Task.WaitAsync(TestBound.Bound);
         }
     }
 

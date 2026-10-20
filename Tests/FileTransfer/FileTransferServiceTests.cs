@@ -14,6 +14,7 @@ public class FileTransferServiceTests
     private FakeRelay _relay = null!;
     private FileTransferService _service = null!;
     private string _tempRoot = null!;
+    private readonly List<GatedReliableRelay> _gatedRelays = [];
 
     [SetUp]
     public void SetUp()
@@ -27,10 +28,20 @@ public class FileTransferServiceTests
     [TearDown]
     public void TearDown()
     {
+        _gatedRelays.ForEach(r => r.Gate.Release());
+        _gatedRelays.Clear();
         _service.Dispose();
     }
 
     // -- helpers --
+
+    // released in TearDown, so a failed test leaves no send parked
+    private GatedReliableRelay GatedRelay(bool ignoreCancellation = false)
+    {
+        var relay = new GatedReliableRelay(ignoreCancellation);
+        _gatedRelays.Add(relay);
+        return relay;
+    }
 
     private string CreateTempFile(string name = "a.txt", string content = "hi")
     {
@@ -49,12 +60,15 @@ public class FileTransferServiceTests
             if (service.FileTransferOngoing) settled.TrySetException(new InvalidOperationException("the outcome was reported before the slot was released"));
             else settled.TrySetResult();
         };
-        return settled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        return settled.Task.WaitAsync(Bound);
     }
 
-    // creates a service with an aggressive 100ms watchdog/accept timeout for timeout tests
-    private FileTransferService FastTimeoutService() =>
-        new(_dialog, new FakeDropTargetResolver(_tempRoot), NullLogger<FileTransferService>.Instance, watchdogTimeoutMs: 100);
+    // a service whose watchdog and accept timeout run on the test's clock
+    private FileTransferService SteppedService(StartedTimers clock) =>
+        new(_dialog, new FakeDropTargetResolver(_tempRoot), NullLogger<FileTransferService>.Instance, clock: clock);
+
+    // past the first timer the service starts
+    private static async Task PassTheFirstTimer(StartedTimers clock) => clock.Advance(await clock.Started.Next("the watchdog to start"));
 
     // routes a message to _service as if it came from the given host
     private Task Simulate(string host, MessageKind kind, object msg) => Simulate(_service, host, kind, msg, _relay);
@@ -65,17 +79,17 @@ public class FileTransferServiceTests
     private static async Task Simulate(FileTransferService svc, string host, MessageKind kind, object msg, FakeRelay relay)
     {
         var decoded = MessageSerializer.Decode(MessageSerializer.Encode(kind, msg));
-        await svc.OnMessageAsync(host, decoded.Kind, decoded.Bytes, relay);
+        await svc.OnMessage(host, decoded.Kind, decoded.Bytes, relay);
     }
 
     // routes a body that is not valid JSON, as a broken or hostile peer might send
-    private Task<bool> SimulateMalformed(MessageKind kind) => _service.OnMessageAsync("master", kind, "{"u8.ToArray(), _relay);
+    private Task<bool> SimulateMalformed(MessageKind kind) => _service.OnMessage("master", kind, "{"u8.ToArray(), _relay);
 
     // computes chunks + sha for a file without sending them anywhere
     private static async Task<(List<(byte[] data, int seq)> chunks, byte[] sha, long totalSent)> ComputeChunks(string path)
     {
         var chunks = new List<(byte[] data, int seq)>();
-        var sha = await TarGzStreamer.StreamAsync([path],
+        var sha = await TarGzStreamer.Compress([path],
             (data, seq, _) => { chunks.Add((data, seq)); return ValueTask.CompletedTask; },
             NoFileStart, CancellationToken.None);
         return (chunks, sha, chunks.Sum(c => (long)c.data.Length));
@@ -100,7 +114,7 @@ public class FileTransferServiceTests
     {
         await Simulate(MessageKind.FileTransferRequest, new FileTransferRequestMessage());
 
-        var accepted = _relay.Snapshot().FirstOrDefault(m => m.Kind == MessageKind.FileTransferAccepted);
+        var accepted = _relay.Sent.Of(MessageKind.FileTransferAccepted).FirstOrDefault();
         using (Assert.EnterMultipleScope())
         {
             Assert.That(accepted, Is.Not.Null);
@@ -115,7 +129,7 @@ public class FileTransferServiceTests
 
         await Simulate(service, "master", MessageKind.FileTransferRequest, new FileTransferRequestMessage(), _relay);
 
-        var abort = _relay.Snapshot().FirstOrDefault(m => m.Kind == MessageKind.FileTransferAbort);
+        var abort = _relay.Sent.Of(MessageKind.FileTransferAbort).FirstOrDefault();
         using (Assert.EnterMultipleScope())
         {
             Assert.That(abort, Is.Not.Null);
@@ -169,7 +183,7 @@ public class FileTransferServiceTests
     {
         await Simulate(MessageKind.FileTransferRequest, new FileTransferRequestMessage());
         await Simulate(MessageKind.FileTransferStart, new FileTransferStartMessage(["a.txt"], 100));
-        _relay.ClearSent();
+        _relay.Sent.Clear();
 
         await SimulateMalformed(MessageKind.FileTransferDone);
 
@@ -177,8 +191,8 @@ public class FileTransferServiceTests
         {
             Assert.That(_dialog.LastState, Is.EqualTo("error"));
             Assert.That(_service.FileTransferOngoing, Is.False);
-            Assert.That(_relay.Snapshot().Select(m => m.Kind), Is.EqualTo([MessageKind.FileTransferAbort]));
-            Assert.That(_relay.Snapshot()[0].Targets, Is.EqualTo(["master"]));
+            Assert.That(_relay.Sent.Snapshot().Select(m => m.Kind), Is.EqualTo([MessageKind.FileTransferAbort]));
+            Assert.That(_relay.Sent.Snapshot()[0].Targets, Is.EqualTo(["master"]));
         }
     }
 
@@ -215,7 +229,7 @@ public class FileTransferServiceTests
     public async Task OnMessage_FileTransferAbort_DuringSend_ClosesDialog()
     {
         _service.InitiateSend([CreateTempFile()], "slave", _relay);
-        _relay.ClearSent();
+        _relay.Sent.Clear();
 
         // receiver ("slave") aborts — we were the sender, so we close without sending our own abort
         await Simulate("slave", MessageKind.FileTransferAbort, new FileTransferAbortMessage("disk full"));
@@ -224,7 +238,7 @@ public class FileTransferServiceTests
         {
             Assert.That(_dialog.LastState, Is.EqualTo("closed"));
             Assert.That(_service.FileTransferOngoing, Is.False);
-            Assert.That(_relay.Snapshot().Any(m => m.Kind == MessageKind.FileTransferAbort), Is.False);
+            Assert.That(_relay.Sent.Of(MessageKind.FileTransferAbort), Is.Empty);
         }
     }
 
@@ -245,13 +259,13 @@ public class FileTransferServiceTests
     public void CancelRequested_DuringSend_SendsAbortAndClosesDialog()
     {
         _service.InitiateSend([CreateTempFile()], "slave", _relay);
-        _relay.ClearSent();
+        _relay.Sent.Clear();
 
         _dialog.TriggerCancel();
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(_relay.Snapshot().Any(m => m.Kind == MessageKind.FileTransferAbort && m.Targets.Contains("slave")), Is.True);
+            Assert.That(_relay.Sent.Of(MessageKind.FileTransferAbort, "slave"), Is.Not.Empty);
             Assert.That(_dialog.LastState, Is.EqualTo("closed"));
         }
     }
@@ -260,13 +274,13 @@ public class FileTransferServiceTests
     public async Task CancelRequested_DuringReceive_SendsAbortAndClosesDialog()
     {
         await Simulate(MessageKind.FileTransferRequest, new FileTransferRequestMessage());
-        _relay.ClearSent();
+        _relay.Sent.Clear();
 
         _dialog.TriggerCancel();
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(_relay.Snapshot().Any(m => m.Kind == MessageKind.FileTransferAbort && m.Targets.Contains("master")), Is.True);
+            Assert.That(_relay.Sent.Of(MessageKind.FileTransferAbort, "master"), Is.Not.Empty);
             Assert.That(_dialog.LastState, Is.EqualTo("closed"));
             Assert.That(_service.FileTransferOngoing, Is.False);
         }
@@ -278,13 +292,13 @@ public class FileTransferServiceTests
     public void Abort_DuringSend_SendsAbortAndClosesDialog()
     {
         _service.InitiateSend([CreateTempFile()], "slave", _relay);
-        _relay.ClearSent();
+        _relay.Sent.Clear();
 
         _service.Abort(_relay, "peer disconnected");
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(_relay.Snapshot().Any(m => m.Kind == MessageKind.FileTransferAbort), Is.True);
+            Assert.That(_relay.Sent.Of(MessageKind.FileTransferAbort), Is.Not.Empty);
             Assert.That(_dialog.LastState, Is.EqualTo("closed"));
             Assert.That(_service.FileTransferOngoing, Is.False);
         }
@@ -294,13 +308,13 @@ public class FileTransferServiceTests
     public async Task Abort_DuringReceive_SendsAbortAndClosesDialog()
     {
         await Simulate(MessageKind.FileTransferRequest, new FileTransferRequestMessage());
-        _relay.ClearSent();
+        _relay.Sent.Clear();
 
         _service.Abort(_relay, "peer disconnected");
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(_relay.Snapshot().Any(m => m.Kind == MessageKind.FileTransferAbort), Is.True);
+            Assert.That(_relay.Sent.Of(MessageKind.FileTransferAbort), Is.Not.Empty);
             Assert.That(_dialog.LastState, Is.EqualTo("closed"));
             Assert.That(_service.FileTransferOngoing, Is.False);
         }
@@ -311,13 +325,13 @@ public class FileTransferServiceTests
     {
         var copyBuffer = new FileTransferService.FileCopyState("source-slave", ["/remote/file.txt"]);
         _service.InitiatePaste(copyBuffer, "target-slave", "local-host", _relay);
-        _relay.ClearSent();
+        _relay.Sent.Clear();
 
         _service.Abort(_relay, "peer disconnected");
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(_relay.Snapshot().Any(m => m.Kind == MessageKind.FileTransferAbort && m.Targets.Contains("target-slave")), Is.True);
+            Assert.That(_relay.Sent.Of(MessageKind.FileTransferAbort, "target-slave"), Is.Not.Empty);
             Assert.That(_service.FileTransferOngoing, Is.False);
         }
     }
@@ -396,7 +410,7 @@ public class FileTransferServiceTests
 
         var result = _service.InitiatePaste(copyBuffer, "local-host", "local-host", _relay);
 
-        var (targets, _, _) = _relay.Snapshot().First(m => m.Kind == MessageKind.FileStreamRequest);
+        var (targets, _, _) = _relay.Sent.Of(MessageKind.FileStreamRequest)[0];
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result, Is.True);
@@ -416,7 +430,7 @@ public class FileTransferServiceTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result, Is.False);
-            Assert.That(_relay.Snapshot(), Is.Empty);
+            Assert.That(_relay.Sent.Snapshot(), Is.Empty);
         }
     }
 
@@ -427,7 +441,7 @@ public class FileTransferServiceTests
 
         _service.InitiatePaste(copyBuffer, "target-slave", "local-host", _relay);
 
-        var (targets, _, json) = _relay.Snapshot().First(m => m.Kind == MessageKind.FileTransferRequest);
+        var (targets, _, json) = _relay.Sent.Of(MessageKind.FileTransferRequest)[0];
         var msg = json.FromSaneJson<FileTransferRequestMessage>();
         using (Assert.EnterMultipleScope())
         {
@@ -444,7 +458,7 @@ public class FileTransferServiceTests
 
         await Simulate("target-slave", MessageKind.FileTransferAccepted, new FileTransferAcceptedMessage());
 
-        var (targets, _, _) = _relay.Snapshot().First(m => m.Kind == MessageKind.FileStreamRequest);
+        var (targets, _, _) = _relay.Sent.Of(MessageKind.FileStreamRequest)[0];
         using (Assert.EnterMultipleScope())
         {
             Assert.That(targets, Contains.Item("source-slave"));
@@ -473,11 +487,11 @@ public class FileTransferServiceTests
     [Test]
     public async Task InitiateSend_IncludesLocalHostAsSourceHostInRequestMessage()
     {
-        // InitiateSend runs RunSendAsync on Task.Run — wait until it produces FileTransferRequest
+        // InitiateSend runs RunSend on Task.Run — wait until it produces FileTransferRequest
         _service.InitiateSend([CreateTempFile()], "slave", _relay, "my-machine");
-        await _relay.WaitForSent(MessageKind.FileTransferRequest, TimeSpan.FromSeconds(3));
+        await _relay.Sent.WaitFor(MessageKind.FileTransferRequest);
 
-        var (_, _, json) = _relay.Snapshot().First(m => m.Kind == MessageKind.FileTransferRequest);
+        var (_, _, json) = _relay.Sent.Of(MessageKind.FileTransferRequest)[0];
         var msg = json.FromSaneJson<FileTransferRequestMessage>();
         Assert.That(msg?.SourceHost, Is.EqualTo("my-machine"));
     }
@@ -490,9 +504,9 @@ public class FileTransferServiceTests
         // slave informs target of total size before streaming so target can show accurate progress
         await _service.ExecuteStreamRequest([CreateTempFile()], "target", _relay);
 
-        var startIdx = _relay.Snapshot().FindIndex(m => m.Kind == MessageKind.FileTransferStart);
-        var firstChunkIdx = _relay.Snapshot().FindIndex(m => m.Kind == MessageKind.FileTransferChunk);
-        var (_, _, json) = _relay.Snapshot().First(m => m.Kind == MessageKind.FileTransferStart);
+        var startIdx = _relay.Sent.Snapshot().FindIndex(m => m.Kind == MessageKind.FileTransferStart);
+        var firstChunkIdx = _relay.Sent.Snapshot().FindIndex(m => m.Kind == MessageKind.FileTransferChunk);
+        var (_, _, json) = _relay.Sent.Of(MessageKind.FileTransferStart)[0];
         var msg = json.FromSaneJson<FileTransferStartMessage>();
         using (Assert.EnterMultipleScope())
         {
@@ -500,7 +514,7 @@ public class FileTransferServiceTests
             Assert.That(firstChunkIdx, Is.GreaterThan(startIdx), "FileTransferStart must arrive before first chunk");
             Assert.That(msg?.TotalBytes, Is.GreaterThan(0), "TotalBytes must be set");
             Assert.That(msg?.FileNames, Is.Not.Empty, "FileNames must be set");
-            Assert.That(_relay.Snapshot().Any(m => m.Kind == MessageKind.FileTransferDone), Is.True);
+            Assert.That(_relay.Sent.Of(MessageKind.FileTransferDone), Is.Not.Empty);
         }
     }
 
@@ -513,7 +527,7 @@ public class FileTransferServiceTests
         await File.WriteAllBytesAsync(path, bytes);
         var relay = new AwaitedSendRelay();
 
-        await _service.ExecuteStreamRequest([path], "target", relay).WaitAsync(TimeSpan.FromSeconds(5));
+        await _service.ExecuteStreamRequest([path], "target", relay).WaitAsync(Bound);
 
         using (Assert.EnterMultipleScope())
         {
@@ -529,17 +543,17 @@ public class FileTransferServiceTests
         var bytes = new byte[TarGzStreamer.ChunkSize * 2];
         Random.Shared.NextBytes(bytes);
         await File.WriteAllBytesAsync(path, bytes);
-        var firstRelay = new GatedReliableRelay(ignoreCancellation: true);
-        var secondRelay = new GatedReliableRelay();
+        var firstRelay = GatedRelay(ignoreCancellation: true);
+        var secondRelay = GatedRelay();
 
         var first = _service.ExecuteStreamRequest([path], "first-target", firstRelay);
-        await firstRelay.FirstReliableSend.WaitAsync(TimeSpan.FromSeconds(3));
+        await firstRelay.FirstReliableSend.WaitAsync(Bound);
         _service.Abort(firstRelay, "replace transfer");
 
         var second = _service.ExecuteStreamRequest([path], "second-target", secondRelay);
-        await secondRelay.FirstReliableSend.WaitAsync(TimeSpan.FromSeconds(3));
-        firstRelay.ReleaseAll();
-        await first.WaitAsync(TimeSpan.FromSeconds(5));
+        await secondRelay.FirstReliableSend.WaitAsync(Bound);
+        firstRelay.Gate.Release();
+        await first.WaitAsync(Bound);
 
         using (Assert.EnterMultipleScope())
         {
@@ -549,8 +563,8 @@ public class FileTransferServiceTests
             Assert.That(_dialog.ProgressUpdates, Is.Zero, "the cancelled send's last chunk reported progress on its replacement's dialog");
         }
 
-        secondRelay.ReleaseAll();
-        await second.WaitAsync(TimeSpan.FromSeconds(5));
+        secondRelay.Gate.Release();
+        await second.WaitAsync(Bound);
     }
 
     [Test]
@@ -566,21 +580,21 @@ public class FileTransferServiceTests
         _dialog.OnSetCurrentFile = () =>
         {
             stalled.TrySetResult();
-            extracting.Task.Wait(TimeSpan.FromSeconds(10));
+            extracting.Task.Wait(Bound);
         };
         await Simulate(MessageKind.FileTransferRequest, new FileTransferRequestMessage());
         await Simulate(MessageKind.FileTransferStart, new FileTransferStartMessage(["random.bin"], totalSent));
 
         // held at its first file, the extractor stops reading, so a full chunk is left waiting on the pipe
         var chunk = Simulate(MessageKind.FileTransferChunk, new FileTransferChunkMessage(chunks[0].seq, chunks[0].data));
-        await stalled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await stalled.Task.WaitAsync(Bound);
         Assert.That(chunk.IsCompleted, Is.False, "the chunk was not waiting on the stalled extractor");
 
         // the cancel waits for the stalled extractor, so it runs aside while the chunk finishes
         var cancel = Task.Run(_dialog.TriggerCancel);
-        await chunk.WaitAsync(TimeSpan.FromSeconds(5));
+        await chunk.WaitAsync(Bound);
         extracting.SetResult();
-        await cancel.WaitAsync(TimeSpan.FromSeconds(5));
+        await cancel.WaitAsync(Bound);
 
         Assert.That(_dialog.ProgressUpdates, Is.Zero, "the cancelled receive's last chunk reported progress on a dialog it no longer owns");
     }
@@ -597,7 +611,7 @@ public class FileTransferServiceTests
         {
             Assert.That(_dialog.LastState, Is.EqualTo("closed"));
             Assert.That(_service.FileTransferOngoing, Is.False);
-            Assert.That(_relay.Snapshot().Select(m => m.Kind), Does.Not.Contain(MessageKind.FileTransferStart));
+            Assert.That(_relay.Sent.Snapshot().Select(m => m.Kind), Does.Not.Contain(MessageKind.FileTransferStart));
         }
     }
 
@@ -626,8 +640,8 @@ public class FileTransferServiceTests
         {
             Assert.That(_dialog.LastState, Is.EqualTo("error"));
             Assert.That(_service.FileTransferOngoing, Is.False);
-            Assert.That(_relay.Snapshot().Select(m => m.Kind), Is.EqualTo([MessageKind.FileTransferAbort]));
-            Assert.That(_relay.Snapshot()[0].Targets, Is.EqualTo(["target"]));
+            Assert.That(_relay.Sent.Snapshot().Select(m => m.Kind), Is.EqualTo([MessageKind.FileTransferAbort]));
+            Assert.That(_relay.Sent.Snapshot()[0].Targets, Is.EqualTo(["target"]));
         }
     }
 
@@ -649,7 +663,7 @@ public class FileTransferServiceTests
         {
             Assert.That(_dialog.LastState, Is.EqualTo("error"));
             Assert.That(_service.FileTransferOngoing, Is.False);
-            Assert.That(_relay.Snapshot(), Is.Empty);
+            Assert.That(_relay.Sent.Snapshot(), Is.Empty);
         }
     }
 
@@ -665,7 +679,7 @@ public class FileTransferServiceTests
         {
             Assert.That(_service.IsSendingTo("slave"), Is.True);
             Assert.That(_service.IsSendingTo("other"), Is.False);
-            Assert.That(other.Snapshot(), Is.Empty);
+            Assert.That(other.Sent.Snapshot(), Is.Empty);
         }
     }
 
@@ -681,7 +695,7 @@ public class FileTransferServiceTests
         {
             Assert.That(_service.IsReceivingFrom("master"), Is.True);
             Assert.That(_service.IsSendingTo("slave"), Is.False);
-            Assert.That(other.Snapshot(), Is.Empty);
+            Assert.That(other.Sent.Snapshot(), Is.Empty);
         }
     }
 
@@ -732,11 +746,13 @@ public class FileTransferServiceTests
     [Test]
     public async Task Watchdog_NoChunksAfterStart_AbortsReceive()
     {
-        using var service = FastTimeoutService();
+        var clock = new StartedTimers();
+        using var service = SteppedService(clock);
         var settled = WhenTransferSettles(service, _dialog);
         await Simulate(service, "master", MessageKind.FileTransferRequest, new FileTransferRequestMessage(), _relay);
         await Simulate(service, "master", MessageKind.FileTransferStart, new FileTransferStartMessage(["a.txt"], 100), _relay);
 
+        await PassTheFirstTimer(clock);
         await settled;
 
         using (Assert.EnterMultipleScope())
@@ -749,17 +765,19 @@ public class FileTransferServiceTests
     [Test]
     public async Task InitiateSend_NoAcceptedResponseWithinTimeout_ShowsError()
     {
-        using var service = FastTimeoutService();
+        var clock = new StartedTimers();
+        using var service = SteppedService(clock);
         var settled = WhenTransferSettles(service, _dialog);
         service.InitiateSend([CreateTempFile()], "slave", _relay);
 
+        await PassTheFirstTimer(clock);
         await settled;
 
         using (Assert.EnterMultipleScope())
         {
             Assert.That(_dialog.LastState, Is.EqualTo("error"));
             Assert.That(service.FileTransferOngoing, Is.False);
-            Assert.That(_relay.Snapshot().Any(m => m.Kind == MessageKind.FileTransferAbort), Is.True);
+            Assert.That(_relay.Sent.Of(MessageKind.FileTransferAbort), Is.Not.Empty);
         }
     }
 
@@ -825,6 +843,18 @@ public class FileTransferServiceTests
         }
     }
 
+    [Test]
+    public void SelectionResult_ToResponse_SaysWhatHappened()
+    {
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(FileSelectionResult.Failure.ToResponse("Finder"), Is.EqualTo(new FileSelectionResponseMessage(null, FileSelectionResult.FailedMessage)));
+            Assert.That(new FileSelectionResult(false, null).ToResponse("Finder").Message, Is.EqualTo("Finder is not focused"));
+            Assert.That(new FileSelectionResult(true, null).ToResponse("Finder"), Is.EqualTo(new FileSelectionResponseMessage(null)));
+            Assert.That(new FileSelectionResult(true, ["a.txt"]).ToResponse("Finder").Paths, Is.EqualTo(["a.txt"]));
+        }
+    }
+
     // -- HandleBusy --
 
     [Test]
@@ -885,15 +915,15 @@ public class FileTransferServiceTests
     {
         // put service into sending state (FileTransferOngoing = true)
         _service.InitiateSend([CreateTempFile()], "slave", _relay);
-        _relay.ClearSent();
+        _relay.Sent.Clear();
 
         // another host now tries to transfer to us
         await Simulate("other-master", MessageKind.FileTransferRequest, new FileTransferRequestMessage());
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(_relay.Snapshot().Any(m => m.Kind == MessageKind.FileTransferBusy && m.Targets.Contains("other-master")), Is.True);
-            Assert.That(_relay.Snapshot().Any(m => m.Kind == MessageKind.FileTransferAccepted), Is.False);
+            Assert.That(_relay.Sent.Of(MessageKind.FileTransferBusy, "other-master"), Is.Not.Empty);
+            Assert.That(_relay.Sent.Of(MessageKind.FileTransferAccepted), Is.Empty);
         }
     }
 
@@ -930,7 +960,7 @@ public class FileTransferServiceTests
     {
         var copyBuffer = new FileTransferService.FileCopyState("source-slave", ["/remote/file.txt"]);
         _service.InitiatePaste(copyBuffer, "target-slave", "local-host", _relay);
-        _relay.ClearSent();
+        _relay.Sent.Clear();
 
         _service.Dispose();
 
@@ -938,7 +968,7 @@ public class FileTransferServiceTests
         {
             Assert.That(_dialog.LastState, Is.EqualTo("closed"));
             Assert.That(_service.FileTransferOngoing, Is.False);
-            Assert.That(_relay.Snapshot().Any(m => m.Kind == MessageKind.FileTransferAbort && m.Targets.Contains("target-slave")), Is.True);
+            Assert.That(_relay.Sent.Of(MessageKind.FileTransferAbort, "target-slave"), Is.Not.Empty);
         }
     }
 }
@@ -953,19 +983,17 @@ internal sealed class ThrowingRelay : NullRelaySender
 
 internal sealed class GatedReliableRelay(bool ignoreCancellation = false) : NullRelaySender
 {
-    private readonly SemaphoreSlim _gate = new(0);
     private readonly TaskCompletionSource _firstReliableSend = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public override bool IsConnected => true;
     public Task FirstReliableSend => _firstReliableSend.Task;
+    public Gate Gate { get; } = new(held: true);
 
     public override async ValueTask SendReliableAsync(string[] targetHosts, byte[] payload, CancellationToken cancel = default)
     {
         _firstReliableSend.TrySetResult();
-        await _gate.WaitAsync(ignoreCancellation ? CancellationToken.None : cancel);
+        await Gate.Passed(ignoreCancellation ? CancellationToken.None : cancel);
     }
-
-    public void ReleaseAll() => _gate.Release(100);
 }
 
 // counts reliable sends and how many were outstanding at once; see AwaitedCalls

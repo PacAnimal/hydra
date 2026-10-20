@@ -1,45 +1,57 @@
+using Hydra;
 using Hydra.Config;
 using Hydra.FileTransfer;
-using Hydra.Keyboard;
 using Hydra.Platform;
 using Hydra.Relay;
 using Hydra.Screen;
+using Microsoft.Extensions.Logging;
 using Tests.Setup;
 
 namespace Tests.Screen;
 
 /// <summary>The copy hotkey asks the local file manager, which may take seconds; routing carries on meanwhile.</summary>
 [TestFixture]
-public class CopyFilesHotkeyTests
+public class CopyFilesHotkeyTests : ServicesFixture
 {
-    private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(10);
-    private const KeyModifiers HotkeyModifiers = KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Super;
-
-    private readonly StartedServices _services = new();
-
-    [TearDown]
-    public Task TearDown() => _services.StopAll();
-
     [Test]
     public async Task SlowLocalSelection_DoesNotStallTheRouter()
     {
         var finder = new GatedFileSelectionDetector();
         var osd = new RecordingOsd();
-        var (platform, relay, _) = await _services.Start(TransitionTestHelper.CreateService(selectionDetector: finder, osd: osd));
-        await TransitionTestHelper.BringRemoteOnline(relay);
+        var (platform, _, _) = await Services.StartOnline(TransitionTestHelper.CreateService(selectionDetector: finder, osd: osd));
         try
         {
             // each Fire waits for the router to process it, so a stalled router fails the wait
-            await Task.Run(() => platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyDown, 'c', HotkeyModifiers))).WaitAsync(Timeout);
-            await finder.Queried.WaitAsync(Timeout);
-            await Task.Run(() => platform.FireMouseMove(100, 100)).WaitAsync(Timeout);
+            await Task.Run(() => platform.PressHotkey('c')).WaitAsync(Bound);
+            await finder.Queried.WaitAsync(Bound);
+            await Task.Run(() => platform.FireMouseMove(100, 100)).WaitAsync(Bound);
         }
         finally
         {
             finder.Release(new FileSelectionResult(true, ["/Users/me/a.txt", "/Users/me/b.txt"]));
         }
 
-        Assert.That(await osd.Shown.Next((int)Timeout.TotalMilliseconds, "the copy OSD"), Is.EqualTo("2 items copied"));
+        Assert.That(await osd.Shown.Next("the copy OSD"), Is.EqualTo("2 items copied"));
+    }
+
+    [Test]
+    public async Task TheLocalSelectionsPaths_AreLoggedMarkedAsFilePaths()
+    {
+        var finder = new GatedFileSelectionDetector();
+        var osd = new RecordingOsd();
+        var log = new CapturingLog<InputRouter>(LogLevel.Information);
+        var (platform, _, _) = await Services.StartOnline(TransitionTestHelper.CreateService(selectionDetector: finder, osd: osd, log: log));
+        await Press(platform, 'c');
+        await finder.Queried.WaitAsync(Bound);
+        finder.Release(new FileSelectionResult(true, ["/Users/me/a.txt"]));
+        await osd.Shown.Next("the copy OSD");
+
+        var entry = log.Entries.Single(e => e.Message.Contains("/Users/me/a.txt"));
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(entry.EventId, Is.EqualTo(LogEvents.FilePaths), "the management log drops it by this, not by its wording");
+            Assert.That(entry.Message, Is.EqualTo("Copy hotkey: 1 file selected: /Users/me/a.txt"));
+        }
     }
 
     [Test]
@@ -49,20 +61,19 @@ public class CopyFilesHotkeyTests
         var osd = new RecordingOsd();
         var fileTransfer = FileTransferService.Null();
         fileTransfer.SetCopyBuffer("remote", ["/home/me/old.txt"]);
-        var (platform, relay, _) = await _services.Start(TransitionTestHelper.CreateService(selectionDetector: finder, osd: osd, fileTransfer: fileTransfer));
-        await TransitionTestHelper.BringRemoteOnline(relay);
+        var (platform, relay, _) = await Services.StartOnline(TransitionTestHelper.CreateService(selectionDetector: finder, osd: osd, fileTransfer: fileTransfer));
         try
         {
             await Press(platform, 'c');
-            await finder.Queried.WaitAsync(Timeout);
-            var sentBefore = relay.Snapshot().Count;
+            await finder.Queried.WaitAsync(Bound);
+            var sentBefore = relay.Sent.Snapshot().Count;
 
             await Press(platform, 'v');
 
             using (Assert.EnterMultipleScope())
             {
-                Assert.That(await osd.Shown.Next((int)Timeout.TotalMilliseconds, "the paste OSD"), Is.EqualTo("Copy in progress"));
-                Assert.That(relay.Snapshot().Skip(sentBefore).Select(s => s.Kind), Is.Empty, "a paste refused for a pending copy must send nothing");
+                Assert.That(await osd.Shown.Next("the paste OSD"), Is.EqualTo("Copy in progress"));
+                Assert.That(relay.Sent.Snapshot().Skip(sentBefore).Select(s => s.Kind), Is.Empty, "a paste refused for a pending copy must send nothing");
             }
         }
         finally
@@ -70,7 +81,7 @@ public class CopyFilesHotkeyTests
             finder.Release(new FileSelectionResult(true, ["/Users/me/a.txt"]));
         }
 
-        Assert.That(await osd.Shown.Next((int)Timeout.TotalMilliseconds, "the copy OSD"), Is.EqualTo("1 item copied"));
+        Assert.That(await osd.Shown.Next("the copy OSD"), Is.EqualTo("1 item copied"));
     }
 
     [Test]
@@ -79,23 +90,22 @@ public class CopyFilesHotkeyTests
         var finder = new GatedFileSelectionDetector();
         var osd = new RecordingOsd();
         var fileTransfer = FileTransferService.Null();
-        var (platform, relay, service) = await _services.Start(TransitionTestHelper.CreateService(selectionDetector: finder, osd: osd, fileTransfer: fileTransfer));
-        await TransitionTestHelper.BringRemoteOnline(relay);
+        var (platform, _, service) = await Services.StartOnline(TransitionTestHelper.CreateService(selectionDetector: finder, osd: osd, fileTransfer: fileTransfer));
         try
         {
             await Press(platform, 'c');
             var first = service.LocalSelectionQuery;
-            await finder.QueriedAt(0).WaitAsync(Timeout);
+            await finder.QueriedAt(0).WaitAsync(Bound);
             await Press(platform, 'c');
             var second = service.LocalSelectionQuery;
-            await finder.QueriedAt(1).WaitAsync(Timeout);
+            await finder.QueriedAt(1).WaitAsync(Bound);
 
             finder.Release(1, new FileSelectionResult(true, ["/Users/me/new.txt"]));
-            await second.WaitAsync(Timeout);
-            await service.FlushAsync();
+            await second.WaitAsync(Bound);
+            await service.Flush();
             finder.Release(0, new FileSelectionResult(true, ["/Users/me/old-a.txt", "/Users/me/old-b.txt"]));
-            await first.WaitAsync(Timeout);
-            await service.FlushAsync();
+            await first.WaitAsync(Bound);
+            await service.Flush();
         }
         finally
         {
@@ -106,7 +116,7 @@ public class CopyFilesHotkeyTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(fileTransfer.GetCopyBuffer()?.Paths, Is.EqualTo(["/Users/me/new.txt"]));
-            Assert.That(await osd.Shown.Next((int)Timeout.TotalMilliseconds, "the copy OSD"), Is.EqualTo("1 item copied"));
+            Assert.That(await osd.Shown.Next("the copy OSD"), Is.EqualTo("1 item copied"));
             Assert.That(osd.Shown.Count, Is.Zero, "the superseded query must not show an OSD");
         }
     }
@@ -116,22 +126,21 @@ public class CopyFilesHotkeyTests
     {
         var finder = new GatedFileSelectionDetector();
         var osd = new RecordingOsd();
-        var (platform, relay, service) = await _services.Start(TransitionTestHelper.CreateService(selectionDetector: finder, osd: osd));
-        await TransitionTestHelper.BringRemoteOnline(relay);
+        var (platform, _, service) = await Services.StartOnline(TransitionTestHelper.CreateService(selectionDetector: finder, osd: osd));
         try
         {
             await Press(platform, 'c');
             var first = service.LocalSelectionQuery;
-            await finder.QueriedAt(0).WaitAsync(Timeout);
+            await finder.QueriedAt(0).WaitAsync(Bound);
             await Press(platform, 'c');
-            await finder.QueriedAt(1).WaitAsync(Timeout);
+            await finder.QueriedAt(1).WaitAsync(Bound);
 
             finder.Release(0, new FileSelectionResult(true, ["/Users/me/old.txt"]));
-            await first.WaitAsync(Timeout);
-            await service.FlushAsync();
+            await first.WaitAsync(Bound);
+            await service.Flush();
             await Press(platform, 'v');
 
-            Assert.That(await osd.Shown.Next((int)Timeout.TotalMilliseconds, "the paste OSD"), Is.EqualTo("Copy in progress"));
+            Assert.That(await osd.Shown.Next("the paste OSD"), Is.EqualTo("Copy in progress"));
         }
         finally
         {
@@ -143,18 +152,17 @@ public class CopyFilesHotkeyTests
     public async Task FailedLocalSelectionQuery_ReportsAndClearsThePendingCopy()
     {
         var osd = new RecordingOsd();
-        var (platform, relay, service) = await _services.Start(TransitionTestHelper.CreateService(selectionDetector: new ThrowingFileSelectionDetector(), osd: osd));
-        await TransitionTestHelper.BringRemoteOnline(relay);
+        var (platform, _, service) = await Services.StartOnline(TransitionTestHelper.CreateService(selectionDetector: new ThrowingFileSelectionDetector(), osd: osd));
 
         await Press(platform, 'c');
-        await service.LocalSelectionQuery.WaitAsync(Timeout);
-        await service.FlushAsync();
+        await service.LocalSelectionQuery.WaitAsync(Bound);
+        await service.Flush();
         await Press(platform, 'v');
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(await osd.Shown.Next((int)Timeout.TotalMilliseconds, "the copy OSD"), Is.EqualTo("Copy failed"));
-            Assert.That(await osd.Shown.Next((int)Timeout.TotalMilliseconds, "the paste OSD"), Is.EqualTo("Nothing to paste"));
+            Assert.That(await osd.Shown.Next("the copy OSD"), Is.EqualTo("Copy failed"));
+            Assert.That(await osd.Shown.Next("the paste OSD"), Is.EqualTo("Nothing to paste"));
         }
     }
 
@@ -163,15 +171,14 @@ public class CopyFilesHotkeyTests
     {
         var finder = new GatedFileSelectionDetector();
         var osd = new RecordingOsd();
-        var (platform, relay, service) = await _services.Start(TransitionTestHelper.CreateService(selectionDetector: finder, osd: osd));
-        await TransitionTestHelper.BringRemoteOnline(relay);
+        var (platform, _, service) = await Services.StartOnline(TransitionTestHelper.CreateService(selectionDetector: finder, osd: osd));
 
         await Press(platform, 'c');
         finder.Release(FileSelectionResult.Failure);
-        await service.LocalSelectionQuery.WaitAsync(Timeout);
-        await service.FlushAsync();
+        await service.LocalSelectionQuery.WaitAsync(Bound);
+        await service.Flush();
 
-        Assert.That(await osd.Shown.Next((int)Timeout.TotalMilliseconds, "the copy OSD"), Is.EqualTo("Copy failed"));
+        Assert.That(await osd.Shown.Next("the copy OSD"), Is.EqualTo("Copy failed"));
     }
 
     [Test]
@@ -179,22 +186,20 @@ public class CopyFilesHotkeyTests
     {
         var finder = new GatedFileSelectionDetector();
         var fileTransfer = FileTransferService.Null();
-        var (platform, relay, service) = await _services.Start(TransitionTestHelper.CreateService(selectionDetector: finder, fileTransfer: fileTransfer));
-        await TransitionTestHelper.BringRemoteOnline(relay);
+        var (platform, relay, service) = await Services.StartOnline(TransitionTestHelper.CreateService(selectionDetector: finder, fileTransfer: fileTransfer));
         try
         {
             await Press(platform, 'c');
             var local = service.LocalSelectionQuery;
-            await finder.Queried.WaitAsync(Timeout);
+            await finder.Queried.WaitAsync(Bound);
 
-            platform.FireMouseMove(2559, 720);
-            Assert.That(platform.IsOnVirtualScreen, Is.True, "pre-condition: on the remote screen");
+            TransitionTestHelper.EnterRemote(platform);
             await Press(platform, 'c');
             await relay.FireMessageReceived("remote", MessageKind.FileSelectionResponse, """{"paths":["/home/r/remote.txt"]}""");
 
             finder.Release(new FileSelectionResult(true, ["/Users/me/local.txt"]));
-            await local.WaitAsync(Timeout);
-            await service.FlushAsync();
+            await local.WaitAsync(Bound);
+            await service.Flush();
         }
         finally
         {
@@ -209,19 +214,17 @@ public class CopyFilesHotkeyTests
     {
         var finder = new GatedFileSelectionDetector();
         var fileTransfer = FileTransferService.Null();
-        var (platform, relay, service) = await _services.Start(TransitionTestHelper.CreateService(selectionDetector: finder, fileTransfer: fileTransfer));
-        await TransitionTestHelper.BringRemoteOnline(relay);
+        var (platform, relay, service) = await Services.StartOnline(TransitionTestHelper.CreateService(selectionDetector: finder, fileTransfer: fileTransfer));
         finder.Release(new FileSelectionResult(true, ["/Users/me/local.txt"]));
 
-        platform.FireMouseMove(2559, 720);
-        Assert.That(platform.IsOnVirtualScreen, Is.True, "pre-condition: on the remote screen");
+        TransitionTestHelper.EnterRemote(platform);
         await Press(platform, 'c');
         for (var i = 0; i < 40 && platform.IsOnVirtualScreen; i++)
             platform.FireMouseDelta(-100, 0);
         Assert.That(platform.IsOnVirtualScreen, Is.False, "pre-condition: back home");
         await Press(platform, 'c');
-        await service.LocalSelectionQuery.WaitAsync(Timeout);
-        await service.FlushAsync();
+        await service.LocalSelectionQuery.WaitAsync(Bound);
+        await service.Flush();
 
         await relay.FireMessageReceived("remote", MessageKind.FileSelectionResponse, """{"paths":["/home/r/remote.txt"]}""");
 
@@ -233,11 +236,9 @@ public class CopyFilesHotkeyTests
     {
         var fileTransfer = FileTransferService.Null();
         fileTransfer.SetCopyBuffer("elsewhere", ["/x/old.txt"]);
-        var (platform, relay, _) = await StartForRemoteCopy(fileTransfer: fileTransfer);
-        await TransitionTestHelper.BringRemoteOnline(relay);
-        EnterRemote(platform);
+        var (platform, relay, _) = await VisitingForRemoteCopy(fileTransfer: fileTransfer);
         await Press(platform, 'c');
-        var sentBefore = relay.Snapshot().Count;
+        var sentBefore = relay.Sent.Snapshot().Count;
 
         await Press(platform, 'v');
 
@@ -250,17 +251,17 @@ public class CopyFilesHotkeyTests
         var finder = new GatedFileSelectionDetector();
         var fileTransfer = FileTransferService.Null();
         fileTransfer.SetCopyBuffer("elsewhere", ["/x/old.txt"]);
-        var (platform, relay, _) = await _services.Start(TransitionTestHelper.CreateService(
+        var (platform, relay, _) = await Services.Start(TransitionTestHelper.CreateService(
             profile: TransitionTestHelper.ChainConfig, selectionDetector: finder, fileTransfer: fileTransfer));
         await TransitionTestHelper.BringHostsOnline(relay, ["remote", "remote2"]);
         try
         {
             await Press(platform, 'c');
-            await finder.Queried.WaitAsync(Timeout);
-            EnterRemote(platform);
+            await finder.Queried.WaitAsync(Bound);
+            TransitionTestHelper.EnterRemote(platform);
             await Press(platform, 'c');
             MoveRightTo(platform, relay, "remote2");
-            var sentBefore = relay.Snapshot().Count;
+            var sentBefore = relay.Sent.Snapshot().Count;
 
             await Press(platform, 'v');
 
@@ -275,12 +276,10 @@ public class CopyFilesHotkeyTests
     [Test]
     public async Task RemoteCopyAnswered_ClearsThePendingCopy()
     {
-        var (platform, relay, _) = await StartForRemoteCopy();
-        await TransitionTestHelper.BringRemoteOnline(relay);
-        EnterRemote(platform);
+        var (platform, relay, _) = await VisitingForRemoteCopy();
         await Press(platform, 'c');
         await relay.FireMessageReceived("remote", MessageKind.FileSelectionResponse, """{"paths":[]}""");
-        var sentBefore = relay.Snapshot().Count;
+        var sentBefore = relay.Sent.Snapshot().Count;
 
         await Press(platform, 'v');
 
@@ -290,13 +289,11 @@ public class CopyFilesHotkeyTests
     [Test]
     public async Task RemoteCopyRefusedAsBusy_ClearsThePendingCopy()
     {
-        var (platform, relay, service) = await StartForRemoteCopy();
-        await TransitionTestHelper.BringRemoteOnline(relay);
-        EnterRemote(platform);
+        var (platform, relay, service) = await VisitingForRemoteCopy();
         await Press(platform, 'c');
         await relay.FireMessageReceived("remote", MessageKind.FileTransferBusy, "{}");
-        await service.FlushAsync();
-        var sentBefore = relay.Snapshot().Count;
+        await service.Flush();
+        var sentBefore = relay.Sent.Snapshot().Count;
 
         await Press(platform, 'v');
 
@@ -307,44 +304,38 @@ public class CopyFilesHotkeyTests
     public async Task RemoteCopyHostLeaving_ClearsThePendingCopy()
     {
         var osd = new RecordingOsd();
-        var (platform, relay, _) = await StartForRemoteCopy(osd: osd);
-        await TransitionTestHelper.BringRemoteOnline(relay);
-        EnterRemote(platform);
+        var (platform, relay, _) = await VisitingForRemoteCopy(osd: osd);
         await Press(platform, 'c');
         await relay.FirePeersChanged();
         Assert.That(platform.IsOnVirtualScreen, Is.False, "pre-condition: back home");
 
         await Press(platform, 'v');
 
-        Assert.That(await osd.Shown.Next((int)Timeout.TotalMilliseconds, "the paste OSD"), Is.EqualTo("Nothing to paste"));
+        Assert.That(await osd.Shown.Next("the paste OSD"), Is.EqualTo("Nothing to paste"));
     }
 
     [Test]
     public async Task RelayDisconnecting_ClearsThePendingRemoteCopy()
     {
         var osd = new RecordingOsd();
-        var (platform, relay, _) = await StartForRemoteCopy(osd: osd);
-        await TransitionTestHelper.BringRemoteOnline(relay);
-        EnterRemote(platform);
+        var (platform, relay, _) = await VisitingForRemoteCopy(osd: osd);
         await Press(platform, 'c');
         await relay.FireDisconnected();
         Assert.That(platform.IsOnVirtualScreen, Is.False, "pre-condition: back home");
 
         await Press(platform, 'v');
 
-        Assert.That(await osd.Shown.Next((int)Timeout.TotalMilliseconds, "the paste OSD"), Is.EqualTo("Nothing to paste"));
+        Assert.That(await osd.Shown.Next("the paste OSD"), Is.EqualTo("Nothing to paste"));
     }
 
     [Test]
     public async Task OtherHostBusy_LeavesTheRemoteCopyPending()
     {
-        var (platform, relay, service) = await StartForRemoteCopy(profile: TransitionTestHelper.ChainConfig);
-        await TransitionTestHelper.BringHostsOnline(relay, ["remote", "remote2"]);
-        EnterRemote(platform);
+        var (platform, relay, service) = await VisitingForRemoteCopy(profile: TransitionTestHelper.ChainConfig);
         await Press(platform, 'c');
         await relay.FireMessageReceived("remote2", MessageKind.FileTransferBusy, "{}");
-        await service.FlushAsync();
-        var sentBefore = relay.Snapshot().Count;
+        await service.Flush();
+        var sentBefore = relay.Sent.Snapshot().Count;
 
         await Press(platform, 'v');
 
@@ -355,9 +346,7 @@ public class CopyFilesHotkeyTests
     public async Task TwoAnswersFromTheSameHostForOnePress_KeepsTheFirst()
     {
         var fileTransfer = FileTransferService.Null();
-        var (platform, relay, _) = await StartForRemoteCopy(fileTransfer: fileTransfer);
-        await TransitionTestHelper.BringRemoteOnline(relay);
-        EnterRemote(platform);
+        var (platform, relay, _) = await VisitingForRemoteCopy(fileTransfer: fileTransfer);
         await Press(platform, 'c');
 
         await relay.FireMessageReceived("remote", MessageKind.FileSelectionResponse, """{"paths":["/home/r/first.txt"]}""");
@@ -366,7 +355,7 @@ public class CopyFilesHotkeyTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(fileTransfer.GetCopyBuffer()?.Paths, Is.EqualTo(["/home/r/first.txt"]));
-            Assert.That(relay.Snapshot().Count(s => s.Kind == MessageKind.Osd), Is.EqualTo(1), "the second answer must not show an OSD");
+            Assert.That(relay.Sent.Of(MessageKind.Osd), Has.Count.EqualTo(1), "the second answer must not show an OSD");
         }
     }
 
@@ -379,16 +368,14 @@ public class CopyFilesHotkeyTests
         await slave.SimulateMasterConfig("home");
         var fileTransfer = FileTransferService.Null();
         fileTransfer.SetCopyBuffer("elsewhere", ["/x/old.txt"]);
-        var (platform, relay, service) = await StartForRemoteCopy(profile: TransitionTestHelper.ChainConfig, fileTransfer: fileTransfer);
-        await TransitionTestHelper.BringHostsOnline(relay, ["remote", "remote2"]);
-        EnterRemote(platform);
+        var (platform, relay, service) = await VisitingForRemoteCopy(profile: TransitionTestHelper.ChainConfig, fileTransfer: fileTransfer);
         try
         {
             await Press(platform, 'c');
             await Press(platform, 'c');
-            foreach (var (_, _, json) in relay.Snapshot().Where(s => s.Kind == MessageKind.FileSelectionQuery).ToList())
-                await slave.SimulateReceive("home", MessageKind.FileSelectionQuery, json).WaitAsync(Timeout);
-            await finder.Queried.WaitAsync(Timeout);
+            foreach (var (_, _, json) in relay.Sent.Of(MessageKind.FileSelectionQuery))
+                await slave.SimulateReceive("home", MessageKind.FileSelectionQuery, json).WaitAsync(Bound);
+            await finder.Queried.WaitAsync(Bound);
             await ForwardSelectionAnswers(slave, relay, service);
         }
         finally
@@ -396,17 +383,17 @@ public class CopyFilesHotkeyTests
             finder.Release(0, new FileSelectionResult(true, ["/home/r/report.pdf"]));
             finder.Release(1, new FileSelectionResult(true, []));
         }
-        await slave.WaitForSent(MessageKind.FileSelectionResponse, Timeout);
+        await slave.Sent.WaitFor(MessageKind.FileSelectionResponse);
         await ForwardSelectionAnswers(slave, relay, service);
         MoveRightTo(platform, relay, "remote2");
-        var sentBefore = relay.Snapshot().Count;
+        var sentBefore = relay.Sent.Snapshot().Count;
 
         await Press(platform, 'v');
 
         using (Assert.EnterMultipleScope())
         {
             Assert.That(fileTransfer.GetCopyBuffer()?.Paths, Is.EqualTo(["/home/r/report.pdf"]));
-            Assert.That(relay.Snapshot().Skip(sentBefore).Single(s => s.Kind == MessageKind.FileTransferRequest).Json, Does.Contain("\"remote\""));
+            Assert.That(relay.Sent.Snapshot().Skip(sentBefore).Single(s => s.Kind == MessageKind.FileTransferRequest).Json, Does.Contain("\"remote\""));
         }
     }
 
@@ -414,9 +401,7 @@ public class CopyFilesHotkeyTests
     public async Task RemoteCopyOnOneHostThenAnother_DropsTheFirstHostsLateAnswer()
     {
         var fileTransfer = FileTransferService.Null();
-        var (platform, relay, _) = await StartForRemoteCopy(profile: TransitionTestHelper.ChainConfig, fileTransfer: fileTransfer);
-        await TransitionTestHelper.BringHostsOnline(relay, ["remote", "remote2"]);
-        EnterRemote(platform);
+        var (platform, relay, _) = await VisitingForRemoteCopy(profile: TransitionTestHelper.ChainConfig, fileTransfer: fileTransfer);
         await Press(platform, 'c');
         MoveRightTo(platform, relay, "remote2");
         await Press(platform, 'c');
@@ -432,9 +417,7 @@ public class CopyFilesHotkeyTests
     public async Task SecondRemotePressToTheSameHost_TakesOneAnswer()
     {
         var fileTransfer = FileTransferService.Null();
-        var (platform, relay, _) = await StartForRemoteCopy(fileTransfer: fileTransfer);
-        await TransitionTestHelper.BringRemoteOnline(relay);
-        EnterRemote(platform);
+        var (platform, relay, _) = await VisitingForRemoteCopy(fileTransfer: fileTransfer);
         await Press(platform, 'c');
         await Press(platform, 'c');
 
@@ -443,7 +426,7 @@ public class CopyFilesHotkeyTests
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(relay.Snapshot().Count(s => s.Kind == MessageKind.FileSelectionQuery), Is.EqualTo(2));
+            Assert.That(relay.Sent.Of(MessageKind.FileSelectionQuery), Has.Count.EqualTo(2));
             Assert.That(fileTransfer.GetCopyBuffer()?.Paths, Is.EqualTo(["/home/r/a.txt"]));
         }
     }
@@ -452,19 +435,17 @@ public class CopyFilesHotkeyTests
     public async Task RemoteCopyAnswer_IsShownWhereTheCursorIsNow()
     {
         var osd = new RecordingOsd();
-        var (platform, relay, _) = await StartForRemoteCopy(osd: osd);
-        await TransitionTestHelper.BringRemoteOnline(relay);
-        EnterRemote(platform);
+        var (platform, relay, _) = await VisitingForRemoteCopy(osd: osd);
         await Press(platform, 'c');
         ReturnHome(platform);
-        var sentBefore = relay.Snapshot().Count;
+        var sentBefore = relay.Sent.Snapshot().Count;
 
         await relay.FireMessageReceived("remote", MessageKind.FileSelectionResponse, """{"paths":["/home/r/a.txt"]}""");
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(await osd.Shown.Next((int)Timeout.TotalMilliseconds, "the copy OSD"), Is.EqualTo("1 item copied"));
-            Assert.That(relay.Snapshot().Skip(sentBefore).Where(s => s.Kind == MessageKind.Osd), Is.Empty, "the OSD went to the host the cursor left");
+            Assert.That(await osd.Shown.Next("the copy OSD"), Is.EqualTo("1 item copied"));
+            Assert.That(relay.Sent.Snapshot().Skip(sentBefore).Where(s => s.Kind == MessageKind.Osd), Is.Empty, "the OSD went to the host the cursor left");
         }
     }
 
@@ -473,11 +454,9 @@ public class CopyFilesHotkeyTests
     {
         var fileTransfer = FileTransferService.Null();
         fileTransfer.SetCopyBuffer("elsewhere", ["/x/old.txt"]);
-        var (platform, relay, _) = await StartForRemoteCopy(fileTransfer: fileTransfer);
-        await TransitionTestHelper.BringRemoteOnline(relay);
-        EnterRemote(platform);
+        var (platform, relay, _) = await VisitingForRemoteCopy(fileTransfer: fileTransfer);
         await Press(platform, 'c');
-        var sentBefore = relay.Snapshot().Count;
+        var sentBefore = relay.Sent.Snapshot().Count;
 
         await relay.FireMessageReceived("remote", MessageKind.FileSelectionResponse, """{"paths":42}""");
 
@@ -492,17 +471,16 @@ public class CopyFilesHotkeyTests
     public async Task Stop_CancelsTheLocalQueryRatherThanWaitingForIt()
     {
         var finder = new GatedFileSelectionDetector();
-        var (platform, relay, service) = await _services.Start(TransitionTestHelper.CreateService(selectionDetector: finder));
-        await TransitionTestHelper.BringRemoteOnline(relay);
+        var (platform, _, service) = await Services.StartOnline(TransitionTestHelper.CreateService(selectionDetector: finder));
         try
         {
             await Press(platform, 'c');
-            await finder.Queried.WaitAsync(Timeout);
+            await finder.Queried.WaitAsync(Bound);
 
-            await _services.Stop(service).WaitAsync(Timeout);
+            await Services.Stop(service).WaitAsync(Bound);
 
-            await finder.Cancelled.WaitAsync(Timeout);
-            await service.LocalSelectionQuery.WaitAsync(Timeout);
+            await finder.Cancelled.WaitAsync(Bound);
+            await service.LocalSelectionQuery.WaitAsync(Bound);
         }
         finally
         {
@@ -515,20 +493,19 @@ public class CopyFilesHotkeyTests
     {
         var finder = new GatedFileSelectionDetector();
         var tracker = new HeldActivityTracker();
-        var (platform, relay, service) = await _services.Start(TransitionTestHelper.CreateService(selectionDetector: finder, activityTracker: tracker));
-        await TransitionTestHelper.BringRemoteOnline(relay);
+        var (platform, _, service) = await Services.StartOnline(TransitionTestHelper.CreateService(selectionDetector: finder, activityTracker: tracker));
         // queue the press without waiting for the router, which is held on it until stopping has begun
         platform.AfterFireCallback = null;
         tracker.Hold();
         try
         {
-            platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyDown, 'c', HotkeyModifiers));
-            await tracker.Held.WaitAsync(Timeout);
-            var stop = _services.Stop(service);
+            platform.PressHotkey('c');
+            await tracker.Held.WaitAsync(Bound);
+            var stop = Services.Stop(service);
             tracker.Release();
-            await stop.WaitAsync(Timeout);
+            await stop.WaitAsync(Bound);
 
-            await service.LocalSelectionQuery.WaitAsync(Timeout);
+            await service.LocalSelectionQuery.WaitAsync(Bound);
             Assert.That(finder.Queried.IsCompleted, Is.False, "a press handled after stopping began still asked the file manager");
         }
         finally
@@ -539,14 +516,10 @@ public class CopyFilesHotkeyTests
     }
 
     // a file manager that supports transfer but is never asked, for copies made on a remote screen
-    private Task<TestServiceBundle> StartForRemoteCopy(IHydraProfile? profile = null, IOsdNotification? osd = null, FileTransferService? fileTransfer = null) =>
-        _services.Start(TransitionTestHelper.CreateService(profile: profile, selectionDetector: new GatedFileSelectionDetector(), osd: osd, fileTransfer: fileTransfer));
-
-    private static void EnterRemote(FakePlatform platform)
-    {
-        platform.FireMouseMove(2559, 720);
-        Assert.That(platform.IsOnVirtualScreen, Is.True, "pre-condition: on the remote screen");
-    }
+    // visiting "remote", with "remote2" online too on the chain
+    private Task<TestServiceBundle> VisitingForRemoteCopy(IHydraProfile? profile = null, IOsdNotification? osd = null, FileTransferService? fileTransfer = null) =>
+        Services.Visiting(TransitionTestHelper.CreateService(profile: profile, selectionDetector: new GatedFileSelectionDetector(), osd: osd, fileTransfer: fileTransfer),
+            profile == TransitionTestHelper.ChainConfig ? ["remote", "remote2"] : []);
 
     private static void ReturnHome(FakePlatform platform)
     {
@@ -557,7 +530,7 @@ public class CopyFilesHotkeyTests
 
     private static void MoveRightTo(FakePlatform platform, FakeRelay relay, string host)
     {
-        bool Entered() => relay.Snapshot().Any(s => s.Kind == MessageKind.EnterScreen && s.Targets.Contains(host));
+        bool Entered() => relay.Sent.Of(MessageKind.EnterScreen, host).Count > 0;
         for (var i = 0; i < 40 && !Entered(); i++)
             platform.FireMouseDelta(100, 0);
         Assert.That(Entered(), Is.True, $"pre-condition: on {host}");
@@ -566,15 +539,15 @@ public class CopyFilesHotkeyTests
     // hands the master whatever "remote" has answered so far, in order
     private static async Task ForwardSelectionAnswers(TestableSlaveRelay slave, FakeRelay relay, InputRouter service)
     {
-        var answers = slave.TakeAll().Where(s => s.Kind == MessageKind.FileSelectionResponse).ToList();
+        var answers = slave.Sent.TakeAll().Where(s => s.Kind == MessageKind.FileSelectionResponse).ToList();
         foreach (var (_, kind, json) in answers)
             await relay.FireMessageReceived("remote", kind, json);
-        await service.FlushAsync();
+        await service.Flush();
     }
 
     // what was sent from the given index on, one line per message
     private static string[] SentSince(FakeRelay relay, int index) =>
-        [.. relay.Snapshot().Skip(index).Select(s => $"{s.Kind} to {string.Join(",", s.Targets)}: {s.Json}")];
+        [.. relay.Sent.Snapshot().Skip(index).Select(s => $"{s.Kind} to {string.Join(",", s.Targets)}: {s.Json}")];
 
     private static string Osd(string host, string text) =>
         $"{MessageKind.Osd} to {host}: {MessageSerializer.Decode(MessageSerializer.Encode(MessageKind.Osd, new OsdMessage(text))).Json}";
@@ -582,33 +555,9 @@ public class CopyFilesHotkeyTests
     // each Fire waits for the router to process it
     private static Task Press(FakePlatform platform, char key) => Task.Run(() =>
     {
-        platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyDown, key, HotkeyModifiers));
-        platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyUp, key, HotkeyModifiers));
-    }).WaitAsync(Timeout);
-}
-
-// holds the router on the first input after Hold, until released
-file sealed class HeldActivityTracker : IActivityTracker
-{
-    private readonly TaskCompletionSource _held = new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private readonly TaskCompletionSource _released = new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private volatile bool _holding;
-
-    public Task Held => _held.Task;
-    public long MsSinceLocalActivity => 0;
-
-    public void Hold() => _holding = true;
-    public void Release() => _released.TrySetResult();
-
-    public async ValueTask LocalActivity()
-    {
-        if (!_holding) return;
-        _held.TrySetResult();
-        await _released.Task;
-    }
-
-    public async ValueTask RemoteActivity(string sourcePeer) => await ValueTask.CompletedTask;
-    public async ValueTask IncomingPing() => await ValueTask.CompletedTask;
+        platform.PressHotkey(key);
+        platform.PressHotkey(key, up: true);
+    }).WaitAsync(Bound);
 }
 
 file sealed class ThrowingFileSelectionDetector : IFileSelectionDetector

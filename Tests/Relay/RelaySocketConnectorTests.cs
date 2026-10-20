@@ -33,11 +33,11 @@ public class RelaySocketConnectorTests
 
     // asking the OS spawns a process on macOS and Linux, and one route has no rival
     [Test]
-    public async Task OrderAsync_AddressesOnOneRoute_KeepTheirOrderWithoutAskingThePreferences()
+    public async Task Order_AddressesOnOneRoute_KeepTheirOrderWithoutAskingThePreferences()
     {
         var queries = 0;
 
-        var ordered = await RelayAddressPreference.OrderAsync([IPAddress.IPv6Loopback, IPAddress.Loopback], _ => "lo0",
+        var ordered = await RelayAddressPreference.Order([IPAddress.IPv6Loopback, IPAddress.Loopback], _ => "lo0",
             async _ =>
             {
                 queries++;
@@ -54,13 +54,13 @@ public class RelaySocketConnectorTests
     }
 
     [Test]
-    public async Task OrderAsync_AddressesOnDifferentRoutes_FollowThePreferences()
+    public async Task Order_AddressesOnDifferentRoutes_FollowThePreferences()
     {
         var wifi = IPAddress.Parse("192.168.1.21");
         var ethernet = IPAddress.Parse("192.168.1.129");
         var interfaces = new Dictionary<IPAddress, string> { [wifi] = "en0", [ethernet] = "en7" };
 
-        var ordered = await RelayAddressPreference.OrderAsync([wifi, ethernet], interfaces.GetValueOrDefault,
+        var ordered = await RelayAddressPreference.Order([wifi, ethernet], interfaces.GetValueOrDefault,
             async _ =>
             {
                 await Task.CompletedTask;
@@ -138,13 +138,13 @@ public class RelaySocketConnectorTests
     }
 
     [Test]
-    public async Task OrderAsync_TwoDialsOfOneAttempt_ShareOneQuery()
+    public async Task Order_TwoDialsOfOneAttempt_ShareOneQuery()
     {
         var query = new CountingPreferences();
         var cache = new InterfacePreferenceCache(query.Run, new FakeTimeProvider());
 
-        var negotiate = await RelayAddressPreference.OrderAsync([Wifi, Ethernet], Interfaces.GetValueOrDefault, cache.GetAsync, CancellationToken.None);
-        var webSocket = await RelayAddressPreference.OrderAsync([Wifi, Ethernet], Interfaces.GetValueOrDefault, cache.GetAsync, CancellationToken.None);
+        var negotiate = await RelayAddressPreference.Order([Wifi, Ethernet], Interfaces.GetValueOrDefault, cache.Get, CancellationToken.None);
+        var webSocket = await RelayAddressPreference.Order([Wifi, Ethernet], Interfaces.GetValueOrDefault, cache.Get, CancellationToken.None);
 
         using (Assert.EnterMultipleScope())
         {
@@ -160,9 +160,9 @@ public class RelaySocketConnectorTests
         var query = new CountingPreferences();
         var cache = new InterfacePreferenceCache(query.Run, new FakeTimeProvider());
 
-        await cache.GetAsync(CancellationToken.None);
+        await cache.Get(CancellationToken.None);
         cache.Invalidate();
-        await cache.GetAsync(CancellationToken.None);
+        await cache.Get(CancellationToken.None);
 
         Assert.That(query.Runs, Is.EqualTo(2));
     }
@@ -175,9 +175,9 @@ public class RelaySocketConnectorTests
         var time = new FakeTimeProvider();
         var cache = InterfacePreferenceCache.Create(query.Run, time, _ => throw new NetworkInformationException());
 
-        await cache.GetAsync(CancellationToken.None);
+        await cache.Get(CancellationToken.None);
         time.Advance(InterfacePreferenceCache.Lifetime);
-        await cache.GetAsync(CancellationToken.None);
+        await cache.Get(CancellationToken.None);
 
         Assert.That(query.Runs, Is.EqualTo(2));
     }
@@ -189,9 +189,9 @@ public class RelaySocketConnectorTests
         Action? changed = null;
         var cache = InterfacePreferenceCache.Create(query.Run, new FakeTimeProvider(), invalidate => changed = invalidate);
 
-        await cache.GetAsync(CancellationToken.None);
+        await cache.Get(CancellationToken.None);
         changed!();
-        await cache.GetAsync(CancellationToken.None);
+        await cache.Get(CancellationToken.None);
 
         Assert.That(query.Runs, Is.EqualTo(2));
     }
@@ -204,12 +204,12 @@ public class RelaySocketConnectorTests
         var time = new FakeTimeProvider();
         var cache = new InterfacePreferenceCache(query.Run, time);
 
-        await cache.GetAsync(CancellationToken.None);
+        await cache.Get(CancellationToken.None);
         time.Advance(InterfacePreferenceCache.Lifetime - TimeSpan.FromSeconds(1));
-        await cache.GetAsync(CancellationToken.None);
+        await cache.Get(CancellationToken.None);
         var withinLifetime = query.Runs;
         time.Advance(TimeSpan.FromSeconds(1));
-        await cache.GetAsync(CancellationToken.None);
+        await cache.Get(CancellationToken.None);
 
         using (Assert.EnterMultipleScope())
         {
@@ -225,8 +225,8 @@ public class RelaySocketConnectorTests
         var query = new CountingPreferences { Answer = new Dictionary<string, int>() };
         var cache = new InterfacePreferenceCache(query.Run, new FakeTimeProvider());
 
-        await cache.GetAsync(CancellationToken.None);
-        await cache.GetAsync(CancellationToken.None);
+        await cache.Get(CancellationToken.None);
+        await cache.Get(CancellationToken.None);
 
         Assert.That(query.Runs, Is.EqualTo(2));
     }
@@ -244,8 +244,8 @@ public class RelaySocketConnectorTests
         }, new FakeTimeProvider());
         using var giveUp = new CancellationTokenSource();
 
-        var abandoned = cache.GetAsync(giveUp.Token);
-        var waiting = cache.GetAsync(CancellationToken.None);
+        var abandoned = cache.Get(giveUp.Token);
+        var waiting = cache.Get(CancellationToken.None);
         await giveUp.CancelAsync();
         release.SetResult(new Dictionary<string, int> { ["en7"] = 1 });
 
@@ -278,19 +278,19 @@ public class RelaySocketConnectorTests
     }
 
     [Test]
-    public async Task ConnectAsync_FirstAddressFails_FallsBackToNextAddress()
+    public async Task Connect_FirstAddressFails_FallsBackToNextAddress()
     {
         using var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
         var port = ((IPEndPoint)listener.LocalEndpoint).Port;
         var accepting = listener.AcceptSocketAsync();
 
-        using var connected = await RelaySocketConnector.ConnectAsync(
+        using var connected = await RelaySocketConnector.Connect(
             [IPAddress.IPv6Loopback, IPAddress.Loopback],
             port,
-            TimeSpan.FromMilliseconds(250),
+            Bound,
             CancellationToken.None);
-        using var accepted = await accepting.WaitAsync(TimeSpan.FromSeconds(1));
+        using var accepted = await accepting.WaitAsync(Bound);
 
         using (Assert.EnterMultipleScope())
         {
@@ -300,10 +300,10 @@ public class RelaySocketConnectorTests
     }
 
     [Test]
-    public void ConnectAsync_NoResolvedAddresses_ReportsHostNotFound()
+    public void Connect_NoResolvedAddresses_ReportsHostNotFound()
     {
         var error = Assert.ThrowsAsync<SocketException>(async () =>
-            await RelaySocketConnector.ConnectAsync(
+            await RelaySocketConnector.Connect(
                 [],
                 51600,
                 TimeSpan.FromMilliseconds(50),

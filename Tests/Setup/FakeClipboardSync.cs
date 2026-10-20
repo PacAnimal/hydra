@@ -9,28 +9,19 @@ public sealed class FakeClipboardSync : IClipboardSync
     public byte[]? ImagePng { get; private set; }
     public string? Html { get; private set; }
     public byte[]? Rtf { get; private set; }
-    public int GetHtmlCallCount { get; private set; }
-    public int GetRtfCallCount { get; private set; }
     public int GetTextCallCount { get; private set; }
-    public int SetTextCallCount { get; private set; }
     public int GetPrimaryTextCallCount { get; private set; }
-    public int SetPrimaryTextCallCount { get; private set; }
     public int GetImagePngCallCount { get; private set; }
-    public int SetImagePngCallCount { get; private set; }
     public int SetClipboardCallCount { get; private set; }
     public bool HasFileClipboardValue { get; set; }
     public bool CanUseEchoFallbackValue { get; set; } = true;
+    public bool WriteFailsValue { get; set; }
+    public bool KeepsSelectionValue { get; set; } = true;
 
     public string? GetText()
     {
         GetTextCallCount++;
         return Text;
-    }
-
-    public void SetText(string text)
-    {
-        SetTextCallCount++;
-        Text = text;
     }
 
     public string? GetPrimaryText()
@@ -39,10 +30,11 @@ public sealed class FakeClipboardSync : IClipboardSync
         return PrimaryText;
     }
 
-    public void SetPrimaryText(string text)
+    public bool SetPrimaryText(string text)
     {
-        SetPrimaryTextCallCount++;
+        if (!KeepsSelectionValue) return false;
         PrimaryText = text;
+        return true;
     }
 
     public byte[]? GetImagePng()
@@ -51,41 +43,28 @@ public sealed class FakeClipboardSync : IClipboardSync
         return ImagePng;
     }
 
-    public void SetImagePng(byte[] pngData)
-    {
-        SetImagePngCallCount++;
-        ImagePng = pngData;
-    }
+    public string? GetHtml() => Html;
 
-    public string? GetHtml()
-    {
-        GetHtmlCallCount++;
-        return Html;
-    }
-
-    public byte[]? GetRtf()
-    {
-        GetRtfCallCount++;
-        return Rtf;
-    }
+    public byte[]? GetRtf() => Rtf;
 
     public bool HasFileClipboard() => HasFileClipboardValue;
 
     public bool CanUseEchoFallback() => CanUseEchoFallbackValue;
 
-    public void SetClipboard(ClipboardSnapshot contents)
+    public bool SetClipboard(ClipboardSnapshot contents)
     {
         SetClipboardCallCount++;
-        // mirror real implementations: replace all formats with the snapshot
+        // mirror real implementations: the selection beside it, and every format replaced
+        if (contents.PrimaryText != null) SetPrimaryText(contents.PrimaryText);
+        if (WriteFailsValue) return false;
         Text = contents.Text;
-        PrimaryText = contents.PrimaryText;
         ImagePng = contents.ImagePng;
         Html = contents.Html;
         Rtf = contents.Rtf;
+        return true;
     }
 
-    // helper for test setup (bypasses call counter)
+    // helpers for test setup (bypass the call counters)
+    public void SetupText(string text) => Text = text;
     public void SetupImage(byte[]? png) => ImagePng = png;
-    public void SetupHtml(string? html) => Html = html;
-    public void SetupRtf(byte[]? rtf) => Rtf = rtf;
 }

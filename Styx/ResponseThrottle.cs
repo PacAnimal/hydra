@@ -7,4 +7,11 @@ namespace Styx;
 public sealed class ResponseThrottle(TimeProvider clock)
 {
     public Task Start(int seconds, CancellationToken cancel) => Task.Delay(TimeSpan.FromSeconds(seconds), clock, cancel);
+
+    // the answer, no sooner than the throttle a caller started
+    public static async Task<T> After<T>(Task throttle, T answer)
+    {
+        await throttle;
+        return answer;
+    }
 }

@@ -1,37 +1,21 @@
 using Hydra.Relay;
-using Hydra.Screen;
 using Tests.Setup;
 
 namespace Tests.Screen;
 
 [TestFixture]
-public class RelayDisconnectTests
+public class RelayDisconnectTests : ServicesFixture
 {
     private FakePlatform _platform = null!;
     private FakeRelay _relay = null!;
-    private InputRouter _service = null!;
 
     [SetUp]
-    public async Task SetUp()
-    {
-        (_platform, _relay, _service) = TransitionTestHelper.CreateService();
-        await _service.StartAsync(CancellationToken.None);
-        await TransitionTestHelper.BringRemoteOnline(_relay);
-    }
-
-    [TearDown]
-    public async Task TearDown()
-    {
-        await _service.StopAsync(CancellationToken.None);
-        await _platform.DisposeAsync();
-    }
+    public async Task SetUp() => (_platform, _relay, _) = await Services.StartOnline(TransitionTestHelper.CreateService());
 
     [Test]
     public async Task RelayDisconnect_WhileOnVirtualScreen_SnapsBackAndShowsCursor()
     {
-        // enter virtual screen
-        _platform.FireMouseMove(2559, 720);
-        Assert.That(_platform.IsOnVirtualScreen, Is.True, "should be on virtual screen");
+        TransitionTestHelper.EnterRemote(_platform);
 
         _platform.ShowCursorCalled = false;
 
@@ -78,8 +62,7 @@ public class RelayDisconnectTests
     public void ReturnToLocal_ShowsCursorImmediately_WithoutExtraMouseMove()
     {
         // enter virtual screen via right edge
-        _platform.FireMouseMove(2559, 720);
-        Assert.That(_platform.IsOnVirtualScreen, Is.True, "pre-condition: should be on virtual screen");
+        TransitionTestHelper.EnterRemote(_platform);
 
         _platform.ShowCursorCalled = false;
 
@@ -121,13 +104,9 @@ public class RelayDisconnectTests
         await AssertCrossingWaitsForRelay(p => p.FireMouseDelta(100, 0));
     }
 
-    private static async Task AssertCrossingWaitsForRelay(Action<FakePlatform> pushRight)
+    private async Task AssertCrossingWaitsForRelay(Action<FakePlatform> pushRight)
     {
-        var (platform, relay, service) = TransitionTestHelper.CreateService(profile: TransitionTestHelper.ChainConfig);
-        await service.StartAsync(CancellationToken.None);
-        await TransitionTestHelper.BringHostsOnline(relay, ["remote", "remote2"]);
-        platform.FireMouseMove(2559, 720);
-        Assert.That(platform.IsOnVirtualScreen, Is.True, "pre-condition: on remote");
+        var (platform, relay, _) = await Services.Visiting(TransitionTestHelper.CreateService(profile: TransitionTestHelper.ChainConfig), "remote", "remote2");
 
         relay.Connected = false;
         for (var i = 0; i < 30; i++)
@@ -135,13 +114,10 @@ public class RelayDisconnectTests
 
         // still parked against remote's edge, so the first push after reconnecting is what crosses
         relay.Connected = true;
-        relay.ClearSent();
+        relay.Sent.Clear();
         pushRight(platform);
 
-        Assert.That(relay.Sent<EnterScreenMessage>(MessageKind.EnterScreen, "remote2"), Is.Not.Empty,
+        Assert.That(relay.Sent.Of<EnterScreenMessage>(MessageKind.EnterScreen, "remote2"), Is.Not.Empty,
             "should only cross to remote2 once the relay is back");
-
-        await service.StopAsync(CancellationToken.None);
-        await platform.DisposeAsync();
     }
 }

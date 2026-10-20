@@ -15,7 +15,7 @@ internal sealed class HydraStatusService(
     HydraRuntimeInfo runtime,
     TransactionalConfigStore configStore)
 {
-    internal async Task<HydraStatusSnapshot> GetAsync(CancellationToken cancel)
+    internal async Task<HydraStatusSnapshot> Get(CancellationToken cancel)
     {
         var localScreens = new List<ScreenStatus>();
         var detector = services.GetService<IScreenDetector>();
@@ -24,7 +24,7 @@ internal sealed class HydraStatusService(
             try
             {
                 var snapshot = await detector.Get(cancel).WaitAsync(TimeSpan.FromSeconds(1), cancel);
-                localScreens = [.. snapshot.Entries.Select(s => new ScreenStatus(s.Name, profile.Name, s.Width, s.Height, s.MouseScale, s.RelativeMouseScale))];
+                localScreens = [.. snapshot.Entries.Select(s => ScreenStatus.From(s, profile.Name))];
             }
             catch (TimeoutException) { }
         }
@@ -34,7 +34,7 @@ internal sealed class HydraStatusService(
         {
             foreach (var peer in await world.GetPeerRuntimeSnapshot())
                 peers.Add(new PeerStatus(peer.Name, peer.Platform.DisplayName(), true,
-                    [.. peer.Screens.Select(s => new ScreenStatus(s.Name, peer.Name, s.Width, s.Height, s.MouseScale, s.RelativeMouseScale))]));
+                    [.. peer.Screens.Select(s => ScreenStatus.From(s, peer.Name))]));
         }
         else
         {
@@ -46,9 +46,9 @@ internal sealed class HydraStatusService(
         var transport = relay?.Transport;
         var router = services.GetService<InputRouter>();
         var adapters = GetActiveNetworkAdapters();
-        var embeddedPeers = await GetEmbeddedRelayPeers();
+        var embeddedPeers = GetEmbeddedRelayPeers();
         var latency = services.GetService<RelayLatencyService>()?.GetSnapshot() ?? [];
-        var config = await configStore.ReadAsync(cancel);
+        var config = await configStore.Read(cancel);
 
         return new HydraStatusSnapshot(
             DateTimeOffset.UtcNow,
@@ -83,14 +83,14 @@ internal sealed class HydraStatusService(
             dormancy.IsDormant,
             localScreens,
             peers,
-            router == null ? null : await router.GetManagementStatusAsync());
+            router == null ? null : await router.GetManagementStatus());
     }
 
-    private async Task<List<EmbeddedRelayPeerStatus>> GetEmbeddedRelayPeers()
+    private List<EmbeddedRelayPeerStatus> GetEmbeddedRelayPeers()
     {
         var server = services.GetService<EmbeddedStyxServer>();
         if (server == null) return [];
-        var clients = await server.GetClients();
+        var clients = server.GetClients();
         return [.. clients
             .Select(client =>
             {

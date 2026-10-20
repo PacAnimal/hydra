@@ -18,7 +18,6 @@ public class ManagementWireNamesTests
             [nameof(ManagementMethods.Status)] = "status",
             [nameof(ManagementMethods.Logs)] = "logs",
             [nameof(ManagementMethods.ConfigGet)] = "config.get",
-            [nameof(ManagementMethods.ConfigValidate)] = "config.validate",
             [nameof(ManagementMethods.ConfigSave)] = "config.save",
             [nameof(ManagementMethods.RelayReconnect)] = "relay.reconnect",
             [nameof(ManagementMethods.HydraRestart)] = "hydra.restart",

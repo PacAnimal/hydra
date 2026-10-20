@@ -6,6 +6,7 @@ namespace Tests.Setup;
 public sealed class CapturingLog<T>(LogLevel minimum = LogLevel.Trace) : ILogger<T>
 {
     private readonly List<CapturedEntry> _entries = [];
+    private readonly SemaphoreSlim _logged = new(0);
 
     public CapturedEntry[] Entries
     {
@@ -23,8 +24,27 @@ public sealed class CapturingLog<T>(LogLevel minimum = LogLevel.Trace) : ILogger
     public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
     {
         if (!IsEnabled(logLevel)) return;
-        lock (_entries) _entries.Add(new CapturedEntry(logLevel, formatter(state, exception)));
+        lock (_entries) _entries.Add(new CapturedEntry(logLevel, formatter(state, exception), eventId));
+        _logged.Release();
+    }
+
+    // the first entry matching, waiting for it to be logged
+    public async Task<CapturedEntry> WaitFor(Func<CapturedEntry, bool> match)
+    {
+        using var timeout = new CancellationTokenSource(TestBound.Bound);
+        try
+        {
+            while (true)
+            {
+                if (Entries.FirstOrDefault(match) is { } entry) return entry;
+                await _logged.WaitAsync(timeout.Token);
+            }
+        }
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+        {
+            throw new TimeoutException("Timed out waiting for a matching log entry");
+        }
     }
 }
 
-public sealed record CapturedEntry(LogLevel Level, string Message);
+public sealed record CapturedEntry(LogLevel Level, string Message, EventId EventId);

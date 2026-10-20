@@ -1,9 +1,5 @@
-using System.Text;
-using System.Text.Json;
-using Cathedral.Config;
-using Cathedral.Utils;
+using Cathedral.Styx;
 using Common;
-using Hydra.Relay;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Styx;
@@ -14,11 +10,19 @@ public static class StyxTestServer
 {
     public const string TestPassword = "test-relay-password-hydra";
 
-    public static WebApplicationFactory<global::Styx.Program> Create(string password = TestPassword, Action<IServiceCollection>? configure = null)
+    /// <summary>The test servers' v2 key. Not Styx.md's published one, which a relay refuses to start with.</summary>
+    public static readonly byte[] TestKey = [.. Enumerable.Range(0, 64).Select(i => (byte)(0x80 + i))];
+
+    public static WebApplicationFactory<global::Styx.Program> Create(Action<IServiceCollection>? configure = null)
     {
-        // must be set before the factory initializes the host. process-wide, so safe only while fixtures run
-        // one at a time — every caller uses the default today
-        Environment.SetEnvironmentVariable("RELAY_PASSWORD", password);
+        // must be set before the factory initializes the host, and the same for every server, since it is process-wide;
+        // anything else a test wants differs in code, by replacing StyxAuth through `configure`
+        Environment.SetEnvironmentVariable(Constants.RelayPasswordEnvVar, TestPassword);
+        Environment.SetEnvironmentVariable(Constants.RelaySigningKeyEnvVar, Convert.ToBase64String(TestKey));
+        Environment.SetEnvironmentVariable(Constants.RelaySigningPassphraseEnvVar, null);
+        Environment.SetEnvironmentVariable(Constants.RevokedNetworksEnvVar, null);
+        Environment.SetEnvironmentVariable(Constants.RevokedIdsEnvVar, null);
+        Environment.SetEnvironmentVariable(Constants.ParallelInvocationsEnvVar, null);
 
         return new WebApplicationFactory<global::Styx.Program>()
             .WithWebHostBuilder(builder =>
@@ -32,27 +36,21 @@ public static class StyxTestServer
             });
     }
 
-    /// <summary>
-    /// A sender and a receiver, both masters on a fresh network, both authenticated.
-    ///
-    /// <para><c>peerTakesBundles</c> is what the sender believes the receiver advertised; null leaves it
-    /// unknown. FALSE is the un-upgraded peer, and it is not a corner case — it is every slave in the field
-    /// until it is updated.</para>
-    /// </summary>
+    /// <summary>A sender and a receiver, both masters on a fresh network, both authenticated.</summary>
     public static async Task<ClientPair> ConnectedPair(
-        WebApplicationFactory<global::Styx.Program> factory, string sender = "sender", string receiver = "receiver", bool? peerTakesBundles = null)
+        WebApplicationFactory<global::Styx.Program> factory, string sender = "sender", string receiver = "receiver")
     {
         var cfg = await BuildNetworkConfig(factory, Guid.NewGuid());
-        var senderClient = HydraTestClient.Master(factory, sender, cfg);
-        if (peerTakesBundles is { } bundles)
-            senderClient.World.SetPeerCapabilities(receiver, PeerCapabilities.Parse(bundles ? PeerCapabilities.Advertise() : null));
-
-        return await ClientPair.Start(senderClient, HydraTestClient.Master(factory, receiver, cfg));
+        return await ClientPair.Start(HydraTestClient.Master(factory, sender, cfg), HydraTestClient.Master(factory, receiver, cfg));
     }
 
-    // generates a valid authorization blob for the given networkId, signed with the given password
-    public static async Task<string> GenerateAuthorization(Guid networkId, string password = TestPassword)
-        => await new SimpleAes(password).EncryptBase64(networkId, CancellationToken.None);
+    /// <summary>A v2 token from the test key, for a fresh network unless one is given.</summary>
+    public static StyxToken MintToken(Guid? network = null, params IEnumerable<StyxCaveat> caveats) =>
+        StyxToken.Mint(TestKey, network ?? StyxToken.NewNetworkId(), caveats);
+
+    // a v1 authorization for the given network, under the test servers' password unless another is given
+    public static async Task<string> GenerateAuthorization(Guid networkId, string password = TestPassword) =>
+        await NetworkConfig.V1Authorization(password, networkId);
 
     // builds the base64-encoded NetworkConfig string that HydraConfig.NetworkConfig expects
     public static async Task<string> BuildNetworkConfig(
@@ -61,18 +59,10 @@ public static class StyxTestServer
         string? encryptionKey = null,
         string password = TestPassword)
     {
-        var key = encryptionKey ?? GenerateEncryptionKey();
         var authorization = await GenerateAuthorization(networkId, password);
-        var styxServer = factory.Server.BaseAddress.ToString().TrimEnd('/');
-        var config = new NetworkConfig(styxServer, key, authorization);
-        var json = JsonSerializer.Serialize(config, SaneJson.Options);
-        return Convert.ToBase64String(Encoding.UTF8.GetBytes(json));
+        return new NetworkConfig(ServerUrl(factory), encryptionKey ?? NetworkConfig.NewEncryptionKey(), authorization).ToBlob();
     }
 
-    // 128-char alphanumeric key, matching what the web UI generates
-    public static string GenerateEncryptionKey()
-    {
-        const string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-        return new string(Random.Shared.GetItems(chars.AsSpan(), 128));
-    }
+    // the test server's address, as a blob's StyxServer spells it
+    public static string ServerUrl(WebApplicationFactory<global::Styx.Program> factory) => factory.Server.BaseAddress.ToString().TrimEnd('/');
 }

@@ -1,12 +1,13 @@
-using Cathedral.Extensions;
+using System.Buffers.Text;
 using System.Security.Cryptography;
 using System.Text;
+using Cathedral.Extensions;
 
 namespace Hydra.Management;
 
 internal static class RemoteManagementCrypto
 {
-    internal static string RandomSecret(int bytes = 32) => Base64Url(RandomNumberGenerator.GetBytes(bytes));
+    internal static string RandomSecret(int bytes = 32) => Base64Url.EncodeToString(RandomNumberGenerator.GetBytes(bytes));
 
     internal static string SignRequest(RemoteWireRequest request, string secret) => Sign(secret,
         request.Version.ToString(), request.RequestId.ToString("N"), request.ControllerId,
@@ -30,46 +31,26 @@ internal static class RemoteManagementCrypto
 
     internal static string HashPairingCode(string code) => code.GetSha256Hash();
 
-    // hex is fixed-width per input length, so a straight byte compare here carries no timing signal
-    // beyond what the hex decode itself does — same fixed-time guarantee as FixedEquals, hex form
-    internal static bool HashesEqual(string left, string right)
-    {
-        try
-        {
-            return CryptographicOperations.FixedTimeEquals(Convert.FromHexString(left), Convert.FromHexString(right));
-        }
-        catch (FormatException)
-        {
-            return false;
-        }
-    }
+    internal static bool HashesEqual(string left, string right) => FixedEquals(left, right, Convert.FromHexString);
 
     private static string Sign(string secret, params string[] fields)
     {
-        var key = FromBase64Url(secret);
-        using var hmac = new HMACSHA256(key);
-        var data = Encoding.UTF8.GetBytes(string.Join('\n', fields.Select(field => Base64Url(Encoding.UTF8.GetBytes(field)))));
-        return Base64Url(hmac.ComputeHash(data));
+        var data = Encoding.UTF8.GetBytes(string.Join('\n', fields.Select(field => Base64Url.EncodeToString(Encoding.UTF8.GetBytes(field)))));
+        return Base64Url.EncodeToString(HMACSHA256.HashData(Base64Url.DecodeFromChars(secret), data));
     }
 
-    private static bool FixedEquals(string left, string right)
+    private static bool FixedEquals(string left, string right) => FixedEquals(left, right, text => Base64Url.DecodeFromChars(text));
+
+    // a fixed-time compare of what two encodings decode to; false when either does not decode
+    private static bool FixedEquals(string left, string right, Func<string, byte[]> decode)
     {
         try
         {
-            return CryptographicOperations.FixedTimeEquals(FromBase64Url(left), FromBase64Url(right));
+            return CryptographicOperations.FixedTimeEquals(decode(left), decode(right));
         }
         catch (FormatException)
         {
             return false;
         }
-    }
-
-    private static string Base64Url(byte[] value) => Convert.ToBase64String(value).TrimEnd('=').Replace('+', '-').Replace('/', '_');
-
-    private static byte[] FromBase64Url(string value)
-    {
-        var padded = value.Replace('-', '+').Replace('_', '/');
-        padded += new string('=', (4 - padded.Length % 4) % 4);
-        return Convert.FromBase64String(padded);
     }
 }

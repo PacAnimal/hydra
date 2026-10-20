@@ -1,20 +1,12 @@
 using Hydra.Keyboard;
 using Hydra.Platform.Windows;
+using static Tests.Setup.WinHook;
 
 namespace Tests.Keyboard;
 
 [TestFixture]
 public class WinKeyResolverTests
 {
-    private static KBDLLHOOKSTRUCT Hook(uint vk, uint flags = 0, uint time = 1) =>
-        new() { vkCode = vk, scanCode = 0, flags = flags, time = time, dwExtraInfo = 0 };
-
-    private static KeyEvent[]? Down(WinKeyResolver r, uint vk) =>
-        r.Resolve(NativeMethods.WM_KEYDOWN, Hook(vk));
-
-    private static KeyEvent[]? Up(WinKeyResolver r, uint vk) =>
-        r.Resolve(NativeMethods.WM_KEYUP, Hook(vk));
-
     [TestCase((uint)WinVirtualKey.Numpad0, SpecialKey.KP_0)]
     [TestCase((uint)WinVirtualKey.Numpad1, SpecialKey.KP_1)]
     [TestCase((uint)WinVirtualKey.Numpad5, SpecialKey.KP_5)]
@@ -66,9 +58,6 @@ public class WinKeyResolverTests
     // VK_RETURN is shared by both regular Enter (no extended flag) and KP_Enter (extended flag).
     // pressing one while the other is held must NOT be suppressed as auto-repeat.
 
-    private static KBDLLHOOKSTRUCT ExtendedHook(uint vk, uint time = 1) =>
-        new() { vkCode = vk, scanCode = 0, flags = NativeMethods.LLKHF_EXTENDED, time = time, dwExtraInfo = 0 };
-
     [Test]
     public void KpEnter_WhileReturnTracked_NotSuppressed()
     {
@@ -76,7 +65,7 @@ public class WinKeyResolverTests
         Down(r, WinVirtualKey.Return);  // regular Return tracked
 
         // KP_Enter (EXTENDED) arrives — must not be suppressed by the tracked Return
-        var events = r.Resolve(NativeMethods.WM_KEYDOWN, ExtendedHook(WinVirtualKey.Return));
+        var events = Down(r, WinVirtualKey.Return, NativeMethods.LLKHF_EXTENDED);
         Assert.That(events, Is.Not.Null);
         Assert.That(events!.Any(e => e.Key == SpecialKey.KP_Enter), Is.True,
             "KP_Enter must fire even while regular Return is held");
@@ -86,7 +75,7 @@ public class WinKeyResolverTests
     public void Return_WhileKpEnterTracked_NotSuppressed()
     {
         var r = new WinKeyResolver();
-        r.Resolve(NativeMethods.WM_KEYDOWN, ExtendedHook(WinVirtualKey.Return));  // KP_Enter tracked
+        Down(r, WinVirtualKey.Return, NativeMethods.LLKHF_EXTENDED);  // KP_Enter tracked
 
         // regular Return (no EXTENDED flag) arrives — must not be suppressed by the tracked KP_Enter
         var events = Down(r, WinVirtualKey.Return);
@@ -99,10 +88,10 @@ public class WinKeyResolverTests
     public void KpEnter_AutoRepeat_EmitsRepeat()
     {
         var r = new WinKeyResolver();
-        r.Resolve(NativeMethods.WM_KEYDOWN, ExtendedHook(WinVirtualKey.Return));
+        Down(r, WinVirtualKey.Return, NativeMethods.LLKHF_EXTENDED);
 
         // master-driven repeats: a held KP_Enter's OS auto-repeat is forwarded marked IsRepeat
-        var repeat = r.Resolve(NativeMethods.WM_KEYDOWN, ExtendedHook(WinVirtualKey.Return));
+        var repeat = Down(r, WinVirtualKey.Return, NativeMethods.LLKHF_EXTENDED);
         Assert.That(repeat, Has.Length.EqualTo(1));
         using (Assert.EnterMultipleScope())
         {
@@ -118,7 +107,7 @@ public class WinKeyResolverTests
     {
         var r = new WinKeyResolver();
         Down(r, WinVirtualKey.Return);
-        r.Resolve(NativeMethods.WM_KEYDOWN, ExtendedHook(WinVirtualKey.Return));  // KP_Enter also down
+        Down(r, WinVirtualKey.Return, NativeMethods.LLKHF_EXTENDED);  // KP_Enter also down
 
         var up = Up(r, WinVirtualKey.Return);
         Assert.That(up, Is.Not.Null);
@@ -131,9 +120,9 @@ public class WinKeyResolverTests
     {
         var r = new WinKeyResolver();
         Down(r, WinVirtualKey.Return);
-        r.Resolve(NativeMethods.WM_KEYDOWN, ExtendedHook(WinVirtualKey.Return));  // KP_Enter also down
+        Down(r, WinVirtualKey.Return, NativeMethods.LLKHF_EXTENDED);  // KP_Enter also down
 
-        var up = r.Resolve(NativeMethods.WM_KEYUP, ExtendedHook(WinVirtualKey.Return));
+        var up = Up(r, WinVirtualKey.Return, NativeMethods.LLKHF_EXTENDED);
         Assert.That(up, Is.Not.Null);
         Assert.That(up!.Any(e => e is { Key: SpecialKey.KP_Enter, Type: KeyEventType.KeyUp }), Is.True,
             "KP_Enter key-up must replay KP_Enter, not Return");
@@ -144,8 +133,8 @@ public class WinKeyResolverTests
     {
         var r = new WinKeyResolver();
         Down(r, WinVirtualKey.Return);
-        r.Resolve(NativeMethods.WM_KEYDOWN, ExtendedHook(WinVirtualKey.Return));   // KP_Enter down
-        r.Resolve(NativeMethods.WM_KEYUP, ExtendedHook(WinVirtualKey.Return));     // KP_Enter up
+        Down(r, WinVirtualKey.Return, NativeMethods.LLKHF_EXTENDED);   // KP_Enter down
+        Up(r, WinVirtualKey.Return, NativeMethods.LLKHF_EXTENDED);     // KP_Enter up
 
         var up = Up(r, WinVirtualKey.Return);
         Assert.That(up, Is.Not.Null);
@@ -167,10 +156,10 @@ public class WinKeyResolverTests
     public void KpEnterAndReturn_CarryDistinctKeys_EachTheSameDownToUp()
     {
         var r = new WinKeyResolver();
-        var kpDown = r.Resolve(NativeMethods.WM_KEYDOWN, ExtendedHook(WinVirtualKey.Return))!.Single();
-        var kpRepeat = r.Resolve(NativeMethods.WM_KEYDOWN, ExtendedHook(WinVirtualKey.Return))!.Single();
+        var kpDown = Down(r, WinVirtualKey.Return, NativeMethods.LLKHF_EXTENDED)!.Single();
+        var kpRepeat = Down(r, WinVirtualKey.Return, NativeMethods.LLKHF_EXTENDED)!.Single();
         var returnDown = Down(r, WinVirtualKey.Return)!.Single();
-        var kpUp = r.Resolve(NativeMethods.WM_KEYUP, ExtendedHook(WinVirtualKey.Return))!.Single();
+        var kpUp = Up(r, WinVirtualKey.Return, NativeMethods.LLKHF_EXTENDED)!.Single();
         var returnUp = Up(r, WinVirtualKey.Return)!.Single();
 
         using (Assert.EnterMultipleScope())
@@ -226,9 +215,9 @@ public class WinKeyResolverTests
     public void AltGr_CarriesRightAlt()
     {
         var r = new WinKeyResolver();
-        r.Resolve(NativeMethods.WM_KEYDOWN, Hook(WinVirtualKey.LControl, time: 42));
+        Down(r, WinVirtualKey.LControl, time: 42);
 
-        var events = r.Resolve(NativeMethods.WM_KEYDOWN, Hook(WinVirtualKey.RMenu, time: 42))!;
+        var events = Down(r, WinVirtualKey.RMenu, time: 42)!;
 
         Assert.That(events.Select(e => (e.Key, e.PhysicalKey)), Is.EqualTo([(SpecialKey.AltGr, WinVirtualKey.RMenu)]));
     }
@@ -239,12 +228,6 @@ public class WinKeyResolverTests
 [Platform("Win")]
 public class WinKeyResolverCharTests
 {
-    private static KBDLLHOOKSTRUCT Hook(uint vk, uint flags = 0) =>
-        new() { vkCode = vk, scanCode = 0, flags = flags, time = 1, dwExtraInfo = 0 };
-
-    private static KeyEvent[]? Down(WinKeyResolver r, uint vk, uint flags = 0) =>
-        r.Resolve(NativeMethods.WM_KEYDOWN, Hook(vk, flags));
-
     [Test]
     public void ShiftedKey_ProducesShiftedCharacter()
     {
@@ -291,12 +274,6 @@ public class WinKeyResolverCharTests
 [Platform("Win")]
 public class WinKeyResolverDeadKeyTests
 {
-    private static KBDLLHOOKSTRUCT Hook(uint vk, uint flags = 0) =>
-        new() { vkCode = vk, scanCode = 0, flags = flags, time = 1, dwExtraInfo = 0 };
-
-    private static KeyEvent[]? Down(WinKeyResolver r, uint vk, uint flags = 0) =>
-        r.Resolve(NativeMethods.WM_KEYDOWN, Hook(vk, flags));
-
     [Test]
     public void DeadKey_ThenCtrl_FlushesSpacingFormBeforeShortcutChar()
     {

@@ -7,15 +7,8 @@ internal static class MacDisplayHelper
 {
     private const uint MaxDisplays = 32;
 
-    // AppKit's screen objects are not thread-safe, and two of our loops ask for them at once: ScreenDetector
-    // and NetworkWatcher's screen-count probe both arrive here from their own thread-pool threads, and both
-    // start together. -[NSScreen localizedName] fills a Swift-side cache on first use, and two first calls on
-    // one screen release the same object twice — reproduced with nothing but AppKit and eight threads, at 3
-    // crashes in 200 fresh processes. Under .NET that fault does not even crash: the runtime keeps resuming
-    // the faulting thread, it never reaches a GC safe point, and the whole process wedges at the next GC —
-    // which is how a macOS slave sat off the relay at full CPU after a self-update restart, until killed.
-    // Everything that touches NSScreen goes through this lock, inside a pool so the autoreleased screens and
-    // strings are drained before the next caller gets in.
+    // NSScreen isn't thread-safe (concurrent first use double-frees and wedges the runtime): everything that
+    // touches it goes through this lock, inside a pool so its autoreleased objects drain before the next caller
     private static readonly Lock NsScreenLock = new();
 
     internal static ScreenPoint? CursorPosition()
@@ -82,8 +75,7 @@ internal static class MacDisplayHelper
             if (screens == nint.Zero) return map;
 
             var count = (nuint)NativeMethods.objc_msgSend_long(screens, selCount);
-            var nsScreenNumberKey = NativeMethods.CFStringCreateWithCString(
-                nint.Zero, "NSScreenNumber", NativeMethods.KCFStringEncodingUtf8);
+            using var nsScreenNumberKey = new NsString("NSScreenNumber");
 
             for (nuint i = 0; i < count; i++)
             {
@@ -109,8 +101,6 @@ internal static class MacDisplayHelper
                 }
                 map[displayId] = name;
             }
-
-            NativeMethods.CFRelease(nsScreenNumberKey);
         }
         catch (Exception)
         {

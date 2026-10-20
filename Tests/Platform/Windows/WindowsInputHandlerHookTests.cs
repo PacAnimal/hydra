@@ -1,5 +1,6 @@
 using Hydra.Platform.Windows;
 using Hydra.Screen;
+using Tests.Setup;
 
 namespace Tests.Platform.Windows;
 
@@ -18,7 +19,7 @@ public class WindowsInputHandlerHookTests
 
     private static HookedHandler NewHandler(int flipTick = FlipTick) => new(flipTick);
 
-    private static readonly KBDLLHOOKSTRUCT KeyA = new() { vkCode = WinVirtualKey.A, time = 1 };
+    private static readonly KBDLLHOOKSTRUCT KeyA = WinHook.Hook(WinVirtualKey.A);
 
     private static MSLLHOOKSTRUCT At(int x, int y, uint time = AfterFlip) => new() { pt = new WINPOINT { x = x, y = y }, time = time };
 

@@ -174,7 +174,7 @@ export default function App() {
                 </p>
               </div>
 
-              <GlobalSettings config={current} onChange={updateCurrent} />
+              <GlobalSettings config={current} serverError={fieldError('.embeddedStyx.server')} onChange={updateCurrent} />
 
               {/* master: screen layout editor */}
               {isMaster && (

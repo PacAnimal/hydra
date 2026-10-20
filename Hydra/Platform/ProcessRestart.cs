@@ -46,15 +46,9 @@ internal static partial class ProcessRestart
         }
     }
 
-    /// <summary>
-    /// Unlinks this process's diagnostic IPC files before exec() replaces the image.
-    ///
-    /// <para>The runtime names them from the PID and the process start time, and exec() preserves both —
-    /// so the new image lands on exactly the files this one created and never removed, because exec() runs
-    /// no shutdown. Measured: the FIFOs are recreated but the socket's bind fails, so a restarted Hydra has
-    /// no endpoint for dotnet-dump / dotnet-counters / dotnet-trace at all, and the stale file is beyond
-    /// any PID-based sweeper for as long as the process lives — which is the rest of the session.</para>
-    /// </summary>
+    // Unlinks this process's diagnostic IPC files before exec() replaces the image. The runtime names them
+    // from the PID and start time, which exec() keeps, so the new image would fail to bind its own socket
+    // and have no endpoint for dotnet-dump, dotnet-counters or dotnet-trace.
     internal static void DropDiagnosticEndpoint(string tempDir, int pid)
     {
         var mine = $"-{pid}-";

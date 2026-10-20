@@ -17,12 +17,12 @@ public class HydraStatusServiceTests
         var runtime = new HydraRuntimeInfo(path, DateTimeOffset.UtcNow);
         var world = new WorldState();
         await world.UpdatePeers(["laptop"], ["laptop"]);
-        await world.SetPeerPlatform("laptop", PeerPlatform.MacOs);
+        world.SetPeerPlatform("laptop", PeerPlatform.MacOs);
         await using var services = new ServiceCollection().BuildServiceProvider();
         var status = new HydraStatusService(services, TransitionTestHelper.TestConfig, world,
             new DormancyState(NullLogger<DormancyState>.Instance), runtime, new TransactionalConfigStore(runtime));
 
-        var snapshot = await status.GetAsync(CancellationToken.None);
+        var snapshot = await status.Get(CancellationToken.None);
 
         Assert.That(snapshot.Peers.Single().Platform, Is.EqualTo("macOS"));
     }

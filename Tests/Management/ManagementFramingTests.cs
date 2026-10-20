@@ -10,10 +10,10 @@ public class ManagementFramingTests
     {
         await using var stream = new MemoryStream();
         var request = new ManagementRequest("status", "{\"x\":1}");
-        await ManagementFraming.WriteAsync(stream, request, CancellationToken.None);
+        await ManagementFraming.Write(stream, request, CancellationToken.None);
         stream.Position = 0;
 
-        var actual = await ManagementFraming.ReadAsync<ManagementRequest>(stream, CancellationToken.None);
+        var actual = await ManagementFraming.Read<ManagementRequest>(stream, CancellationToken.None);
 
         Assert.That(actual, Is.EqualTo(request));
     }
@@ -25,7 +25,7 @@ public class ManagementFramingTests
         BinaryPrimitives.WriteInt32BigEndian(header, ManagementProtocol.MaxMessageBytes + 1);
         using var stream = new MemoryStream(header);
 
-        var read = ManagementFraming.ReadAsync<ManagementRequest>(stream, CancellationToken.None);
+        var read = ManagementFraming.Read<ManagementRequest>(stream, CancellationToken.None);
 
         Assert.That(async () => await read, Throws.TypeOf<InvalidDataException>());
     }

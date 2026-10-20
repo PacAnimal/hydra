@@ -3,17 +3,18 @@ import { NetworkConfig } from './NetworkConfig'
 
 interface Props {
   config: HydraProfile
+  serverError?: string
   onChange: (patch: Partial<HydraProfile>) => void
 }
 
-export function GlobalSettings({ config, onChange }: Props) {
+export function GlobalSettings({ config, serverError, onChange }: Props) {
   const isMaster = config.mode === 'Master'
 
   return (
     <>
       <div className="section">
         <h2>Network</h2>
-        <NetworkConfig config={config} onChange={onChange} />
+        <NetworkConfig config={config} serverError={serverError} onChange={onChange} />
       </div>
 
       <div className="section">

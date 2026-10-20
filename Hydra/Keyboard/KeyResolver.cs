@@ -19,7 +19,7 @@ internal static class KeyResolver
     };
 
     // maps spacing accent characters (the standalone form of a dead key) to their Unicode combining equivalents.
-    // used by both Windows (ToUnicodeEx returns spacing form directly) and Linux (via DeadKeySpacing lookup).
+    // Windows needs it because ToUnicodeEx reports a dead key by its spacing form.
     internal static readonly Dictionary<char, char> SpacingToCombining = new()
     {
         { '\u0060', '\u0300' },  // ` grave accent
@@ -51,8 +51,40 @@ internal static class KeyResolver
     internal static char ComposeOrSpacing(char baseChar, char combining, char spacing) =>
         baseChar == ' ' && spacing != '\0' ? spacing : Compose(baseChar, combining);
 
+    // a dead key's spacing form typed on its own: down and up, since no physical key will release it.
+    // modifiers are None because the character belongs to the dead key press, not the key that aborted it.
+    internal static KeyEvent[] SpacingTap(char spacing) =>
+    [
+        KeyEvent.Char(KeyEventType.KeyDown, spacing, KeyModifiers.None),
+        KeyEvent.Char(KeyEventType.KeyUp, spacing, KeyModifiers.None),
+    ];
+
+    // clears a pending dead key and returns its spacing form as a tap; null when none is pending or it has no
+    // spacing form (dead_belowdot), since the raw combining char is never sent
+    internal static KeyEvent[]? TakeDeadKeySpacing(ref char pendingDeadKey, ref char pendingDeadSpacing)
+    {
+        if (pendingDeadKey == '\0') return null;
+        var spacing = pendingDeadSpacing;
+        pendingDeadKey = '\0';
+        pendingDeadSpacing = '\0';
+        return spacing == '\0' ? null : SpacingTap(spacing);
+    }
+
+    // the non-null events of every part, in order; null when there are none
+    internal static KeyEvent[]? Concat(params ReadOnlySpan<KeyEvent?[]?> parts)
+    {
+        List<KeyEvent>? events = null;
+        foreach (var part in parts)
+        {
+            if (part is null) continue;
+            foreach (var e in part)
+                if (e is not null) (events ??= []).Add(e);
+        }
+        return events?.ToArray();
+    }
+
     // replay the key event that was emitted on key-down, using the stored char/special from _keyDownId.
-    // shared across all three platform resolvers (mac, xorg, win) — TKey is int or uint depending on platform.
+    // shared by every platform resolver; TKey is int or uint depending on platform.
     internal static KeyEvent? ReplayKeyUp<TKey>(Dictionary<TKey, CharClassification> keyDownId, TKey key, KeyModifiers mods)
         where TKey : notnull
     {

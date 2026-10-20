@@ -1,3 +1,4 @@
+using Cathedral.Utils;
 using Hydra.Keyboard;
 using Hydra.Mouse;
 using Microsoft.Extensions.Logging;
@@ -9,9 +10,7 @@ namespace Hydra.Platform.Linux;
 // cursor/warp are no-ops — remote-only mode uses deltas, not absolute positions.
 internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatformInput
 {
-    // One entry per open device, in poll order. Keyboard and pointer are FLAGS, not alternatives:
-    // a single evdev node can be both, and on a wireless receiver it usually is - see
-    // DiscoverDevices for what picking just one of them silently broke.
+    // open devices in poll order; one node can be both keyboard and pointer (a wireless receiver usually is)
     private readonly List<InputDeviceRole> _devices = [];
     private volatile bool _running;
     private volatile bool _grabbed;
@@ -38,8 +37,6 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
         }
     }
 
-    public bool IsAccessibilityTrusted() => true;
-
     public ValueTask HideCursor() => ValueTask.CompletedTask;   // no-op: headless
     public ValueTask ShowCursor() => ValueTask.CompletedTask;   // no-op: headless
     public void WarpCursor(int x, int y) { }          // no-op: remote-only uses deltas
@@ -58,11 +55,8 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
         Action<MouseScrollEvent> onMouseScroll,
         Action? onLocalActivity = null)
     {
-        // StartEventTap can be called more than once on the same instance: this handler is a DI
-        // singleton and the self-updater restarts the host in-process. Without releasing first,
-        // DiscoverDevices appends a SECOND set of fds to the same lists - the old set still holds
-        // EVIOCGRAB, every grab on the new set fails with EBUSY, and input silently goes nowhere
-        // while the process looks perfectly healthy.
+        // a re-tap (the host restarts in-process) releases the old fds first: they would keep EVIOCGRAB,
+        // and every grab on the new set would fail with EBUSY
         ReleaseDevices();
 
         _onMouseDelta = onMouseDelta;
@@ -83,8 +77,11 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
             throw new InvalidOperationException("No input devices found in /dev/input/. Check permissions (user may need to be in 'input' group).");
 
         if (log.IsEnabled(LogLevel.Information))
-            log.LogInformation("Found {K} keyboard(s), {M} mouse/pointer device(s)",
-                _devices.Count(d => d.Keyboard), _devices.Count(d => d.Pointer));
+        {
+            var keyboards = _devices.Count(d => d.Keyboard);
+            var pointers = _devices.Count(d => d.Pointer);
+            log.LogInformation("Found {K} {Keyboards}, {M} mouse/pointer {Devices}", keyboards, Pluralize.Of(keyboards, "keyboard"), pointers, Pluralize.Of(pointers, "device"));
+        }
 
         _running = true;
         _thread = new Thread(EventLoop) { Name = "HydraEvdevEventLoop", IsBackground = true };
@@ -109,7 +106,7 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
         if (_grabbed) SetGrab(false);
         foreach (var device in _devices)
             _ = EvdevNativeMethods.Close(device.Fd);
-        if (log.IsEnabled(LogLevel.Debug)) log.LogDebug("Released {Count} input device(s)", _devices.Count);
+        if (log.IsEnabled(LogLevel.Debug)) log.LogDebug("Released {Count} input {Devices}", _devices.Count, Pluralize.Of(_devices.Count, "device"));
         _devices.Clear();
         _grabbed = false;
     }
@@ -147,13 +144,7 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
                 && TestBit(relBuf, EvdevNativeMethods.REL_X)
                 && TestBit(relBuf, EvdevNativeMethods.REL_Y);
 
-            // Both tests run and BOTH answers are kept. These roles are not exclusive: a wireless
-            // receiver presents one node that reports letter keys and relative axes together, so
-            // testing for a keyboard first and stopping there classified every such mouse as a
-            // keyboard and read its motion from nothing at all. The symptom is a pointer that does
-            // not move while typing works perfectly, and it is invisible in the device counts
-            // unless a pointer-only device (a Bluetooth mouse, a trackpad) happens to be present
-            // to make up the numbers.
+            // keep both roles: a wireless receiver's one node reports letter keys and relative axes together
             if (!isKeyboard && !isPointer)
             {
                 _ = EvdevNativeMethods.Close(fd);
@@ -196,10 +187,7 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
                     var r = EvdevNativeMethods.Read(device.Fd, ref ev, (nuint)System.Runtime.InteropServices.Marshal.SizeOf<InputEvent>());
                     if (r <= 0) break;
 
-                    // Dispatch on the EVENT, not on the device. A combo device delivers keystrokes
-                    // and motion down one fd, so the device alone cannot say what an event is.
-                    // HandleKeyboardEvent already forwards BTN_* to the button path, which is why
-                    // a keyboard with buttons needs nothing extra here.
+                    // dispatch on the event, not the device: a combo device sends keys and motion down one fd
                     if (ev.Type == EvdevNativeMethods.EV_KEY)
                     {
                         if (device.Keyboard) HandleKeyboardEvent(ev);
@@ -216,7 +204,6 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
 
     private void HandleKeyboardEvent(InputEvent ev)
     {
-        if (ev.Type != EvdevNativeMethods.EV_KEY) return;
         if (_keyResolver == null) return;
 
         var code = ev.Code;
@@ -239,10 +226,6 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
     {
         switch (ev.Type)
         {
-            case EvdevNativeMethods.EV_KEY:
-                HandleButtonCode(ev.Code, ev.Value);
-                break;
-
             case EvdevNativeMethods.EV_REL:
                 {
                     switch (ev.Code)
@@ -254,10 +237,10 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
                             pendingDy += ev.Value * scale;
                             break;
                         case EvdevNativeMethods.REL_WHEEL:
-                            _onMouseScroll?.Invoke(new MouseScrollEvent(0, (short)(ev.Value * 120)));
+                            _onMouseScroll?.Invoke(new MouseScrollEvent(0, (short)(ev.Value * MouseScrollEvent.Notch)));
                             break;
                         case EvdevNativeMethods.REL_HWHEEL:
-                            _onMouseScroll?.Invoke(new MouseScrollEvent((short)(ev.Value * 120), 0));
+                            _onMouseScroll?.Invoke(new MouseScrollEvent((short)(ev.Value * MouseScrollEvent.Notch), 0));
                             break;
                     }
                     break;

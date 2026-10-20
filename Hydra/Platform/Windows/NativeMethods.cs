@@ -1,4 +1,4 @@
-// mirrors the Win32 SDK headers (winuser.h, winbase.h, wingdi.h, shellscalingapi.h, wtsapi32.h, commctrl.h, ole2.h, shellapi.h, sas.h)
+// mirrors the Win32 SDK headers (winuser.h, winbase.h, wingdi.h, shellscalingapi.h, wtsapi32.h, ole2.h, shellapi.h, sas.h)
 // ReSharper disable InconsistentNaming
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -37,16 +37,12 @@ internal static partial class NativeMethods
 
     internal const int WM_KEYDOWN = 0x0100;
     internal const int WM_KEYUP = 0x0101;
-    internal const int WM_SYSKEYDOWN = 0x0104;
     internal const int WM_SYSKEYUP = 0x0105;
 
     // -- message loop --
 
     internal const uint WM_QUIT = 0x0012;
     internal const uint WM_USER = 0x0400;
-
-    // -- system colors (use as hbrBackground: cast to nint, add 1) --
-    internal const int COLOR_BTNFACE = 15;
 
     // -- GetSystemMetrics indices --
 
@@ -83,6 +79,13 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     internal static partial int GetMessage(out MSG lpMsg, nint hWnd, uint wMsgFilterMin, uint wMsgFilterMax);
 
+    internal const uint PM_REMOVE = 0x0001;
+
+    [LibraryImport(User32, EntryPoint = "PeekMessageW")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool PeekMessage(out MSG lpMsg, nint hWnd, uint wMsgFilterMin, uint wMsgFilterMax, uint wRemoveMsg);
+
     [LibraryImport(User32)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     [return: MarshalAs(UnmanagedType.Bool)]
@@ -108,10 +111,6 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool GetCursorPos(out WINPOINT lpPoint);
-
-    [LibraryImport(User32)]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
-    internal static partial nint WindowFromPoint(WINPOINT pt);
 
     internal const uint GA_ROOT = 2;
     internal const uint GA_ROOTOWNER = 3;
@@ -179,11 +178,7 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     internal static partial int GetSystemMetrics(int nIndex);
 
-    [LibraryImport(User32)]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
-    internal static partial uint GetDpiForSystem();
-
-    // EnumDisplayMonitors: classic DllImport for managed delegate marshaling
+    // the delegate is marshaled as a function pointer, valid only for the call
     [LibraryImport(User32, SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool EnumDisplayMonitors(nint hdc, nint lprcClip, MonitorEnumProc lpfnEnum, nint dwData);
@@ -239,7 +234,7 @@ internal static partial class NativeMethods
     internal const uint MOUSEEVENTF_VIRTUALDESK = 0x4000;
     internal const uint MOUSEEVENTF_ABSOLUTE = 0x8000;
 
-    [LibraryImport(User32)]
+    [LibraryImport(User32, SetLastError = true)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     internal static unsafe partial uint SendInput(uint nInputs, INPUT* pInputs, int cbSize);
 
@@ -290,7 +285,6 @@ internal static partial class NativeMethods
     // -- window management --
 
     internal const uint WS_POPUP = 0x80000000;
-    internal const uint WS_DISABLED = 0x08000000;
     internal const uint WS_EX_TOPMOST = 0x00000008;
     internal const uint WS_EX_TOOLWINDOW = 0x00000080;
     internal const uint WS_EX_LAYERED = 0x00080000;
@@ -325,8 +319,6 @@ internal static partial class NativeMethods
         internal nint hIconSm;
     }
 
-    internal const int ERROR_CLASS_ALREADY_EXISTS = 1410;
-
     [LibraryImport(User32, EntryPoint = "RegisterClassExW", SetLastError = true)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     internal static partial ushort RegisterClassExW(in WNDCLASSEXW lpwcx);
@@ -336,7 +328,7 @@ internal static partial class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool UnregisterClassW(nint lpClassName, nint hInstance);
 
-    [LibraryImport(User32, EntryPoint = "CreateWindowExW")]
+    [LibraryImport(User32, EntryPoint = "CreateWindowExW", SetLastError = true)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     internal static partial nint CreateWindowExW(
         uint dwExStyle, nint lpClassName, nint lpWindowName,
@@ -361,11 +353,6 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool SetWindowPos(nint hWnd, nint hWndInsertAfter, int x, int y, int cx, int cy, uint uFlags);
-
-    [LibraryImport(User32)]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    internal static partial bool EnableWindow(nint hWnd, [MarshalAs(UnmanagedType.Bool)] bool bEnable);
 
     [LibraryImport(User32)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
@@ -540,13 +527,6 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     internal static partial int MessageBoxW(nint hWnd, string lpText, string lpCaption, uint uType);
 
-    // SetThreadExecutionState: prevents sleep/screensaver
-    internal const uint ES_DISPLAY_REQUIRED = 0x00000002;
-
-    [LibraryImport(Kernel32)]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
-    internal static partial uint SetThreadExecutionState(uint esFlags);
-
     // -- clipboard --
 
     internal const uint CF_UNICODETEXT = 13;
@@ -587,6 +567,14 @@ internal static partial class NativeMethods
 
     [LibraryImport(User32)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial uint GetClipboardSequenceNumber();
+
+    [LibraryImport(User32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial nint GetClipboardOwner();
+
+    [LibraryImport(User32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     internal static partial nint GetClipboardData(uint uFormat);
 
     [LibraryImport(User32)]
@@ -612,12 +600,10 @@ internal static partial class NativeMethods
 
     // -- desktop --
 
-    internal const uint GENERIC_READ = 0x80000000;
     internal const uint GENERIC_WRITE = 0x40000000;
     internal const uint DESKTOP_READOBJECTS = 0x0001;
     internal const uint DESKTOP_CREATEWINDOW = 0x0002;
     internal const uint DESKTOP_HOOKCONTROL = 0x0008;
-    internal const uint DESKTOP_WRITEOBJECTS = 0x0080;
     internal const uint DF_ALLOWOTHERACCOUNTHOOK = 0x0001;
     internal const int UOI_NAME = 2;
 
@@ -718,37 +704,7 @@ internal static partial class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool CloseHandle(nint hObject);
 
-    // -- common controls --
-
-    private const string ComCtl32 = "comctl32.dll";
-
-    internal const uint ICC_PROGRESS_CLASS = 0x00000020;
-    internal const uint PBS_SMOOTH = 0x01;
-    internal const uint PBM_SETRANGE32 = 0x0406;
-    internal const uint PBM_SETPOS = 0x0402;
-    internal const int WM_COMMAND = 0x0111;
-    internal const int BN_CLICKED = 0;
-    internal const uint BS_PUSHBUTTON = 0x00000000;
-    internal const uint SS_LEFT = 0x00000000;
-    internal const uint WS_CHILD = 0x40000000;
-    internal const uint WS_VISIBLE = 0x10000000;
-    internal const uint WS_CAPTION = 0x00C00000;
-    internal const uint WS_SYSMENU = 0x00080000;
-    internal const uint WS_OVERLAPPED = 0x00000000;
-
-    [StructLayout(LayoutKind.Sequential)]
-    internal struct INITCOMMONCONTROLSEX
-    {
-        internal uint dwSize;
-        internal uint dwICC;
-    }
-
-    [LibraryImport(ComCtl32)]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    internal static partial bool InitCommonControlsEx(in INITCOMMONCONTROLSEX lpInitCtrls);
-
-    // -- OLE (required for clipboard image interop) --
+    // -- OLE (an STA for IProgressDialog and SHFileOperation) --
 
     private const string Ole32 = "ole32.dll";
 
@@ -759,14 +715,6 @@ internal static partial class NativeMethods
     [LibraryImport(Ole32)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     internal static partial void OleUninitialize();
-
-    [LibraryImport(Ole32)]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
-    internal static partial int RegisterDragDrop(nint hwnd, nint pDropTarget);
-
-    [LibraryImport(Ole32)]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
-    internal static partial int RevokeDragDrop(nint hwnd);
 
     // -- sas.dll --
 
@@ -891,12 +839,6 @@ internal struct INPUT
 internal struct WINRECT
 {
     internal int Left, Top, Right, Bottom;
-}
-
-[StructLayout(LayoutKind.Sequential)]
-internal struct POINTL
-{
-    internal int x, y;
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 4)]

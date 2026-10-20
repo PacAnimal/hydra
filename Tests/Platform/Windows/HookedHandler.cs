@@ -58,10 +58,10 @@ internal sealed class HookedHandler
             setCursorPos ?? NoWarp);
 
     public bool Down(int vk, uint flags = 0, uint time = 1) =>
-        Handler.HandleKey(NativeMethods.WM_KEYDOWN, new KBDLLHOOKSTRUCT { vkCode = (uint)vk, flags = flags, time = time });
+        Handler.HandleKey(NativeMethods.WM_KEYDOWN, WinHook.Hook((uint)vk, flags, time));
 
     public bool Up(int vk, uint flags = 0, uint time = 1) =>
-        Handler.HandleKey(NativeMethods.WM_KEYUP, new KBDLLHOOKSTRUCT { vkCode = (uint)vk, flags = flags, time = time });
+        Handler.HandleKey(NativeMethods.WM_KEYUP, WinHook.Hook((uint)vk, flags, time));
 
     public bool Mouse(int msg, uint mouseData = 0) => Handler.HandleMouse(msg, new MSLLHOOKSTRUCT { mouseData = mouseData }, NoWarp);
 

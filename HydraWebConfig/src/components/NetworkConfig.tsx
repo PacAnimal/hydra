@@ -2,6 +2,7 @@ import type { HydraProfile, NetworkType, EmbeddedStyxConfig, EmbeddedStyxServerC
 
 interface Props {
   config: HydraProfile
+  serverError?: string
   onChange: (patch: Partial<HydraProfile>) => void
 }
 
@@ -11,7 +12,7 @@ const TYPE_LABELS: Record<NetworkType, string> = {
   embeddedStyxServer: 'Embedded Styx server',
 }
 
-export function NetworkConfig({ config, onChange }: Props) {
+export function NetworkConfig({ config, serverError, onChange }: Props) {
   const type = config.networkType ?? 'config'
 
   function setType(t: NetworkType) {
@@ -60,10 +61,12 @@ export function NetworkConfig({ config, onChange }: Props) {
             <label>Server</label>
             <input
               type="text"
+              className={serverError ? 'input-error' : undefined}
               value={config.embeddedStyx?.server ?? ''}
-              placeholder="e.g. styx.example.com:8080 or 192.168.1.10"
+              placeholder="e.g. https://192.168.1.10:5000"
               onChange={e => patchStyx({ server: e.target.value })}
             />
+            {serverError && <span className="field-error-msg">{serverError}</span>}
           </div>
           <div className="field flex-grow">
             <label>Password</label>

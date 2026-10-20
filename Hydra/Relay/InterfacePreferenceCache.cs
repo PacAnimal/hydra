@@ -24,7 +24,7 @@ internal sealed class InterfacePreferenceCache
 
     internal static InterfacePreferenceCache Shared { get; } = CreateShared();
 
-    internal async Task<IReadOnlyDictionary<string, int>> GetAsync(CancellationToken cancellationToken)
+    internal async Task<IReadOnlyDictionary<string, int>> Get(CancellationToken cancellationToken)
     {
         Task<IReadOnlyDictionary<string, int>> answer;
         lock (_lock)
@@ -73,7 +73,7 @@ internal sealed class InterfacePreferenceCache
     }
 
     private static InterfacePreferenceCache CreateShared() =>
-        Create(RelayAddressPreference.QueryInterfacePreferencesAsync, TimeProvider.System, invalidate =>
+        Create(RelayAddressPreference.QueryInterfacePreferences, TimeProvider.System, invalidate =>
         {
             NetworkChange.NetworkAddressChanged += (_, _) => invalidate();
             NetworkChange.NetworkAvailabilityChanged += (_, _) => invalidate();

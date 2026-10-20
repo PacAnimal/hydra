@@ -21,7 +21,7 @@ public class ManagementServerTests
             new HydraRuntimeInfo(_configPath, DateTimeOffset.UtcNow),
             null!, null!, null!, lifetime, null!, NullLogger<ManagementServer>.Instance);
 
-        var response = await server.DispatchAsync(new ManagementRequest(ManagementMethods.HydraShutdown), CancellationToken.None);
+        var response = await server.Dispatch(new ManagementRequest(ManagementMethods.HydraShutdown), CancellationToken.None);
 
         using (Assert.EnterMultipleScope())
         {
@@ -41,7 +41,7 @@ public class ManagementServerTests
             new HydraRuntimeInfo(_configPath, DateTimeOffset.UtcNow),
             null!, null!, null!, new FakeLifetimeController(), null!, NullLogger<ManagementServer>.Instance);
 
-        var response = await server.DispatchAsync(new ManagementRequest(ManagementMethods.Hello), CancellationToken.None);
+        var response = await server.Dispatch(new ManagementRequest(ManagementMethods.Hello), CancellationToken.None);
 
         Assert.That(ManagementJson.Deserialize<ServerHello>(response.Json).HydraVersion,
             Is.EqualTo(typeof(ManagementServer).Assembly.GetName().Version!.ToString(3)));

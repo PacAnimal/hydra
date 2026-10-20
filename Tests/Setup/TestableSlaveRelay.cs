@@ -20,7 +20,8 @@ public sealed class TestableSlaveRelay : SlaveRelayConnection
     public IDormancyState Dormancy { get; }
     public FakeScreenDetector Screens { get; }
     public NullPlatformOutput Output { get; }
-    private readonly SentSignals _signals = new();
+    // everything the slave sent
+    public SentSignals Sent { get; } = new();
     private readonly WebApplicationFactory<global::Styx.Program>? _styx;
     private readonly NotificationQueue<bool> _authenticated = new();
 
@@ -40,10 +41,11 @@ public sealed class TestableSlaveRelay : SlaveRelayConnection
         FakeScreenDetector? screens = null,
         IFileSelectionDetector? selectionDetector = null,
         IOsdNotification? osd = null,
-        FileTransferService? fileTransfer = null)
+        FileTransferService? fileTransfer = null,
+        ILogger<RelayConnection>? log = null)
         : this(MakeShared(worldState, screenSaverSync, trackerClock), clipboard, cursorHider, screenSaverSync,
             dormancy ?? new DormancyState(NullLogger<DormancyState>.Instance), screens ?? new FakeScreenDetector(), new NullPlatformOutput(),
-            selectionDetector ?? new NullFileSelectionDetector(), osd ?? new NullOsdNotification(), fileTransfer: fileTransfer)
+            selectionDetector ?? new NullFileSelectionDetector(), osd ?? new NullOsdNotification(), fileTransfer: fileTransfer, log: log)
     { }
 
     // ActivityTracker and SlaveRelayConnection must share the same WorldState — chaining lets us build it once
@@ -84,15 +86,8 @@ public sealed class TestableSlaveRelay : SlaveRelayConnection
     public Task SimulateReceive(string host, MessageKind kind, string json) => OnReceive(host, kind, Encoding.UTF8.GetBytes(json));
     public Task SimulateDisconnected() => OnDisconnected();
 
-    public List<SentMessage> Snapshot() => _signals.Snapshot();
-    public void ClearSent() => _signals.Clear();
-    public List<SentMessage> TakeAll() => _signals.TakeAll();
-
-    // completes once a message of this kind has been sent, for a reply worked out off the receive path
-    public Task WaitForSent(MessageKind kind, TimeSpan timeout) => _signals.WaitFor(kind, timeout);
-
     // completes once the relay has logged the slave in again
-    public Task NextAuthentication(TimeSpan timeout) => _authenticated.Next((int)timeout.TotalMilliseconds, "the slave to authenticate");
+    public Task NextAuthentication() => _authenticated.Next("the slave to authenticate");
 
     protected override TimeSpan ReconnectDelay => TimeSpan.Zero;
 
@@ -108,7 +103,13 @@ public sealed class TestableSlaveRelay : SlaveRelayConnection
         _authenticated.Push(true);
     }
 
-    protected override void OnSent(string[] targetHosts, byte[] payload) => _signals.Record(targetHosts, payload);
+    protected override void OnSent(string[] targetHosts, byte[] payload) => Sent.Record(targetHosts, payload);
+
+    protected override void OnSentKey(string[] targetHosts, KeyEventMessage message) =>
+        OnSent(targetHosts, MessageSerializer.Encode(MessageKind.KeyEvent, message));
+
+    protected override void OnSentDelta(string[] targetHosts, int dx, int dy) =>
+        OnSent(targetHosts, MessageSerializer.Encode(MessageKind.MouseMoveDelta, new MouseMoveDeltaMessage(dx, dy)));
 
     private static SharedDeps MakeShared(IWorldState? worldState, IScreenSaverSync? screenSaverSync, Func<long>? clock = null)
     {

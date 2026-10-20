@@ -15,11 +15,13 @@ internal sealed class HydraLifetimeController(
     IHostApplicationLifetime lifetime,
     ILogger<HydraLifetimeController> log) : IHydraLifetimeController
 {
+    // long enough for the management response to reach its client before we go
+    private static readonly TimeSpan ResponseGrace = TimeSpan.FromMilliseconds(350);
+
     public void RestartAfterResponse()
     {
-        _ = Task.Run(async () =>
+        AfterResponse(() =>
         {
-            await Task.Delay(350);
             try
             {
                 if (OperatingSystem.IsWindows() && RunMode.IsSessionChild)
@@ -40,9 +42,8 @@ internal sealed class HydraLifetimeController(
             return new CommandResult(false,
                 "Hydra is managed by the Windows service. Stop it from Windows Services or an elevated terminal.");
 
-        _ = Task.Run(async () =>
+        AfterResponse(() =>
         {
-            await Task.Delay(350);
             try
             {
                 // A KeepAlive LaunchAgent would immediately relaunch Hydra after a normal
@@ -61,6 +62,12 @@ internal sealed class HydraLifetimeController(
         });
         return new CommandResult(true, "Hydra shutdown requested.");
     }
+
+    private static void AfterResponse(Action action) => _ = Task.Run(async () =>
+    {
+        await Task.Delay(ResponseGrace);
+        action();
+    });
 
     internal static bool CanShutdown(bool isWindows, bool isSessionChild) =>
         !isWindows || !isSessionChild;

@@ -38,12 +38,7 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
     private static readonly nint SelSubtype = NativeMethods.sel_registerName("subtype");
     private static readonly nint SelData1 = NativeMethods.sel_registerName("data1");
 
-
-    public bool IsAccessibilityTrusted()
-    {
-        if (NativeHelpers.PollAccessibilityTrusted()) return true;
-        return NativeHelpers.ShowAccessibilityPrompt();
-    }
+    public bool IsAccessibilityTrusted() => NativeHelpers.EnsureAccessibilityTrusted();
     public Task WaitForAccessibilityTrusted(CancellationToken cancel) => NativeHelpers.WaitForAccessibilityTrusted(cancel);
 
     public void WarpCursor(int x, int y)
@@ -136,9 +131,10 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
         await CreateTapThread();
     }
 
-    private Task<bool> CreateTapThread()
+    // completes once the tap is running, or has failed and said so
+    private Task CreateTapThread()
     {
-        var ready = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         _tapThread = new Thread(() =>
         {
@@ -157,7 +153,7 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
             if (tapPort == nint.Zero)
             {
                 log.LogError("CGEventTapCreate returned null -- accessibility permission denied?");
-                ready.TrySetResult(false);
+                ready.TrySetResult();
                 return;
             }
 
@@ -165,7 +161,7 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
             NativeMethods.CFRunLoopAddSource(runLoop, runLoopSource, NativeMethods.KCFRunLoopCommonModes);
             NativeMethods.CGEventTapEnable(tapPort, true);
 
-            ready.TrySetResult(true);
+            ready.TrySetResult();
             NativeMethods.CFRunLoopRun();
 
             // release this thread's OWN handles via captured locals — the fields may have been
@@ -264,11 +260,11 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
             if (isContinuous != 0)
             {
                 // trackpad / hi-res continuous: use 16.16 fixed-point deltas (preserves smooth granularity).
-                // convert to 120-unit wire format: fixedPt * 120 >> 16 (1.0 lines = 120 wire units).
+                // one line is one notch on the wire
                 var fpDy = NativeMethods.CGEventGetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventFixedPtDeltaAxis1);
                 var fpDx = NativeMethods.CGEventGetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventFixedPtDeltaAxis2);
-                wireX = (short)Math.Clamp(fpDx * 120L >> 16, short.MinValue, short.MaxValue);
-                wireY = (short)Math.Clamp(fpDy * 120L >> 16, short.MinValue, short.MaxValue);
+                wireX = (short)Math.Clamp(fpDx * MouseScrollEvent.Notch >> 16, short.MinValue, short.MaxValue);
+                wireY = (short)Math.Clamp(fpDy * MouseScrollEvent.Notch >> 16, short.MinValue, short.MaxValue);
             }
             else
             {
@@ -277,14 +273,14 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
                 if (profile.AccelerateMouseWheel)
                 {
                     // forward macOS line-delta acceleration as-is
-                    wireX = (short)Math.Clamp(dx * 120L, short.MinValue, short.MaxValue);
-                    wireY = (short)Math.Clamp(dy * 120L, short.MinValue, short.MaxValue);
+                    wireX = (short)Math.Clamp(dx * MouseScrollEvent.Notch, short.MinValue, short.MaxValue);
+                    wireY = (short)Math.Clamp(dy * MouseScrollEvent.Notch, short.MinValue, short.MaxValue);
                 }
                 else
                 {
-                    // normalize to ±120 per event — discard macOS acceleration, let slave apply its own
-                    wireX = (short)(Math.Sign(dx) * 120);
-                    wireY = (short)(Math.Sign(dy) * 120);
+                    // one notch per event — discard macOS acceleration, let slave apply its own
+                    wireX = (short)(Math.Sign(dx) * MouseScrollEvent.Notch);
+                    wireY = (short)(Math.Sign(dy) * MouseScrollEvent.Notch);
                 }
             }
             if (wireX != 0 || wireY != 0)

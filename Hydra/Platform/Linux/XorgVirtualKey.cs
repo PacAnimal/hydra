@@ -3,8 +3,6 @@
 namespace Hydra.Platform.Linux;
 
 // X11 keysym constants (XK_* values from <X11/keysymdef.h>).
-// note: Hydra's KeyId constants are derived from these by subtracting 0x1000,
-// so XorgSpecialKeyMap entries are purely for clarity and validation.
 internal static class XorgVirtualKey
 {
     // tty
@@ -41,6 +39,7 @@ internal static class XorgVirtualKey
     internal const ulong KP_Add = 0xFFAB;
     internal const ulong KP_Subtract = 0xFFAD;
     internal const ulong KP_Decimal = 0xFFAE;
+    internal const ulong KP_Separator = 0xFFAC;  // comma on European layouts
     internal const ulong KP_Divide = 0xFFAF;
     internal const ulong KP_0 = 0xFFB0;
     internal const ulong KP_1 = 0xFFB1;
@@ -90,6 +89,7 @@ internal static class XorgVirtualKey
     // modifiers
     internal const ulong ISO_Left_Tab = 0xFE20;      // Shift+Tab on most layouts
     internal const ulong ISO_Level3_Shift = 0xFE03;  // AltGr on most layouts
+    internal const ulong Mode_switch = 0xFF7E;       // AltGr on older X11 configurations
     internal const ulong Shift_L = 0xFFE1;
     internal const ulong Shift_R = 0xFFE2;
     internal const ulong Control_L = 0xFFE3;

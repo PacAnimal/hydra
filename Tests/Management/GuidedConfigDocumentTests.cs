@@ -55,7 +55,7 @@ public class GuidedConfigDocumentTests
     [Test]
     public void ClearingOptionalFieldsRemovesTheirObjects()
     {
-        const string json = """{"profiles":[{"mode":"Slave","conditions":{"ssid":"x"},"embeddedStyx":{"server":"http://x","password":"pw"}}]}""";
+        const string json = """{"profiles":[{"mode":"Slave","conditions":{"ssid":"x"},"embeddedStyx":{"server":"https://x","password":"pw"}}]}""";
         var document = GuidedConfigDocument.Parse(json);
         var profile = document.ReadProfile(0);
         profile[GuidedFields.Ssid] = "";
@@ -122,7 +122,7 @@ public class GuidedConfigDocumentTests
     [Test]
     public void DuplicateKeysShowAndKeepTheValueTheLoaderUses()
     {
-        const string relay = """ "embeddedStyx":{"server":"http://x:5000","password":"pw"} """;
+        const string relay = """ "embeddedStyx":{"server":"https://x:5000","password":"pw"} """;
         var document = GuidedConfigDocument.Parse($$"""{"profiles":[{"mode":"Master","hideCursor":false,"HideCursor":true,{{relay}}}]}""");
 
         var shown = document.ReadProfile(0);
@@ -170,6 +170,10 @@ public class GuidedConfigDocumentTests
     }
 
     [Test]
+    public void ANumericUpdateChannelShowsAsItsName() =>
+        Assert.That(GuidedConfigDocument.Parse("""{"updateChannel":1,"profiles":[]}""").ReadRoot()[GuidedFields.UpdateChannel], Is.EqualTo(nameof(UpdateChannel.Edge)));
+
+    [Test]
     public void AnUndefinedNumericEnumValueShowsAsWritten() =>
         Assert.That(GuidedConfigDocument.Parse("""{"profiles":[{"clipboardSync":7}]}""").ReadProfile(0)[GuidedFields.ClipboardSync], Is.EqualTo("7"));
 
@@ -180,6 +184,7 @@ public class GuidedConfigDocumentTests
           "profile": "Home",
           "logLevel": "dbug",
           "autoUpdate": false,
+          "updateChannel": "Edge",
           "debugShield": true,
           "debugMouse": true,
           "profiles": [{
@@ -187,14 +192,13 @@ public class GuidedConfigDocumentTests
             "mode": "Slave",
             "conditions": { "ssid": "Home WiFi", "screenCount": 2, "isPluggedIn": true },
             "networkConfig": "secret",
-            "embeddedStyx": { "server": "http://relay:5000", "password": "client-pw" },
+            "embeddedStyx": { "server": "https://relay:5000", "password": "client-pw" },
             "embeddedStyxServer": { "port": 5001, "password": "server-pw" },
             "hideCursor": true,
             "remoteOnly": true,
             "syncScreensaver": false,
             "screenLockPropagation": true,
             "accelerateMouseWheel": false,
-            "unicodeKeyRepeat": false,
             "clipboardSync": "System",
             "allowSystemSleep": true,
             "mouseScale": 1.5,
@@ -238,7 +242,7 @@ public class GuidedConfigDocumentTests
     [Test]
     public void ClearingAnEmbeddedRelayDropsItWhole_SinceItCannotLoadWithoutItsFields()
     {
-        var document = GuidedConfigDocument.Parse("""{"profiles":[{"mode":"Slave","embeddedStyx":{"server":"http://x","password":"pw","note":"x"}}]}""");
+        var document = GuidedConfigDocument.Parse("""{"profiles":[{"mode":"Slave","embeddedStyx":{"server":"https://x","password":"pw","note":"x"}}]}""");
         var profile = document.ReadProfile(0);
         profile[GuidedFields.EmbeddedServer] = "";
         profile[GuidedFields.EmbeddedPassword] = "";
@@ -311,6 +315,28 @@ public class GuidedConfigDocumentTests
     }
 
     [Test]
+    public void AnUnknownUpdateChannelIsRefused()
+    {
+        var document = GuidedConfigDocument.Parse("""{"profiles":[]}""");
+        var root = document.ReadRoot();
+        root[GuidedFields.UpdateChannel] = "Nightly";
+
+        Assert.That(() => document.WriteRoot(root), Throws.InvalidOperationException.With.Message.EqualTo("Update Channel must be one of: Stable, Edge."));
+    }
+
+    [Test]
+    public void AnEmptyUpdateChannelLeavesTheDefaultToTheLoader()
+    {
+        var document = GuidedConfigDocument.Parse("""{"updateChannel":"Edge","profiles":[]}""");
+        var root = document.ReadRoot();
+        root[GuidedFields.UpdateChannel] = "";
+
+        document.WriteRoot(root);
+
+        Assert.That(document.ToJson(), Does.Not.Contain("updateChannel"));
+    }
+
+    [Test]
     public void AnEmptyClipboardSyncLeavesTheDefaultToTheLoader()
     {
         var document = GuidedConfigDocument.Parse("""{"profiles":[{"mode":"Slave","clipboardSync":"System"}]}""");
@@ -341,6 +367,7 @@ public class GuidedConfigDocumentTests
             Assert.That(file.Profile, Is.EqualTo("Home"));
             Assert.That(file.LogLevel, Is.EqualTo(Microsoft.Extensions.Logging.LogLevel.Debug));
             Assert.That(file.AutoUpdate, Is.False);
+            Assert.That(file.UpdateChannel, Is.EqualTo(UpdateChannel.Edge));
             Assert.That(file.DebugShield, Is.True);
             Assert.That(file.DebugMouse, Is.True);
             Assert.That(profile.ProfileName, Is.EqualTo("Home"));
@@ -349,7 +376,7 @@ public class GuidedConfigDocumentTests
             Assert.That(profile.Conditions.ScreenCount, Is.EqualTo(2));
             Assert.That(profile.Conditions.IsPluggedIn, Is.True);
             Assert.That(profile.NetworkConfig, Is.EqualTo("secret"));
-            Assert.That(profile.EmbeddedStyx!.Server, Is.EqualTo("http://relay:5000"));
+            Assert.That(profile.EmbeddedStyx!.Server, Is.EqualTo("https://relay:5000"));
             Assert.That(profile.EmbeddedStyx.Password, Is.EqualTo("client-pw"));
             Assert.That(profile.EmbeddedStyxServer!.Port, Is.EqualTo(5001));
             Assert.That(profile.EmbeddedStyxServer.Password, Is.EqualTo("server-pw"));
@@ -358,7 +385,6 @@ public class GuidedConfigDocumentTests
             Assert.That(profile.SyncScreensaver, Is.False);
             Assert.That(profile.ScreenLockPropagation, Is.True);
             Assert.That(profile.AccelerateMouseWheel, Is.False);
-            Assert.That(profile.UnicodeKeyRepeat, Is.False);
             Assert.That(profile.AllowSystemSleep, Is.True);
             Assert.That(profile.ClipboardSync, Is.EqualTo(ClipboardSyncMode.System));
             Assert.That(profile.MouseScale, Is.EqualTo(1.5m));
@@ -375,6 +401,7 @@ public class GuidedConfigDocumentTests
         [GuidedFields.ProfileOverride] = "Home",
         [GuidedFields.LogLevel] = "dbug",
         [GuidedFields.AutoUpdate] = GuidedValues.Off,
+        [GuidedFields.UpdateChannel] = "Edge",
         [GuidedFields.DebugShield] = GuidedValues.On,
         [GuidedFields.DebugMouse] = GuidedValues.On,
         [GuidedFields.ProfileName] = "Home",
@@ -383,7 +410,7 @@ public class GuidedConfigDocumentTests
         [GuidedFields.ScreenCount] = "2",
         [GuidedFields.IsPluggedIn] = "yes",
         [GuidedFields.NetworkConfig] = "secret",
-        [GuidedFields.EmbeddedServer] = "http://relay:5000",
+        [GuidedFields.EmbeddedServer] = "https://relay:5000",
         [GuidedFields.EmbeddedPassword] = "client-pw",
         [GuidedFields.EmbeddedPort] = "5001",
         [GuidedFields.EmbeddedServerPassword] = "server-pw",
@@ -392,7 +419,6 @@ public class GuidedConfigDocumentTests
         [GuidedFields.SyncScreensaver] = GuidedValues.Off,
         [GuidedFields.ScreenLockPropagation] = GuidedValues.On,
         [GuidedFields.AccelerateMouseWheel] = GuidedValues.Off,
-        [GuidedFields.UnicodeKeyRepeat] = GuidedValues.Off,
         [GuidedFields.AllowSystemSleep] = GuidedValues.On,
         [GuidedFields.ClipboardSync] = "System",
         [GuidedFields.MouseScale] = "1.5",

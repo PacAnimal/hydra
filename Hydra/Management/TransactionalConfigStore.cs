@@ -8,28 +8,15 @@ internal sealed class TransactionalConfigStore(HydraRuntimeInfo runtime)
     private readonly SemaphoreSlim _writeLock = new(1, 1);
     private readonly ConfigDir _dir = new(runtime.ConfigPath);
 
-    /// <summary>
-    /// Reads under the cross-process config lock — the TUI is a SEPARATE PROCESS from the service and both
-    /// read this file, so an unlocked read here is a read racing another program's save. On Windows it does
-    /// not merely read a stale copy: the reader's handle refuses the saver's replace and the SAVE fails, so
-    /// a user's config edit is lost because something else happened to be reading.
-    ///
-    /// <para><b>This lock has no portable test.</b> Its only symptom is a refused replace, which is Windows
-    /// behaviour — a POSIX rename ignores open handles. The save side's lock is covered everywhere by
-    /// <c>ConcurrentSavesLoseNoEdit</c>, which is no cover for this one.</para>
-    /// </summary>
-    internal async Task<ConfigDocument> ReadAsync(CancellationToken cancel = default)
+    // reads take the cross-process lock too (see ConfigFileLock)
+    internal async Task<ConfigDocument> Read(CancellationToken cancel = default)
     {
         await using var fileLock = await ConfigFileLock.Acquire(_dir.ConfigLock, cancel);
-        return await ReadUnlockedAsync(cancel);
+        return await ReadUnlocked(cancel);
     }
 
-    /// <summary>
-    /// The same read for a caller that ALREADY HOLDS the config lock. The lock is exclusive and not
-    /// re-entrant — taking it twice in one call stack does not nest, it waits for itself until the budget
-    /// runs out and then throws — so a path that holds it must come through here. Rollback is that path.
-    /// </summary>
-    internal async Task<ConfigDocument> ReadUnlockedAsync(CancellationToken cancel = default)
+    // the same read for a caller already holding the config lock, which is not re-entrant (rollback)
+    internal async Task<ConfigDocument> ReadUnlocked(CancellationToken cancel = default)
     {
         var json = await File.ReadAllTextAsync(runtime.ConfigPath, cancel);
         return new ConfigDocument(runtime.ConfigPath, Revision(json), json);
@@ -48,7 +35,7 @@ internal sealed class TransactionalConfigStore(HydraRuntimeInfo runtime)
         }
     }
 
-    internal async Task<ConfigDocument> SaveAsync(string expectedRevision, string json, CancellationToken cancel,
+    internal async Task<ConfigDocument> Save(string expectedRevision, string json, CancellationToken cancel,
         bool allowPendingRemoteApply = false)
     {
         if (!allowPendingRemoteApply && RemoteApplyStore.HasPendingTransaction(runtime.ConfigPath))

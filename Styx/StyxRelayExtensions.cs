@@ -1,37 +1,86 @@
+using ByteSizeLib;
+using Cathedral.Config;
 using Cathedral.Extensions;
 using Cathedral.Logging;
 using Cathedral.Utils;
 using Microsoft.AspNetCore.Connections.Features;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Styx.Filters;
 using Styx.Services;
+using System.Text.Json.Serialization.Metadata;
 
 namespace Styx;
 
 public static class StyxRelayExtensions
 {
     // everything a relay host needs besides its listeners, logging and any endpoints of its own, shared by
-    // the standalone server and the one embedded in Hydra
-    public static WebApplicationBuilder AddStyxRelay(this WebApplicationBuilder builder, IStyxPasswordProvider passwordProvider, StyxOptions options,
-        TimeProvider? throttleClock = null)
+    // the standalone server and the one embedded in Hydra. Only a host behind a proxy may believe forwarded headers:
+    // anywhere else, any machine on a private network could name itself whatever address it liked
+    public static WebApplicationBuilder AddStyxRelay(this WebApplicationBuilder builder, StyxAuth auth, StyxOptions options, bool behindProxy)
     {
         var services = builder.Services;
 
         builder.DisableEventLog();
         services.AddDataProtection().PersistKeysToNowhere();
-        services.AddStyxSignalR();
+        services.AddStyxSignalR(options.ParallelInvocations);
 
         services.AddSingleton(options);
-        services.AddSingleton(new ResponseThrottle(throttleClock ?? TimeProvider.System));
+        services.AddSingleton(new ResponseThrottle(TimeProvider.System));
         services.AddSingleton<IClientRegistry, ClientRegistry>();
+        services.AddSingleton<PeerWriter>();
+        services.TryAddKeyedSingleton<TimeProvider>(typeof(PeerWriter), TimeProvider.System);
         services.AddHostedService<IPeerBroadcaster, PeerBroadcastService>();
-        services.AddSingleton(passwordProvider);
+        services.AddSingleton(auth);
+        services.TryAddSingleton(TimeProvider.System);
+        services.AddSingleton<FailureLimiter>();
+        services.AddSingleton<V1TokenVerifier>();
+        services.AddSingleton<ITokenVerifier, TokenVerifier>();
+        services.AddSingleton<IExpiryScheduler, ExpiryScheduler>();
         services.AddSingleton<AuthenticationHubFilter>();
         services.Configure<HubOptions>(hub => hub.AddFilter<AuthenticationHubFilter>());
 
-        services.AddCathedralForwardedHeaders();
+        if (behindProxy) services.AddCathedralForwardedHeaders();
         return builder;
+    }
+
+    // hub and protocol wiring: limits and the serializers a client may speak
+    private static void AddStyxSignalR(this IServiceCollection services, int parallelInvocations)
+    {
+        services.AddSingleton<HubLifetimeManager<ParallelStyxHub>, SharedHubLifetimeManager<ParallelStyxHub>>();
+
+        services.AddSignalR(options =>
+        {
+            options.KeepAliveInterval = TimeSpan.FromSeconds(Constants.KeepAliveSeconds);
+            options.ClientTimeoutInterval = TimeSpan.FromSeconds(Constants.ClientTimeoutSeconds);
+            options.EnableDetailedErrors = true;
+            options.MaximumReceiveMessageSize = (long)ByteSize.FromMebiBytes(Constants.MaxMessageMebiBytes).Bytes;
+            options.MaximumParallelInvocationsPerClient = Constants.MaxParallelInvocations;
+        }).AddJsonProtocol(options =>
+        {
+            // "required" is a C# construction guarantee, not a wire contract: a client that omits a member
+            // should get a refusal it can read from the hub, not an argument-binding error from the parser
+            options.PayloadSerializerOptions.TypeInfoResolver =
+                (options.PayloadSerializerOptions.TypeInfoResolver ?? new DefaultJsonTypeInfoResolver())
+                .WithAddedModifier(static typeInfo =>
+                {
+                    foreach (var property in typeInfo.Properties)
+                        property.IsRequired = false;
+                });
+        }).AddMessagePackProtocol(options =>
+        {
+            // members match in any casing; StyxWireFormatTests pins the encoding
+            options.SerializerOptions = SaneMessagePack.InteropOptions;
+        }).AddHubOptions<ParallelStyxHub>(hub => hub.MaximumParallelInvocationsPerClient = parallelInvocations);
+    }
+
+    // both relay paths, on every host, so one cannot exist without the other
+    public static IEndpointRouteBuilder MapStyxRelay(this IEndpointRouteBuilder endpoints)
+    {
+        endpoints.MapHub<StyxHub>(Constants.RelayPath);
+        endpoints.MapHub<ParallelStyxHub>(Constants.ParallelRelayPath);
+        return endpoints;
     }
 
     // relay traffic is small input frames that must leave at once, not wait for Nagle to coalesce them

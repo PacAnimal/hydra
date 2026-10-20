@@ -8,24 +8,20 @@ namespace Tests.Screen;
 // pin land after the warp and leave the cursor mid-screen.
 // The flag and warp are one ReturnTo, which on Windows marks the park point as the flag clears.
 [TestFixture]
-public class ReturnOrderTests
+public class ReturnOrderTests : ServicesFixture
 {
     private static readonly string[] Showing = ["show", "return", "flag:False", "warp"];
     private static readonly string[] Hiding = ["hide", "return", "flag:False", "warp"];
 
-    private static async Task<TestServiceBundle> OnTheRemoteScreen(IHydraProfile? profile = null, FakeScreenSaverSync? screenSaverSync = null)
+    private async Task<TestServiceBundle> OnTheRemoteScreen(IHydraProfile? profile = null, FakeScreenSaverSync? screenSaverSync = null)
     {
-        var bundle = await TransitionTestHelper.Visiting(TransitionTestHelper.CreateService(profile: profile, screenSaverSync: screenSaverSync));
+        var bundle = await Services.Visiting(TransitionTestHelper.CreateService(profile: profile, screenSaverSync: screenSaverSync));
         bundle.Platform.Calls.Clear();
         return bundle;
     }
 
-    private static async Task AssertReturned(TestServiceBundle bundle, string[] expected)
-    {
-        var calls = bundle.Platform.Calls.Where(c => c is "show" or "hide" or "return" or "flag:False" or "warp").ToList();
-        await bundle.Service.StopAsync(CancellationToken.None);
-        Assert.That(calls, Is.EqualTo(expected));
-    }
+    private static void AssertReturned(TestServiceBundle bundle, string[] expected) =>
+        Assert.That(bundle.Platform.Calls.Where(c => c is "show" or "hide" or "return" or "flag:False" or "warp"), Is.EqualTo(expected));
 
     [Test]
     public async Task EdgeReturn_ShowsBeforeItWarps()
@@ -34,7 +30,7 @@ public class ReturnOrderTests
 
         bundle.Platform.FireMouseMove(1276, 720);
 
-        await AssertReturned(bundle, Showing);
+        AssertReturned(bundle, Showing);
     }
 
     [Test]
@@ -44,7 +40,7 @@ public class ReturnOrderTests
 
         bundle.Platform.FireMouseMove(1276, 720);
 
-        await AssertReturned(bundle, Hiding);
+        AssertReturned(bundle, Hiding);
     }
 
     [Test]
@@ -53,9 +49,9 @@ public class ReturnOrderTests
         var bundle = await OnTheRemoteScreen();
 
         await bundle.Relay.FirePeersChanged();
-        await bundle.Service.FlushAsync();
+        await bundle.Service.Flush();
 
-        await AssertReturned(bundle, Showing);
+        AssertReturned(bundle, Showing);
     }
 
     [Test]
@@ -64,9 +60,9 @@ public class ReturnOrderTests
         var bundle = await OnTheRemoteScreen();
 
         await bundle.Relay.FireDisconnected();
-        await bundle.Service.FlushAsync();
+        await bundle.Service.Flush();
 
-        await AssertReturned(bundle, Showing);
+        AssertReturned(bundle, Showing);
     }
 
     [Test]
@@ -76,8 +72,8 @@ public class ReturnOrderTests
         var bundle = await OnTheRemoteScreen(screenSaverSync: screenSaverSync);
 
         screenSaverSync.FireActivated();
-        await bundle.Service.FlushAsync();
+        await bundle.Service.Flush();
 
-        await AssertReturned(bundle, Showing);
+        AssertReturned(bundle, Showing);
     }
 }

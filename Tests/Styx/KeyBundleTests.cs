@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Hydra.Keyboard;
 using Hydra.Relay;
 using Tests.Setup;
@@ -31,97 +30,37 @@ public class KeyBundleTests : StyxFixtureBase
     private const int ExpectedCapacity = 64;
 
     /// <summary>
-    /// One key, through whichever of the two entry points the case names.
-    ///
-    /// <para><b>Both, because production and these tests were using different ones.</b>
-    /// <c>InputRouter</c> forwards a keystroke through <c>SendKeyEvent</c>; every test here called
-    /// <c>Send</c> with an encoded payload. Measured: replacing <c>RelayConnection.SendKeyEvent</c>'s body
-    /// with a silent drop left <b>297</b> tests green — a master that types nothing, ever, with nothing to
-    /// say so. The two are meant to be one behaviour, and the only thing that keeps them one is asserting
-    /// every claim below against each.</para>
-    ///
-    /// <para><c>typed: true</c> is the production path.</para>
-    /// </summary>
-    private static void SendKey(bool typed, HydraTestClient sender, string[] targets, int n, KeyEventType type = KeyEventType.KeyDown)
-    {
-        if (typed) sender.SendKeyEvent(targets, TestMessages.KeyMessage(n, type));
-        else sender.Send(targets, TestMessages.Key(n, type));
-    }
-
-    /// <summary>
     /// Every key event that arrived, flattened out of whatever frames carried them, in arrival order.
     ///
     /// <para>Flattening is the point: a test must not care whether an event came alone or in a bundle of
     /// forty, only that it came, once, in its turn. That is exactly the property bundling must not change.</para>
     /// </summary>
-    private static List<(KeyEventType Type, char Character)> KeysIn(IEnumerable<(string Source, MessageKind Kind, string Json)> messages)
+    private static List<string> KeysIn(IEnumerable<ReceivedMessage> messages)
     {
-        var keys = new List<(KeyEventType, char)>();
-        foreach (var (_, kind, json) in messages)
+        var keys = new List<string>();
+        foreach (var message in messages)
         {
-            switch (kind)
+            switch (message.Kind)
             {
                 case MessageKind.KeyEvent:
-                    keys.Add(One(JsonDocument.Parse(json).RootElement));
+                    keys.Add(Key(message.As<KeyEventMessage>()));
                     break;
                 case MessageKind.KeyEventBatch:
-                    foreach (var element in JsonDocument.Parse(json).RootElement.GetProperty("events").EnumerateArray())
-                        keys.Add(One(element));
+                    keys.AddRange(message.As<KeyEventBatchMessage>().Events.Select(Key));
                     break;
             }
         }
 
         return keys;
-
-        // Tolerant of how the serializer spells these: an enum may arrive as a name or a number, and a char
-        // as a one-character string. The test is about which events arrived, not about the encoding — which
-        // StyxWireFormatTests is the right place to pin.
-        static (KeyEventType, char) One(JsonElement e)
-        {
-            var type = e.GetProperty("type");
-            var character = e.GetProperty("character");
-            return (type.ValueKind == JsonValueKind.Number ? (KeyEventType)type.GetInt32() : Enum.Parse<KeyEventType>(type.GetString()!, ignoreCase: true),
-                    character.ValueKind == JsonValueKind.Number ? (char)character.GetInt32() : character.GetString()![0]);
-        }
     }
 
-    /// <summary>
-    /// A message nothing else here sends, last, to mark the end of what a test expects.
-    ///
-    /// <para><b>A kind that coalesces is the wrong terminator.</b> This was a MouseMove, and it survived
-    /// only because a key happened to precede it every time and the key path closes the movement batch —
-    /// put a move before the sentinel and it merges into that batch, the reader returns early, and every
-    /// test in the fixture fails for a reason with nothing to do with keys. <c>Osd</c> neither coalesces
-    /// nor bundles, so it takes a frame of its own whatever came before it.</para>
-    /// </summary>
-    private static byte[] Sentinel() => MessageSerializer.Encode(MessageKind.Osd, new OsdMessage("end-of-test"));
-
     /// <summary>Every frame that carried key events, so a test can assert HOW they were packed.</summary>
-    private static List<(string Source, MessageKind Kind, string Json)> KeyFrames(IEnumerable<(string Source, MessageKind Kind, string Json)> frames) =>
+    private static List<ReceivedMessage> KeyFrames(IEnumerable<ReceivedMessage> frames) =>
         [.. frames.Where(f => f.Kind is MessageKind.KeyEvent or MessageKind.KeyEventBatch)];
 
     /// <summary>How many events one frame carried — 1 for a plain KeyEvent, N for a batch.</summary>
-    private static int EventsIn((string Source, MessageKind Kind, string Json) frame) =>
-        frame.Kind == MessageKind.KeyEvent ? 1 : JsonDocument.Parse(frame.Json).RootElement.GetProperty("events").GetArrayLength();
-
-    /// <summary>
-    /// Reads frames until the sentinel arrives, and hands back every key event among them.
-    ///
-    /// <para><b>Bounded by the sentinel and never by a count of what SHOULD arrive.</b> Waiting for a
-    /// number of events turns every lost key into a fifteen-second timeout, and a timeout says "something
-    /// is slow" where these tests have to say "a key went missing". Losing keys must fail on the
-    /// assertion, naming the sequence that arrived.</para>
-    /// </summary>
-    private static async Task<List<(string Source, MessageKind Kind, string Json)>> ReadUntilSentinel(HydraTestClient receiver)
-    {
-        var frames = new List<(string Source, MessageKind Kind, string Json)>();
-        while (true)
-        {
-            var frame = await receiver.WaitForNextMessage();
-            if (frame.Kind == MessageKind.Osd) return frames;
-            frames.Add(frame);
-        }
-    }
+    private static int EventsIn(ReceivedMessage frame) =>
+        frame.Kind == MessageKind.KeyEvent ? 1 : frame.As<KeyEventBatchMessage>().Events.Length;
 
     // ── nothing is lost ──────────────────────────────────────────────────────────────────────────
 
@@ -134,27 +73,21 @@ public class KeyBundleTests : StyxFixtureBase
     /// too, because a test that only checked the events would pass against an implementation that quietly
     /// stopped bundling — and then this whole change would be dead code nobody noticed.</para>
     /// </summary>
-    [TestCase(false)]
-    [TestCase(true)]
-    public async Task ABurstOfKeysArrivesCompleteAndInOrder(bool typed)
+    [Test]
+    public async Task ABurstOfKeysArrivesCompleteAndInOrder()
     {
-        await using var pair = await ConnectedPair(peerTakesBundles: true);
+        await using var pair = await ConnectedPair();
         var (sender, receiver) = pair;
 
         const int count = 40;
 
-        sender.HoldLane(RelayLane.Input);
-        var blocker = sender.SendReliableAsync([Receiver], TestMessages.Key(0)).AsTask();
-        await sender.WaitUntilLaneHeld();
+        await sender.BehindParkedLane(RelayLane.Input, Receiver, TestMessages.Key(0), () =>
+        {
+            for (var i = 1; i <= count; i++) sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(i));
+        });
 
-        for (var i = 1; i <= count; i++) SendKey(typed, sender, [Receiver], i);
-
-        sender.Send([Receiver], Sentinel());
-        sender.ReleaseLane();
-        await blocker.WaitAsync(Bound);
-
-        var frames = await ReadUntilSentinel(receiver);
-        var expected = Enumerable.Range(0, count + 1).Select(i => (KeyEventType.KeyDown, (char)('a' + i % 26))).ToList();
+        var frames = await receiver.ReadUntilSentinel();
+        var expected = Enumerable.Range(0, count + 1).Select(i => Key(KeyEventType.KeyDown, (char)('a' + i % 26))).ToList();
 
         using (Assert.EnterMultipleScope())
         {
@@ -170,30 +103,24 @@ public class KeyBundleTests : StyxFixtureBase
     /// both halves of a keystroke are queued before either goes out. Deliver only the down and the key is
     /// held on the remote machine for ever.</para>
     /// </summary>
-    [TestCase(false)]
-    [TestCase(true)]
-    public async Task ADownAndItsUpInOneBundleBothArriveInOrder(bool typed)
+    [Test]
+    public async Task ADownAndItsUpInOneBundleBothArriveInOrder()
     {
-        await using var pair = await ConnectedPair(peerTakesBundles: true);
+        await using var pair = await ConnectedPair();
         var (sender, receiver) = pair;
 
-        sender.HoldLane(RelayLane.Input);
-        var blocker = sender.SendReliableAsync([Receiver], TestMessages.Move(1)).AsTask();
-        await sender.WaitUntilLaneHeld();
+        await sender.BehindParkedLane(RelayLane.Input, Receiver, TestMessages.Move(1), () =>
+        {
+            sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(0));
+            sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(0, KeyEventType.KeyUp));
+        });
 
-        SendKey(typed, sender, [Receiver], 0);
-        SendKey(typed, sender, [Receiver], 0, KeyEventType.KeyUp);
-
-        sender.Send([Receiver], Sentinel());
-        sender.ReleaseLane();
-        await blocker.WaitAsync(Bound);
-
-        var frames = await ReadUntilSentinel(receiver);
+        var frames = await receiver.ReadUntilSentinel();
         var carrying = KeyFrames(frames);
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(KeysIn(frames), Is.EqualTo([(KeyEventType.KeyDown, 'a'), (KeyEventType.KeyUp, 'a')]),
+            Assert.That(KeysIn(frames), Is.EqualTo([Key(KeyEventType.KeyDown, 'a'), Key(KeyEventType.KeyUp, 'a')]),
                 "a keystroke that was bundled must still be a press followed by a release");
 
             // WITHOUT THIS THE TEST IS ABOUT NOTHING. KeysIn flattens a batch and two lone frames into the
@@ -211,29 +138,23 @@ public class KeyBundleTests : StyxFixtureBase
     /// frame, never the input — an implementation that dropped the event which did not fit would pass a test
     /// that only counted frames.</para>
     /// </summary>
-    [TestCase(false)]
-    [TestCase(true)]
-    public async Task MoreKeysThanOneBundleHoldsSpillIntoTheNextWithoutLoss(bool typed)
+    [Test]
+    public async Task MoreKeysThanOneBundleHoldsSpillIntoTheNextWithoutLoss()
     {
-        await using var pair = await ConnectedPair(peerTakesBundles: true);
+        await using var pair = await ConnectedPair();
         var (sender, receiver) = pair;
 
         // Comfortably over the cap, so at least three frames are needed.
         const int count = 150;
 
-        sender.HoldLane(RelayLane.Input);
-        var blocker = sender.SendReliableAsync([Receiver], TestMessages.Move(1)).AsTask();
-        await sender.WaitUntilLaneHeld();
+        await sender.BehindParkedLane(RelayLane.Input, Receiver, TestMessages.Move(1), () =>
+        {
+            for (var i = 0; i < count; i++) sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(i));
+        });
 
-        for (var i = 0; i < count; i++) SendKey(typed, sender, [Receiver], i);
+        var expected = Enumerable.Range(0, count).Select(i => Key(KeyEventType.KeyDown, (char)('a' + i % 26))).ToList();
 
-        sender.Send([Receiver], Sentinel());
-        sender.ReleaseLane();
-        await blocker.WaitAsync(Bound);
-
-        var expected = Enumerable.Range(0, count).Select(i => (KeyEventType.KeyDown, (char)('a' + i % 26))).ToList();
-
-        var frames = await ReadUntilSentinel(receiver);
+        var frames = await receiver.ReadUntilSentinel();
         var carrying = KeyFrames(frames);
 
         using (Assert.EnterMultipleScope())
@@ -266,27 +187,22 @@ public class KeyBundleTests : StyxFixtureBase
     [Test]
     public async Task AMoveBetweenKeysKeepsEverythingInOrder()
     {
-        await using var pair = await ConnectedPair(peerTakesBundles: true);
+        await using var pair = await ConnectedPair();
         var (sender, receiver) = pair;
 
-        sender.HoldLane(RelayLane.Input);
-        var blocker = sender.SendReliableAsync([Receiver], TestMessages.Key(25)).AsTask();
-        await sender.WaitUntilLaneHeld();
+        await sender.BehindParkedLane(RelayLane.Input, Receiver, TestMessages.Key(25), () =>
+        {
+            sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(0));
+            sender.Send([Receiver], TestMessages.Move(7));
+            sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(1));
+        });
 
-        sender.Send([Receiver], TestMessages.Key(0));
-        sender.Send([Receiver], TestMessages.Move(7));
-        sender.Send([Receiver], TestMessages.Key(1));
-
-        sender.Send([Receiver], Sentinel());
-        sender.ReleaseLane();
-        await blocker.WaitAsync(Bound);
-
-        var frames = await ReadUntilSentinel(receiver);
+        var frames = await receiver.ReadUntilSentinel();
         var order = frames.Select(f => f.Kind).Where(k => k is MessageKind.KeyEvent or MessageKind.KeyEventBatch or MessageKind.MouseMove).ToList();
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(KeysIn(frames), Is.EqualTo([(KeyEventType.KeyDown, 'z'), (KeyEventType.KeyDown, 'a'), (KeyEventType.KeyDown, 'b')]));
+            Assert.That(KeysIn(frames), Is.EqualTo([Key(KeyEventType.KeyDown, 'z'), Key(KeyEventType.KeyDown, 'a'), Key(KeyEventType.KeyDown, 'b')]));
             Assert.That(order.IndexOf(MessageKind.MouseMove), Is.GreaterThan(0), "the move must not overtake the keys sent before it");
             Assert.That(order.IndexOf(MessageKind.MouseMove), Is.LessThan(order.Count - 1), "and the key sent after it must not overtake the move");
         }
@@ -306,27 +222,26 @@ public class KeyBundleTests : StyxFixtureBase
     /// returns, the first bundle has provably been read — and the key sent next is landing in exactly the gap
     /// that loses it. With the clear in place it starts a fresh bundle; without it, it vanishes.</para>
     /// </summary>
-    [TestCase(false)]
-    [TestCase(true)]
-    public async Task AKeySentAfterTheDrainTookTheBundleStillArrives(bool typed)
+    [Test]
+    public async Task AKeySentAfterTheDrainTookTheBundleStillArrives()
     {
-        await using var pair = await ConnectedPair(peerTakesBundles: true);
+        await using var pair = await ConnectedPair();
         var (sender, receiver) = pair;
 
         sender.HoldLane(RelayLane.Input);
 
         // Read and snapshotted by the drain, which then parks — so the bundle behind it is spent.
-        SendKey(typed, sender, [Receiver], 0);
+        sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(0));
         await sender.WaitUntilLaneHeld();
 
         // Into the gap. This must NOT join the bundle that has already been read.
-        SendKey(typed, sender, [Receiver], 1);
+        sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(1));
 
-        sender.Send([Receiver], Sentinel());
+        sender.Send([Receiver], TestMessages.Sentinel());
         sender.ReleaseLane();
 
-        Assert.That(KeysIn(await ReadUntilSentinel(receiver)),
-            Is.EqualTo([(KeyEventType.KeyDown, 'a'), (KeyEventType.KeyDown, 'b')]),
+        Assert.That(KeysIn(await receiver.ReadUntilSentinel()),
+            Is.EqualTo([Key(KeyEventType.KeyDown, 'a'), Key(KeyEventType.KeyDown, 'b')]),
             "a key appended to a bundle the drain had already taken was never sent at all");
     }
 
@@ -346,28 +261,23 @@ public class KeyBundleTests : StyxFixtureBase
     [Test]
     public async Task AMouseDeltaBetweenKeysKeepsEverythingInOrder()
     {
-        await using var pair = await ConnectedPair(peerTakesBundles: true);
+        await using var pair = await ConnectedPair();
         var (sender, receiver) = pair;
 
-        sender.HoldLane(RelayLane.Input);
-        var blocker = sender.SendReliableAsync([Receiver], TestMessages.Move(1)).AsTask();
-        await sender.WaitUntilLaneHeld();
+        await sender.BehindParkedLane(RelayLane.Input, Receiver, TestMessages.Move(1), () =>
+        {
+            sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(0));
+            sender.SendMouseDelta([Receiver], 7, 9);
+            sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(1));
+        });
 
-        sender.Send([Receiver], TestMessages.Key(0));
-        sender.SendMouseDelta([Receiver], 7, 9);
-        sender.Send([Receiver], TestMessages.Key(1));
-
-        sender.Send([Receiver], Sentinel());
-        sender.ReleaseLane();
-        await blocker.WaitAsync(Bound);
-
-        var frames = await ReadUntilSentinel(receiver);
+        var frames = await receiver.ReadUntilSentinel();
         var kinds = frames.Select(f => f.Kind).ToList();
         var delta = kinds.IndexOf(MessageKind.MouseMoveDelta);
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(KeysIn(frames), Is.EqualTo([(KeyEventType.KeyDown, 'a'), (KeyEventType.KeyDown, 'b')]),
+            Assert.That(KeysIn(frames), Is.EqualTo([Key(KeyEventType.KeyDown, 'a'), Key(KeyEventType.KeyDown, 'b')]),
                 "both keys must arrive, in order");
             Assert.That(delta, Is.GreaterThan(0), "the delta must not overtake the key sent before it");
             Assert.That(delta, Is.LessThan(kinds.Count - 1), "and the key sent after the delta must not overtake it");
@@ -381,111 +291,27 @@ public class KeyBundleTests : StyxFixtureBase
     [Test]
     public async Task AReliableMessageBetweenKeysKeepsEverythingInOrder()
     {
-        await using var pair = await ConnectedPair(peerTakesBundles: true);
+        await using var pair = await ConnectedPair();
         var (sender, receiver) = pair;
 
-        sender.HoldLane(RelayLane.Input);
-        var blocker = sender.SendReliableAsync([Receiver], TestMessages.Move(1)).AsTask();
-        await sender.WaitUntilLaneHeld();
+        Task? between = null;
+        await sender.BehindParkedLane(RelayLane.Input, Receiver, TestMessages.Move(1), () =>
+        {
+            sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(0));
+            between = sender.SendReliableAsync([Receiver], MessageSerializer.Encode(MessageKind.LockScreen, new LockScreenMessage(0))).AsTask();
+            sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(1));
+        });
+        await between!.WaitAsync(Bound);
 
-        sender.Send([Receiver], TestMessages.Key(0));
-        var between = sender.SendReliableAsync([Receiver], MessageSerializer.Encode(MessageKind.LockScreen, new LockScreenMessage(0))).AsTask();
-        sender.Send([Receiver], TestMessages.Key(1));
-
-        sender.Send([Receiver], Sentinel());
-        sender.ReleaseLane();
-        await Task.WhenAll(blocker, between).WaitAsync(Bound);
-
-        var frames = await ReadUntilSentinel(receiver);
+        var frames = await receiver.ReadUntilSentinel();
         var kinds = frames.Select(f => f.Kind).ToList();
         var lockScreen = kinds.IndexOf(MessageKind.LockScreen);
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(KeysIn(frames), Is.EqualTo([(KeyEventType.KeyDown, 'a'), (KeyEventType.KeyDown, 'b')]));
+            Assert.That(KeysIn(frames), Is.EqualTo([Key(KeyEventType.KeyDown, 'a'), Key(KeyEventType.KeyDown, 'b')]));
             Assert.That(lockScreen, Is.GreaterThan(0), "the control message must not overtake the key before it");
             Assert.That(lockScreen, Is.LessThan(kinds.Count - 1), "nor the key after it overtake the control message");
-        }
-    }
-
-    // ── and nothing is bundled where it would be discarded ───────────────────────────────────────
-
-    /// <summary>
-    /// A peer that has NOT advertised support is sent one <c>KeyEvent</c> per frame, never a batch.
-    ///
-    /// <para><b>This is the safety property the whole design turns on.</b> An unrecognised message kind
-    /// reaches <c>RelayConnection.OnReceive</c>'s base implementation, which does nothing whatsoever — so a
-    /// batch sent to a slave that predates this feature would not fail, or warn, or retry. Every key in it
-    /// would simply never be typed.</para>
-    ///
-    /// <para><b>REMOVE AFTER 2026-10-30, with the negotiation itself.</b> This is the one test here about
-    /// asking rather than about bundling, so it is the one that goes. Everything else in this fixture is
-    /// about not losing keys and outlives the upgrade window — see <see cref="PeerCapabilities.Mine"/> for
-    /// the full removal list.</para>
-    /// </summary>
-    [TestCase(false)]
-    [TestCase(true)]
-    public async Task APeerThatNeverAdvertisedSupportIsNeverSentABatch(bool typed)
-    {
-        await using var pair = await ConnectedPair(peerTakesBundles: false);
-        var (sender, receiver) = pair;
-
-        const int count = 20;
-
-        sender.HoldLane(RelayLane.Input);
-        var blocker = sender.SendReliableAsync([Receiver], TestMessages.Move(1)).AsTask();
-        await sender.WaitUntilLaneHeld();
-
-        for (var i = 0; i < count; i++) SendKey(typed, sender, [Receiver], i);
-
-        sender.Send([Receiver], Sentinel());
-        sender.ReleaseLane();
-        await blocker.WaitAsync(Bound);
-
-        var frames = await ReadUntilSentinel(receiver);
-        var expected = Enumerable.Range(0, count).Select(i => (KeyEventType.KeyDown, (char)('a' + i % 26))).ToList();
-
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(frames.Any(f => f.Kind == MessageKind.KeyEventBatch), Is.False,
-                "a batch was sent to a peer that never said it understands one — it would discard every key in it silently");
-            Assert.That(KeysIn(frames), Is.EqualTo(expected), "and the keys must still all arrive, one frame each");
-            Assert.That(KeyFrames(frames), Has.Count.EqualTo(count), "one frame per key is what an un-advertising peer must get");
-        }
-    }
-
-    /// <summary>
-    /// The positive control for <see cref="APeerThatNeverAdvertisedSupportIsNeverSentABatch"/>: a peer that
-    /// DID advertise is sent one.
-    ///
-    /// <para><b>A negative assertion with no positive counterpart is satisfied by the feature not
-    /// existing.</b> "No batch appears" is trivially true of a build that never bundles, so on its own it
-    /// proves the gate works only in the sense that nothing works.</para>
-    /// </summary>
-    [TestCase(false)]
-    [TestCase(true)]
-    public async Task APeerThatAdvertisedSupportIsSentOne(bool typed)
-    {
-        await using var pair = await ConnectedPair(peerTakesBundles: true);
-        var (sender, receiver) = pair;
-
-        sender.HoldLane(RelayLane.Input);
-        var blocker = sender.SendReliableAsync([Receiver], TestMessages.Move(1)).AsTask();
-        await sender.WaitUntilLaneHeld();
-
-        for (var i = 0; i < 20; i++) SendKey(typed, sender, [Receiver], i);
-
-        sender.Send([Receiver], Sentinel());
-        sender.ReleaseLane();
-        await blocker.WaitAsync(Bound);
-
-        var frames = await ReadUntilSentinel(receiver);
-
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(frames.Any(f => f.Kind == MessageKind.KeyEventBatch), Is.True,
-                "an advertising peer was sent no batch at all — the gate is refusing everyone, or nothing bundles");
-            Assert.That(KeyFrames(frames), Has.Count.LessThan(20), "and the keys were actually packed together");
         }
     }
 
@@ -494,33 +320,27 @@ public class KeyBundleTests : StyxFixtureBase
     ///
     /// <para>A fixed seed, so a failure is reproducible rather than a story about one unlucky run.</para>
     /// </summary>
-    [TestCase(false)]
-    [TestCase(true)]
-    public async Task ARandomisedStreamOfKeysRoundTripsExactly(bool typed)
+    [Test]
+    public async Task ARandomisedStreamOfKeysRoundTripsExactly()
     {
-        await using var pair = await ConnectedPair(peerTakesBundles: true);
+        await using var pair = await ConnectedPair();
         var (sender, receiver) = pair;
 
         var random = new Random(20260921);
-        var sent = new List<(KeyEventType Type, char Character)>();
+        var sent = new List<string>();
 
-        sender.HoldLane(RelayLane.Input);
-        var blocker = sender.SendReliableAsync([Receiver], TestMessages.Move(1)).AsTask();
-        await sender.WaitUntilLaneHeld();
-
-        for (var i = 0; i < 300; i++)
+        await sender.BehindParkedLane(RelayLane.Input, Receiver, TestMessages.Move(1), () =>
         {
-            var type = random.Next(2) == 0 ? KeyEventType.KeyDown : KeyEventType.KeyUp;
-            var n = random.Next(26);
-            SendKey(typed, sender, [Receiver], n, type);
-            sent.Add((type, (char)('a' + n)));
-        }
+            for (var i = 0; i < 300; i++)
+            {
+                var type = random.Next(2) == 0 ? KeyEventType.KeyDown : KeyEventType.KeyUp;
+                var n = random.Next(26);
+                sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(n, type));
+                sent.Add(Key(type, (char)('a' + n)));
+            }
+        });
 
-        sender.Send([Receiver], Sentinel());
-        sender.ReleaseLane();
-        await blocker.WaitAsync(Bound);
-
-        Assert.That(KeysIn(await ReadUntilSentinel(receiver)), Is.EqualTo(sent));
+        Assert.That(KeysIn(await receiver.ReadUntilSentinel()), Is.EqualTo(sent));
     }
 
     /// <summary>
@@ -537,22 +357,17 @@ public class KeyBundleTests : StyxFixtureBase
     [Test]
     public async Task AMoveMadeAfterAKeyIsNeverDeliveredBeforeIt()
     {
-        await using var pair = await ConnectedPair(peerTakesBundles: true);
+        await using var pair = await ConnectedPair();
         var (sender, receiver) = pair;
 
-        sender.HoldLane(RelayLane.Input);
-        var blocker = sender.SendReliableAsync([Receiver], TestMessages.Key(25)).AsTask();
-        await sender.WaitUntilLaneHeld();
+        await sender.BehindParkedLane(RelayLane.Input, Receiver, TestMessages.Key(25), () =>
+        {
+            sender.Send([Receiver], TestMessages.Move(3));
+            sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(0));
+            sender.Send([Receiver], TestMessages.Move(9));
+        });
 
-        sender.Send([Receiver], TestMessages.Move(3));
-        sender.Send([Receiver], TestMessages.Key(0));
-        sender.Send([Receiver], TestMessages.Move(9));
-
-        sender.Send([Receiver], Sentinel());
-        sender.ReleaseLane();
-        await blocker.WaitAsync(Bound);
-
-        var frames = await ReadUntilSentinel(receiver);
+        var frames = await receiver.ReadUntilSentinel();
         var order = frames.Select(f => f.Kind).Where(k => k is MessageKind.KeyEvent or MessageKind.KeyEventBatch or MessageKind.MouseMove).ToList();
 
         Assert.That(order, Is.EqualTo([MessageKind.KeyEvent, MessageKind.MouseMove, MessageKind.KeyEvent, MessageKind.MouseMove]),
@@ -563,35 +378,29 @@ public class KeyBundleTests : StyxFixtureBase
     /// One key travels as an ordinary <c>KeyEvent</c>, never as a batch of one.
     ///
     /// <para>The common case by far — nobody types fast enough to queue two keys behind one frame most of
-    /// the time — and the wire shape a peer that predates batching depends on. The lane is parked so the
+    /// the time. The lane is parked so the
     /// event provably goes through the bundling path rather than round it: this is <c>Snapshot</c>'s rule,
     /// not an accident of the drain being quick.</para>
     /// </summary>
-    [TestCase(false)]
-    [TestCase(true)]
-    public async Task ALoneKeyTravelsAsAPlainKeyEventNotABatchOfOne(bool typed)
+    [Test]
+    public async Task ALoneKeyTravelsAsAPlainKeyEventNotABatchOfOne()
     {
-        await using var pair = await ConnectedPair(peerTakesBundles: true);
+        await using var pair = await ConnectedPair();
         var (sender, receiver) = pair;
 
-        sender.HoldLane(RelayLane.Input);
-        var blocker = sender.SendReliableAsync([Receiver], TestMessages.Move(1)).AsTask();
-        await sender.WaitUntilLaneHeld();
+        await sender.BehindParkedLane(RelayLane.Input, Receiver, TestMessages.Move(1), () =>
+        {
+            sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(0));
+        });
 
-        SendKey(typed, sender, [Receiver], 0);
-
-        sender.Send([Receiver], Sentinel());
-        sender.ReleaseLane();
-        await blocker.WaitAsync(Bound);
-
-        var frames = await ReadUntilSentinel(receiver);
+        var frames = await receiver.ReadUntilSentinel();
         var carrying = KeyFrames(frames);
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(KeysIn(frames), Is.EqualTo([(KeyEventType.KeyDown, 'a')]));
+            Assert.That(KeysIn(frames), Is.EqualTo([Key(KeyEventType.KeyDown, 'a')]));
             Assert.That(carrying.Select(f => f.Kind), Is.EqualTo([MessageKind.KeyEvent]),
-                "a single event was wrapped in a batch — an older peer discards that kind in silence, so the keystroke is simply lost");
+                "a single event was wrapped in a batch");
         }
     }
 
@@ -604,32 +413,29 @@ public class KeyBundleTests : StyxFixtureBase
     /// anyway — but nothing tested it, and "defended twice" is only true while both defences exist.</para>
     ///
     /// <para>The other host never connects, which is the point: its frame goes nowhere, so anything of its
-    /// arriving HERE could only have come out of this receiver's bundle. It is given the capability by hand
-    /// because otherwise the batch gate refuses it first and the guard under test is never reached.</para>
+    /// arriving HERE could only have come out of this receiver's bundle.</para>
     /// </summary>
     [Test]
     public async Task AKeyForAnotherTargetNeverJoinsThisOnesFrame()
     {
-        await using var pair = await ConnectedPair(peerTakesBundles: true);
+        await using var pair = await ConnectedPair();
         var (sender, receiver) = pair;
 
         const string other = "somebody-else";
-        sender.World.SetPeerCapabilities(other, PeerCapabilities.Parse(PeerCapabilities.Advertise()));
+        await sender.BehindParkedLane(RelayLane.Input, Receiver, TestMessages.Move(1), () =>
+        {
+            sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(0));
+            sender.SendKeyEvent([other], TestMessages.KeyMessage(1));
+            sender.SendKeyEvent([Receiver], TestMessages.KeyMessage(2));
+        });
 
-        sender.HoldLane(RelayLane.Input);
-        var blocker = sender.SendReliableAsync([Receiver], TestMessages.Move(1)).AsTask();
-        await sender.WaitUntilLaneHeld();
-
-        sender.Send([Receiver], TestMessages.Key(0));
-        sender.Send([other], TestMessages.Key(1));
-        sender.Send([Receiver], TestMessages.Key(2));
-
-        sender.Send([Receiver], Sentinel());
-        sender.ReleaseLane();
-        await blocker.WaitAsync(Bound);
-
-        Assert.That(KeysIn(await ReadUntilSentinel(receiver)),
-            Is.EqualTo([(KeyEventType.KeyDown, 'a'), (KeyEventType.KeyDown, 'c')]),
+        Assert.That(KeysIn(await receiver.ReadUntilSentinel()),
+            Is.EqualTo([Key(KeyEventType.KeyDown, 'a'), Key(KeyEventType.KeyDown, 'c')]),
             "a key addressed to another host was delivered here, which means it was never delivered there");
     }
+
+    // a key event as the assertions name it
+    private static string Key(KeyEventType type, char character) => $"{type} {character}";
+
+    private static string Key(KeyEventMessage e) => Key(e.Type, e.Character!.Value);
 }

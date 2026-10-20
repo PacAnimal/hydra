@@ -56,17 +56,14 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
                 _charToVk = BuildCharToVkMap();
                 _asciiCharToVk = BuildCharToVkMap(asciiCapable: true);
             };
-            var name = NativeHelpers.MakeNsString("com.apple.Carbon.TISNotifySelectedKeyboardInputSourceChanged");
+            using var name = new NsString(InputSourceChanged);
             NativeMethods.CFNotificationCenterAddObserver(_layoutNotificationCenter, 1, _layoutChangeCallback, name, nint.Zero,
                 NativeMethods.CFNotificationSuspensionBehaviorDeliverImmediately);
-            NativeMethods.CFRelease(name);
         }
         GetHidConnection();
     }
 
-    // combined session state source — used only for keyboard CGEvent fallback paths.
-    // mouse events use nint.Zero (null source) so system UI does not filter them as synthetic.
-    private static readonly nint EventSource = NativeMethods.CGEventSourceCreate(NativeMethods.KCGEventSourceStateCombinedSessionState);
+    private const string InputSourceChanged = "com.apple.Carbon.TISNotifySelectedKeyboardInputSourceChanged";
 
     private static readonly double DoubleClickMaxDist = Math.Sqrt(2) + 0.0001;
     private static readonly double DoubleClickIntervalMs = GetDoubleClickIntervalMs();
@@ -86,23 +83,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
         _mouseX = x;
         _mouseY = y;
         _mousePositionInitialized = true;
-        var pos = new CGPoint { X = x, Y = y };
-
-        // post a real event so apps and OS features (dock, hot corners) see the movement.
-        // use drag event type when a button is held, otherwise plain moved
-        var move = GetMoveEventType();
-
-        var eventRef = NativeMethods.CGEventCreateMouseEvent(nint.Zero, move.EventType, pos, move.Button);
-        if (eventRef == nint.Zero) return;
-        NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGMouseEventClickState, _clickState);
-        NativeMethods.CGEventSetFlags(eventRef, _modifierFlags);
-        // delta fields needed for drag operations (e.g. screenshot overlay resize)
-        NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGMouseEventDeltaX, (long)dx);
-        NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGMouseEventDeltaY, (long)dy);
-        NativeMethods.CGEventSetDoubleValueField(eventRef, NativeMethods.KCGMouseEventDeltaX, dx);
-        NativeMethods.CGEventSetDoubleValueField(eventRef, NativeMethods.KCGMouseEventDeltaY, dy);
-        NativeMethods.CGEventPost(NativeMethods.KCGHidEventTap, eventRef);
-        NativeMethods.CFRelease(eventRef);
+        PostMove(dx, dy);
     }
 
     public void MoveMouseRelative(int dx, int dy)
@@ -110,29 +91,31 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
         _mouseX += dx;
         _mouseY += dy;
         _mousePositionInitialized = true;
-        var pos = new CGPoint { X = _mouseX, Y = _mouseY };
+        PostMove(dx, dy);
+    }
 
+    // posts a real move (a drag while a button is held) to the current position, so apps and OS features
+    // (dock, hot corners) see it. drags need the deltas (e.g. screenshot overlay resize), and some 3D apps
+    // and games read the double variant rather than the integer one.
+    private void PostMove(double dx, double dy)
+    {
         var move = GetMoveEventType();
-
-        var eventRef = NativeMethods.CGEventCreateMouseEvent(nint.Zero, move.EventType, pos, move.Button);
+        var eventRef = NativeMethods.CGEventCreateMouseEvent(nint.Zero, move.EventType, new CGPoint { X = _mouseX, Y = _mouseY }, move.Button);
         if (eventRef == nint.Zero) return;
         NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGMouseEventClickState, _clickState);
         NativeMethods.CGEventSetFlags(eventRef, _modifierFlags);
-        // set integer AND double delta fields — some 3D apps/games read the double variant (barrier comment)
-        NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGMouseEventDeltaX, dx);
-        NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGMouseEventDeltaY, dy);
+        NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGMouseEventDeltaX, (long)dx);
+        NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGMouseEventDeltaY, (long)dy);
         NativeMethods.CGEventSetDoubleValueField(eventRef, NativeMethods.KCGMouseEventDeltaX, dx);
         NativeMethods.CGEventSetDoubleValueField(eventRef, NativeMethods.KCGMouseEventDeltaY, dy);
-        NativeMethods.CGEventPost(NativeMethods.KCGHidEventTap, eventRef);
-        NativeMethods.CFRelease(eventRef);
+        NativeHelpers.PostAndRelease(eventRef);
     }
 
     public void InjectKey(KeyEventMessage msg)
     {
         var isDown = msg.Type == KeyEventType.KeyDown;
-        // unicode repeat routing applies only when the master opts in (UnicodeKeyRepeat). when disabled,
-        // a repeat falls through to the physical-key path below — the legacy re-press behaviour.
-        var isRepeat = msg.IsRepeat && msg.UnicodeKeyRepeat;
+        // a repeat re-presses the held key marked as autorepeat, as macOS's own repeats are
+        var isRepeat = isDown && msg.IsRepeat;
         var flags = MacKeyResolver.MapModifiersToFlags(msg.Modifiers);
 
         if (msg.Key is { } key && key.IsModifier())
@@ -145,7 +128,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
             {
                 // not in Reverse (e.g. ScrollLock) — check OutputOverrides (ScrollLock → F14)
                 if (MacSpecialKeyMap.OutputOverrides.TryGetValue(key, out var ovr))
-                    PostCgKey(ovr.Vk, isDown, flags | ovr.ExtraFlags);
+                    PostCgKey(ovr.Vk, isDown, flags | ovr.ExtraFlags, isRepeat: false);
                 return;
             }
 
@@ -153,8 +136,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
             if (generic == 0 && device == 0)
             {
                 // NumLock (KeypadClear) has no modifier mask — inject as a regular toggle key, not a flags change
-                if (!PostHidKey((ushort)modVk, isDown))
-                    PostCgKey((ushort)modVk, isDown, flags);
+                PostKey((ushort)modVk, isDown, flags, isRepeat: false);
                 return;
             }
 
@@ -184,22 +166,9 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
             // fires correctly before the character reaches the focused app.
             var isAltGr = (msg.Modifiers & KeyModifiers.AltGr) != 0;
 
-            // repeats inject the character as a keycode-less unicode tap rather than re-pressing the
-            // physical key. re-pressing a held accent-eligible key triggers the macOS press-and-hold
-            // accent popup instead of repeating; a unicode insertion repeats cleanly while the initial
-            // physical key-down stays held (so games and held shortcuts still see the key down).
-            if (isRepeat)
+            if (!isAltGr && _charToVk.TryGetValue(ch, out var charVk))
             {
-                var repeatFlags = isAltGr
-                    ? flags & ~(NativeMethods.KCGEventFlagMaskAlternate | NativeMethods.KCGEventFlagMaskShift)
-                    : flags;
-                InjectCharacter(ch, true, repeatFlags);
-                InjectCharacter(ch, false, repeatFlags);
-            }
-            else if (!isAltGr && _charToVk.TryGetValue(ch, out var charVk))
-            {
-                if (!PostHidKey(charVk, isDown))
-                    PostCgKey(charVk, isDown, flags);
+                PostKey(charVk, isDown, flags, isRepeat);
             }
             else if (!isAltGr && _charToVk.TryGetValue(char.ToLowerInvariant(ch), out charVk))
             {
@@ -207,14 +176,12 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
                 // state for Shift; if Shift is not yet in _deviceModifierFlags (e.g. focus arrived while
                 // Shift was already held), use PostCgKey which applies flags — including Shift — directly.
                 var shiftReady = (_deviceModifierFlags & (NativeMethods.NxDeviceLShiftKeyMask | NativeMethods.NxDeviceRShiftKeyMask)) != 0;
-                if (!shiftReady || !PostHidKey(charVk, isDown))
-                    PostCgKey(charVk, isDown, flags);
+                PostKey(charVk, isDown, flags, isRepeat, viaHid: shiftReady);
             }
             else if (!isAltGr && (flags & (NativeMethods.KCGEventFlagMaskCommand | NativeMethods.KCGEventFlagMaskControl)) != 0 &&
                      _asciiCharToVk.TryGetValue(ch, out charVk))
             {
-                if (!PostHidKey(charVk, isDown))
-                    PostCgKey(charVk, isDown, flags);
+                PostKey(charVk, isDown, flags, isRepeat);
             }
             else
             {
@@ -223,7 +190,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
                 // Shift was consumed by level-3 resolution on the master; it must not reach the slave.
                 InjectCharacter(ch, isDown, isAltGr
                     ? flags & ~(NativeMethods.KCGEventFlagMaskAlternate | NativeMethods.KCGEventFlagMaskShift)
-                    : flags);
+                    : flags, isRepeat);
             }
         }
         else if (msg.Key is { } key2)
@@ -236,7 +203,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
             }
             else if (key2 is SpecialKey.BrightnessUp or SpecialKey.BrightnessDown)
                 HandleMediaKeyWithLegacyFallback(key2, isDown,
-                    () => _brightness.TryAdjustMainDisplay(key2 == SpecialKey.BrightnessUp, out _));
+                    () => _brightness.TryAdjustMainDisplay(key2 == SpecialKey.BrightnessUp));
             else if (key2 is SpecialKey.AudioVolumeUp or SpecialKey.AudioVolumeDown)
                 HandleMediaKeyWithLegacyFallback(key2, isDown,
                     () => MacAudioController.TryAdjustVolume(key2 == SpecialKey.AudioVolumeUp));
@@ -249,12 +216,11 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
             else if (MacMediaKeyMap.TryGetNxKeyType(key2, out var nxType))
                 PostNsMediaKey(nxType, isDown);
             else if (MacSpecialKeyMap.OutputOverrides.TryGetValue(key2, out var ovr))
-                PostCgKey(ovr.Vk, isDown, flags | ovr.ExtraFlags);
+                PostCgKey(ovr.Vk, isDown, flags | ovr.ExtraFlags, isRepeat);
             else if (MacSpecialKeyMap.Instance.Reverse.TryGetValue(key2, out var vk))
             {
                 // non-modifier special key: IOHIDPostEvent-first, CGEvent fallback
-                if (!PostHidKey((ushort)vk, isDown))
-                    PostCgKey((ushort)vk, isDown, flags);
+                PostKey((ushort)vk, isDown, flags, isRepeat);
             }
         }
     }
@@ -307,36 +273,37 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
 
         NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGMouseEventClickState, _clickState);
         NativeMethods.CGEventSetFlags(eventRef, _modifierFlags);
-
-        NativeMethods.CGEventPost(NativeMethods.KCGHidEventTap, eventRef);
-        NativeMethods.CFRelease(eventRef);
+        NativeHelpers.PostAndRelease(eventRef);
     }
 
     public void InjectMouseScroll(MouseScrollMessage msg)
     {
         if (msg.YDelta == 0 && msg.XDelta == 0) return;
 
-        // wire format: 120 = 1 line. convert to integer line counts for the event constructor.
-        // kCGScrollEventUnitLine = 1
-        var eventRef = NativeMethods.CGEventCreateScrollWheelEvent(nint.Zero, 1, 2, msg.YDelta / 120, msg.XDelta / 120);
+        // one notch is one line: whole lines for the event constructor (kCGScrollEventUnitLine = 1)
+        var eventRef = NativeMethods.CGEventCreateScrollWheelEvent(nint.Zero, 1, 2, msg.YDelta / MouseScrollEvent.Notch, msg.XDelta / MouseScrollEvent.Notch);
         if (eventRef == nint.Zero) return;
 
-        // set 16.16 fixed-point line deltas for sub-line precision (reverses input handler's fpDelta * 120 >> 16)
-        NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventFixedPtDeltaAxis1, (long)msg.YDelta * 65536 / 120);
-        NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventFixedPtDeltaAxis2, (long)msg.XDelta * 65536 / 120);
-
-        NativeMethods.CGEventPost(NativeMethods.KCGHidEventTap, eventRef);
-        NativeMethods.CFRelease(eventRef);
+        // set 16.16 fixed-point line deltas for sub-line precision (reverses the input handler's conversion)
+        NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventFixedPtDeltaAxis1, (long)msg.YDelta * 65536 / MouseScrollEvent.Notch);
+        NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventFixedPtDeltaAxis2, (long)msg.XDelta * 65536 / MouseScrollEvent.Notch);
+        NativeHelpers.PostAndRelease(eventRef);
     }
 
-    // post a CG keyboard event — used for non-modifier special keys and as fallback for modifiers.
-    private static void PostCgKey(ushort vk, bool isDown, ulong flags)
+    // through IOHIDPostEvent where it can, else as a CG event
+    private void PostKey(ushort vk, bool isDown, ulong flags, bool isRepeat, bool viaHid = true)
     {
-        var eventRef = NativeMethods.CGEventCreateKeyboardEvent(EventSource, vk, isDown);
+        if (!viaHid || !PostHidKey(vk, isDown, isRepeat)) PostCgKey(vk, isDown, flags, isRepeat);
+    }
+
+    // post a CG keyboard event, with its flags applied directly
+    private static void PostCgKey(ushort vk, bool isDown, ulong flags, bool isRepeat)
+    {
+        var eventRef = NativeMethods.CGEventCreateKeyboardEvent(NativeHelpers.EventSource, vk, isDown);
         if (eventRef == nint.Zero) return;
         NativeMethods.CGEventSetFlags(eventRef, flags | FnFlagForVk(vk));
-        NativeMethods.CGEventPost(NativeMethods.KCGHidEventTap, eventRef);
-        NativeMethods.CFRelease(eventRef);
+        MarkRepeat(eventRef, isRepeat);
+        NativeHelpers.PostAndRelease(eventRef);
     }
 
     // post NX_FLAGSCHANGED via IOHIDPostEvent — updates system-wide modifier state so
@@ -359,12 +326,12 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
     // eventFlags carries only the Fn flag (where applicable); modifier context comes from the global
     // HID state set by NX_FLAGSCHANGED — adding modifiers inline causes character translation
     // (e.g. VK_4 + Shift → '¤' on Norwegian) to happen before the shortcut handler fires.
-    private bool PostHidKey(ushort vk, bool isDown)
+    private bool PostHidKey(ushort vk, bool isDown, bool isRepeat)
     {
         var conn = GetHidConnection();
         if (conn == 0) return false;
 
-        var eventData = new NXEventData { KeyCode = vk };
+        var eventData = new NXEventData { KeyCode = vk, Repeat = (short)(isRepeat ? 1 : 0) };
         var eventType = isDown ? NativeMethods.NxKeyDown : NativeMethods.NxKeyUp;
         var eventFlags = (uint)FnFlagForVk(vk);
         var kr = NativeMethods.IOHIDPostEvent(conn, eventType, default, in eventData,
@@ -468,12 +435,11 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
     // mirrors deskflow's postKeyboardKey() fallback path.
     private void PostFlagsChanged(ushort vk, bool isDown)
     {
-        var eventRef = NativeMethods.CGEventCreateKeyboardEvent(EventSource, vk, isDown);
+        var eventRef = NativeMethods.CGEventCreateKeyboardEvent(NativeHelpers.EventSource, vk, isDown);
         if (eventRef == nint.Zero) return;
         NativeMethods.CGEventSetType(eventRef, NativeMethods.KCGEventFlagsChanged);
         NativeMethods.CGEventSetFlags(eventRef, _modifierFlags);
-        NativeMethods.CGEventPost(NativeMethods.KCGHidEventTap, eventRef);
-        NativeMethods.CFRelease(eventRef);
+        NativeHelpers.PostAndRelease(eventRef);
     }
 
     // returns the extra event flags that macOS hardware events carry for certain vk codes.
@@ -507,17 +473,22 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
         _ => 0,
     };
 
+    private static void MarkRepeat(nint eventRef, bool isRepeat)
+    {
+        if (isRepeat) NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGKeyboardEventAutorepeat, 1);
+    }
+
     // fallback character injection for chars with no VK mapping (foreign/composed chars).
     // vk=0 with explicit unicode string — only reached when _charToVk has no entry for the char.
-    private static unsafe void InjectCharacter(char ch, bool isDown, ulong flags)
+    private static unsafe void InjectCharacter(char ch, bool isDown, ulong flags, bool isRepeat)
     {
-        var eventRef = NativeMethods.CGEventCreateKeyboardEvent(EventSource, 0, isDown);
+        var eventRef = NativeMethods.CGEventCreateKeyboardEvent(NativeHelpers.EventSource, 0, isDown);
         if (eventRef == nint.Zero) return;
         NativeMethods.CGEventSetFlags(eventRef, flags);
+        MarkRepeat(eventRef, isRepeat);
         var utf16 = (ushort)ch;
         NativeMethods.CGEventKeyboardSetUnicodeString(eventRef, 1, &utf16);
-        NativeMethods.CGEventPost(NativeMethods.KCGHidEventTap, eventRef);
-        NativeMethods.CFRelease(eventRef);
+        NativeHelpers.PostAndRelease(eventRef);
     }
 
     // build reverse map: character → vk code, from current keyboard layout.
@@ -528,58 +499,44 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
     {
         var map = new Dictionary<char, ushort>();
 
-        var layoutSource = asciiCapable
-            ? NativeMethods.TISCopyCurrentASCIICapableKeyboardLayoutInputSource()
-            : NativeMethods.TISCopyCurrentKeyboardLayoutInputSource();
-        if (layoutSource == nint.Zero) return map;
+        using var layout = KeyboardLayout.Open(asciiCapable);
+        var layoutPtr = layout.Data;
+        if (layoutPtr == nint.Zero) return map;
 
-        try
+        var kbdType = NativeMethods.LMGetKbdType();
+        ushort* chars = stackalloc ushort[2];
+
+        foreach (var ucMods in new uint[] { 0, 2 }) // unshifted, then shifted
         {
-            var layoutData = NativeMethods.TISGetInputSourceProperty(layoutSource, NativeMethods.KTISPropertyUnicodeKeyLayoutData);
-            if (layoutData == nint.Zero) return map;
-
-            var layoutPtr = NativeMethods.CFDataGetBytePtr(layoutData);
-            if (layoutPtr == nint.Zero) return map;
-
-            var kbdType = NativeMethods.LMGetKbdType();
-            ushort* chars = stackalloc ushort[2];
-
-            foreach (var ucMods in new uint[] { 0, 2 }) // unshifted, then shifted
+            for (ushort vk = 0; vk < 128; vk++)
             {
-                for (ushort vk = 0; vk < 128; vk++)
-                {
-                    // probe without kUCKeyTranslateNoDeadKeysBit: if deadKeyState goes non-zero the
-                    // key is a dead key at this level. injecting that VK on the slave would start a
-                    // dead-key sequence instead of producing the char — exclude it from the map.
-                    uint deadProbeState = 0;
-                    _ = NativeMethods.UCKeyTranslate(layoutPtr, vk, NativeMethods.KUCKeyActionDown, ucMods, kbdType, 0, ref deadProbeState, 2, out _, chars);
-                    if (deadProbeState != 0) continue;
+                // probe without kUCKeyTranslateNoDeadKeysBit: if deadKeyState goes non-zero the
+                // key is a dead key at this level. injecting that VK on the slave would start a
+                // dead-key sequence instead of producing the char — exclude it from the map.
+                uint deadProbeState = 0;
+                _ = NativeMethods.UCKeyTranslate(layoutPtr, vk, NativeMethods.KUCKeyActionDown, ucMods, kbdType, 0, ref deadProbeState, 2, out _, chars);
+                if (deadProbeState != 0) continue;
 
-                    uint deadKeyState = 0;
-                    var status = NativeMethods.UCKeyTranslate(
-                        layoutPtr,
-                        vk,
-                        NativeMethods.KUCKeyActionDown,
-                        ucMods,
-                        kbdType,
-                        1, // kUCKeyTranslateNoDeadKeysBit — skip dead key composition
-                        ref deadKeyState,
-                        2,
-                        out var count,
-                        chars);
+                uint deadKeyState = 0;
+                var status = NativeMethods.UCKeyTranslate(
+                    layoutPtr,
+                    vk,
+                    NativeMethods.KUCKeyActionDown,
+                    ucMods,
+                    kbdType,
+                    1, // kUCKeyTranslateNoDeadKeysBit — skip dead key composition
+                    ref deadKeyState,
+                    2,
+                    out var count,
+                    chars);
 
-                    if (status != 0 || count == 0) continue;
+                if (status != 0 || count == 0) continue;
 
-                    var ch = (char)chars[0];
-                    // only map printable chars, skip control chars; first mapping wins
-                    if (ch >= 0x20 && !map.ContainsKey(ch))
-                        map[ch] = vk;
-                }
+                var ch = (char)chars[0];
+                // only map printable chars, skip control chars; first mapping wins
+                if (ch >= 0x20 && !map.ContainsKey(ch))
+                    map[ch] = vk;
             }
-        }
-        finally
-        {
-            NativeMethods.CFRelease(layoutSource);
         }
 
         return map;
@@ -636,11 +593,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
         _ => 4,
     };
 
-    public bool IsAccessibilityTrusted()
-    {
-        if (NativeHelpers.PollAccessibilityTrusted()) return true;
-        return NativeHelpers.ShowAccessibilityPrompt();
-    }
+    public bool IsAccessibilityTrusted() => NativeHelpers.EnsureAccessibilityTrusted();
     public Task WaitForAccessibilityTrusted(CancellationToken cancel) => NativeHelpers.WaitForAccessibilityTrusted(cancel);
 
     public ScreenPoint? GetCursorPosition() => MacDisplayHelper.CursorPosition();
@@ -668,9 +621,8 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
     {
         if (_layoutNotificationCenter != nint.Zero)
         {
-            var name = NativeHelpers.MakeNsString("com.apple.Carbon.TISNotifySelectedKeyboardInputSourceChanged");
-            NativeMethods.CFNotificationCenterRemoveObserver(_layoutNotificationCenter, 1, name, nint.Zero);
-            NativeMethods.CFRelease(name);
+            using (var name = new NsString(InputSourceChanged))
+                NativeMethods.CFNotificationCenterRemoveObserver(_layoutNotificationCenter, 1, name, nint.Zero);
             _layoutChangeCallback = null;
         }
         if (_cursorHidden)

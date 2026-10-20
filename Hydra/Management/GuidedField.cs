@@ -42,10 +42,16 @@ internal static class GuidedFields
     internal static readonly GuidedField AutoUpdate = new(GuidedSection.Global, 6, 0, null, "autoUpdate", GuidedFieldKind.Toggle, "Auto Update",
         "Allow Hydra's built-in updater to check for and apply releases.")
     { Fallback = GuidedValues.On };
-    internal static readonly GuidedField DebugShield = new(GuidedSection.Global, 8, 0, null, "debugShield", GuidedFieldKind.Toggle, "Debug Shield",
+    internal static readonly GuidedField UpdateChannel = new(GuidedSection.Global, 8, 0, null, "updateChannel", GuidedFieldKind.Choice, "Update Channel",
+        "Stable takes full releases only; Edge also takes prereleases built from the edge branch.")
+    {
+        DefaultHint = nameof(Config.UpdateChannel.Stable),
+        ChoiceEnum = typeof(UpdateChannel)
+    };
+    internal static readonly GuidedField DebugShield = new(GuidedSection.Global, 10, 0, null, "debugShield", GuidedFieldKind.Toggle, "Debug Shield",
         "Enable verbose macOS shield diagnostics. Normally leave disabled.")
     { Fallback = GuidedValues.Off };
-    internal static readonly GuidedField DebugMouse = new(GuidedSection.Global, 10, 0, null, "debugMouse", GuidedFieldKind.Toggle, "Debug Mouse",
+    internal static readonly GuidedField DebugMouse = new(GuidedSection.Global, 12, 0, null, "debugMouse", GuidedFieldKind.Toggle, "Debug Mouse",
         "Enable verbose mouse routing diagnostics. Normally leave disabled.")
     { Fallback = GuidedValues.Off };
 
@@ -108,18 +114,15 @@ internal static class GuidedFields
     internal static readonly GuidedField AccelerateMouseWheel = new(GuidedSection.Behaviour, 8, 0, null, "accelerateMouseWheel", GuidedFieldKind.Toggle,
         "Accelerate Wheel", "Apply Hydra's scroll-wheel acceleration behavior.")
     { Fallback = GuidedValues.On };
-    internal static readonly GuidedField UnicodeKeyRepeat = new(GuidedSection.Behaviour, 10, 0, null, "unicodeKeyRepeat", GuidedFieldKind.Toggle,
-        "Unicode Key Repeat", "Repeat printable keys as Unicode on Mac slaves to avoid the accent popup.")
-    { Fallback = GuidedValues.On };
-    internal static readonly GuidedField AllowSystemSleep = new(GuidedSection.Behaviour, 12, 0, null, "allowSystemSleep", GuidedFieldKind.Toggle,
+    internal static readonly GuidedField AllowSystemSleep = new(GuidedSection.Behaviour, 10, 0, null, "allowSystemSleep", GuidedFieldKind.Toggle,
         "Allow System Sleep", "Let the OS sleep this machine on its normal idle policy; Hydra leaves the relay before it suspends.")
     { Fallback = GuidedValues.Off };
     internal static readonly IReadOnlyList<GuidedField> All =
     [
-        Name, LogLevel, ProfileOverride, AutoUpdate, DebugShield, DebugMouse,
+        Name, LogLevel, ProfileOverride, AutoUpdate, UpdateChannel, DebugShield, DebugMouse,
         ProfileName, Mode, Ssid, ScreenCount, ClipboardSync, IsPluggedIn, MouseScale, RelativeMouseScale, DeadCorners, MaxMouseHz,
         NetworkConfig, EmbeddedServer, EmbeddedPassword, EmbeddedPort, EmbeddedServerPassword,
-        HideCursor, RemoteOnly, SyncScreensaver, ScreenLockPropagation, AccelerateMouseWheel, UnicodeKeyRepeat, AllowSystemSleep
+        HideCursor, RemoteOnly, SyncScreensaver, ScreenLockPropagation, AccelerateMouseWheel, AllowSystemSleep
     ];
 
     internal static readonly IReadOnlyList<GuidedField> Root = [.. All.Where(f => f.IsRoot)];

@@ -86,8 +86,7 @@ public sealed class XorgOutputHandler : IPlatformOutput, ICursor
 
         if (msg.Character is { } ch)
         {
-            // unicode char → keysym, always injected via temp-binding at all 4 levels so the
-            // produced character is independent of the slave's keyboard layout and current modifier state.
+            // unicode char → keysym, injected on its natural keycode when the layout has it there, else temp-bound
             var keysym = ch <= '\xFF' ? (ulong)ch : 0x01000000u | ch;
             InjectCharKeysym(keysym, isDown, msg.Modifiers);
         }
@@ -119,15 +118,7 @@ public sealed class XorgOutputHandler : IPlatformOutput, ICursor
 
     public void InjectMouseButton(MouseButtonMessage msg)
     {
-        var button = msg.Button switch
-        {
-            MouseButton.Left => 1u,
-            MouseButton.Middle => 2u,
-            MouseButton.Right => 3u,
-            MouseButton.Extra1 => 8u,
-            MouseButton.Extra2 => 9u,
-            _ => 0u,
-        };
+        var button = XorgDisplayHelper.X11Button(msg.Button);
         if (button == 0) return;
 
         _ = NativeMethods.XTestFakeButtonEvent(_display, button, msg.IsPressed, 0);
@@ -136,9 +127,9 @@ public sealed class XorgOutputHandler : IPlatformOutput, ICursor
 
     public void InjectMouseScroll(MouseScrollMessage msg)
     {
-        // x11 scroll: buttons 4=up, 5=down, 6=left, 7=right (each press = one 120-unit click)
-        InjectScrollAxis(4u, 5u, msg.YDelta / 120);
-        InjectScrollAxis(7u, 6u, msg.XDelta / 120);
+        // x11 scroll: buttons 4=up, 5=down, 6=left, 7=right, a press per notch
+        InjectScrollAxis(4u, 5u, msg.YDelta / MouseScrollEvent.Notch);
+        InjectScrollAxis(7u, 6u, msg.XDelta / MouseScrollEvent.Notch);
         _ = NativeMethods.XFlush(_display);
     }
 
@@ -271,8 +262,7 @@ public sealed class XorgOutputHandler : IPlatformOutput, ICursor
 
     private static ulong SpecialKeyToKeysym(SpecialKey key)
     {
-        // every key Hydra can inject on X11 is in the map, including the MISCELLANY block whose enum
-        // values already carry the keysym; 0 means "no keysym", which the caller treats as unsupported
+        // every key Hydra can inject on X11 is in the map; 0 means "no keysym", which the caller treats as unsupported
         return XorgSpecialKeyMap.Instance.Reverse.TryGetValue(key, out var keysym) ? keysym : 0;
     }
 

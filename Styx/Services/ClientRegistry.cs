@@ -1,139 +1,155 @@
+using Cathedral.Extensions;
+
 namespace Styx.Services;
 
 public interface IClientRegistry
 {
-    ValueTask Register(string connectionId, Guid networkId, string hostName, string remoteIp, string localIp = ClientRegistry.Unknown);
-    ValueTask Unregister(string connectionId);
-    ValueTask<string?> GetConnectionId(Guid networkId, string hostName);
-    ValueTask<ClientIdentity?> GetIdentity(string connectionId);
+    // what was registered on the connection, if anything
+    ClientIdentity? Unregister(string connectionId);
+    string? GetConnectionId(NetworkKey network, string hostName);
+    ClientIdentity? GetIdentity(string connectionId);
     // atomically kicks same-network+host duplicates AND registers the new connection under one lock, so two
     // concurrent authenticates for the same host can't both find nothing to kick and both register.
-    ValueTask<RegistrationResult> RegisterKickingDuplicates(string connectionId, Guid networkId, string hostName, string remoteIp, string localIp = ClientRegistry.Unknown);
-    // returns all clients on a network, optionally excluding one connection
-    ValueTask<IReadOnlyList<NetworkClient>> GetNetworkClients(Guid networkId, string? excludeConnectionId = null);
-    ValueTask<IReadOnlyList<ClientIdentity>> GetAllIdentities();
+    RegistrationResult Register(string connectionId, NetworkKey network, string hostName, string remoteIp, string localIp);
+    // removes the registration only if it is still the one with this generation, so a timer armed for an earlier
+    // login can never evict whatever holds the connection or the name now
+    ClientIdentity? UnregisterIfCurrent(string connectionId, long generation);
+    IReadOnlyList<NetworkClient> GetNetworkClients(NetworkKey network);
+    IReadOnlyList<ClientIdentity> GetAllIdentities();
 }
 
-public record ClientIdentity(Guid NetworkId, string HostName, string RemoteIp, string LocalIp);
+/// <param name="Generation">unique per registration, so a later login on the same connection is told apart</param>
+public record ClientIdentity(NetworkKey Network, string HostName, string RemoteIp, string LocalIp, long Generation);
 
 public record NetworkClient(string ConnectionId, string HostName);
 
-/// <param name="Kicked">connectionIds displaced by this registration — more than one if stale entries accumulated.</param>
+/// <param name="Kicked">the connection this registration displaced from the name, if any</param>
 /// <param name="OtherClients">the network with the duplicates gone but before this connection joined, so a
 /// displaced host can be broadcast as having left before it is broadcast as having arrived.</param>
-public record RegistrationResult(IReadOnlyList<string> Kicked, IReadOnlyList<NetworkClient> OtherClients);
+/// <param name="Generation">the new registration's generation</param>
+/// <param name="Left">the network this connection was registered on before, when it was a different one, so its
+/// peers there can be told it has gone</param>
+public record RegistrationResult(string? Kicked, IReadOnlyList<NetworkClient> OtherClients, long Generation, NetworkKey? Left);
 
 public class ClientRegistry(ILogger<ClientRegistry> log) : IClientRegistry
 {
     // stands in for an address the connection could not report
     public const string Unknown = "unknown";
 
+    public static string RemoteIpOf(HttpContext? http) => http?.Connection.RemoteIpAddress?.ToString() ?? Unknown;
+
     private readonly Lock _lock = new();
     private readonly Dictionary<string, ClientIdentity> _byConnection = [];
-    private readonly Dictionary<(Guid NetworkId, string HostName), string> _byNetworkHost = [];
+    private readonly Dictionary<HostKey, string> _byNetworkHost = [];
+    private long _generation;
 
-    public ValueTask Register(string connectionId, Guid networkId, string hostName, string remoteIp, string localIp = Unknown)
-    {
-        lock (_lock)
-            Register(connectionId, new ClientIdentity(networkId, hostName, remoteIp, localIp));
-        if (log.IsEnabled(LogLevel.Debug))
-            log.LogDebug("Registered client \"{HostName}\" from {RemoteIp} on network {NetworkId}", hostName, remoteIp, networkId);
-        return ValueTask.CompletedTask;
-    }
-
-    public ValueTask Unregister(string connectionId)
+    public ClientIdentity? Unregister(string connectionId)
     {
         ClientIdentity? identity;
         lock (_lock)
             identity = Remove(connectionId);
-        if (identity != null && log.IsEnabled(LogLevel.Information))
+        LogUnregistered(identity);
+        return identity;
+    }
+
+    public ClientIdentity? UnregisterIfCurrent(string connectionId, long generation)
+    {
+        ClientIdentity? identity = null;
+        lock (_lock)
         {
-            log.LogInformation("Unregistered client \"{HostName}\" from network {NetworkId}", identity.HostName, identity.NetworkId);
+            if (_byConnection.TryGetValue(connectionId, out var current) && current.Generation == generation)
+                identity = Remove(connectionId);
         }
-        return ValueTask.CompletedTask;
+        LogUnregistered(identity);
+        return identity;
     }
 
     // the lock is held only for a lookup, so a relay send pays for an uncontended acquire at most
-    public ValueTask<string?> GetConnectionId(Guid networkId, string hostName)
+    public string? GetConnectionId(NetworkKey network, string hostName)
     {
-        lock (_lock) return ValueTask.FromResult(_byNetworkHost.GetValueOrDefault(HostKey(networkId, hostName)));
+        lock (_lock) return _byNetworkHost.GetValueOrDefault(new HostKey(network, hostName));
     }
 
-    public ValueTask<ClientIdentity?> GetIdentity(string connectionId)
+    public ClientIdentity? GetIdentity(string connectionId)
     {
-        lock (_lock) return ValueTask.FromResult(_byConnection.GetValueOrDefault(connectionId));
+        lock (_lock) return _byConnection.GetValueOrDefault(connectionId);
     }
 
-    // atomically kick same-network+host duplicates and register the new connection under one lock
-    public ValueTask<RegistrationResult> RegisterKickingDuplicates(string connectionId, Guid networkId, string hostName, string remoteIp, string localIp = Unknown)
+    public RegistrationResult Register(string connectionId, NetworkKey network, string hostName, string remoteIp, string localIp)
     {
         RegistrationResult result;
         lock (_lock)
         {
-            // Look up the same case-insensitive key Register() below will evict by — a case-sensitive
-            // scan here could miss a duplicate that Register() then silently displaces without it ever
-            // appearing in Kicked, leaving the displaced connection never told it lost the name.
-            var found = new List<string>();
-            if (_byNetworkHost.TryGetValue(HostKey(networkId, hostName), out var previousConnectionId)
+            string? kicked = null;
+            if (_byNetworkHost.TryGetValue(new HostKey(network, hostName), out var previousConnectionId)
                 && previousConnectionId != connectionId)
             {
-                found.Add(previousConnectionId);
+                kicked = previousConnectionId;
                 Remove(previousConnectionId);
                 if (log.IsEnabled(LogLevel.Information))
-                    log.LogInformation("Kicked duplicate \"{HostName}\" from network {NetworkId}", hostName, networkId);
+                    log.LogInformation("Kicked duplicate \"{HostName}\" from network {Network}", hostName, network);
             }
-            var others = OnNetwork(networkId, connectionId);
-            Register(connectionId, new ClientIdentity(networkId, hostName, remoteIp, localIp));
-            result = new RegistrationResult(found, others);
+            var left = _byConnection.TryGetValue(connectionId, out var before) && before.Network != network ? before.Network : (NetworkKey?)null;
+            var others = OnNetwork(network, connectionId);
+            var generation = ++_generation;
+            Index(connectionId, new ClientIdentity(network, hostName, remoteIp, localIp, generation));
+            result = new RegistrationResult(kicked, others, generation, left);
         }
         if (log.IsEnabled(LogLevel.Debug))
-            log.LogDebug("Registered client \"{HostName}\" from {RemoteIp} on network {NetworkId}", hostName, remoteIp, networkId);
-        return ValueTask.FromResult(result);
+            log.LogDebug("Registered client \"{HostName}\" from {RemoteIp} on network {Network}", hostName, remoteIp, network);
+        return result;
     }
 
-    public ValueTask<IReadOnlyList<NetworkClient>> GetNetworkClients(Guid networkId, string? excludeConnectionId = null)
+    public IReadOnlyList<NetworkClient> GetNetworkClients(NetworkKey network)
     {
-        lock (_lock) return ValueTask.FromResult<IReadOnlyList<NetworkClient>>(OnNetwork(networkId, excludeConnectionId));
+        lock (_lock) return OnNetwork(network, null);
     }
 
-    public ValueTask<IReadOnlyList<ClientIdentity>> GetAllIdentities()
+    public IReadOnlyList<ClientIdentity> GetAllIdentities()
     {
-        lock (_lock) return ValueTask.FromResult<IReadOnlyList<ClientIdentity>>([.. _byConnection.Values]);
+        lock (_lock) return [.. _byConnection.Values];
     }
 
-    private List<NetworkClient> OnNetwork(Guid networkId, string? excludeConnectionId)
+    private List<NetworkClient> OnNetwork(NetworkKey network, string? excludeConnectionId)
     {
         var result = new List<NetworkClient>();
         foreach (var (connectionId, identity) in _byConnection)
         {
-            if (identity.NetworkId == networkId && connectionId != excludeConnectionId)
+            if (identity.Network == network && connectionId != excludeConnectionId)
                 result.Add(new NetworkClient(connectionId, identity.HostName));
         }
         return result;
     }
 
-    private void Register(string connectionId, ClientIdentity identity)
+    private void LogUnregistered(ClientIdentity? identity)
     {
-        // A connection can re-authenticate in tests/third-party clients. Remove its previous reverse index
-        // before assigning the new identity so the O(1) host index never points at stale connection data.
+        if (identity != null && log.IsEnabled(LogLevel.Information))
+            log.LogInformation("Unregistered client \"{HostName}\" from network {Network}", identity.HostName, identity.Network);
+    }
+
+    private void Index(string connectionId, ClientIdentity identity)
+    {
+        // a connection that logs in again drops the name it held before
         Remove(connectionId);
-        var hostKey = HostKey(identity.NetworkId, identity.HostName);
-        if (_byNetworkHost.TryGetValue(hostKey, out var previousConnectionId))
-            Remove(previousConnectionId);
         _byConnection[connectionId] = identity;
-        _byNetworkHost[hostKey] = connectionId;
+        _byNetworkHost[new HostKey(identity.Network, identity.HostName)] = connectionId;
     }
 
     private ClientIdentity? Remove(string connectionId)
     {
         if (!_byConnection.Remove(connectionId, out var old)) return null;
-        var key = HostKey(old.NetworkId, old.HostName);
+        var key = new HostKey(old.Network, old.HostName);
         if (_byNetworkHost.GetValueOrDefault(key) == connectionId)
             _byNetworkHost.Remove(key);
         return old;
     }
 
-    private static string Normalize(string hostName) => hostName.ToLowerInvariant();
-    private static (Guid NetworkId, string HostName) HostKey(Guid networkId, string hostName) =>
-        (networkId, Normalize(hostName));
+    // a name compares ignoring case, as a token's hostname caveats do: a Send names its targets in the sender's own
+    // spelling, and a name a caveat excludes can never reach the excluded peer's slot through another case relation
+    private readonly record struct HostKey(NetworkKey Network, string HostName)
+    {
+        public bool Equals(HostKey other) => Network == other.Network && HostName.EqualsIgnoreCase(other.HostName);
+
+        public override int GetHashCode() => HashCode.Combine(Network, StringComparer.OrdinalIgnoreCase.GetHashCode(HostName));
+    }
 }

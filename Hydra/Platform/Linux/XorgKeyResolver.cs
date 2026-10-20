@@ -64,14 +64,12 @@ internal sealed class XorgKeyResolver
                 if (sym2 != 0) keysym = sym2;
             }
 
-            // KP digits (0xFFB0-0xFFB9) pass through as KP_0-KP_9 SpecialKeys; only decimal/separator become chars
-            if (keysym == XorgVirtualKey.KP_Decimal) keysym = '.';
-            else if (keysym == 0xFFAC) keysym = ',';  // KP_Separator
+            keysym = KpDecimalToChar(keysym);
         }
         else
         {
             // numlock off: if shift gave a numeric keysym (X11 XOR), re-query at level=0 for navigation
-            if (level != 0 && (keysym is >= 0xFFB0 and <= 0xFFB9 || keysym is 0xFFAE or 0xFFAC))
+            if (level != 0 && IsKpNumeric(keysym))
             {
                 var sym2 = NativeMethods.XkbKeycodeToKeysym(display, keycode, group, 0);
                 if (sym2 is >= 0xFF95 and <= 0xFF9F) keysym = sym2;
@@ -84,7 +82,6 @@ internal sealed class XorgKeyResolver
         // adjust so modifiers always describe what's held after the event takes effect.
         var adjustedState = AdjustModifierState(evType, keysym, state);
         var mods = MapModifiers(adjustedState);
-        var type = evType == NativeMethods.KeyPress ? KeyEventType.KeyDown : KeyEventType.KeyUp;
 
         // key-up: replay the same event that was emitted on key-down
         if (evType == NativeMethods.KeyRelease)
@@ -96,45 +93,35 @@ internal sealed class XorgKeyResolver
         // a repeat (rather than suppressing) lets the slave inject each — char resolution stays on the master.
         if (_keyDownId.ContainsKey(keycode)) return BuildRepeat(keysym, mods);
 
-        // shortcut context (Ctrl/Super held): if the base key is a dead key, clear any pending dead
-        // state and emit the spacing form (e.g. Ctrl+` → `) so the shortcut fires with the correct base char.
-        // dead keys with no spacing form (e.g. XK_dead_belowdot) are dropped to avoid producing garbage.
+        return ResolveDown(keysym, keycode, isShortcut, mods, _keyDownId, ref _pendingDeadKey, ref _pendingDeadSpacing);
+    }
+
+    // the key-down pipeline shared with EvdevKeyResolver. a shortcut (Ctrl/Super) on a dead key sends its spacing
+    // form (Ctrl+` → `); a shortcut or a non-modifier special key first flushes a pending dead key as its spacing
+    // form (dead_grave + Ctrl+A → ` then Ctrl+A, dead_acute + Tab → ´ then Tab), as on Windows and macOS.
+    internal static KeyEvent[]? ResolveDown(
+        ulong keysym, uint keycode, bool isShortcut, KeyModifiers mods,
+        Dictionary<uint, CharClassification> keyDownId, ref char pendingDeadKey, ref char pendingDeadSpacing)
+    {
         if (isShortcut && DeadKeyLookup(keysym) is { Combining: not '\0' } deadShortcut)
         {
-            // check spacing form before clearing pending state — a dead key with no spacing form (e.g.
-            // XK_dead_belowdot on Vietnamese layout) should not discard an existing pending dead key.
+            // no spacing form (dead_belowdot): drop the key and leave any pending dead key armed
             if (deadShortcut.Spacing == '\0') return null;
-            // flush any prior pending dead key: dead_grave pending + Ctrl+dead_acute → ` then Ctrl+´
-            var prevFlush = TakeDeadKeySpacing(ref _pendingDeadKey, ref _pendingDeadSpacing);
-            _keyDownId[keycode] = new CharClassification(deadShortcut.Spacing, null);
-            var shortcutEvent = KeyEvent.Char(KeyEventType.KeyDown, deadShortcut.Spacing, mods);
-            return prevFlush is not null ? [.. prevFlush, shortcutEvent] : [shortcutEvent];
+            var prevFlush = KeyResolver.TakeDeadKeySpacing(ref pendingDeadKey, ref pendingDeadSpacing);
+            keyDownId[keycode] = new CharClassification(deadShortcut.Spacing, null);
+            return KeyResolver.Concat(prevFlush, [KeyEvent.Char(KeyEventType.KeyDown, deadShortcut.Spacing, mods)]);
         }
 
-        // flush pending dead key before any shortcut character (mirrors Windows/Mac behaviour).
-        // the shortcut-dead-key branch above handles Ctrl/Super+dead_key; this handles Ctrl/Super+normal_char
-        // (e.g. dead_grave + Ctrl+A → '`' then Ctrl+A, not 'à' with Control).
-        var shortcutFlush = (isShortcut && _pendingDeadKey != '\0')
-            ? TakeDeadKeySpacing(ref _pendingDeadKey, ref _pendingDeadSpacing) : null;
-
-        // pre-flush: non-modifier special key while dead key pending — emit spacing form before the special key.
-        // this mirrors Windows' FlushPendingDeadKey: dead_acute + Tab → '´' then Tab, not just Tab.
-        var deadFlush = FlushDeadKeyBeforeSpecial(keysym, ref _pendingDeadKey, ref _pendingDeadSpacing);
-
-        // trackDeadKey: register dead keys in _keyDownId so OS auto-repeat is suppressed
-        var ev = ResolveKeysym(keysym, keycode, _keyDownId, ref _pendingDeadKey, ref _pendingDeadSpacing, mods, type, trackDeadKey: true);
-        // shortcutFlush ?? deadFlush: if shortcutFlush fired it already cleared _pendingDeadKey, so
-        // FlushDeadKeyBeforeSpecial (above) would have seen '\0' and returned null — ?? never resolves to deadFlush.
-        var flush = shortcutFlush ?? deadFlush;
-        if (flush is not null && ev is not null) return [.. flush, .. ev];
-        if (flush is not null) return flush;
-        return ev;
+        var flush = isShortcut
+            ? KeyResolver.TakeDeadKeySpacing(ref pendingDeadKey, ref pendingDeadSpacing)
+            : FlushDeadKeyBeforeSpecial(keysym, ref pendingDeadKey, ref pendingDeadSpacing);
+        return KeyResolver.Concat(flush, ResolveKeysym(keysym, keycode, keyDownId, ref pendingDeadKey, ref pendingDeadSpacing, mods));
     }
 
     // builds a repeat event for a held key from its current keysym and modifiers, mirroring the special-then-char
     // order of ResolveKeysym but without touching dead-key state (a repeat never composes). returns null if the
     // keysym maps to neither (e.g. a held dead key, which does not repeat-compose). shared with EvdevKeyResolver.
-    internal static KeyEvent?[]? BuildRepeat(ulong keysym, KeyModifiers mods)
+    internal static KeyEvent[]? BuildRepeat(ulong keysym, KeyModifiers mods)
     {
         var special = KeySymToSpecialKey(keysym);
         if (special.HasValue)
@@ -145,65 +132,31 @@ internal sealed class XorgKeyResolver
         return null;
     }
 
-    // flushes a pending dead key as its spacing form when a non-modifier special key interrupts composition.
-    // dead keys with no spacing form (e.g. dead_belowdot) are dropped — never emit the raw combining char.
-    // modifiers are always None: the spacing form belongs to the dead key press, not the aborting key.
-    // returns [down, up] pair, or null if no flush is needed.
-    internal static KeyEvent?[]? FlushDeadKeyBeforeSpecial(ulong keysym, ref char pendingDeadKey, ref char pendingDeadSpacing)
+    // flushes a pending dead key as its spacing form when a non-modifier special key interrupts composition
+    internal static KeyEvent[]? FlushDeadKeyBeforeSpecial(ulong keysym, ref char pendingDeadKey, ref char pendingDeadSpacing)
     {
         if (pendingDeadKey == '\0') return null;
-        var possibleSpecial = KeySymToSpecialKey(keysym);
-        if (!possibleSpecial.HasValue || ModifierBit(keysym) != 0) return null;
-        return TakeDeadKeySpacing(ref pendingDeadKey, ref pendingDeadSpacing);
+        if (!KeySymToSpecialKey(keysym).HasValue || ModifierBit(keysym) != 0) return null;
+        return KeyResolver.TakeDeadKeySpacing(ref pendingDeadKey, ref pendingDeadSpacing);
     }
 
-    // unconditionally takes the pending dead key spacing form; clears pending state regardless.
-    // used when a shortcut or numpad key interrupts composition and pending state must always be flushed.
-    // returns [down, up] pair so the slave does not get a stuck key from the synthetic press.
-    internal static KeyEvent?[]? TakeDeadKeySpacing(ref char pendingDeadKey, ref char pendingDeadSpacing)
-    {
-        if (pendingDeadKey == '\0') return null;
-        var spacing = pendingDeadSpacing;
-        pendingDeadKey = '\0';
-        pendingDeadSpacing = '\0';
-        if (spacing == '\0') return null;  // no spacing form — drop silently
-        return [
-            KeyEvent.Char(KeyEventType.KeyDown, spacing, KeyModifiers.None),
-            KeyEvent.Char(KeyEventType.KeyUp, spacing, KeyModifiers.None),
-        ];
-    }
-
-    // shared dead-key → special → char resolution pipeline, used by XorgKeyResolver and EvdevKeyResolver.
-    // trackDeadKey: evdev needs a placeholder _keyDownId entry for dead keys to support key-up replay.
-    internal static KeyEvent?[]? ResolveKeysym(
+    // dead-key → special → char resolution of a key-down
+    internal static KeyEvent[]? ResolveKeysym(
         ulong keysym, uint keycode, Dictionary<uint, CharClassification> keyDownId,
-        ref char pendingDeadKey, ref char pendingDeadSpacing,
-        KeyModifiers mods, KeyEventType type, bool trackDeadKey = false)
+        ref char pendingDeadKey, ref char pendingDeadSpacing, KeyModifiers mods)
     {
         // dead key: store combining char and spacing form, then wait for the next character.
         // dead + dead: emit spacing form of the first dead key before starting the second.
         var dead = DeadKeyLookup(keysym);
         if (dead.Combining != '\0')
         {
-            if (pendingDeadKey != '\0')
-            {
-                var spc = pendingDeadSpacing;
-                pendingDeadKey = dead.Combining;
-                pendingDeadSpacing = dead.Spacing;
-                if (trackDeadKey) keyDownId[keycode] = new CharClassification(null, null);
-                if (spc == '\0') return null;
-                // do NOT overwrite the (null,null) placeholder: this key's release should not
-                // replay the spacing form — the flush is a synthetic event, not a character produced by this key.
-                // emit [down, up] pair: the flush has no physical key-up coming, so the slave must not get a stuck key.
-                return [
-                    KeyEvent.Char(type, spc, KeyModifiers.None),
-                    KeyEvent.Char(KeyEventType.KeyUp, spc, KeyModifiers.None),
-                ];
-            }
+            var flush = KeyResolver.TakeDeadKeySpacing(ref pendingDeadKey, ref pendingDeadSpacing);
             pendingDeadKey = dead.Combining;
             pendingDeadSpacing = dead.Spacing;
-            if (trackDeadKey) keyDownId[keycode] = new CharClassification(null, null);
-            return null;
+            // a placeholder, so OS auto-repeat is suppressed and the release replays nothing: a flush is
+            // synthetic, not a character this key produced
+            keyDownId[keycode] = new CharClassification(null, null);
+            return flush;
         }
 
         // special key (arrows, function keys, modifiers, keypad)?
@@ -217,7 +170,7 @@ internal sealed class XorgKeyResolver
                 pendingDeadSpacing = '\0';
             }
             keyDownId[keycode] = new CharClassification(null, special.Value);
-            return [KeyEvent.Special(type, special.Value, mods)];
+            return [KeyEvent.Special(KeyEventType.KeyDown, special.Value, mods)];
         }
 
         // character key
@@ -233,7 +186,7 @@ internal sealed class XorgKeyResolver
                 ch = KeyResolver.ComposeOrSpacing(ch.Value, pd, spc);
             }
             keyDownId[keycode] = new CharClassification(ch, null);
-            return [KeyEvent.Char(type, ch.Value, mods)];
+            return [KeyEvent.Char(KeyEventType.KeyDown, ch.Value, mods)];
         }
 
         return null;
@@ -276,18 +229,8 @@ internal sealed class XorgKeyResolver
         _ => new('\0', '\0'),
     };
 
-    // checks special key map first, then falls back to mechanical MISCELLANY mapping.
-    // MISCELLANY keysyms (0xFF00-0xFFFF) map directly: keysym | 0x01000000 = SpecialKey value.
-    internal static SpecialKey? KeySymToSpecialKey(ulong keysym)
-    {
-        if (XorgSpecialKeyMap.Instance.TryGet(keysym, out var special)) return special;
-
-        // mechanical MISCELLANY mapping for named keys not in the special map
-        if (keysym is >= 0xFF00 and <= 0xFFFF)
-            return (SpecialKey)(keysym | 0x01000000);
-
-        return null;
-    }
+    internal static SpecialKey? KeySymToSpecialKey(ulong keysym) =>
+        XorgSpecialKeyMap.Instance.TryGet(keysym, out var special) ? special : null;
 
     // maps a keysym to a printable char.
     // latin-1 printable range (0x0020-0x00FF) maps directly as unicode codepoints.
@@ -364,7 +307,7 @@ internal sealed class XorgKeyResolver
         XorgVirtualKey.Super_L or XorgVirtualKey.Super_R => NativeMethods.Mod4Mask,
         XorgVirtualKey.CapsLock => NativeMethods.LockMask,
         XorgVirtualKey.NumLock => NativeMethods.Mod2Mask,
-        XorgVirtualKey.ISO_Level3_Shift or 0xFF7EUL => NativeMethods.Mod5Mask,  // ISO_Level3_Shift or Mode_switch
+        XorgVirtualKey.ISO_Level3_Shift or XorgVirtualKey.Mode_switch => NativeMethods.Mod5Mask,
         _ => 0,
     };
 
@@ -404,16 +347,17 @@ internal sealed class XorgKeyResolver
         _ => keysym,
     };
 
-    // converts KP numeric keysyms (digits, decimal, separator) to their Unicode char equivalents,
-    // so the slave can emit them without caring about its own numlock state.
-    // covers: KP_0–KP_9 (0xFFB0–0xFFB9), KP_Decimal (.), KP_Separator/comma (0xFFAC).
-    internal static ulong KpNumericToChar(ulong keysym) => keysym switch
+    // numlock on: KP digits pass through as KP_0-KP_9 SpecialKeys, but decimal and separator type their character
+    internal static ulong KpDecimalToChar(ulong keysym) => keysym switch
     {
-        >= 0xFFB0 and <= 0xFFB9 => '0' + (keysym - 0xFFB0),
         XorgVirtualKey.KP_Decimal => '.',
-        0xFFAC => ',',  // XK_KP_Separator — comma on European layouts
+        XorgVirtualKey.KP_Separator => ',',
         _ => keysym,
     };
+
+    // the keysyms numlock-on gives the numeric keypad keys
+    internal static bool IsKpNumeric(ulong keysym) =>
+        keysym is (>= XorgVirtualKey.KP_0 and <= XorgVirtualKey.KP_9) or XorgVirtualKey.KP_Decimal or XorgVirtualKey.KP_Separator;
 
     // maps KP numeric keysyms to their KP navigation equivalents (for numlock-off handling in evdev).
     internal static ulong KpNumericToNav(ulong keysym) => keysym switch
@@ -428,7 +372,7 @@ internal sealed class XorgKeyResolver
         0xFFB7 => 0xFF95,
         0xFFB8 => 0xFF97,
         0xFFB9 => 0xFF9A,
-        XorgVirtualKey.KP_Decimal or 0xFFAC => 0xFF9F,  // KP_Decimal / KP_Separator → KP_Delete
+        XorgVirtualKey.KP_Decimal or XorgVirtualKey.KP_Separator => 0xFF9F,  // → KP_Delete
         _ => keysym,
     };
 

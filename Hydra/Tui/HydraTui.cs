@@ -1,6 +1,8 @@
 using System.Text;
 using System.Net.Sockets;
+using ByteSizeLib;
 using Cathedral.Extensions;
+using Cathedral.Utils;
 using Hydra.Config;
 using Hydra.Management;
 using Hydra.Platform;
@@ -111,24 +113,12 @@ internal static class HydraTui
     // InternalsVisibleTo — see FormatOverview/FormatPeers and their tests.
     internal sealed class TuiController(IApplication app, Window window, string configPath, IManagementClient client, bool demo) : IDisposable
     {
-        // ONLY THE STATE MARKER IS TINTED BY STATE. The rest of the line is facts — version, host,
-        // profile — that are equally true whatever the connection is doing, so colouring them by it said
-        // nothing and drowned the one word that did. The detail takes the same teal as the form's field
-        // captions, which is the TUI's own accent; the status bar along the bottom is Terminal.Gui's
-        // LightBlue and is not ours to match.
-        //
-        // Unconditional, and it must stay that way: every other colour here is — Terminal.Gui renders
-        // borders, the active tab and the status bar in 24-bit colour by default — so putting the one colour
-        // that carries INFORMATION behind a switch would make it the only one anybody had to ask for.
+        // only the state marker is tinted by state; the rest of the line is facts true in any state.
+        // Black backgrounds throughout, so the marker's colour never depends on the terminal's theme.
         private static readonly Terminal.Gui.Drawing.Scheme ConnectedScheme = MarkerScheme(Terminal.Gui.Drawing.ColorName16.BrightGreen);
         private static readonly Terminal.Gui.Drawing.Scheme DisconnectedScheme = MarkerScheme(Terminal.Gui.Drawing.ColorName16.BrightRed);
 
-        // Black backgrounds throughout, deliberately: these schemes paint a bar across the top of the window
-        // and an inherited background would make the lamp's own colour depend on the terminal's theme. It is
-        // the one choice here that a light-background terminal would notice.
-        //
-        // Orange by RGB (255,145,0), because the 16-colour names have none and BrightYellow reads as a
-        // warning rather than as work in progress. Blue is left to its zero default rather than written.
+        // orange by RGB: the 16-colour names have none, and BrightYellow reads as a warning
         private static readonly Terminal.Gui.Drawing.Scheme ConnectingScheme = new(new Terminal.Gui.Drawing.Attribute(
             new Terminal.Gui.Drawing.Color(255, 145), new Terminal.Gui.Drawing.Color(Terminal.Gui.Drawing.ColorName16.Black)));
 
@@ -136,14 +126,10 @@ internal static class HydraTui
             new(new Terminal.Gui.Drawing.Attribute(
                 new Terminal.Gui.Drawing.Color(foreground), new Terminal.Gui.Drawing.Color(Terminal.Gui.Drawing.ColorName16.Black)));
 
-        // The built-in "Accent" scheme derives from Base with no hue of its own, so a selected
-        // mode/section button just goes flat grey — this gives the selected one a real color
-        // instead, and field captions their own consistent color so the Configuration form isn't
-        // pure grey-on-black.
+        // the built-in "Accent" scheme has no hue of its own, so the selected mode/section button gets one
         private static readonly Terminal.Gui.Drawing.Scheme SelectedButtonScheme = new(new Terminal.Gui.Drawing.Attribute(
             new Terminal.Gui.Drawing.Color(Terminal.Gui.Drawing.ColorName16.Black), new Terminal.Gui.Drawing.Color(Terminal.Gui.Drawing.ColorName16.BrightCyan)));
-        private static readonly Terminal.Gui.Drawing.Scheme FieldCaptionScheme = new(new Terminal.Gui.Drawing.Attribute(
-            new Terminal.Gui.Drawing.Color(Terminal.Gui.Drawing.ColorName16.BrightCyan), new Terminal.Gui.Drawing.Color(Terminal.Gui.Drawing.ColorName16.Black)));
+        private static readonly Terminal.Gui.Drawing.Scheme FieldCaptionScheme = MarkerScheme(Terminal.Gui.Drawing.ColorName16.BrightCyan);
 
         private static readonly TimeSpan RemoteTimeout = TimeSpan.FromSeconds(12);
         // one local management call: status, config, hello
@@ -162,11 +148,11 @@ internal static class HydraTui
         private readonly FrameView _configForm = new() { BorderStyle = Terminal.Gui.Drawing.LineStyle.None };
         private readonly FrameView _configText = new() { BorderStyle = Terminal.Gui.Drawing.LineStyle.None, Visible = false };
         private readonly Label _configHelp = new() { Text = "Move focus or hover over an option to see what it does.", X = 1, Y = 0, Width = Dim.Fill(1), Height = 2 };
-        private readonly Button _formModeButton = new() { ShadowStyle = ShadowStyles.None, Text = "_Form" };
-        private readonly Button _textModeButton = new() { ShadowStyle = ShadowStyles.None, Text = "Te_xt" };
-        private readonly Button _previousProfile = new() { ShadowStyle = ShadowStyles.None, Text = "Pr_evious", Enabled = false };
-        private readonly Button _nextProfile = new() { ShadowStyle = ShadowStyles.None, Text = "_Next", Enabled = false };
-        private readonly Button _revealSecrets = new() { ShadowStyle = ShadowStyles.None, Text = "Reveal _Secrets", Visible = false };
+        private readonly Button _formModeButton = FlatButton("_Form");
+        private readonly Button _textModeButton = FlatButton("Te_xt");
+        private readonly Button _previousProfile = FlatButton("Pr_evious", enabled: false);
+        private readonly Button _nextProfile = FlatButton("_Next", enabled: false);
+        private readonly Button _revealSecrets = FlatButton("Reveal _Secrets", visible: false);
         // no highlighter: every line here is a flat "Label   Value" row with no indent to distinguish
         // a header from data, so the Status ruleset's no-indent-means-header rule would color it all
         private readonly Editor _diagnostics = ReadOnlyEditor();
@@ -192,10 +178,10 @@ internal static class HydraTui
         /// <summary>What the lamp is showing now, so a refresh tick only repaints it when it changed.</summary>
         private Link _link = Link.Connecting;
         private readonly Label _activity = new() { Text = "Ready", X = 1, Y = Pos.AnchorEnd(2), Width = Dim.Fill(), SchemeName = "Base" };
-        private readonly Button _reconnect = new() { ShadowStyle = ShadowStyles.None, Text = "R_econnect Relay", Enabled = false };
-        private readonly Button _restart = new() { ShadowStyle = ShadowStyles.None, Text = "Res_tart Hydra", Enabled = false };
-        private readonly Button _shutdown = new() { ShadowStyle = ShadowStyles.None, Text = "Shutdo_wn Hydra", Enabled = false };
-        private readonly Button _start = new() { ShadowStyle = ShadowStyles.None, Text = "_Start Hydra", Enabled = false };
+        private readonly Button _reconnect = FlatButton("R_econnect Relay", enabled: false);
+        private readonly Button _restart = FlatButton("Res_tart Hydra", enabled: false);
+        private readonly Button _shutdown = FlatButton("Shutdo_wn Hydra", enabled: false);
+        private readonly Button _start = FlatButton("_Start Hydra", enabled: false);
         private readonly Queue<string> _visibleLogs = new();
         private ConfigDocument? _configDocument;
         private RemoteConfigDocument? _remoteConfigDocument;
@@ -256,18 +242,18 @@ internal static class HydraTui
 
             var status = new StatusBar([
                 new Shortcut(Application.GetDefaultKey(Command.Quit), "Quit", () => window.RequestStop()),
-                new Shortcut(Key.F5, "Refresh", () => _ = RefreshAsync(f5: true)),
+                new Shortcut(Key.F5, "Refresh", () => _ = Refresh(f5: true)),
                 new Shortcut(Key.F1, "Help", () => _mainTabs.Select(contents.Length - 1))
             ]);
             window.Add(status);
 
             app.AddTimeout(TimeSpan.FromSeconds(2), () =>
             {
-                _ = RefreshAsync();
+                _ = Refresh();
                 return true;
             });
-            _ = LoadConfigAsync();
-            _ = RefreshAsync();
+            _ = LoadConfig();
+            _ = Refresh();
         }
 
         private void HandleMainTabMouse(object? sender, Terminal.Gui.Input.Mouse mouse)
@@ -282,38 +268,31 @@ internal static class HydraTui
             _overview.Height = Dim.Fill(3);
             _reconnect.X = 1;
             _reconnect.Y = Pos.AnchorEnd(2);
-            _reconnect.Accepting += (_, e) =>
-            {
-                e.Handled = true;
-                Forget(RunCommandAsync(() => _client.ReconnectRelayAsync(_cancel.Token), CommandKind.ReconnectRelay));
-            };
+            OnAccept(_reconnect, () => Forget(RunCommand(() => _client.ReconnectRelay(_cancel.Token), CommandKind.ReconnectRelay)));
             _restart.X = Pos.Right(_reconnect) + 2;
             _restart.Y = Pos.Top(_reconnect);
-            _restart.Accepting += (_, e) =>
+            OnAccept(_restart, () =>
             {
-                e.Handled = true;
                 if (MessageBox.Query(app, "Restart Hydra", "Restart the running Hydra process?", "Restart", "Cancel") == 0)
-                    Forget(RunCommandAsync(() => _client.RestartHydraAsync(_cancel.Token), CommandKind.RestartHydra));
-            };
+                    Forget(RunCommand(() => _client.RestartHydra(_cancel.Token), CommandKind.RestartHydra));
+            });
             _shutdown.X = Pos.Right(_restart) + 2;
             _shutdown.Y = Pos.Top(_restart);
-            _shutdown.Accepting += (_, e) =>
+            OnAccept(_shutdown, () =>
             {
-                e.Handled = true;
                 if (MessageBox.Query(app, "Shutdown Hydra",
                         "Stop Hydra and disconnect all peers? You can start it again later.",
                         "Shutdown", "Cancel") == 0)
-                    Forget(RunCommandAsync(() => _client.ShutdownHydraAsync(_cancel.Token), CommandKind.ShutdownHydra));
-            };
+                    Forget(RunCommand(() => _client.ShutdownHydra(_cancel.Token), CommandKind.ShutdownHydra));
+            });
             _start.X = Pos.Right(_shutdown) + 2;
             _start.Y = Pos.Top(_shutdown);
-            _start.Accepting += (_, e) =>
+            OnAccept(_start, () =>
             {
-                e.Handled = true;
                 if (MessageBox.Query(app, "Start Hydra",
                         "Start Hydra with the current configuration?", "Start", "Cancel") == 0)
-                    Forget(StartHydraAsync());
-            };
+                    Forget(StartHydra());
+            });
             tab.Add(_reconnect, _restart, _shutdown, _start);
             return tab;
         }
@@ -327,8 +306,8 @@ internal static class HydraTui
             _formModeButton.MouseHighlightStates = MouseState.None;
             _textModeButton.CanFocus = true;
             _textModeButton.MouseHighlightStates = MouseState.None;
-            _formModeButton.Accepting += (_, e) => { e.Handled = true; SwitchConfigMode(guided: true); };
-            _textModeButton.Accepting += (_, e) => { e.Handled = true; SwitchConfigMode(guided: false); };
+            OnAccept(_formModeButton, () => SwitchConfigMode(guided: true));
+            OnAccept(_textModeButton, () => SwitchConfigMode(guided: false));
 
             _configForm.X = _configText.X = 0;
             _configForm.Y = _configText.Y = 2;
@@ -343,20 +322,16 @@ internal static class HydraTui
 
             var helpPanel = new FrameView { Title = "Option Help", X = 0, Y = Pos.AnchorEnd(6), Width = Dim.Fill(), Height = 3 };
             helpPanel.Add(_configHelp);
-            var validate = new Button { ShadowStyle = ShadowStyles.None, Text = "_Validate", X = 1, Y = Pos.AnchorEnd(2) };
-            validate.Accepting += (_, e) => { e.Handled = true; ValidateConfig(); };
-            var reload = new Button { ShadowStyle = ShadowStyles.None, Text = "Reload", X = Pos.Right(validate) + 2, Y = Pos.Top(validate) };
-            reload.Accepting += (_, e) => { e.Handled = true; Forget(LoadConfigAsync()); };
+            var validate = FlatButton("_Validate", ValidateConfig);
+            validate.X = 1; validate.Y = Pos.AnchorEnd(2);
+            var reload = FlatButton("Reload", () => Forget(LoadConfig()));
+            reload.X = Pos.Right(validate) + 2; reload.Y = Pos.Top(validate);
             _revealSecrets.X = Pos.Right(reload) + 2; _revealSecrets.Y = Pos.Top(validate);
-            _revealSecrets.Accepting += (_, e) =>
-            {
-                e.Handled = true;
-                ToggleSecrets(_revealSecrets);
-            };
-            var save = new Button { ShadowStyle = ShadowStyles.None, Text = "S_ave", X = Pos.Right(_revealSecrets) + 2, Y = Pos.Top(validate) };
-            save.Accepting += (_, e) => { e.Handled = true; Forget(SaveConfigAsync(restart: false)); };
-            var apply = new Button { ShadowStyle = ShadowStyles.None, Text = "Save && Restar_t", X = Pos.Right(save) + 2, Y = Pos.Top(validate) };
-            apply.Accepting += (_, e) => { e.Handled = true; Forget(SaveConfigAsync(restart: true)); };
+            OnAccept(_revealSecrets, () => ToggleSecrets(_revealSecrets));
+            var save = FlatButton("S_ave", () => Forget(SaveConfig(restart: false)));
+            save.X = Pos.Right(_revealSecrets) + 2; save.Y = Pos.Top(validate);
+            var apply = FlatButton("Save && Restar_t", () => Forget(SaveConfig(restart: true)));
+            apply.X = Pos.Right(save) + 2; apply.Y = Pos.Top(validate);
             _configText.Add(_config);
             tab.Add(_formModeButton, _textModeButton, _configForm, _configText, helpPanel,
                 validate, reload, _revealSecrets, save, apply);
@@ -383,14 +358,14 @@ internal static class HydraTui
             codeLabel.SetScheme(FieldCaptionScheme);
             _remotePairingCode.X = 57; _remotePairingCode.Y = 0; _remotePairingCode.Width = 34;
 
-            var pair = new Button { ShadowStyle = ShadowStyles.None, Text = "Pa_ir", X = 1, Y = 2 };
-            pair.Accepting += (_, e) => { e.Handled = true; Forget(PairRemoteAsync()); };
-            var load = new Button { ShadowStyle = ShadowStyles.None, Text = "Load Co_nfig", X = Pos.Right(pair) + 2, Y = 2 };
-            load.Accepting += (_, e) => { e.Handled = true; Forget(LoadRemoteConfigAsync()); };
-            var validate = new Button { ShadowStyle = ShadowStyles.None, Text = "_Validate", X = Pos.Right(load) + 2, Y = 2 };
-            validate.Accepting += (_, e) => { e.Handled = true; Forget(ValidateRemoteConfigAsync()); };
-            var apply = new Button { ShadowStyle = ShadowStyles.None, Text = "Save && _Apply", X = Pos.Right(validate) + 2, Y = 2 };
-            apply.Accepting += (_, e) => { e.Handled = true; Forget(ApplyRemoteConfigAsync()); };
+            var pair = FlatButton("Pa_ir", () => Forget(PairRemote()));
+            pair.X = 1; pair.Y = 2;
+            var load = FlatButton("Load Co_nfig", () => Forget(LoadRemoteConfig()));
+            load.X = Pos.Right(pair) + 2; load.Y = 2;
+            var validate = FlatButton("_Validate", () => Forget(ValidateRemoteConfig()));
+            validate.X = Pos.Right(load) + 2; validate.Y = 2;
+            var apply = FlatButton("Save && _Apply", () => Forget(ApplyRemoteConfig()));
+            apply.X = Pos.Right(validate) + 2; apply.Y = 2;
             _remoteStatus.X = Pos.Right(apply) + 3; _remoteStatus.Y = 2; _remoteStatus.Width = Dim.Fill(1);
 
             _remoteConfig.X = 0; _remoteConfig.Y = 4; _remoteConfig.Width = Dim.Fill(); _remoteConfig.Height = Dim.Fill();
@@ -398,7 +373,7 @@ internal static class HydraTui
             return tab;
         }
 
-        private async Task PairRemoteAsync()
+        private async Task PairRemote()
         {
             var host = _remoteHost.Text.Trim();
             var code = _remotePairingCode.Text.Trim();
@@ -411,7 +386,7 @@ internal static class HydraTui
             {
                 SetText(_remoteStatus, $"Pairing with {host}…");
                 using var timeout = TimeoutAfter(RemoteTimeout);
-                var result = await _client.PairRemoteAsync(new RemotePairRequest(host, code), timeout.Token);
+                var result = await _client.PairRemote(new RemotePairRequest(host, code), timeout.Token);
                 app.Invoke(() =>
                 {
                     _remotePairingCode.Text = "";
@@ -420,7 +395,7 @@ internal static class HydraTui
             });
         }
 
-        private async Task LoadRemoteConfigAsync()
+        private async Task LoadRemoteConfig()
         {
             var host = _remoteHost.Text.Trim();
             if (string.IsNullOrWhiteSpace(host))
@@ -432,7 +407,7 @@ internal static class HydraTui
             {
                 SetText(_remoteStatus, $"Loading {host}…");
                 using var timeout = TimeoutAfter(RemoteTimeout);
-                var document = await _client.GetRemoteConfigAsync(host, timeout.Token);
+                var document = await _client.GetRemoteConfig(host, timeout.Token);
                 _remoteConfigDocument = document;
                 app.Invoke(() =>
                 {
@@ -442,7 +417,7 @@ internal static class HydraTui
             });
         }
 
-        private async Task ValidateRemoteConfigAsync()
+        private async Task ValidateRemoteConfig()
         {
             var host = _remoteHost.Text.Trim();
             if (_remoteConfigDocument == null || !_remoteConfigDocument.Host.EqualsIgnoreCase(host))
@@ -454,7 +429,7 @@ internal static class HydraTui
             await RunRemote("Remote Configuration", failurePrefix: null, async () =>
             {
                 using var timeout = TimeoutAfter(RemoteTimeout);
-                var result = await _client.ValidateRemoteConfigAsync(new RemoteValidateRequest(host, _remoteConfig.Text), timeout.Token);
+                var result = await _client.ValidateRemoteConfig(new RemoteValidateRequest(host, _remoteConfig.Text), timeout.Token);
                 app.Invoke(() =>
                 {
                     if (result.Valid) MessageBox.Query(app, "Remote Configuration", "The remote configuration is valid.", "OK");
@@ -463,7 +438,7 @@ internal static class HydraTui
             });
         }
 
-        private async Task ApplyRemoteConfigAsync()
+        private async Task ApplyRemoteConfig()
         {
             var host = _remoteHost.Text.Trim();
             var document = _remoteConfigDocument;
@@ -476,7 +451,7 @@ internal static class HydraTui
             {
                 using (var timeout = TimeoutAfter(RemoteTimeout))
                 {
-                    var validation = await _client.ValidateRemoteConfigAsync(new RemoteValidateRequest(host, _remoteConfig.Text), timeout.Token);
+                    var validation = await _client.ValidateRemoteConfig(new RemoteValidateRequest(host, _remoteConfig.Text), timeout.Token);
                     if (!validation.Valid)
                     {
                         app.Invoke(() => MessageBox.ErrorQuery(app, "Remote Configuration", validation.Error ?? "Invalid configuration.", "OK"));
@@ -493,10 +468,10 @@ internal static class HydraTui
 
                 app.Invoke(() => SetText(_remoteStatus, $"Applying candidate to {host}…"));
                 using var applyTimeout = TimeoutAfter(RemoteTimeout);
-                var accepted = await _client.ApplyRemoteConfigAsync(
+                var accepted = await _client.ApplyRemoteConfig(
                     new RemoteApplyRequest(host, document.Revision, _remoteConfig.Text), applyTimeout.Token);
                 app.Invoke(() => SetText(_remoteStatus, $"{host} restarting; waiting for candidate revision…"));
-                await WaitForRemoteApplyAsync(host, accepted);
+                await WaitForRemoteApply(host, accepted);
             });
         }
 
@@ -543,17 +518,17 @@ internal static class HydraTui
 
         private void EndRemoteOperation() => Interlocked.Exchange(ref _remoteOperationActive, 0);
 
-        private async Task WaitForRemoteApplyAsync(string host, RemoteApplyAccepted accepted)
+        private async Task WaitForRemoteApply(string host, RemoteApplyAccepted accepted)
         {
             var confirmed = await Poll(accepted.ExpiresAt + TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(6), async cancel =>
             {
                 try
                 {
-                    var document = await _client.GetRemoteConfigAsync(host, cancel);
+                    var document = await _client.GetRemoteConfig(host, cancel);
                     if (document.Revision.Equals(accepted.CandidateRevision, StringComparison.Ordinal)
                         && document.Apply?.TransactionId == accepted.TransactionId)
                     {
-                        _ = await _client.ConfirmRemoteConfigAsync(
+                        _ = await _client.ConfirmRemoteConfig(
                             new RemoteConfirmRequest(host, accepted.TransactionId, accepted.CandidateRevision), cancel);
                         _remoteConfigDocument = document with { Apply = null };
                         app.Invoke(() =>
@@ -588,8 +563,8 @@ internal static class HydraTui
             _profilePosition.X = 1; _profilePosition.Y = 0; _profilePosition.Width = 66;
             _previousProfile.X = 1; _previousProfile.Y = 2;
             _nextProfile.X = Pos.Right(_previousProfile) + 2; _nextProfile.Y = 2;
-            _previousProfile.Accepting += (_, e) => { e.Handled = true; ChangeGuidedProfile(-1); };
-            _nextProfile.Accepting += (_, e) => { e.Handled = true; ChangeGuidedProfile(1); };
+            OnAccept(_previousProfile, () => ChangeGuidedProfile(-1));
+            OnAccept(_nextProfile, () => ChangeGuidedProfile(1));
             profile.Add(_profilePosition, _previousProfile, _nextProfile);
             BindConfigHelp(_previousProfile, "Previous Profile", "Move to the previous profile. Disabled on the first profile or when only one exists.");
             BindConfigHelp(_nextProfile, "Next Profile", "Move to the next profile. Disabled on the last profile or when only one exists.");
@@ -618,16 +593,11 @@ internal static class HydraTui
             for (var index = 0; index < sections.Length; index++)
             {
                 var captured = index;
-                var button = new Button
-                {
-                    ShadowStyle = ShadowStyles.None,
-                    Text = sections[index].Item2,
-                    X = previous == null ? 1 : Pos.Right(previous) + 1,
-                    Y = 0,
-                    CanFocus = true,
-                    MouseHighlightStates = MouseState.None
-                };
-                button.Accepting += (_, e) => { e.Handled = true; SelectFormSection(captured); };
+                var button = FlatButton(sections[index].Item2, () => SelectFormSection(captured));
+                button.X = previous == null ? 1 : Pos.Right(previous) + 1;
+                button.Y = 0;
+                button.CanFocus = true;
+                button.MouseHighlightStates = MouseState.None;
                 _configForm.Add(button, sections[index].Item3);
                 _formSections.Add((button, sections[index].Item3, sections[index].Item1));
                 previous = button;
@@ -754,7 +724,7 @@ internal static class HydraTui
             return BuildTextTab(help);
         }
 
-        private async Task RefreshAsync(bool f5 = false)
+        private async Task Refresh(bool f5 = false)
         {
             if (Interlocked.Exchange(ref _refreshing, 1) != 0) return;
             if (f5) _f5Refreshes++;
@@ -763,7 +733,7 @@ internal static class HydraTui
                 using var timeout = TimeoutAfter(ProbeTimeout);
                 if (!_helloComplete)
                 {
-                    var hello = await _client.HelloAsync(timeout.Token);
+                    var hello = await _client.Hello(timeout.Token);
                     if (hello.ProtocolVersion != ManagementProtocol.Version)
                         throw new ProtocolMismatchException($"Management protocol {hello.ProtocolVersion} is incompatible with this TUI ({ManagementProtocol.Version}).");
                     if (_serverProcessId != null && _serverProcessId != hello.ProcessId)
@@ -771,8 +741,8 @@ internal static class HydraTui
                     _serverProcessId = hello.ProcessId;
                     _helloComplete = true;
                 }
-                var status = await _client.GetStatusAsync(timeout.Token);
-                var logs = await _client.GetLogsAsync(_logCursor, timeout.Token);
+                var status = await _client.GetStatus(timeout.Token);
+                var logs = await _client.GetLogs(_logCursor, timeout.Token);
                 _connected = true;
                 _lastStatus = status;
                 _logCursor = logs.LatestCursor;
@@ -868,7 +838,7 @@ internal static class HydraTui
             });
         }
 
-        private async Task LoadConfigAsync()
+        private async Task LoadConfig()
         {
             try
             {
@@ -876,13 +846,13 @@ internal static class HydraTui
                 try
                 {
                     using var timeout = TimeoutAfter(ProbeTimeout);
-                    document = await _client.GetConfigAsync(timeout.Token);
+                    document = await _client.GetConfig(timeout.Token);
                     _connected = true;
                 }
                 catch (Exception ex) when (ex is IOException or SocketException
                     || ex is OperationCanceledException && !_cancel.IsCancellationRequested)
                 {
-                    document = await _offlineStore.ReadAsync(_cancel.Token);
+                    document = await _offlineStore.Read(_cancel.Token);
                 }
                 _configDocument = document;
                 _configWithSecrets = document.Json;
@@ -936,7 +906,7 @@ internal static class HydraTui
             }
         }
 
-        private async Task SaveConfigAsync(bool restart)
+        private async Task SaveConfig(bool restart)
         {
             if (_configDocument is not { } document) return;
             var previousStatus = _lastStatus;
@@ -955,8 +925,8 @@ internal static class HydraTui
 
                 SetCommandBusy(true, restart ? "Saving configuration and restarting Hydra…" : "Saving configuration…");
                 _configDocument = _connected
-                    ? await _client.SaveConfigAsync(new SaveConfigRequest(document.Revision, json, restart), _cancel.Token)
-                    : await _offlineStore.SaveAsync(document.Revision, json, _cancel.Token);
+                    ? await _client.SaveConfig(new SaveConfigRequest(document.Revision, json, restart), _cancel.Token)
+                    : await _offlineStore.Save(document.Revision, json, _cancel.Token);
                 _configWithSecrets = _configDocument.Json;
                 _secretsRevealed = false;
                 _configMaskFailed = false;
@@ -966,7 +936,7 @@ internal static class HydraTui
                     LoadGuidedConfig(_configDocument.Json);
                 });
                 if (restart && _connected)
-                    await WaitForRestartAsync(previousStatus);
+                    await WaitForRestart(previousStatus);
                 else
                     SetCommandBusy(false, restart ? "Configuration saved. Start Hydra to apply it." : "Configuration saved.");
             }, failure => app.Invoke(() =>
@@ -1138,7 +1108,7 @@ internal static class HydraTui
             }
         }
 
-        private async Task RunCommandAsync(Func<Task<CommandResult>> command, CommandKind kind)
+        private async Task RunCommand(Func<Task<CommandResult>> command, CommandKind kind)
         {
             if (!_liveControlsReady)
             {
@@ -1168,11 +1138,11 @@ internal static class HydraTui
                     return;
                 }
                 if (kind == CommandKind.ShutdownHydra)
-                    await WaitForShutdownAsync();
+                    await WaitForShutdown();
                 else if (kind == CommandKind.RestartHydra)
-                    await WaitForRestartAsync(previousStatus);
+                    await WaitForRestart(previousStatus);
                 else
-                    await WaitForRelayAsync(previousStatus);
+                    await WaitForRelay(previousStatus);
             }, failure => ReportCommandFailure("Command Failed", failure), _cancel.Token);
         }
 
@@ -1182,7 +1152,7 @@ internal static class HydraTui
             MessageBox.ErrorQuery(app, title, failure, "OK");
         });
 
-        private async Task StartHydraAsync()
+        private async Task StartHydra()
         {
             if (!CanStartHydra(_connected, _shutdownConfirmed, _commandBusy)) return;
             SetCommandBusy(true, "Starting Hydra…");
@@ -1192,7 +1162,7 @@ internal static class HydraTui
                 {
                     try
                     {
-                        var status = await _client.GetStatusAsync(timeout.Token);
+                        var status = await _client.GetStatus(timeout.Token);
                         _connected = true;
                         _lastStatus = status;
                         app.Invoke(() =>
@@ -1212,18 +1182,18 @@ internal static class HydraTui
                     }
                 }
                 HydraProcessLauncher.Start(configPath);
-                await WaitForStartAsync();
+                await WaitForStart();
             }, failure => ReportCommandFailure("Start Failed", failure), _cancel.Token);
         }
 
-        private async Task WaitForStartAsync()
+        private async Task WaitForStart()
         {
             app.Invoke(() => SetActivity("Start requested — waiting for Hydra to come online…", "Accent"));
-            await WaitForStatusAsync(_ => true,
+            await WaitForStatus(_ => true,
                 status => $"Hydra started and connected (PID {status.ProcessId}).", resetLogs: true);
         }
 
-        private async Task WaitForShutdownAsync()
+        private async Task WaitForShutdown()
         {
             app.Invoke(() => SetActivity("Shutdown requested — waiting for Hydra to stop…", "Accent"));
             var failedReads = 0;
@@ -1231,7 +1201,7 @@ internal static class HydraTui
             {
                 try
                 {
-                    await _client.GetStatusAsync(cancel);
+                    await _client.GetStatus(cancel);
                     failedReads = 0;
                     return false;
                 }
@@ -1265,21 +1235,21 @@ internal static class HydraTui
             _diagnostics.Text = FormatDiagnostics();
         }
 
-        private async Task WaitForRestartAsync(HydraStatusSnapshot? previousStatus)
+        private async Task WaitForRestart(HydraStatusSnapshot? previousStatus)
         {
             app.Invoke(() => SetActivity("Restart requested — waiting for Hydra to come back…", "Accent"));
-            await WaitForStatusAsync(status => previousStatus == null || HasRestarted(previousStatus, status),
+            await WaitForStatus(status => previousStatus == null || HasRestarted(previousStatus, status),
                 status => $"Hydra restarted and reconnected (PID {status.ProcessId}).", resetLogs: true);
         }
 
-        private async Task WaitForRelayAsync(HydraStatusSnapshot? previousStatus)
+        private async Task WaitForRelay(HydraStatusSnapshot? previousStatus)
         {
             app.Invoke(() => SetActivity("Relay reconnect requested — waiting for the connection…", "Accent"));
-            await WaitForStatusAsync(status => HasRelayReconnected(previousStatus, status),
+            await WaitForStatus(status => HasRelayReconnected(previousStatus, status),
                 _ => "Relay reconnected.");
         }
 
-        private async Task WaitForStatusAsync(
+        private async Task WaitForStatus(
             Func<HydraStatusSnapshot, bool> complete,
             Func<HydraStatusSnapshot, string> message,
             bool resetLogs = false)
@@ -1289,7 +1259,7 @@ internal static class HydraTui
             {
                 try
                 {
-                    var status = await _client.GetStatusAsync(cancel);
+                    var status = await _client.GetStatus(cancel);
                     if (!complete(status)) return false;
                     _connected = true;
                     _helloComplete = false;
@@ -1366,21 +1336,18 @@ internal static class HydraTui
                   Relay traffic ↑ {FormatBytes(relay.BytesSent)} / {relay.MessagesSent} msg   ↓ {FormatBytes(relay.BytesReceived)} / {relay.MessagesReceived} msg
                   Attempts      {relay.ConnectionAttempts}
                 """;
-            var activeAdapters = s.ActiveNetworkAdapters ?? [];
-            var adapters = activeAdapters.Count == 0
+            var adapters = s.ActiveNetworkAdapters.Count == 0
                 ? "  (none detected)"
-                : string.Join('\n', activeAdapters.Select(adapter =>
+                : string.Join('\n', s.ActiveNetworkAdapters.Select(adapter =>
                     $"  {(adapter.HasGateway ? "◆" : "◇")} {adapter.Type,-12} {adapter.Name,-10} {FormatLinkSpeed(adapter.LinkSpeedBitsPerSecond),9}  ↓ {FormatBytes(adapter.BytesReceived),9} ↑ {FormatBytes(adapter.BytesSent),9}  drops ↓{FormatCounter(adapter.ReceiveDrops)} ↑{FormatCounter(adapter.SendDrops)} errors ↓{FormatCounter(adapter.ReceiveErrors)} ↑{FormatCounter(adapter.SendErrors)}\n" +
                     $"      {string.Join(", ", adapter.Addresses)}"));
-            var relayPeers = s.EmbeddedRelayPeers ?? [];
-            var embeddedPeers = relayPeers.Count == 0
+            var embeddedPeers = s.EmbeddedRelayPeers.Count == 0
                 ? "  (not hosting an embedded relay)"
-                : string.Join('\n', relayPeers.Select(peer =>
+                : string.Join('\n', s.EmbeddedRelayPeers.Select(peer =>
                     $"  ● {peer.HostName,-16} {peer.InterfaceType} ({peer.InterfaceName})  {peer.RemoteAddress} → {peer.LocalAddress}{(peer.HostName.EqualsIgnoreCase(s.HostName) ? "  [this Hydra]" : "")}"));
-            var latency = s.PeerLatency ?? [];
-            var peerLatency = latency.Count == 0
+            var peerLatency = s.PeerLatency.Count == 0
                 ? "  (collecting samples)"
-                : string.Join('\n', latency.Select(peer =>
+                : string.Join('\n', s.PeerLatency.Select(peer =>
                     $"  {peer.Host,-16} now {peer.LastRttMs,6:0.0} ms   avg {peer.AverageRttMs,6:0.0} ms   p95 {peer.P95RttMs,6:0.0} ms   jitter {peer.JitterMs,5:0.0} ms   lost {peer.Lost}"));
             return $"""
                 Runtime
@@ -1418,13 +1385,20 @@ internal static class HydraTui
         // whole seconds: a fraction only churns on every refresh
         private static string FormatDuration(TimeSpan span) => $"{TimeSpan.FromSeconds(Math.Floor(span.TotalSeconds)):g}";
 
-        private static string FormatBytes(long? bytes) => bytes switch
+        private static string FormatBytes(long? bytes) => bytes is { } b ? ByteSize.FromBytes(b).ToBinaryString() : "unknown";
+
+        // a shadowless button; onAccept, when given, handles its accept
+        private static Button FlatButton(string text, Action? onAccept = null, bool enabled = true, bool visible = true)
         {
-            null => "unknown",
-            >= 1024 * 1024 * 1024 => $"{bytes / (1024d * 1024 * 1024):0.0} GiB",
-            >= 1024 * 1024 => $"{bytes / (1024d * 1024):0.0} MiB",
-            >= 1024 => $"{bytes / 1024d:0.0} KiB",
-            _ => $"{bytes} B"
+            var button = new Button { ShadowStyle = ShadowStyles.None, Text = text, Enabled = enabled, Visible = visible };
+            if (onAccept != null) OnAccept(button, onAccept);
+            return button;
+        }
+
+        private static void OnAccept(Button button, Action action) => button.Accepting += (_, e) =>
+        {
+            e.Handled = true;
+            action();
         };
 
         private static string FormatCounter(long? value) => value?.ToString() ?? "n/a";
@@ -1447,7 +1421,7 @@ internal static class HydraTui
             output.AppendLine().AppendLine("Peers");
             foreach (var peer in s.Peers)
             {
-                output.AppendLine($"  {(peer.Connected ? "●" : "○")} {peer.Name}  [{peer.Platform}]  {peer.Screens.Count} screen(s)");
+                output.AppendLine($"  {(peer.Connected ? "●" : "○")} {peer.Name}  [{peer.Platform}]  {peer.Screens.Count} {Pluralize.Of(peer.Screens.Count, "screen")}");
                 foreach (var screen in peer.Screens)
                     output.AppendLine($"      {screen.Name,-24} {screen.Width,5}×{screen.Height,-5} scale {screen.MouseScale}");
             }

@@ -140,12 +140,12 @@ public class XorgHeldKeyTests
             FakeKey(_keycodeA, isPress: true);
             handler.IsOnVirtualScreen = true;
             // the server's own auto-repeat, once its delay has passed: XKB drops a second fake press of a key already down
-            await heldKeySeen.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            await heldKeySeen.Task.WaitAsync(Bound);
             FakeKey(_keycodeA, isPress: false);
             FakeKey(_keycodeB, isPress: true);
             FakeKey(_keycodeB, isPress: false);
 
-            await sentinelUp.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            await sentinelUp.Task.WaitAsync(Bound);
         }
         finally
         {

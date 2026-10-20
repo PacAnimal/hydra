@@ -67,30 +67,7 @@ internal static partial class NativeMethods
     [LibraryImport(ApplicationServices)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     [return: MarshalAs(UnmanagedType.Bool)]
-    internal static partial bool AXIsProcessTrusted();
-
-    [LibraryImport(ApplicationServices)]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool AXIsProcessTrustedWithOptions(nint options);
-
-    [LibraryImport(ApplicationServices)]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    internal static partial nint AXUIElementCreateSystemWide();
-
-    [LibraryImport(ApplicationServices)]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    internal static partial nint AXUIElementCreateApplication(int pid);
-
-    // returns AXError (0 = kAXErrorSuccess); element is a CFTypeRef (caller must CFRelease)
-    [LibraryImport(ApplicationServices)]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    internal static partial int AXUIElementCopyElementAtPosition(nint application, float x, float y, out nint element);
-
-    // returns AXError (0 = kAXErrorSuccess); value is a CFTypeRef (caller must CFRelease)
-    [LibraryImport(ApplicationServices)]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    internal static partial int AXUIElementCopyAttributeValue(nint element, nint attribute, out nint value);
 
     // -- CoreGraphics: display --
 
@@ -676,10 +653,12 @@ internal struct IOGPoint
     internal short Y;
 }
 
-// NXEventData: union from IOLLEvent.h — verified sizeof=48, keyCode at offset 8 via SDK header
+// NXEventData: union from IOLLEvent.h — verified sizeof=48, key.repeat at offset 2, keyCode at offset 8 via SDK header
 [StructLayout(LayoutKind.Explicit, Size = 48)]
 internal struct NXEventData
 {
+    [FieldOffset(2)]
+    internal short Repeat;
     [FieldOffset(8)]
     internal ushort KeyCode;
 }

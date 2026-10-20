@@ -41,9 +41,7 @@ internal static class NetworkInterfaceLookup
             }
             catch (NetworkInformationException)
             {
-                // This interface doesn't support the queried address family (IPv6 disabled on an
-                // Ethernet adapter, a Teredo/ISATAP tunnel with no IPv4 side, etc.) — skip just this
-                // one interface rather than letting the exception abort the whole search.
+                // no such address family on this interface (IPv6 disabled, a tunnel with no IPv4 side); skip it
                 return false;
             }
         });

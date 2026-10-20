@@ -1,16 +1,12 @@
 using Hydra.Config;
-using Hydra.FileTransfer;
-using Hydra.Platform;
-using Hydra.Relay;
 using Hydra.Screen;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Abstractions;
 using Tests.Setup;
 
 namespace Tests.Screen;
 
 [TestFixture]
-public class ScreenStartupTests
+public class ScreenStartupTests : ServicesFixture
 {
     [Test]
     public async Task StartAsync_NameNotInScreens_LogsErrorAndDoesNotCrash()
@@ -26,14 +22,9 @@ public class ScreenStartupTests
         });
 
         var logs = new CapturingLog<InputRouter>(LogLevel.Error);
-        var platform = new FakePlatform();
-        var service = new InputRouter(
-            platform, platform, profile, new NullRelaySender(),
-            new FakeScreenDetector(), NullLoggerFactory.Instance, logs, new NullScreenSaverSync(), new NullClipboardSync(),
-            FileTransferService.Null(), new NullFileSelectionDetector(), new NullOsdNotification(), TransitionTestHelper.TestActivityTracker(profile));
 
         // must not throw
-        await service.StartAsync(CancellationToken.None);
+        await Services.Start(TransitionTestHelper.CreateService(profile: profile, log: logs));
 
         Assert.That(logs.Entries, Is.Not.Empty, "should log an error when hostname is not in screens");
     }

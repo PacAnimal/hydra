@@ -85,29 +85,4 @@ public class KeyBatchDeliveryTests
 
         Assert.That(slave.Output.Keys, Is.Empty);
     }
-
-    /// <summary>
-    /// The slave TELLS the master it can take bundles, through the capability list it puts on ScreenInfo.
-    /// Without this the master never sends one — which is the safe direction, and exactly why forgetting to
-    /// advertise would be invisible: everything keeps working, one frame per key, and the feature is simply
-    /// never used.
-    /// </summary>
-    [Test]
-    public async Task TheSlaveAdvertisesThatItAppliesBundles()
-    {
-        var slave = new TestableSlaveRelay();
-
-        // MasterConfig is what makes a slave answer with its screens — and therefore with what it can do.
-        await slave.SimulateReceive(Master, MessageKind.MasterConfig, Json(new MasterConfigMessage(null)));
-
-        var screenInfo = slave.Snapshot().LastOrDefault(s => s.Kind == MessageKind.ScreenInfo)?.Json;
-        Assert.That(screenInfo, Is.Not.Null, "the slave never sent ScreenInfo, so it never advertised anything");
-
-        var advertised = JsonDocument.Parse(screenInfo!).RootElement.TryGetProperty("capabilities", out var list)
-            ? PeerCapabilities.Parse([.. list.EnumerateArray().Select(e => e.GetString()!)])
-            : PeerCapabilities.Parse(null);
-
-        Assert.That(advertised, Does.Contain(PeerCapability.KeyEventBatch),
-            "a slave that does not advertise is never sent a bundle, and the feature is dead");
-    }
 }

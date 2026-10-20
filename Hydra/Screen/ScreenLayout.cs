@@ -119,19 +119,14 @@ public class ScreenLayout(List<ScreenRect> screens, List<HostConfig> configs, in
     public EdgeHit? DetectEdgeExit(ScreenRect current, int x, int y)
     {
         Direction? dir = null;
-        int perpPos = 0; // position along the crossed edge (height for left/right, width for up/down)
-        int edgeLen = 0;
-
-        if (x <= JumpZone - 1)
-        { dir = Direction.Left; perpPos = y; edgeLen = current.Height; }
-        else if (x >= current.Width - JumpZone)
-        { dir = Direction.Right; perpPos = y; edgeLen = current.Height; }
-        else if (y <= JumpZone - 1)
-        { dir = Direction.Up; perpPos = x; edgeLen = current.Width; }
-        else if (y >= current.Height - JumpZone)
-        { dir = Direction.Down; perpPos = x; edgeLen = current.Width; }
+        if (x <= JumpZone - 1) dir = Direction.Left;
+        else if (x >= current.Width - JumpZone) dir = Direction.Right;
+        else if (y <= JumpZone - 1) dir = Direction.Up;
+        else if (y >= current.Height - JumpZone) dir = Direction.Down;
 
         if (dir is null) return null;
+        var perpPos = dir is Direction.Left or Direction.Right ? y : x; // position along the crossed edge
+        var edgeLen = EdgeLength(current, dir.Value);
         if (!_graph.TryGetValue((current.Name, dir.Value), out var links)) return null;
 
         // normalized position along the edge [0,1]
@@ -172,7 +167,7 @@ public class ScreenLayout(List<ScreenRect> screens, List<HostConfig> configs, in
     private static ScreenPoint MapEntry(
         ScreenRect to, Direction dir, int perpPos, int srcEdgeLen, EdgeLink link)
     {
-        int destEdgeLen = dir is Direction.Left or Direction.Right ? to.Height : to.Width;
+        var destEdgeLen = EdgeLength(to, dir);
 
         // normalize within source range then project into dest range
         var srcSpan = (link.SourceEnd - link.SourceStart) * srcEdgeLen;
@@ -190,7 +185,7 @@ public class ScreenLayout(List<ScreenRect> screens, List<HostConfig> configs, in
     {
         var screen = screens.FirstOrDefault(s => s.Name.EqualsIgnoreCase(exit.Screen));
         if (screen is null) return null;
-        var edgeLen = exit.Edge is Direction.Left or Direction.Right ? screen.Height : screen.Width;
+        var edgeLen = EdgeLength(screen, exit.Edge);
         if (edgeLen <= 0) return null;
         return screen.ToGlobal(InsetFromEdge(screen, exit.Edge.Opposite(), Math.Clamp(exit.Position, 0, edgeLen - 1)));
     }
@@ -206,29 +201,8 @@ public class ScreenLayout(List<ScreenRect> screens, List<HostConfig> configs, in
         _ => throw new ArgumentOutOfRangeException(nameof(arrivingDir), arrivingDir, null),
     };
 
-    // returns the active edge ranges for all local screens, with dead corners trimmed.
-    // each entry describes a pixel range along one edge of one local screen where a transition exists.
-    public List<ActiveEdgeRange> GetLocalEdgeRanges()
-    {
-        var result = new List<ActiveEdgeRange>();
-        foreach (var ((name, dir), links) in _graph)
-        {
-            var screen = screens.FirstOrDefault(s => s.Name == name && s.IsLocal);
-            if (screen == null) continue;
-            var edgeLen = dir is Direction.Left or Direction.Right ? screen.Height : screen.Width;
-            if (edgeLen <= 0) continue;
-            var dc = _deadCorners.GetValueOrDefault(name);
-
-            foreach (var link in links)
-            {
-                var pxStart = Math.Max((int)(link.SourceStart * edgeLen), dc);
-                var pxEnd = Math.Min((int)(link.SourceEnd * edgeLen), edgeLen - dc);
-                if (pxStart >= pxEnd) continue;
-                result.Add(new ActiveEdgeRange(screen, dir, pxStart, pxEnd));
-            }
-        }
-        return result;
-    }
+    // length of the edge a cursor crosses moving in dir
+    private static int EdgeLength(ScreenRect screen, Direction dir) => dir is Direction.Left or Direction.Right ? screen.Height : screen.Width;
 
     // one entry per edge segment connection
     private record EdgeLink(
@@ -236,6 +210,3 @@ public class ScreenLayout(List<ScreenRect> screens, List<HostConfig> configs, in
         float DestStart, float DestEnd,       // normalized [0,1] range on dest edge
         ScreenRect Destination);
 }
-
-// pixel range along one edge of a local screen where a transition exists
-public record ActiveEdgeRange(ScreenRect Screen, Direction Direction, int PixelStart, int PixelEnd);

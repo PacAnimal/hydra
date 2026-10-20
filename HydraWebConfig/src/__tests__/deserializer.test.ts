@@ -58,6 +58,17 @@ describe('deserialize', () => {
     expect(state.logLevel).toBe('info')
   })
 
+  it('parses root updateChannel in any case', () => {
+    expect(deserialize(asFile('[{"mode":"Master"}]', '"updateChannel":"edge"')).updateChannel).toBe('edge')
+    expect(deserialize(asFile('[{"mode":"Master"}]', '"updateChannel":"Edge"')).updateChannel).toBe('edge')
+    expect(deserialize(asFile('[{"mode":"Master"}]', '"updateChannel":"STABLE"')).updateChannel).toBe('stable')
+  })
+
+  it('leaves updateChannel undefined when absent or unknown', () => {
+    expect(deserialize(asFile('[{"mode":"Master"}]')).updateChannel).toBeUndefined()
+    expect(deserialize(asFile('[{"mode":"Master"}]', '"updateChannel":"nightly"')).updateChannel).toBeUndefined()
+  })
+
   it('parses root autoUpdate: false', () => {
     const state = deserialize(asFile('[{"mode":"Master"}]', '"autoUpdate":false'))
     expect(state.autoUpdate).toBe(false)

@@ -54,23 +54,20 @@ internal sealed class MacBrightnessController
         _writeI2C = OptionalNative.LoadDelegate<I2CDelegate>(_ioKitHandle, "IOAVServiceWriteI2C");
     }
 
-    internal bool TryAdjustMainDisplay(bool increase, out float normalizedBrightness)
+    internal bool TryAdjustMainDisplay(bool increase)
     {
-        normalizedBrightness = 0;
         lock (_gate)
         {
             if (MacBetterDisplayController.TryAdjustMainDisplayBrightness(increase))
                 return true;
 
             var displayId = NativeMethods.CGMainDisplayID();
-            return TryAdjustDisplayServices(displayId, increase, out normalizedBrightness)
-                || TryAdjustDdc(displayId, increase, out normalizedBrightness);
+            return TryAdjustDisplayServices(displayId, increase) || TryAdjustDdc(displayId, increase);
         }
     }
 
-    private bool TryAdjustDisplayServices(uint displayId, bool increase, out float normalizedBrightness)
+    private bool TryAdjustDisplayServices(uint displayId, bool increase)
     {
-        normalizedBrightness = 0;
         if (_getDisplayBrightness is null || _setDisplayBrightness is null) return false;
         // Apple panels can be controllable even if this optional capability symbol is unavailable.
         if (_canChangeDisplayBrightness is not null && _canChangeDisplayBrightness(displayId) == 0) return false;
@@ -79,13 +76,11 @@ internal sealed class MacBrightnessController
         var next = Math.Clamp(current + (increase ? (float)Step : -(float)Step), 0f, 1f);
         if (_setDisplayBrightness(displayId, next) != KernSuccess) return false;
         _ = _displayBrightnessChanged?.Invoke(displayId, next);
-        normalizedBrightness = next;
         return true;
     }
 
-    private bool TryAdjustDdc(uint displayId, bool increase, out float normalizedBrightness)
+    private bool TryAdjustDdc(uint displayId, bool increase)
     {
-        normalizedBrightness = 0;
         if (_createWithService is null || _readI2C is null || _writeI2C is null) return false;
         // A built-in display is handled by DisplayServices; generic external monitors use DDC/CI.
         if (NativeMethods.CGDisplayIsBuiltin(displayId) != 0) return false;
@@ -108,11 +103,7 @@ internal sealed class MacBrightnessController
                         if (!TryReadBrightness(avService, out var current, out var max) || max == 0) continue;
                         var delta = Math.Max(1, (int)Math.Round(max * Step));
                         var next = (ushort)Math.Clamp(current + (increase ? delta : -delta), 0, max);
-                        if (TryWriteBrightness(avService, next))
-                        {
-                            normalizedBrightness = next / (float)max;
-                            return true;
-                        }
+                        if (TryWriteBrightness(avService, next)) return true;
                     }
                     finally { NativeMethods.CFRelease(avService); }
                 }

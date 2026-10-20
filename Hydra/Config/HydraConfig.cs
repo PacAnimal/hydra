@@ -1,4 +1,5 @@
 using Cathedral.Extensions;
+using Hydra.Relay;
 using Hydra.Screen;
 
 namespace Hydra.Config;
@@ -68,7 +69,7 @@ public class HydraConfig
     public ClipboardSyncMode ClipboardSync { get; init; } = ClipboardSyncMode.Hydra;
     public bool SyncScreensaver { get; init; } = true;
     // When enabled, remote activity does not keep this machine awake and Hydra disconnects from the
-    // relay before system sleep. The legacy/default behaviour keeps sleeping displays remotely wakeable.
+    // relay before system sleep. Off by default, so sleeping displays stay remotely wakeable.
     public bool AllowSystemSleep { get; init; }
     public bool ScreenLockPropagation { get; init; } = false;  // master only (Mac/Windows) — propagate machine lock to connected slaves
     public bool AccelerateMouseWheel { get; init; } = true;
@@ -78,20 +79,17 @@ public class HydraConfig
 
     public int? DeadCorners { get; init; }  // pixel dead zone at screen corners; scaled by screen scale; per-host setting overrides this
 
-    // master only — sent with each keypress so per-master preferences are honoured on shared slaves.
-    // true (default): held printable keys repeat via keycode-less unicode insertion on Mac slaves, avoiding
-    // the macOS press-and-hold accent popup. false: repeat by re-pressing the physical key (legacy behaviour).
-    public bool UnicodeKeyRepeat { get; init; } = true;
-
     // optional — if set, this config only activates when all specified conditions are met
     public ConfigConditions? Conditions { get; init; }
+
+    internal bool IsConditional => Conditions?.IsEmpty == false;
 
     public HostConfig? LocalHost(string resolvedName) => Hosts.FirstOrDefault(s => s.Name.EqualsIgnoreCase(resolvedName));
 
     public IEnumerable<HostConfig> RemoteHosts(string resolvedName) => Hosts.Where(s => !s.Name.EqualsIgnoreCase(resolvedName));
 
     // true if any profile has effective conditions — if false, the single unconditional profile is always active
-    public static bool HasConditions(List<HydraConfig> profiles) => profiles.Any(c => c.Conditions?.IsEmpty == false);
+    public static bool HasConditions(List<HydraConfig> profiles) => profiles.Any(c => c.IsConditional);
 
     // true if any profile matches on SSID — determines whether WiFi detection is needed
     public static bool HasSsidConditions(List<HydraConfig> profiles) => profiles.Any(c => c.Conditions?.Ssid != null);
@@ -114,21 +112,10 @@ public class HydraConfig
 
         foreach (var cfg in profiles)
         {
-            if (cfg.Conditions == null || cfg.Conditions.IsEmpty)
-            {
+            if (!cfg.IsConditional)
                 fallback = cfg;
-                continue;
-            }
-
-            // all specified conditions must match (AND logic)
-            if (cfg.Conditions.Ssid != null && !state.ActiveSsids.Any(s => s.EqualsIgnoreCase(cfg.Conditions.Ssid)))
-                continue;
-            if (cfg.Conditions.ScreenCount != null && state.ScreenCount != cfg.Conditions.ScreenCount)
-                continue;
-            if (cfg.Conditions.IsPluggedIn != null && state.IsPluggedIn != cfg.Conditions.IsPluggedIn)
-                continue;
-
-            return cfg;
+            else if (cfg.Conditions!.Matches(state))
+                return cfg;
         }
 
         return fallback;
@@ -203,7 +190,7 @@ public class HydraConfig
             throw new InvalidOperationException($"hydra.conf has duplicate profile name '{names.Key}'.");
 
         // empty conditions ({}) is treated as unconditional — count those as defaults too
-        var defaults = profiles.Count(c => c.Conditions == null || c.Conditions.IsEmpty);
+        var defaults = profiles.Count(c => !c.IsConditional);
         if (defaults > 1)
             throw new InvalidOperationException("hydra.conf has multiple default profiles (profiles without a 'conditions' field). Only one is allowed.");
 
@@ -216,7 +203,7 @@ public class HydraConfig
                 throw new InvalidOperationException("remoteOnly requires at least one remote host in the hosts list.");
         }
 
-        foreach (var cfg in profiles.Where(c => c.Conditions?.IsEmpty == false))
+        foreach (var cfg in profiles.Where(c => c.IsConditional))
         {
             if (cfg.Conditions!.ScreenCount is < 1)
                 throw new InvalidOperationException("screenCount condition must be >= 1.");
@@ -224,7 +211,7 @@ public class HydraConfig
 
         // no two conditional profiles may have identical (ssid, screenCount, isPluggedIn) tuples
         var conditionKeys = profiles
-            .Where(c => c.Conditions?.IsEmpty == false)
+            .Where(c => c.IsConditional)
             .Select(c => (Ssid: c.Conditions!.Ssid?.ToLowerInvariant(), c.Conditions.ScreenCount, c.Conditions.IsPluggedIn))
             .ToList();
         var duplicate = conditionKeys.GroupBy(k => k).FirstOrDefault(g => g.Count() > 1);
@@ -235,6 +222,8 @@ public class HydraConfig
         {
             if (cfg.NetworkConfig == null && cfg.EmbeddedStyx == null && cfg.EmbeddedStyxServer == null)
                 throw new InvalidOperationException($"Profile '{cfg.ProfileName ?? "(default)"}' has no relay configured. Add networkConfig, embeddedStyx, or embeddedStyxServer.");
+            if (cfg.EmbeddedStyx != null && !EmbeddedRelayTls.WithHttps(cfg.EmbeddedStyx.Server).StartsWithIgnoreCase("https://"))
+                throw new InvalidOperationException("embeddedStyx.server must be https://: the embedded relay only speaks TLS.");
 
             // no duplicate host names within a profile
             var dupHost = cfg.Hosts

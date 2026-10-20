@@ -71,7 +71,7 @@ internal sealed class RelayLatencyService(
         }
 
         foreach (var (host, sequence) in sends)
-            relay.Send([host], MessageSerializer.Encode(MessageKind.LatencyProbe, new LatencyProbeMessage(sequence)));
+            relay.Send(host, MessageKind.LatencyProbe, new LatencyProbeMessage(sequence));
     }
 
     private Task OnPeersChanged(string[] hosts)
@@ -108,8 +108,7 @@ internal sealed class RelayLatencyService(
                 {
                     var request = body.TryDecodeBody<LatencyProbeMessage>();
                     if (request != null)
-                        relay.Send([sourceHost], MessageSerializer.Encode(MessageKind.LatencyProbeResponse,
-                            new LatencyProbeResponseMessage(request.Sequence)));
+                        relay.Send(sourceHost, MessageKind.LatencyProbeResponse, new LatencyProbeResponseMessage(request.Sequence));
                     break;
                 }
             case MessageKind.LatencyProbeResponse:

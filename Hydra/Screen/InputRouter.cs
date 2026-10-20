@@ -1,7 +1,7 @@
-using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Threading.Channels;
 using Cathedral.Extensions;
+using Cathedral.Utils;
 using Hydra.Config;
 using Hydra.FileTransfer;
 using Hydra.Keyboard;
@@ -34,7 +34,6 @@ public class InputRouter(
     TimeProvider? timeProvider = null)
     : IHostedService
 {
-
     // How often a mouse position is sent to a slave, and therefore how long a batch of raw samples is
     // held before it is processed. Both come off the one number, so raising it moves them together.
     // Integer division truncates, so a rate that does not divide 1000 lands on the next rate up.
@@ -48,8 +47,7 @@ public class InputRouter(
 
     private readonly IWorldState _peerState = peerState ?? new WorldState();
     private readonly Func<long> _getTickCount = getTickCount ?? (() => Environment.TickCount64);
-    private readonly PeerPlatform _localPlatform = localPlatform ?? DetectLocalPlatform();
-    private readonly ConcurrentDictionary<string, PeerPlatform> _peerPlatforms = new(StringComparer.OrdinalIgnoreCase);
+    private readonly PeerPlatform _localPlatform = localPlatform ?? PeerPlatforms.Local;
 
     // channel-based actor model: single consumer processes all state mutations sequentially.
     // event tap callbacks post commands via TryWrite (non-blocking); async callers use TCS.
@@ -70,11 +68,9 @@ public class InputRouter(
 
     private CancellationTokenSource? _pollCts;
     private readonly IScreenSaverSync _screenSaverSync = screenSaverSync;
-    private readonly IClipboardSync _clipboardSync = clipboardSync;
     private readonly FileTransferService _fileTransfer = fileTransfer;
     private readonly IFileSelectionDetector _selectionDetector = selectionDetector;
-    private ClipboardSnapshot? _lastReceived;
-    private string? _lastPulledFrom;
+    private readonly ClipboardMaster _clipboard = new(clipboardSync, log);
     // cancelled when stopping begins: abandons a selection query and refuses new ones
     private readonly CancellationTokenSource _stopping = new();
 
@@ -233,7 +229,7 @@ public class InputRouter(
     // posts a fence command and awaits it — all previously queued commands will have been processed on return.
     // used by tests to synchronize after firing platform events. Seals first, so input captured into a
     // batch still waiting out its interval is part of what the fence covers.
-    internal Task FlushAsync()
+    internal Task Flush()
     {
         if (_consumerTask == null) return Task.CompletedTask;
         SealMouseBatch();
@@ -243,7 +239,7 @@ public class InputRouter(
         return tcs.Task;
     }
 
-    internal Task<RouterStatus?> GetManagementStatusAsync() => RunFence(st =>
+    internal Task<RouterStatus?> GetManagementStatus() => RunFence(st =>
     {
         var current = st.Mouse.CurrentScreen;
         return new RouterStatus(
@@ -289,8 +285,6 @@ public class InputRouter(
     private async Task OnPeersChanged(string[] hostNames)
     {
         var current = new HashSet<string>(hostNames, StringComparer.OrdinalIgnoreCase);
-        foreach (var host in _peerPlatforms.Keys.Where(host => !current.Contains(host)).ToArray())
-            _peerPlatforms.TryRemove(host, out _);
         var configuredSlaves = profile.RemoteHosts
             .Select(s => s.Name)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -314,15 +308,13 @@ public class InputRouter(
                 log.LogInformation("Remote peer '{Name}' disconnected — returned to local screen", disconnectedHost);
         }
 
-        // abort a transfer only if ITS peer actually left — not merely because the cursor's current screen
-        // peer did (Abort tears down ANY transfer, so the old cursor-screen-coupled call aborted unrelated ones)
+        // abort a transfer only if its own peer left, not the cursor's
         _fileTransfer.AbortIfPeerGone(current, relay);
 
         // send MasterConfig only to newly appeared peers that are configured as slaves
         foreach (var host in delta.NewPeers)
         {
-            var payload = MessageSerializer.Encode(MessageKind.MasterConfig, new MasterConfigMessage(profile.LogLevel));
-            relay.Send([host], payload);
+            relay.Send(host, MessageKind.MasterConfig, new MasterConfigMessage(profile.LogLevel));
             if (log.IsEnabled(LogLevel.Debug))
                 log.LogDebug("Sent MasterConfig to {Host}", host);
         }
@@ -341,7 +333,6 @@ public class InputRouter(
 
         // reset known peers so all slaves get a fresh MasterConfig on reconnect
         await _peerState.ClearPeers();
-        _peerPlatforms.Clear();
 
         if (disconnectedHost != null)
         {
@@ -370,7 +361,7 @@ public class InputRouter(
                 }
             }
 
-            await BroadcastScreensaverSync(true);
+            await BroadcastToPeers(MessageKind.ScreensaverSync, new ScreensaverSyncMessage(true));
             log.LogInformation("Screensaver activated — synced to slaves");
         });
     }
@@ -382,7 +373,7 @@ public class InputRouter(
             if (!st.ScreensaverActive) return;
             st.ScreensaverActive = false;
 
-            await BroadcastScreensaverSync(false);
+            await BroadcastToPeers(MessageKind.ScreensaverSync, new ScreensaverSyncMessage(false));
             log.LogInformation("Screensaver deactivated — synced to slaves");
 
             // a remote-only master whose visit cannot be restored goes back to a remote now, keyboard-only use included
@@ -408,13 +399,12 @@ public class InputRouter(
         return true;
     }
 
-    private async ValueTask BroadcastScreensaverSync(bool active)
+    private async ValueTask BroadcastToPeers<T>(MessageKind kind, T message)
     {
         var peerScreens = await _peerState.GetPeerScreensSnapshot();
         var hosts = peerScreens.Keys.ToArray();
         if (hosts.Length == 0) return;
-        var payload = MessageSerializer.Encode(MessageKind.ScreensaverSync, new ScreensaverSyncMessage(active));
-        relay.Send(hosts, payload);
+        relay.Send(hosts, kind, message);
     }
 
     private void OnLockDetected()
@@ -436,15 +426,8 @@ public class InputRouter(
         });
     }
 
-    private async ValueTask BroadcastLockScreen(LocalMasterState st)
-    {
-        var peerScreens = await _peerState.GetPeerScreensSnapshot();
-        var hosts = peerScreens.Keys.ToArray();
-        if (hosts.Length == 0) return;
-        var msSinceInput = _getTickCount() - st.LastInputTick;
-        var payload = MessageSerializer.Encode(MessageKind.LockScreen, new LockScreenMessage(msSinceInput));
-        relay.Send(hosts, payload);
-    }
+    private ValueTask BroadcastLockScreen(LocalMasterState st) =>
+        BroadcastToPeers(MessageKind.LockScreen, new LockScreenMessage(_getTickCount() - st.LastInputTick));
 
     // sends master's clipboard hash to slave; slave decides whether to request the full push
     private void PushClipboardToHost(string host)
@@ -452,13 +435,11 @@ public class InputRouter(
         if (!UseHydraClipboard(host)) return;
         try
         {
-            var clip = ClipboardUtils.ReadWithFallback(_clipboardSync, _lastReceived, log, "push");
-            if (string.IsNullOrEmpty(clip.Text) && string.IsNullOrEmpty(clip.PrimaryText) && clip.ImagePng == null && clip.Html == null && clip.Rtf == null)
+            if (_clipboard.Hash() is not { } hash)
                 return; // nothing to push
-            var hash = ClipboardUtils.ClipboardHash(clip);
             if (log.IsEnabled(LogLevel.Debug))
                 log.LogDebug("Sending clipboard hash to {Host}", host);
-            relay.Send([host], MessageSerializer.Encode(MessageKind.ClipboardHash, new ClipboardHashMessage(hash)));
+            relay.Send(host, MessageKind.ClipboardHash, hash);
         }
         catch (Exception ex)
         {
@@ -472,10 +453,8 @@ public class InputRouter(
         if (!UseHydraClipboard(host)) return;
         try
         {
-            var clip = ClipboardUtils.ReadWithFallback(_clipboardSync, _lastReceived, log, "push");
-            if (string.IsNullOrEmpty(clip.Text) && string.IsNullOrEmpty(clip.PrimaryText) && clip.ImagePng == null && clip.Html == null && clip.Rtf == null)
-                return;
-            relay.Send([host], MessageSerializer.Encode(MessageKind.ClipboardPush, new ClipboardPushMessage(clip.Text ?? "", clip.PrimaryText, clip.ImagePng, clip.Html, clip.Rtf)));
+            if (_clipboard.Push() is { } push)
+                relay.Send(host, MessageKind.ClipboardPush, push);
         }
         catch (Exception ex)
         {
@@ -488,10 +467,7 @@ public class InputRouter(
         if (!UseHydraClipboard(host)) return;
         if (log.IsEnabled(LogLevel.Debug))
             log.LogDebug("Pulling clipboard from {Host}", host);
-        _lastPulledFrom = host;
-        var localClip = ClipboardUtils.ReadWithFallback(_clipboardSync, _lastReceived, log, "pull");
-        var masterHash = ClipboardUtils.ClipboardHash(localClip);
-        relay.Send([host], MessageSerializer.Encode(MessageKind.ClipboardPull, new ClipboardPullMessage(masterHash)));
+        relay.Send(host, MessageKind.ClipboardPull, _clipboard.Pull(host));
     }
 
     private async Task OnMessageReceived(string sourceHost, MessageKind kind, ReadOnlyMemory<byte> body)
@@ -499,26 +475,18 @@ public class InputRouter(
         switch (kind)
         {
             case MessageKind.ScreenInfo:
-                var info = body.ParseMessage<ScreenInfoMessage>(log, $"ScreenInfo from {sourceHost}");
+                var info = body.ParseMessage<ScreenInfoMessage>(log, sourceHost);
                 var owned = ScreenNaming.OwnedBy(sourceHost, info?.Screens ?? []);
                 if (owned.Refused.Count > 0 && log.IsEnabled(LogLevel.Warning))
-                    log.LogWarning("{Host} sent screen(s) {Names}, which are not its own or repeat one it already sent; ignored",
-                        sourceHost, string.Join(", ", owned.Refused));
+                    log.LogWarning("{Host} sent {Screens} {Names}, which are not its own or repeat one it already sent; ignored",
+                        sourceHost, Pluralize.Of(owned.Refused.Count, "screen"), string.Join(", ", owned.Refused));
                 if (info != null && owned.Kept.Count > 0)
                 {
                     await _peerState.SetPeerScreens(sourceHost, owned.Kept);
-                    // Recorded on every ScreenInfo that advertises a screen, REPLACING what came before, so a peer that
-                    // reconnects on an older build takes its capabilities away again. One with no screens of its own
-                    // is broken and changes nothing: the peer keeps its previous screens and capabilities.
-                    _peerState.SetPeerCapabilities(sourceHost, PeerCapabilities.Parse(info.Capabilities));
 
-                    if (info.Platform.HasValue)
-                    {
-                        await _peerState.SetPeerPlatform(sourceHost, info.Platform.Value);
-                        _peerPlatforms[sourceHost] = info.Platform.Value;
-                        if (!UseHydraClipboard(sourceHost) && log.IsEnabled(LogLevel.Information))
-                            log.LogInformation("Clipboard sync with {Host}: using macOS Universal Clipboard; Hydra is standing down", sourceHost);
-                    }
+                    _peerState.SetPeerPlatform(sourceHost, info.Platform);
+                    if (!UseHydraClipboard(sourceHost) && log.IsEnabled(LogLevel.Information))
+                        log.LogInformation("Clipboard sync with {Host}: using macOS Universal Clipboard; Hydra is standing down", sourceHost);
                     var snapshot = await _peerState.GetPeerScreensSnapshot();
                     await RunFence(async st =>
                     {
@@ -526,11 +494,11 @@ public class InputRouter(
                         await TryEnterRemoteOnly(st);
                     });
                     if (log.IsEnabled(LogLevel.Information))
-                        log.LogInformation("Screen info from {Host}: {Count} screen(s)", sourceHost, owned.Kept.Count);
+                        log.LogInformation("Screen info from {Host}: {Count} {Screens}", sourceHost, owned.Kept.Count, Pluralize.Of(owned.Kept.Count, "screen"));
                 }
                 break;
             case MessageKind.SlaveLog:
-                var entry = body.ParseMessage<SlaveLogMessage>(log, $"SlaveLog from {sourceHost}");
+                var entry = body.ParseMessage<SlaveLogMessage>(log, sourceHost);
                 if (entry != null) ForwardSlaveLog(sourceHost, entry);
                 break;
             case MessageKind.ScreensaverSync:
@@ -556,41 +524,20 @@ public class InputRouter(
                 }
             case MessageKind.ClipboardPullResponse:
                 if (!UseHydraClipboard(sourceHost)) break;
-                var clip = body.ParseMessage<ClipboardPullResponseMessage>(log, $"ClipboardPullResponse from {sourceHost}");
+                var clip = body.ParseMessage<ClipboardPullResponseMessage>(log, sourceHost);
                 if (clip != null)
                 {
-                    // only apply if from the slave we last pulled from
-                    if (!sourceHost.EqualsIgnoreCase(_lastPulledFrom))
-                    {
-                        if (log.IsEnabled(LogLevel.Debug))
-                            log.LogDebug("Clipboard pull response from {Host} ignored (not last pulled from)", sourceHost);
-                        break;
-                    }
-                    if (clip.Unchanged == true)
-                    {
-                        if (log.IsEnabled(LogLevel.Debug))
-                            log.LogDebug("Clipboard pull response from {Host}: unchanged", sourceHost);
-                        break;
-                    }
-                    if (log.IsEnabled(LogLevel.Debug))
-                        log.LogDebug("Clipboard pull response from {Host}: text={TextLen}, primary={PrimaryLen}, image={ImageLen}",
-                            sourceHost, clip.Text?.Length, clip.PrimaryText?.Length, clip.ImagePng?.Length);
-                    var validated = ClipboardUtils.ValidateFields(clip.Text, clip.PrimaryText, clip.ImagePng, clip.Html, clip.Rtf, log, "pull response", sourceHost);
-                    if (!ClipboardUtils.TrySetClipboardPreservingFiles(_clipboardSync, validated, log, $"pull response from {sourceHost}"))
+                    if (_clipboard.OnPullAnswer(sourceHost, clip) == null)
                         break;
                     // if cursor is currently on a remote screen, forward the clipboard to it
-                    var activeHost = await RunFence(st =>
-                    {
-                        _lastReceived = validated;
-                        return st.Mouse.CurrentScreen?.Host;
-                    }, null);
+                    var activeHost = await RunFence(st => st.Mouse.CurrentScreen?.Host, null);
                     if (activeHost != null)
                         PushClipboardToHost(activeHost);
                 }
                 break;
             case MessageKind.FileSelectionResponse:
                 {
-                    var response = body.ParseMessage<FileSelectionResponseMessage>(log, $"FileSelectionResponse from {sourceHost}");
+                    var response = body.ParseMessage<FileSelectionResponseMessage>(log, sourceHost);
                     // on the consumer, so no copy can be pressed between the check and the buffer write
                     var outcome = await RunFence(st => ApplyRemoteSelection(st, sourceHost, response), RemoteSelectionOutcome.NotApplied);
                     if (outcome == RemoteSelectionOutcome.Superseded && log.IsEnabled(LogLevel.Debug))
@@ -605,7 +552,7 @@ public class InputRouter(
                     _ = _commands.Writer.TryWrite(st =>
                     {
                         if (IsAwaitedRemoteCopy(st, sourceHost)) AbandonRemoteCopy(st, "it is busy with a transfer");
-                        ShowOsd(st, "Transfer in progress");
+                        ShowOsd(st, FileTransferService.InProgressOsd);
                         return ValueTask.CompletedTask;
                     });
                     break;
@@ -622,10 +569,10 @@ public class InputRouter(
                         {
                             var abort = body.TryDecodeBody<FileTransferAbortMessage>();
                             if (abort?.Reason == FileTransferService.ReasonNoFolder)
-                                SendOsd(sourceHost, "Invalid paste target");
+                                SendOsd(sourceHost, FileTransferService.InvalidTargetOsd);
                         }
                     }
-                    if (await _fileTransfer.OnMessageAsync(sourceHost, kind, body, relay))
+                    if (await _fileTransfer.OnMessage(sourceHost, kind, body, relay))
                         osd.Show(FileTransferService.PastedOsd);
                     break;
                 }
@@ -715,41 +662,14 @@ public class InputRouter(
             return;
         }
         st.CopyPending = false;
-        if (result.Failed)
-            ShowOsd(st, FileSelectionResult.FailedMessage);
-        else if (!result.FileManagerFocused)
-        {
-            if (log.IsEnabled(LogLevel.Information))
-                log.LogInformation("Copy hotkey: {Name} is not focused", _selectionDetector.FileManagerName);
-            ShowOsd(st, $"{_selectionDetector.FileManagerName} is not focused");
-        }
-        else if (result.Paths != null)
-        {
-            if (log.IsEnabled(LogLevel.Information))
-                log.LogInformation("Copy hotkey: {Count} file(s) selected locally: {Paths}", result.Paths.Count, string.Join(", ", result.Paths));
-            _fileTransfer.SetCopyBuffer(profile.Name, result.Paths);
-            var n = result.Paths.Count;
-            ShowOsd(st, $"{n} {(n == 1 ? "item" : "items")} copied");
-        }
-        else
-        {
-            log.LogInformation("Copy hotkey: no files selected locally");
-            _fileTransfer.ClearCopyBuffer();
-            ShowOsd(st, "0 items selected");
-        }
+        var name = _selectionDetector.FileManagerName;
+        result.Log(log, "Copy hotkey", name);
+        ShowOsd(st, _fileTransfer.HandleSelectionResponse(profile.Name, result.ToResponse(name)));
     }
 
     // routes OSD to slave when cursor is remote, otherwise shows locally on master
-    private void ShowOsd(LocalMasterState st, string message)
-    {
-        if (st.Mouse.IsOnVirtualScreen)
-        {
-            var payload = MessageSerializer.Encode(MessageKind.Osd, new OsdMessage(message));
-            relay.Send([st.Mouse.CurrentScreen.Host], payload);
-        }
-        else
-            osd.Show(message);
-    }
+    private void ShowOsd(LocalMasterState st, string message) =>
+        SendOsd(st.Mouse.IsOnVirtualScreen ? st.Mouse.CurrentScreen.Host : profile.Name, message);
 
     // sends OSD to a specific known host (file transfer outcomes, etc.)
     private void SendOsd(string targetHost, string message)
@@ -757,10 +677,7 @@ public class InputRouter(
         if (targetHost.EqualsIgnoreCase(profile.Name))
             osd.Show(message);
         else
-        {
-            var payload = MessageSerializer.Encode(MessageKind.Osd, new OsdMessage(message));
-            relay.Send([targetHost], payload);
-        }
+            relay.Send(targetHost, MessageKind.Osd, new OsdMessage(message));
     }
 
     private void ForwardSlaveLog(string sourceHost, SlaveLogMessage entry)
@@ -877,11 +794,8 @@ public class InputRouter(
                 {
                     // an explicit lock or unlock says where the cursor belongs, so a pending screensaver restore is off
                     st.SavedScreenName = null;
-                    // A remote-only master with no local screen has nowhere to pass input to: the
-                    // old behaviour left the remote screen and OnMouseDelta then dropped every
-                    // delta, so keyboard and mouse appeared dead until the hotkey was pressed
-                    // again. Confine the cursor to the current remote screen instead, which is what
-                    // the hotkey does in every other mode.
+                    // a remote-only master with no local screen has nowhere to return to, so confine the
+                    // cursor to the current remote screen instead
                     if (profile.RemoteOnly && !st.Screens.Any(sc => sc.IsLocal))
                     {
                         st.ConfinedToScreen = !st.ConfinedToScreen;
@@ -895,11 +809,9 @@ public class InputRouter(
                         st.LockedToScreen = !st.LockedToScreen;
                         if (profile.RemoteOnly)
                         {
-                            // ShowOsd falls back to a LOCAL osd when the cursor is not on a remote
-                            // screen, and a remote-only master often has no display to show it on. So
-                            // each branch shows its OSD at the only moment a remote screen is current:
-                            // after entering when locking, before leaving when unlocking. Announcing it
-                            // up front instead made re-locking silent.
+                            // ShowOsd falls back to a local osd off a remote screen, and a remote-only master
+                            // often has no display, so each branch shows its OSD while a remote screen is
+                            // current: after entering when locking, before leaving when unlocking
                             if (st.LockedToScreen)
                             {
                                 log.LogInformation("Remote lock: locked to remote");
@@ -947,14 +859,14 @@ public class InputRouter(
                 {
                     if (_fileTransfer.FileTransferOngoing)
                     {
-                        ShowOsd(st, "Transfer in progress");
+                        ShowOsd(st, FileTransferService.InProgressOsd);
                     }
                     else if (!st.Mouse.IsOnVirtualScreen)
                     {
                         if (!_selectionDetector.IsFileTransferSupported)
                         {
                             log.LogInformation("Copy hotkey: file transfer not supported on this platform");
-                            ShowOsd(st, "Action not supported");
+                            ShowOsd(st, FileTransferService.NotSupportedOsd);
                         }
                         else
                         {
@@ -966,8 +878,7 @@ public class InputRouter(
                         if (log.IsEnabled(LogLevel.Information))
                             log.LogInformation("Copy hotkey: querying file selection on {Host}", st.Mouse.CurrentScreen.Host);
                         CopyRemoteSelection(st, st.Mouse.CurrentScreen.Host);
-                        var queryPayload = MessageSerializer.Encode(MessageKind.FileSelectionQuery, new FileSelectionQueryMessage());
-                        relay.Send([st.Mouse.CurrentScreen.Host], queryPayload);
+                        relay.Send(st.Mouse.CurrentScreen.Host, MessageKind.FileSelectionQuery, new FileSelectionQueryMessage());
                     }
                 }
                 else if (hotkeyAction == HotkeyAction.MissionControl && st.Mouse.IsOnVirtualScreen)
@@ -975,19 +886,19 @@ public class InputRouter(
                     if (log.IsEnabled(LogLevel.Information))
                         log.LogInformation("Mission Control hotkey: sending to {Host}", st.Mouse.CurrentScreen.Host);
                     var host = st.Mouse.CurrentScreen.Host;
-                    relay.Send([host], MessageSerializer.Encode(MessageKind.KeyEvent, new KeyEventMessage(KeyEventType.KeyDown, KeyModifiers.None, null, SpecialKey.MissionControl)));
-                    relay.Send([host], MessageSerializer.Encode(MessageKind.KeyEvent, new KeyEventMessage(KeyEventType.KeyUp, KeyModifiers.None, null, SpecialKey.MissionControl)));
+                    relay.SendKeyEvent([host], new KeyEventMessage(KeyEventType.KeyDown, KeyModifiers.None, null, SpecialKey.MissionControl));
+                    relay.SendKeyEvent([host], new KeyEventMessage(KeyEventType.KeyUp, KeyModifiers.None, null, SpecialKey.MissionControl));
                 }
                 else if (hotkeyAction == HotkeyAction.PasteFiles)
                 {
                     if (_fileTransfer.FileTransferOngoing)
                     {
-                        ShowOsd(st, "Transfer in progress");
+                        ShowOsd(st, FileTransferService.InProgressOsd);
                     }
                     else if (!_selectionDetector.IsFileTransferSupported)
                     {
                         log.LogInformation("Paste hotkey: file transfer not supported on this platform");
-                        ShowOsd(st, "Action not supported");
+                        ShowOsd(st, FileTransferService.NotSupportedOsd);
                     }
                     else if (st.CopyPending)
                     {
@@ -999,19 +910,19 @@ public class InputRouter(
                         var targetHost = st.Mouse.IsOnVirtualScreen
                             ? st.Mouse.CurrentScreen.Host
                             : profile.Name;
-                        if (string.Equals(copyBuffer.SourceHost, targetHost, StringComparison.OrdinalIgnoreCase))
+                        if (copyBuffer.SourceHost.EqualsIgnoreCase(targetHost))
                         {
                             if (log.IsEnabled(LogLevel.Information))
                                 log.LogInformation("Paste hotkey: source and target are the same host ({Host}), nothing to do", targetHost);
-                            ShowOsd(st, "Invalid paste target");
+                            ShowOsd(st, FileTransferService.InvalidTargetOsd);
                         }
                         else
                         {
                             if (log.IsEnabled(LogLevel.Information))
-                                log.LogInformation("Paste hotkey: {Count} file(s) from {Source} → {Target}",
-                                    copyBuffer.Paths.Length, copyBuffer.SourceHost, targetHost);
+                                log.LogInformation("Paste hotkey: {Count} {Files} from {Source} → {Target}",
+                                    copyBuffer.Paths.Length, Pluralize.Of(copyBuffer.Paths.Length, "file"), copyBuffer.SourceHost, targetHost);
                             if (!_fileTransfer.InitiatePaste(copyBuffer, targetHost, profile.Name, relay))
-                                SendOsd(targetHost, "Invalid paste target");
+                                SendOsd(targetHost, FileTransferService.InvalidTargetOsd);
                         }
                     }
                     else
@@ -1026,7 +937,7 @@ public class InputRouter(
             {
                 // repeats are master-driven: each OS auto-repeat is re-resolved (live modifier/dead-key state)
                 // and forwarded with IsRepeat set, so the slave injects the correct character every tick.
-                ForwardKeyToVirtualScreen(st, new KeyEventMessage(keyEvent.Type, keyEvent.Modifiers, keyEvent.Character, RemapKey(keyEvent.Key), IsRepeat: keyEvent.IsRepeat, UnicodeKeyRepeat: profile.UnicodeKeyRepeat));
+                ForwardKeyToVirtualScreen(st, new KeyEventMessage(keyEvent.Type, keyEvent.Modifiers, keyEvent.Character, RemapKey(keyEvent.Key), IsRepeat: keyEvent.IsRepeat));
             }
         });
     }
@@ -1109,9 +1020,8 @@ public class InputRouter(
         st.PendingDy = 0;
         if (profile.DebugMouse && log.IsEnabled(LogLevel.Information))
             log.LogInformation("[mouse] move to {Host}: screen={Screen} x={X} y={Y}", screen.Host, screen.Name, (int)st.Mouse.X, (int)st.Mouse.Y);
-        var payload = MessageSerializer.Encode(MessageKind.MouseMove, new MouseMoveMessage(screen.Name, (int)st.Mouse.X, (int)st.Mouse.Y));
         st.LastMouseSendTick = now;
-        relay.Send([screen.Host], payload);
+        relay.Send(screen.Host, MessageKind.MouseMove, new MouseMoveMessage(screen.Name, (int)st.Mouse.X, (int)st.Mouse.Y));
     }
 
     // flush pending state before leaving a virtual screen.
@@ -1138,8 +1048,7 @@ public class InputRouter(
     {
         var target = st.Mouse.CurrentScreen?.Host;
         if (target == null) return;
-        var payload = MessageSerializer.Encode(kind, message);
-        relay.Send([target], payload);
+        relay.Send(target, kind, message);
     }
 
     /// <summary>
@@ -1223,10 +1132,7 @@ public class InputRouter(
         st.PendingDx = 0;
         st.PendingDy = 0;
         if (!relay.IsConnected || !st.Mouse.IsOnVirtualScreen) return;
-        var s = st.Mouse.CurrentScreen;
-        var payload = MessageSerializer.Encode(MessageKind.EnterScreen,
-            new EnterScreenMessage(s.Name, (int)st.Mouse.X, (int)st.Mouse.Y, s.Width, s.Height));
-        relay.Send([s.Host], payload);
+        SendEnterMessage(st.Mouse.CurrentScreen, (int)st.Mouse.X, (int)st.Mouse.Y);
     }
 
     // Every return to the local screen, on the consumer. The cursor is shown (or hidden) before the flag clears and
@@ -1254,7 +1160,7 @@ public class InputRouter(
         if (reachable && relay.IsConnected)
         {
             foreach (var button in st.ForwardedButtons)
-                relay.Send([host], MessageSerializer.Encode(MessageKind.MouseButton, new MouseButtonMessage(button, false)));
+                relay.Send(host, MessageKind.MouseButton, new MouseButtonMessage(button, false));
             LeaveRemoteScreen(host);
         }
         st.ForgetForwarded();
@@ -1334,7 +1240,7 @@ public class InputRouter(
             _openMouseBatch ??= new CoalescingBatch<MouseInputKind, double>(kind, accumulate: kind == MouseInputKind.Delta);
             _openMouseBatch.Add(x, y);
 
-            // Raw samples arrive at the mouse's polling rate — ~900/s on an ordinary one — and posting
+            // Raw samples arrive at the mouse's polling rate, commonly up to 1000/s, and posting
             // an actor command each costs a thread-pool wake per sample while buying nothing, since
             // sends are throttled to the configured rate anyway. Holding the batch for the rest of the interval
             // loses no movement: deltas accumulate and absolute samples keep the latest.
@@ -1567,32 +1473,24 @@ public class InputRouter(
     // sends EnterScreen relay message + pushes clipboard to destination host
     private void SendEnterScreen(ScreenRect dest, int entryX, int entryY)
     {
-        var payload = MessageSerializer.Encode(MessageKind.EnterScreen, new EnterScreenMessage(dest.Name, entryX, entryY, dest.Width, dest.Height));
-        relay.Send([dest.Host], payload);
+        SendEnterMessage(dest, entryX, entryY);
         PushClipboardToHost(dest.Host);
     }
+
+    private void SendEnterMessage(ScreenRect dest, int entryX, int entryY) =>
+        relay.Send(dest.Host, MessageKind.EnterScreen, new EnterScreenMessage(dest.Name, entryX, entryY, dest.Width, dest.Height));
 
     // sends LeaveScreen relay message + pulls clipboard from host (unconditional — callers guard the condition)
     private void LeaveRemoteScreen(string host)
     {
-        relay.Send([host], MessageSerializer.Encode(MessageKind.LeaveScreen, new LeaveScreenMessage()));
+        relay.Send(host, MessageKind.LeaveScreen, new LeaveScreenMessage());
         PullClipboardFromHost(host);
     }
 
-    private bool UseHydraClipboard(string host)
-    {
-        var remotePlatform = _peerPlatforms.GetValueOrDefault(host, PeerPlatform.Unknown);
-        return UseHydraClipboard(profile.ClipboardSync, _localPlatform, remotePlatform);
-    }
+    private bool UseHydraClipboard(string host) => UseHydraClipboard(profile.ClipboardSync, _localPlatform, _peerState.PeerPlatformOf(host));
 
     internal static bool UseHydraClipboard(ClipboardSyncMode mode, PeerPlatform localPlatform, PeerPlatform remotePlatform) =>
         mode != ClipboardSyncMode.System || localPlatform != PeerPlatform.MacOs || remotePlatform != PeerPlatform.MacOs;
-
-    private static PeerPlatform DetectLocalPlatform() =>
-        OperatingSystem.IsMacOS() ? PeerPlatform.MacOs :
-        OperatingSystem.IsWindows() ? PeerPlatform.Windows :
-        OperatingSystem.IsLinux() ? PeerPlatform.Linux :
-        PeerPlatform.Unknown;
 
     private void UpdateWarpPoint(LocalMasterState st, ScreenRect screen)
     {
@@ -1611,7 +1509,7 @@ public class InputRouter(
     private void LogDetectedScreens(List<ScreenRect> detected)
     {
         if (!log.IsEnabled(LogLevel.Information)) return;
-        log.LogInformation("Detected {Count} local screen(s):", detected.Count);
+        log.LogInformation("Detected {Count} local {Screens}:", detected.Count, Pluralize.Of(detected.Count, "screen"));
         for (var i = 0; i < detected.Count; i++)
             if (detected[i].Identity != null)
                 log.LogInformation("  Screen {I}: {Json}", i, JsonSerializer.Serialize(detected[i].Identity, ScreenDetector.JsonOptions));
@@ -1673,7 +1571,7 @@ public class InputRouter(
         public string? SavedScreenName;
         public int SavedCursorX, SavedCursorY;
 
-        // 120Hz throttle: accumulated deltas and last send time
+        // send throttle: accumulated deltas and last send time
         public long LastMouseSendTick;
         public double PendingDx;
         public double PendingDy;

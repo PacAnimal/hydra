@@ -1,6 +1,7 @@
 export type Mode = 'Master' | 'Slave'
 export type Direction = 'Left' | 'Right' | 'Up' | 'Down'
 export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'critical'
+export type UpdateChannel = 'stable' | 'edge'
 export type NetworkType = 'config' | 'embeddedStyx' | 'embeddedStyxServer'
 
 export interface NeighbourConfig {
@@ -90,6 +91,7 @@ export interface HydraProfile {
 export interface FormState {
   name?: string
   autoUpdate?: boolean
+  updateChannel?: UpdateChannel
   managementListener?: boolean
   logLevel?: LogLevel
   lockFile?: string
@@ -98,3 +100,6 @@ export interface FormState {
   profiles: HydraProfile[]
   activeIndex: number
 }
+
+// the root-level fields the Global Settings section edits
+export type RootSettingsPatch = Partial<Pick<FormState, 'name' | 'autoUpdate' | 'updateChannel' | 'managementListener' | 'logLevel' | 'lockFile' | 'logFile' | 'sessionLogFile'>>

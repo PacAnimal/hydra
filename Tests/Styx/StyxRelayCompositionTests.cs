@@ -30,22 +30,29 @@ public class StyxRelayCompositionTests
         var services = factory.Services;
 
         AssertRelayServices(services);
-        Assert.That(services.GetRequiredService<IStyxPasswordProvider>(), Is.InstanceOf<EnvironmentStyxPasswordProvider>());
-        Assert.That(services.GetRequiredService<IStyxPasswordProvider>().Password, Is.EqualTo(StyxTestServer.TestPassword));
+        var auth = services.GetRequiredService<StyxAuth>();
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(auth.V1Password, Is.EqualTo(StyxTestServer.TestPassword));
+            Assert.That(auth.Keys, Has.Count.EqualTo(1));
+            Assert.That(auth.CanMint, Is.True);
+        }
     }
 
     [Test]
     public async Task TheEmbeddedRelayComposesTheRelayServices()
     {
         var config = new EmbeddedStyxServerConfig { Port = 0, Password = EmbeddedPassword };
-        await using var app = new EmbeddedStyxServer(config, NullLogger<EmbeddedStyxServer>.Instance).BuildApp();
+        using var embedded = new EmbeddedStyxServer(config, NullLogger<EmbeddedStyxServer>.Instance);
+        await using var app = embedded.BuildApp();
         var services = app.Services;
 
         AssertRelayServices(services);
-        Assert.That(services.GetRequiredService<IStyxPasswordProvider>(), Is.InstanceOf<InlineStyxPasswordProvider>());
+        var auth = services.GetRequiredService<StyxAuth>();
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(services.GetRequiredService<IStyxPasswordProvider>().Password, Is.EqualTo(EmbeddedPassword));
+            Assert.That(auth.V1Password, Is.EqualTo(EmbeddedPassword));
+            Assert.That(auth.CanMint, Is.False, "the embedded relay stays v1 only");
             Assert.That(services.GetRequiredService<StyxOptions>().DebugMessages, Is.False);
         }
     }
@@ -75,7 +82,7 @@ public class StyxRelayCompositionTests
         using var client = new TcpClient();
         await client.ConnectAsync(IPAddress.Loopback, address.Port);
 
-        Assert.That(await observed.Task.WaitAsync(TimeSpan.FromSeconds(30)), Is.True);
+        Assert.That(await observed.Task.WaitAsync(Bound), Is.True);
         await app.StopAsync();
     }
 
@@ -89,6 +96,8 @@ public class StyxRelayCompositionTests
             Assert.That(broadcaster, Is.InstanceOf<PeerBroadcastService>());
             Assert.That(services.GetServices<IHostedService>(), Does.Contain(broadcaster), "the broadcaster's queue is drained only when it runs as a hosted service");
             Assert.That(services.GetRequiredService<AuthenticationHubFilter>(), Is.Not.Null);
+            Assert.That(services.GetRequiredService<ITokenVerifier>(), Is.InstanceOf<TokenVerifier>());
+            Assert.That(services.GetRequiredService<IExpiryScheduler>(), Is.InstanceOf<ExpiryScheduler>());
             Assert.That(services.GetRequiredService<StyxOptions>(), Is.Not.Null);
         }
     }

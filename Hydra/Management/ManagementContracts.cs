@@ -1,4 +1,5 @@
 using Hydra.Config;
+using Hydra.Relay;
 
 namespace Hydra.Management;
 
@@ -15,7 +16,6 @@ internal static class ManagementMethods
     internal const string Status = "status";
     internal const string Logs = "logs";
     internal const string ConfigGet = "config.get";
-    internal const string ConfigValidate = "config.validate";
     internal const string ConfigSave = "config.save";
     internal const string RelayReconnect = "relay.reconnect";
     internal const string HydraRestart = "hydra.restart";
@@ -32,13 +32,15 @@ public sealed record ManagementRequest(string Method, string? Json = null);
 public sealed record ManagementResponse(bool Success, string? Json = null, string? Error = null)
 {
     public static ManagementResponse Ok<T>(T value) => new(true, ManagementJson.Serialize(value));
-    public static ManagementResponse Empty() => new(true);
     public static ManagementResponse Fail(string error) => new(false, Error: error);
 }
 
 public sealed record ServerHello(int ProtocolVersion, string HydraVersion, string InstanceId, int ProcessId);
 
-public sealed record ScreenStatus(string Name, string Host, int Width, int Height, decimal MouseScale, decimal? RelativeMouseScale);
+public sealed record ScreenStatus(string Name, string Host, int Width, int Height, decimal MouseScale, decimal? RelativeMouseScale)
+{
+    internal static ScreenStatus From(ScreenInfoEntry s, string host) => new(s.Name, host, s.Width, s.Height, s.MouseScale, s.RelativeMouseScale);
+}
 
 public sealed record PeerStatus(string Name, string Platform, bool Connected, List<ScreenStatus> Screens);
 
@@ -87,11 +89,9 @@ public sealed record HydraStatusSnapshot(
     bool IsIdle,
     bool RelayConnected,
     RelayConnectionStatus? RelayConnection,
-    // Nullable: a TUI newer than the daemon it's talking to reads a status response from before these
-    // fields existed, and JSON deserialization leaves a missing field null rather than throwing.
-    List<NetworkAdapterStatus>? ActiveNetworkAdapters,
-    List<EmbeddedRelayPeerStatus>? EmbeddedRelayPeers,
-    List<PeerLatencyStatus>? PeerLatency,
+    List<NetworkAdapterStatus> ActiveNetworkAdapters,
+    List<EmbeddedRelayPeerStatus> EmbeddedRelayPeers,
+    List<PeerLatencyStatus> PeerLatency,
     bool Dormant,
     List<ScreenStatus> LocalScreens,
     List<PeerStatus> Peers,

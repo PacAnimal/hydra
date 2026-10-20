@@ -16,7 +16,7 @@ public class AuthenticationHubFilter(IClientRegistry registry) : IHubFilter
         if (context.HubMethod.GetCustomAttribute<AllowAnonymousHubAttribute>() != null)
             return await next(context);
 
-        var identity = await registry.GetIdentity(context.Context.ConnectionId);
+        var identity = registry.GetIdentity(context.Context.ConnectionId);
         if (identity != null)
             return await next(context);
 

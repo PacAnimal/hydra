@@ -77,32 +77,21 @@ internal sealed class MacKeyResolver
         // keypad decimal/separator: use UCKeyTranslate for locale-correct char ('.' or ',')
         if ((ulong)vkCode == MacVirtualKey.KeypadDecimal)
         {
-            KeyEvent?[]? decDeadFlush = null;
-            if (_deadKeyState != 0)
-                decDeadFlush = DeadFlushPair();
-            _deadKeyState = 0;
+            var decDeadFlush = TakeDeadKey();
             var decEvent = ResolveCharacter(vkCode, cgFlags, mods, ref _deadKeyState);
             if (decEvent is not null)
                 _keyDownId[vkCode] = new CharClassification(decEvent.Character, decEvent.Key);
             else
                 _keyDownId[vkCode] = new CharClassification(null, null);  // sentinel: ensure key-up is replayed
-            if (decDeadFlush is not null) return decEvent is not null ? [.. decDeadFlush, decEvent] : decDeadFlush;
-            return decEvent is not null ? [decEvent] : null;
+            return KeyResolver.Concat(decDeadFlush, [decEvent]);
         }
 
         // special key (function keys, arrows, modifiers, keypad operators)?
         if (MacSpecialKeyMap.Instance.TryGet((ulong)vkCode, out var specialKey))
         {
-            KeyEvent?[]? deadFlush = null;
-            if (!specialKey.IsModifier())
-            {
-                // non-modifier special key aborts dead key composition — emit spacing form first.
-                // call UCKeyTranslate with Space to resolve the pending dead key to its spacing form
-                // (e.g. dead_grave pending → ` emitted before Tab/Esc/arrow).
-                if (_deadKeyState != 0)
-                    deadFlush = DeadFlushPair();
-                _deadKeyState = 0;  // clear in case UCKeyTranslate didn't reset it (dead key with no spacing form)
-            }
+            // non-modifier special key aborts dead key composition — emit spacing form first
+            // (e.g. dead_grave pending → ` emitted before Tab/Esc/arrow)
+            var deadFlush = specialKey.IsModifier() ? null : TakeDeadKey();
             // scroll lock (F14) has no CGEventFlag — track toggle in software so the bit travels with every event.
             if (specialKey == SpecialKey.ScrollLock)
             {
@@ -111,19 +100,14 @@ internal sealed class MacKeyResolver
             }
             _keyDownId[vkCode] = new CharClassification(null, specialKey);
             var specialEvent = KeyEvent.Special(KeyEventType.KeyDown, specialKey, mods);
-            return deadFlush is not null ? [.. deadFlush, specialEvent] : [specialEvent];
+            return KeyResolver.Concat(deadFlush, [specialEvent]);
         }
 
         // resolve character via UCKeyTranslate.
         // if a Cmd/Ctrl shortcut would clear a pending dead key inside ResolveCharacter, flush it first
         // so the spacing form is emitted before the shortcut char (dead_grave + Cmd+a → ` then Cmd+a).
         var isCommandChar = (cgFlags & (NativeMethods.KCGEventFlagMaskCommand | NativeMethods.KCGEventFlagMaskControl)) != 0;
-        KeyEvent?[]? charDeadFlush = null;
-        if (isCommandChar && _deadKeyState != 0)
-        {
-            charDeadFlush = DeadFlushPair();
-            _deadKeyState = 0;
-        }
+        var charDeadFlush = isCommandChar ? TakeDeadKey() : null;
         var ev = ResolveCharacter(vkCode, cgFlags, mods, ref _deadKeyState);
         if (ev is not null)
         {
@@ -142,8 +126,7 @@ internal sealed class MacKeyResolver
             // sentinel suppresses OS auto-repeat, which would otherwise re-enter UCKeyTranslate unguarded.
             _keyDownId[vkCode] = new CharClassification(null, null);
         }
-        if (charDeadFlush is not null) return ev is not null ? [.. charDeadFlush, ev] : charDeadFlush;
-        return ev is not null ? [ev] : null;
+        return KeyResolver.Concat(charDeadFlush, [ev]);
     }
 
     // re-resolves a held key for an OS auto-repeat and emits it marked as a repeat. non-modifier special
@@ -162,105 +145,94 @@ internal sealed class MacKeyResolver
         return ev is not null ? [ev with { IsRepeat = true }] : null;
     }
 
-    // emit current dead key state as [down, up] pair by resolving with Space, then synthesizing the up.
-    // the dead key slave has no physical key-up for a flush event, so a standalone down would stick.
-    private KeyEvent?[]? DeadFlushPair()
+    // clears a pending dead key and returns its spacing form, which UCKeyTranslate gives for dead key + Space
+    private KeyEvent[]? TakeDeadKey()
     {
-        var downEvent = ResolveCharacter((int)MacVirtualKey.Space, 0, KeyModifiers.None, ref _deadKeyState);
-        if (downEvent?.Character is not { } ch) return null;
-        return [downEvent, KeyEvent.Char(KeyEventType.KeyUp, ch, KeyModifiers.None)];
+        if (_deadKeyState == 0) return null;
+        var spacing = ResolveCharacter((int)MacVirtualKey.Space, 0, KeyModifiers.None, ref _deadKeyState)?.Character;
+        // a dead key with no spacing form may leave the state set
+        _deadKeyState = 0;
+        return spacing is { } ch ? KeyResolver.SpacingTap(ch) : null;
     }
 
     private KeyEvent? ResolveCharacter(int vkCode, ulong cgFlags, KeyModifiers mods, ref uint deadKeyState)
     {
-        var layoutSource = NativeMethods.TISCopyCurrentKeyboardLayoutInputSource();
-        if (layoutSource == nint.Zero) return null;
+        using var layout = KeyboardLayout.Open();
+        var layoutPtr = layout.Data;
+        if (layoutPtr == nint.Zero) return null;
 
-        try
+        // is this a command (ctrl or cmd held)? used for AltGr detection
+        bool isCommand = (cgFlags & (NativeMethods.KCGEventFlagMaskCommand | NativeMethods.KCGEventFlagMaskControl)) != 0;
+        // shortcut context: discard any pending dead key — it would otherwise compose with the shortcut character
+        if (isCommand) deadKeyState = 0;
+
+        // include Shift, CapsLock, and Option (when not a Cmd/Ctrl shortcut) in UCKeyTranslate.
+        // Hydra resolves the final character server-side, so Option must be included to get
+        // e.g. Opt+Shift+4 → '€' rather than '$'. Cmd/Ctrl shortcuts strip both Option AND Shift
+        // so the base key character is sent (e.g. '4' not '¤' for Cmd+Shift+4 on a Norwegian keyboard).
+        // The slave receives Shift in mods and reconstructs the correct VK + Shift injection.
+        uint ucMods = 0;
+        if (!isCommand && (cgFlags & NativeMethods.KCGEventFlagMaskShift) != 0) ucMods |= 0x02;      // shiftKey >> 8
+        if ((cgFlags & NativeMethods.KCGEventFlagMaskAlphaShift) != 0) ucMods |= 0x04;               // alphaLock >> 8
+        if (!isCommand && (cgFlags & NativeMethods.KCGEventFlagMaskAlternate) != 0) ucMods |= 0x08;  // optionKey >> 8
+
+        CharClassification classified;
+        unsafe
         {
-            var layoutData = NativeMethods.TISGetInputSourceProperty(layoutSource, NativeMethods.KTISPropertyUnicodeKeyLayoutData);
-            if (layoutData == nint.Zero) return null;
+            ushort* chars = stackalloc ushort[2];
+            // kUCKeyTranslateNoDeadKeysBit=1: prevent Cmd/Ctrl+dead_key from activating dead-key state.
+            // without this, pressing Cmd+` (dead_grave on some layouts) leaves _deadKeyState non-zero,
+            // so the next character press (e.g. 'a') composes 'à' instead of 'a'.
+            var status = NativeMethods.UCKeyTranslate(
+                layoutPtr,
+                (ushort)(vkCode & 0xFFu),
+                NativeMethods.KUCKeyActionDown,
+                ucMods,
+                NativeMethods.LMGetKbdType(),
+                isCommand ? 1u : 0u,
+                ref deadKeyState,
+                2,
+                out var count,
+                chars);
 
-            var layoutPtr = NativeMethods.CFDataGetBytePtr(layoutData);
-            if (layoutPtr == nint.Zero) return null;
+            if (status != 0) return null;
 
-            // is this a command (ctrl or cmd held)? used for AltGr detection
-            bool isCommand = (cgFlags & (NativeMethods.KCGEventFlagMaskCommand | NativeMethods.KCGEventFlagMaskControl)) != 0;
-            // shortcut context: discard any pending dead key — it would otherwise compose with the shortcut character
-            if (isCommand) deadKeyState = 0;
+            // count=0 with non-zero dead state means a dead key was consumed; next keypress will compose.
+            // deadKeyState intentionally not cleared here — it's needed for composition on the next keypress.
+            if (count == 0 && deadKeyState != 0) return null;
 
-            // include Shift, CapsLock, and Option (when not a Cmd/Ctrl shortcut) in UCKeyTranslate.
-            // Hydra resolves the final character server-side, so Option must be included to get
-            // e.g. Opt+Shift+4 → '€' rather than '$'. Cmd/Ctrl shortcuts strip both Option AND Shift
-            // so the base key character is sent (e.g. '4' not '¤' for Cmd+Shift+4 on a Norwegian keyboard).
-            // The slave receives Shift in mods and reconstructs the correct VK + Shift injection.
-            uint ucMods = 0;
-            if (!isCommand && (cgFlags & NativeMethods.KCGEventFlagMaskShift) != 0) ucMods |= 0x02;      // shiftKey >> 8
-            if ((cgFlags & NativeMethods.KCGEventFlagMaskAlphaShift) != 0) ucMods |= 0x04;               // alphaLock >> 8
-            if (!isCommand && (cgFlags & NativeMethods.KCGEventFlagMaskAlternate) != 0) ucMods |= 0x08;  // optionKey >> 8
+            deadKeyState = 0;
+            if (count == 0) return null;
 
-            CharClassification classified;
-            unsafe
-            {
-                ushort* chars = stackalloc ushort[2];
-                // kUCKeyTranslateNoDeadKeysBit=1: prevent Cmd/Ctrl+dead_key from activating dead-key state.
-                // without this, pressing Cmd+` (dead_grave on some layouts) leaves _deadKeyState non-zero,
-                // so the next character press (e.g. 'a') composes 'à' instead of 'a'.
-                var status = NativeMethods.UCKeyTranslate(
-                    layoutPtr,
-                    (ushort)(vkCode & 0xFFu),
-                    NativeMethods.KUCKeyActionDown,
-                    ucMods,
-                    NativeMethods.LMGetKbdType(),
-                    isCommand ? 1u : 0u,
-                    ref deadKeyState,
-                    2,
-                    out var count,
-                    chars);
-
-                if (status != 0) return null;
-
-                // count=0 with non-zero dead state means a dead key was consumed; next keypress will compose.
-                // deadKeyState intentionally not cleared here — it's needed for composition on the next keypress.
-                if (count == 0 && deadKeyState != 0) return null;
-
-                deadKeyState = 0;
-                if (count == 0) return null;
-
-                classified = KeyResolver.ClassifyChar((char)chars[0]);
-            }
-
-            // a shortcut resolved on a non-Latin layout carries a char no slave can act on. re-resolve the
-            // same physical key through the Latin-capable layout macOS keeps alongside it, so the slave
-            // receives the base ASCII the user's muscle memory means (Cmd+С on Cyrillic → Cmd+C).
-            if (isCommand && classified.Ch is > (char)0x7F && TranslateInAsciiLayout(vkCode) is { } asciiCh)
-                classified = KeyResolver.ClassifyChar(asciiCh);
-
-            if (!classified.Ch.HasValue && !classified.Key.HasValue) return null;
-
-            // detect AltGr: option was held and produced a printable character (not a keyboard shortcut)
-            bool optionHeld = (cgFlags & NativeMethods.KCGEventFlagMaskAlternate) != 0;
-            // Option+Space is an application shortcut far more often than it is text. UCKeyTranslate
-            // renders it as U+00A0, which DetectAltGr below would classify as AltGr text and send for
-            // unicode injection, so the chord never reaches the slave as a chord. Send plain Space with
-            // Option still set instead. This does cost the ability to type a non-breaking space through
-            // Option+Space, and a Windows slave reads the result as Alt+Space (its window menu) — both
-            // are the faithful translation of the chord the user actually pressed.
-            if (optionHeld && !isCommand && (ulong)vkCode == MacVirtualKey.Space)
-                return KeyEvent.Char(KeyEventType.KeyDown, ' ', mods);
-            if (DetectAltGr(classified.Ch, isCommand, optionHeld))
-            {
-                mods |= KeyModifiers.AltGr;
-                mods &= ~(KeyModifiers.Alt | KeyModifiers.Shift); // AltGr and Alt are mutually exclusive; Shift consumed by level-3 resolution
-            }
-
-            if (classified.Ch.HasValue) return KeyEvent.Char(KeyEventType.KeyDown, classified.Ch.Value, mods);
-            return KeyEvent.Special(KeyEventType.KeyDown, classified.Key!.Value, mods);
+            classified = KeyResolver.ClassifyChar((char)chars[0]);
         }
-        finally
+
+        // a shortcut resolved on a non-Latin layout carries a char no slave can act on. re-resolve the
+        // same physical key through the Latin-capable layout macOS keeps alongside it, so the slave
+        // receives the base ASCII the user's muscle memory means (Cmd+С on Cyrillic → Cmd+C).
+        if (isCommand && classified.Ch is > (char)0x7F && TranslateInAsciiLayout(vkCode) is { } asciiCh)
+            classified = KeyResolver.ClassifyChar(asciiCh);
+
+        if (!classified.Ch.HasValue && !classified.Key.HasValue) return null;
+
+        // detect AltGr: option was held and produced a printable character (not a keyboard shortcut)
+        bool optionHeld = (cgFlags & NativeMethods.KCGEventFlagMaskAlternate) != 0;
+        // Option+Space is an application shortcut far more often than it is text. UCKeyTranslate
+        // renders it as U+00A0, which DetectAltGr below would classify as AltGr text and send for
+        // unicode injection, so the chord never reaches the slave as a chord. Send plain Space with
+        // Option still set instead. This does cost the ability to type a non-breaking space through
+        // Option+Space, and a Windows slave reads the result as Alt+Space (its window menu) — both
+        // are the faithful translation of the chord the user actually pressed.
+        if (optionHeld && !isCommand && (ulong)vkCode == MacVirtualKey.Space)
+            return KeyEvent.Char(KeyEventType.KeyDown, ' ', mods);
+        if (DetectAltGr(classified.Ch, isCommand, optionHeld))
         {
-            NativeMethods.CFRelease(layoutSource);
+            mods |= KeyModifiers.AltGr;
+            mods &= ~(KeyModifiers.Alt | KeyModifiers.Shift); // AltGr and Alt are mutually exclusive; Shift consumed by level-3 resolution
         }
+
+        if (classified.Ch.HasValue) return KeyEvent.Char(KeyEventType.KeyDown, classified.Ch.Value, mods);
+        return KeyEvent.Special(KeyEventType.KeyDown, classified.Key!.Value, mods);
     }
 
     // resets composition and press-tracking state after the event tap is re-enabled.
@@ -317,39 +289,27 @@ internal sealed class MacKeyResolver
     // returns null when there is no such layout or the key yields nothing printable there.
     private static unsafe char? TranslateInAsciiLayout(int vkCode)
     {
-        var source = NativeMethods.TISCopyCurrentASCIICapableKeyboardLayoutInputSource();
-        if (source == nint.Zero) return null;
+        using var layout = KeyboardLayout.Open(asciiCapable: true);
+        var layoutPtr = layout.Data;
+        if (layoutPtr == nint.Zero) return null;
 
-        try
-        {
-            var layoutData = NativeMethods.TISGetInputSourceProperty(source, NativeMethods.KTISPropertyUnicodeKeyLayoutData);
-            if (layoutData == nint.Zero) return null;
+        // level 0 with dead keys suppressed: the unmodified base character of the key
+        uint deadKeyState = 0;
+        ushort* chars = stackalloc ushort[2];
+        var status = NativeMethods.UCKeyTranslate(
+            layoutPtr,
+            (ushort)(vkCode & 0xFFu),
+            NativeMethods.KUCKeyActionDown,
+            0,
+            NativeMethods.LMGetKbdType(),
+            1,
+            ref deadKeyState,
+            2,
+            out var count,
+            chars);
 
-            var layoutPtr = NativeMethods.CFDataGetBytePtr(layoutData);
-            if (layoutPtr == nint.Zero) return null;
-
-            // level 0 with dead keys suppressed: the unmodified base character of the key
-            uint deadKeyState = 0;
-            ushort* chars = stackalloc ushort[2];
-            var status = NativeMethods.UCKeyTranslate(
-                layoutPtr,
-                (ushort)(vkCode & 0xFFu),
-                NativeMethods.KUCKeyActionDown,
-                0,
-                NativeMethods.LMGetKbdType(),
-                1,
-                ref deadKeyState,
-                2,
-                out var count,
-                chars);
-
-            if (status != 0 || count == 0) return null;
-            var ch = (char)chars[0];
-            return ch >= 0x20 && ch <= 0x7F ? ch : null;
-        }
-        finally
-        {
-            NativeMethods.CFRelease(source);
-        }
+        if (status != 0 || count == 0) return null;
+        var ch = (char)chars[0];
+        return ch >= 0x20 && ch <= 0x7F ? ch : null;
     }
 }

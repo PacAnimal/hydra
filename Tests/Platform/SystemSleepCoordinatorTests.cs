@@ -15,7 +15,7 @@ public class SystemSleepCoordinatorTests
         var relay = new SleepRelay();
         var coordinator = Make(enabled: false, relay);
 
-        await coordinator.PrepareForSleepAsync(CancellationToken.None);
+        await coordinator.PrepareForSleep(CancellationToken.None);
         coordinator.BeginResumeAfterSleep();
         coordinator.ResumeAfterSleep();
 
@@ -33,8 +33,8 @@ public class SystemSleepCoordinatorTests
         var relay = new SleepRelay();
         var coordinator = Make(enabled: true, relay);
 
-        await coordinator.PrepareForSleepAsync(CancellationToken.None);
-        await coordinator.PrepareForSleepAsync(CancellationToken.None);
+        await coordinator.PrepareForSleep(CancellationToken.None);
+        await coordinator.PrepareForSleep(CancellationToken.None);
         coordinator.BeginResumeAfterSleep();
         coordinator.BeginResumeAfterSleep();
         coordinator.ResumeAfterSleep();
@@ -51,13 +51,14 @@ public class SystemSleepCoordinatorTests
     [Test]
     public async Task WakeDuringRelayShutdown_IsReappliedAfterSuspensionCompletes()
     {
-        var relay = new SleepRelay { BlockSuspension = true };
+        var relay = new SleepRelay();
+        relay.Suspension.Hold();
         var coordinator = Make(enabled: true, relay);
 
-        var prepare = coordinator.PrepareForSleepAsync(CancellationToken.None);
-        await relay.SuspensionStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        var prepare = coordinator.PrepareForSleep(CancellationToken.None);
+        await relay.SuspensionStarted.Task.WaitAsync(Bound);
         coordinator.ResumeAfterSleep();
-        relay.AllowSuspensionToComplete.TrySetResult();
+        relay.Suspension.Release();
         await prepare;
 
         using (Assert.EnterMultipleScope())
@@ -72,13 +73,14 @@ public class SystemSleepCoordinatorTests
     [Test]
     public async Task EarlyWakeDuringRelayShutdown_IsReappliedAfterSuspensionCompletes()
     {
-        var relay = new SleepRelay { BlockSuspension = true };
+        var relay = new SleepRelay();
+        relay.Suspension.Hold();
         var coordinator = Make(enabled: true, relay);
 
-        var prepare = coordinator.PrepareForSleepAsync(CancellationToken.None);
-        await relay.SuspensionStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        var prepare = coordinator.PrepareForSleep(CancellationToken.None);
+        await relay.SuspensionStarted.Task.WaitAsync(Bound);
         coordinator.BeginResumeAfterSleep();
-        relay.AllowSuspensionToComplete.TrySetResult();
+        relay.Suspension.Release();
         await prepare;
 
         using (Assert.EnterMultipleScope())
@@ -96,7 +98,7 @@ public class SystemSleepCoordinatorTests
         var relay = new SleepRelay();
         var coordinator = Make(enabled: true, relay);
 
-        await coordinator.PrepareForSleepAsync(CancellationToken.None);
+        await coordinator.PrepareForSleep(CancellationToken.None);
         coordinator.ResumeAfterSleep();
 
         using (Assert.EnterMultipleScope())
@@ -112,10 +114,10 @@ public class SystemSleepCoordinatorTests
         var relay = new SleepRelay();
         var coordinator = Make(enabled: true, relay);
 
-        await coordinator.PrepareForSleepAsync(CancellationToken.None);
+        await coordinator.PrepareForSleep(CancellationToken.None);
         coordinator.BeginResumeAfterSleep();
         coordinator.ResumeAfterSleep();
-        await coordinator.PrepareForSleepAsync(CancellationToken.None);
+        await coordinator.PrepareForSleep(CancellationToken.None);
         coordinator.BeginResumeAfterSleep();
         coordinator.ResumeAfterSleep();
 
@@ -150,11 +152,10 @@ public class SystemSleepCoordinatorTests
 
     private sealed class SleepRelay : NullRelaySender
     {
-        internal bool BlockSuspension { get; init; }
         internal TaskCompletionSource SuspensionStarted { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
-        internal TaskCompletionSource AllowSuspensionToComplete { get; } =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        // held, a suspension waits until released
+        internal Gate Suspension { get; } = new();
         internal int SuspendCount { get; private set; }
         internal bool SuspensionWasBounded { get; private set; }
         internal List<long> SleepGenerations { get; } = [];
@@ -162,18 +163,17 @@ public class SystemSleepCoordinatorTests
         internal int CompleteWakeCount { get; private set; }
         internal List<long> WakeGenerations { get; } = [];
         public override bool IsConnected => true;
-        public override async ValueTask SuspendConnectionAsync(CancellationToken cancel = default)
+        public override async ValueTask SuspendConnection(CancellationToken cancel = default)
         {
             SuspendCount++;
             SuspensionWasBounded = cancel.CanBeCanceled;
             SuspensionStarted.TrySetResult();
-            if (BlockSuspension)
-                await AllowSuspensionToComplete.Task.WaitAsync(cancel);
+            await Suspension.Passed(cancel);
         }
-        public override ValueTask SuspendForSystemSleepAsync(long generation, CancellationToken cancel = default)
+        public override ValueTask SuspendForSystemSleep(long generation, CancellationToken cancel = default)
         {
             SleepGenerations.Add(generation);
-            return SuspendConnectionAsync(cancel);
+            return SuspendConnection(cancel);
         }
         public override void BeginSystemWake(long generation)
         {
