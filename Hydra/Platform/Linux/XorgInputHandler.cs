@@ -225,6 +225,16 @@ public sealed class XorgInputHandler : IPlatformInput
         return (mask & 0x1F00) != 0;
     }
 
+    // a grab on the root window, released at once: the one on entry would fail the same way, after the cursor had gone
+    public bool KeyboardHeldElsewhere()
+    {
+        var r = NativeMethods.XGrabKeyboard(_display, _rootWindow, false,
+            NativeMethods.GrabModeAsync, NativeMethods.GrabModeAsync, NativeMethods.CurrentTime);
+        if (r == NativeMethods.GrabSuccess) _ = NativeMethods.XUngrabKeyboard(_display, NativeMethods.CurrentTime);
+        _ = NativeMethods.XFlush(_display);
+        return r != NativeMethods.GrabSuccess;
+    }
+
     public void StopEventTap()
     {
         _running = false;

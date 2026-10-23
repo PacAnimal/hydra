@@ -69,6 +69,8 @@ public sealed class FakePlatform : IPlatformInput, ICursorHider
     }
 
     public bool AnyMouseButtonHeld { get; set; }
+    public bool KeyboardHeldElsewhere { get; set; }
+    bool IPlatformInput.KeyboardHeldElsewhere() => KeyboardHeldElsewhere;
     public bool CursorIsVisible { get; set; }
     public bool RecentresItself { get; set; }
     // the default for SeesSwallowed, less UnseenButtons

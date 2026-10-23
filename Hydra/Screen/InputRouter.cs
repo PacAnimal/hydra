@@ -1625,9 +1625,18 @@ public class InputRouter(
     // Every entry from the local screen to a remote one; callers keep their own gates and log line. exitEdge is what
     // a return with no edge of its own comes back through (see LocalLandingPoint), null when the entry had no edge.
     // Refused (false) while a mouse button is held: it went down here, and its up would be swallowed during the visit.
+    // Refused too while another client holds the keyboard: the visit would take the mouse and leave the typing here.
     private async ValueTask<bool> EnterFromLocal(LocalMasterState st, ScreenRect dest, int x, int y, ScreenEdge? exitEdge)
     {
         if (platform.AnyMouseButtonHeld()) return false;
+        if (platform.KeyboardHeldElsewhere())
+        {
+            if (!st.KeyboardRefusalLogged && log.IsEnabled(LogLevel.Warning))
+                log.LogWarning("Entry to '{Name}' refused: another client holds the keyboard", dest.Name);
+            st.KeyboardRefusalLogged = true;
+            return false;
+        }
+        st.KeyboardRefusalLogged = false;
         st.SavedScreenName = null;
         st.ExitEdge = exitEdge;
         var remoteInfo = await RemoteInfoFor(st, dest);
@@ -1651,7 +1660,7 @@ public class InputRouter(
     // enters remote-only mode targeting the first remote screen with known dimensions; must be called from consumer.
     // returns whether it entered. It does nothing when not remote-only, already virtual or unlocked, during the
     // screensaver (its end restores the visit, or enters here), or with no screen or relay ready; while a mouse button
-    // is held it is refused, and retried on the button's release and on local moves.
+    // is held it is refused, and retried on the button's release and on local moves (a held keyboard: on local moves).
     private async ValueTask<bool> TryEnterRemoteOnly(LocalMasterState st)
     {
         if (!profile.RemoteOnly || st.Mouse.IsOnVirtualScreen || st.ScreensaverActive) return false;
@@ -2010,6 +2019,8 @@ public class InputRouter(
 
         // whether the current button state has already logged a refused edge; any button event resets it
         public bool EdgeRefusalLogged;
+        // whether the current hold of the keyboard by another client has already logged a refused entry
+        public bool KeyboardRefusalLogged;
 
         public void ForgetForwarded()
         {

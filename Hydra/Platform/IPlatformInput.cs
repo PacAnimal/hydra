@@ -44,6 +44,10 @@ public interface IPlatformInput : IAsyncDisposable, ICursor, ILocalEventTap
 
     bool AnyMouseButtonHeld();
 
+    // True when another client holds the keyboard, so a visit would take the mouse and leave the typing here (Xorg: an
+    // open dmenu, a window manager's menu). The other platforms capture beneath any such grab and never refuse.
+    bool KeyboardHeldElsewhere() => false;
+
     // True when AnyMouseButtonHeld sees this button though the event tap swallowed it (macOS; Xorg's Left/Middle/Right). A
     // Windows hook hides it from GetAsyncKeyState, and evdev cannot ask at all.
     bool SeesSwallowed(MouseButton button);
