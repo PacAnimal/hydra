@@ -80,7 +80,8 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
         {
             var keyboards = _devices.Count(d => d.Keyboard);
             var pointers = _devices.Count(d => d.Pointer);
-            log.LogInformation("Found {K} {Keyboards}, {M} mouse/pointer {Devices}", keyboards, Pluralize.Of(keyboards, "keyboard"), pointers, Pluralize.Of(pointers, "device"));
+            log.LogInformation("Found {K} {Keyboards}, {M} mouse/pointer {Devices}",
+                keyboards, Pluralize.Of(keyboards, "keyboard"), pointers, Pluralize.Of(pointers, "device"));
         }
 
         _running = true;

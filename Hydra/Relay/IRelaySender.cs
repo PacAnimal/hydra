@@ -71,4 +71,7 @@ public static class RelaySenderExt
 
     public static void Send<T>(this IRelaySender relay, string[] hosts, MessageKind kind, T message) =>
         relay.Send(hosts, MessageSerializer.Encode(kind, message));
+
+    public static void SendClipboardAbort(this IRelaySender relay, string host, long id, bool failed = false) =>
+        relay.Send(host, MessageKind.ClipboardStreamAbort, new ClipboardStreamAbortMessage(id, failed ? true : null));
 }

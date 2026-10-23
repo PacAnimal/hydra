@@ -37,7 +37,8 @@ internal static partial class AgentCommands
         // remove any running instance before overwriting the plist
         RunLaunchctl(tolerateFailure: true, "bootout", $"{DomainTarget()}/{Label}");
 
-        File.WriteAllText(plistPath, AgentPlist.Generate(exePath, workingDir, logDir, configPath), new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        File.WriteAllText(plistPath, AgentPlist.Generate(exePath, workingDir, logDir, configPath),
+            new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
 
         RunLaunchctl("bootstrap", DomainTarget(), plistPath);
         Console.WriteLine("Hydra agent installed and started.");

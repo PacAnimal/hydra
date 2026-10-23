@@ -1,3 +1,4 @@
+using System.Threading.Channels;
 using Cathedral.Extensions;
 using Cathedral.Utils;
 using Hydra.Config;
@@ -17,6 +18,8 @@ public class SlaveRelayConnection : RelayConnection
     private readonly ICursorHider _cursorHider;
     private readonly IScreenSaverSync _screenSaverSync;
     private readonly ClipboardSlave _clipboard;
+    private readonly ClipboardStreamSender _streams;
+    private readonly ClipboardStreamReceiver _receiver;
     private readonly FileTransferService _fileTransfer;
     private readonly IFileSelectionDetector _selectionDetector;
     private readonly IOsdNotification _osd;
@@ -44,19 +47,36 @@ public class SlaveRelayConnection : RelayConnection
 
     private readonly IActivityTracker _activityTracker;
 
-    public SlaveRelayConnection(IHydraProfile profile, ILogger<RelayConnection> log, IPlatformOutput output, IScreenDetector screens, IWorldState peerState, ICursorHider cursorHider, IScreenSaverSync screenSaverSync, IClipboardSync clipboardSync, FileTransferService fileTransfer, IFileSelectionDetector selectionDetector, IOsdNotification osd, IActivityTracker activityTracker, IDormancyState dormancy)
+    // the one clipboard worker's queue, see OnClipboardWorker
+    private readonly Channel<Action> _clipboardWork = Channel.CreateUnbounded<Action>(new UnboundedChannelOptions { SingleReader = true });
+    private readonly Task _clipboardWorker;
+
+    // clock times the clipboard stream watchdog: tests alone pass one, since nothing else reaches the receiver, and DI,
+    // which registers no TimeProvider, leaves it the system's
+    public SlaveRelayConnection(IHydraProfile profile, ILogger<RelayConnection> log, IPlatformOutput output, IScreenDetector screens, IWorldState peerState,
+        ICursorHider cursorHider, IScreenSaverSync screenSaverSync, IClipboardSync clipboardSync, FileTransferService fileTransfer,
+        IFileSelectionDetector selectionDetector, IOsdNotification osd, IActivityTracker activityTracker, IDormancyState dormancy,
+        TimeProvider? clock = null)
         : base(profile, log, peerState)
     {
         _output = output;
         _screens = screens;
         _cursorHider = cursorHider;
         _screenSaverSync = screenSaverSync;
-        _clipboard = new ClipboardSlave(clipboardSync, log);
         _fileTransfer = fileTransfer;
         _selectionDetector = selectionDetector;
         _osd = osd;
         _activityTracker = activityTracker;
         _dormancy = dormancy;
+        // a stream pending from the master counts as already applied; the receiver takes pushes, its default
+        _clipboard = new ClipboardSlave(clipboardSync, log, PendingFrom);
+        _receiver = new ClipboardStreamReceiver(clipboardSync, (host, hash) => _clipboard.Begun(host, hash), _clipboard.Rejected,
+            clock ?? TimeProvider.System, log);
+        // a slave favours no master, so no host's stream goes first
+        _streams = new ClipboardStreamSender(this, () => null, log);
+        _receiver.Abandoned += (host, id) => OnStreamGivenUp(host, id, abort: true, failed: false);
+        _receiver.Failed += failed => OnStreamGivenUp(failed.Host, failed.Id, abort: !failed.SenderGaveUp, failed: true);
+        _clipboardWorker = Task.Run(RunClipboardWorker);
 
         _screens.ScreensChanged += async snapshot =>
         {
@@ -65,7 +85,8 @@ public class SlaveRelayConnection : RelayConnection
             if (_dormancy.IsDormant)
             {
                 if (Log.IsEnabled(LogLevel.Debug))
-                    Log.LogDebug("Dormant: ignoring screen change to {Count} {Screens}", snapshot.Screens.Count, Pluralize.Of(snapshot.Screens.Count, "screen"));
+                    Log.LogDebug("Dormant: ignoring screen change to {Count} {Screens}",
+                        snapshot.Screens.Count, Pluralize.Of(snapshot.Screens.Count, "screen"));
                 return;
             }
             _cachedScreens = snapshot;
@@ -79,7 +100,11 @@ public class SlaveRelayConnection : RelayConnection
 
         // the master keeps its cursor parked on us while we sleep, so we never see the up for whatever
         // is held right now — release it here rather than waking with a stuck modifier or button.
-        _dormancy.Entered += ReleaseAll;
+        _dormancy.Entered += () =>
+        {
+            DropStreamsForDormancy();
+            return ReleaseAll();
+        };
 
         _dormancy.Exited += async () =>
         {
@@ -89,6 +114,147 @@ public class SlaveRelayConnection : RelayConnection
                 Log.LogInformation("Woke from dormancy — local screens: {Count}", snapshot.Screens.Count);
             AnnounceScreens(await PeerState.GetMasters(), snapshot);
         };
+    }
+
+    // by the time _clipboard asks, _receiver is set
+    private ulong? PendingFrom(string host) => _receiver.PendingFrom(host);
+
+    // clipboard work reads and writes the os clipboard, which can take seconds, so it runs off the receive path that
+    // applies input, on one worker, in arrival order; _clipboard is touched only there
+    private void OnClipboardWorker(Action work)
+    {
+        if (!_clipboardWork.Writer.TryWrite(work) && Log.IsEnabled(LogLevel.Debug))
+            Log.LogDebug("Clipboard work dropped: shutting down");
+    }
+
+    // clipboard work for a message the receive path took while awake: dormancy starting before it runs, after its
+    // streams were dropped, refuses it there as DropWhileDormant would (refused telling the sender: a Begin's master
+    // that it failed, a pull's that nothing changed)
+    private void OnClipboardWorkerAwake(string sourceHost, MessageKind kind, Action work, Action? refused = null) =>
+        OnClipboardWorker(() =>
+        {
+            if (!_dormancy.IsDormant)
+            {
+                work();
+                return;
+            }
+            if (Log.IsEnabled(LogLevel.Debug))
+                Log.LogDebug("Dormant: refused {Kind} from {Host}", kind, sourceHost);
+            refused?.Invoke();
+        });
+
+    private async Task RunClipboardWorker()
+    {
+        await foreach (var work in _clipboardWork.Reader.ReadAllAsync())
+        {
+            try
+            {
+                work();
+            }
+            catch (Exception ex)
+            {
+                Log.LogError(ex, "Clipboard work failed");
+            }
+        }
+    }
+
+    // for tests: completes once every clipboard message received so far has been handled
+    protected Task DrainClipboardWork()
+    {
+        var idle = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!_clipboardWork.Writer.TryWrite(idle.SetResult)) idle.SetResult();
+        return idle.Task;
+    }
+
+    private void HandleHash(string host, ClipboardHashMessage hash)
+    {
+        if (_clipboard.OnHash(hash, host) != PushNeed.None)
+            this.Send(host, MessageKind.ClipboardPullRequest, new ClipboardPullRequestMessage(hash.Visit));
+    }
+
+    private void HandlePushNone(string host, ClipboardPushNoneMessage none)
+    {
+        if (!_clipboard.NoPush(none, host)) return;
+        Log.LogWarning("Clipboard push from {Host} will not come; the clipboard stays empty", host);
+        _osd.Show(ClipboardStreamReceiver.FailedOsd);
+    }
+
+    private void HandlePush(string host, ClipboardPushMessage push)
+    {
+        if (_clipboard.CopiedSinceHash(host)) return;
+        // a whole push is newer than any stream still pending, from that host or another master
+        Supersede(host);
+        _receiver.Drop(host);
+        if (_clipboard.OnPush(push, host)) _osd.Show(ClipboardStreamReceiver.FailedOsd);
+    }
+
+    // the master's pull answered
+    private void AnswerPull(string host, ClipboardPullMessage pull) =>
+        _streams.Send(host, MessageKind.ClipboardPullResponse, _clipboard.OnPull(pull, host));
+
+    // a clipboard message refused while dormant, which its master needs told (dormancy dropped every stream both ways, so
+    // nothing else does): a pull answered unchanged, the user away and nothing copied here, so its pull resolves
+    private void RefuseWhileDormant(string host, ClipboardPullMessage pull) =>
+        _streams.Send(host, MessageKind.ClipboardPullResponse, new ClipboardPullResponseMessage(pull.PullId, null, Unchanged: true));
+
+    // ... and a Begin told it failed, so its master stops streaming rather than wait for a watchdog
+    private void RefuseWhileDormant(string host, ClipboardStreamBeginMessage begin) => this.SendClipboardAbort(host, begin.Id, failed: true);
+
+    private void HandleBegin(string host, ClipboardStreamBeginMessage begin)
+    {
+        // a Begin older than a copy made here since its hash is told so silently, so its master stops streaming; one from a
+        // master another superseded is its newer clipboard, which now starts last and wins
+        if (_clipboard.CopiedSinceHash(host))
+        {
+            this.SendClipboardAbort(host, begin.Id);
+            return;
+        }
+        Supersede(host);
+        _clipboard.StreamBegun(host);
+        _receiver.OnBegin(host, begin);
+    }
+
+    private void HandleChunk(string host, ClipboardStreamChunkMessage chunk)
+    {
+        // the receiver takes only pushes, so a completed stream is one
+        if (HeldOff(host, MessageKind.ClipboardStreamChunk) || _receiver.OnChunk(host, chunk) is not { } completed) return;
+        if (completed.Bytes.TryDecodeBody<ClipboardPushMessage>() is { } streamed)
+        {
+            if (_clipboard.OnPush(streamed, host, streamed: true)) _osd.Show(ClipboardStreamReceiver.FailedOsd);
+        }
+        else
+            _receiver.OnUnreadable(host, chunk.Id);
+    }
+
+    // a stream the receiver gave up on: stop its sender if abort, and show a failure if failed
+    private void OnStreamGivenUp(string host, long id, bool abort, bool failed)
+    {
+        if (abort) this.SendClipboardAbort(host, id);
+        if (failed) _osd.Show(ClipboardStreamReceiver.FailedOsd);
+    }
+
+    // a clipboard from host starts: the last to start wins, so every other master's pending stream is dropped and its
+    // sender told, silently (a supersede, no failure); the chunks of those streams are then ignored, while their masters
+    // may still start newer ones
+    private void Supersede(string host)
+    {
+        foreach (var stream in _receiver.Supersede(host))
+        {
+            _clipboard.Superseded(stream.Host);
+            this.SendClipboardAbort(stream.Host, stream.Id);
+            if (Log.IsEnabled(LogLevel.Debug))
+                Log.LogDebug("Clipboard stream {Id} from {Host} superseded by {Winner}'s clipboard", stream.Id, stream.Host, host);
+        }
+    }
+
+    // whether host's chunk is of a stream another master's superseded: host starting a newer clipboard, or the winner's
+    // stream ending, completed or not, lifts it
+    private bool HeldOff(string host, MessageKind kind)
+    {
+        if (_receiver.HeldOffBy(host) is not { } winner) return false;
+        if (Log.IsEnabled(LogLevel.Debug))
+            Log.LogDebug("Clipboard {Kind} from {Host} ignored: {Winner}'s clipboard is still streaming", kind, host, winner);
+        return true;
     }
 
     private void AnnounceScreens(string[] masters, LocalScreenSnapshot snapshot)
@@ -113,7 +279,8 @@ public class SlaveRelayConnection : RelayConnection
         _isReady = false;
         if (!_output.IsAccessibilityTrusted())
         {
-            Log.LogWarning("Output injection permission not granted — open System Settings › Privacy & Security › Accessibility and enable Hydra, then Hydra will continue automatically.");
+            Log.LogWarning("Output injection permission not granted — open System Settings › Privacy & Security › Accessibility and enable Hydra, "
+                + "then Hydra will continue automatically.");
             await _output.WaitForAccessibilityTrusted(ConnectionToken);
             if (ConnectionToken.IsCancellationRequested) return;
             Log.LogInformation("Accessibility permission granted");
@@ -126,7 +293,7 @@ public class SlaveRelayConnection : RelayConnection
 
     protected override async Task OnReceive(string sourceHost, MessageKind kind, ReadOnlyMemory<byte> body)
     {
-        if (_dormancy.IsDormant && DropWhileDormant(sourceHost, kind)) return;
+        if (_dormancy.IsDormant && DropWhileDormant(sourceHost, kind, body)) return;
 
         switch (kind)
         {
@@ -181,6 +348,7 @@ public class SlaveRelayConnection : RelayConnection
                     {
                         if (!_dormancy.IsDormant) MoveToCachedScreen(enter.Screen, enter.X, enter.Y);
                         _onScreenMasters.Add(sourceHost);
+                        OnClipboardWorker(() => _clipboard.Entered(sourceHost));
                         _cursorHider.Show();
                     }
                     break;
@@ -227,23 +395,49 @@ public class SlaveRelayConnection : RelayConnection
                 }
             case MessageKind.ClipboardHash:
                 {
-                    var hashMsg = body.ParseMessage<ClipboardHashMessage>(Log, sourceHost);
-                    if (hashMsg != null && _clipboard.OnHash(hashMsg, sourceHost) != PushNeed.None)
-                        this.Send(sourceHost, MessageKind.ClipboardPullRequest, new ClipboardPullRequestMessage());
+                    if (body.ParseMessage<ClipboardHashMessage>(Log, sourceHost) is { } hashMsg)
+                        OnClipboardWorkerAwake(sourceHost, kind, () => HandleHash(sourceHost, hashMsg));
+                    break;
+                }
+            case MessageKind.ClipboardPushNone:
+                {
+                    if (body.ParseMessage<ClipboardPushNoneMessage>(Log, sourceHost) is { } none)
+                        OnClipboardWorkerAwake(sourceHost, kind, () => HandlePushNone(sourceHost, none));
                     break;
                 }
             case MessageKind.ClipboardPush:
                 {
-                    var push = body.ParseMessage<ClipboardPushMessage>(Log, sourceHost);
-                    if (push != null)
-                        _clipboard.OnPush(push, sourceHost);
+                    if (body.ParseMessage<ClipboardPushMessage>(Log, sourceHost) is { } push)
+                        OnClipboardWorkerAwake(sourceHost, kind, () => HandlePush(sourceHost, push));
                     break;
                 }
             case MessageKind.ClipboardPull:
                 {
-                    var pull = body.ParseMessage<ClipboardPullMessage>(Log, sourceHost);
-                    if (pull != null)
-                        this.Send(sourceHost, MessageKind.ClipboardPullResponse, _clipboard.OnPull(pull, sourceHost));
+                    if (body.ParseMessage<ClipboardPullMessage>(Log, sourceHost) is { } pull)
+                        OnClipboardWorkerAwake(sourceHost, kind, () => AnswerPull(sourceHost, pull), () => RefuseWhileDormant(sourceHost, pull));
+                    break;
+                }
+            case MessageKind.ClipboardStreamBegin:
+                {
+                    if (body.ParseMessage<ClipboardStreamBeginMessage>(Log, sourceHost) is { } begin)
+                        OnClipboardWorkerAwake(sourceHost, kind, () => HandleBegin(sourceHost, begin), () => RefuseWhileDormant(sourceHost, begin));
+                    break;
+                }
+            case MessageKind.ClipboardStreamChunk:
+                {
+                    if (body.ParseMessage<ClipboardStreamChunkMessage>(Log, sourceHost) is { } chunk)
+                        OnClipboardWorkerAwake(sourceHost, kind, () => HandleChunk(sourceHost, chunk));
+                    break;
+                }
+            case MessageKind.ClipboardStreamAbort:
+                {
+                    if (body.ParseMessage<ClipboardStreamAbortMessage>(Log, sourceHost) is not { } abort) break;
+                    // each side's ids are its own, so each ignores one it doesn't hold
+                    OnClipboardWorkerAwake(sourceHost, kind, () =>
+                    {
+                        _receiver.OnAbort(sourceHost, abort);
+                        _streams.OnAbort(sourceHost, abort);
+                    });
                     break;
                 }
             case MessageKind.Osd:
@@ -288,6 +482,12 @@ public class SlaveRelayConnection : RelayConnection
     protected override async Task OnDisconnected()
     {
         _fileTransfer.Abort(this, "relay disconnected");
+        // after the clipboard work already queued, so a stream it begins is dropped too
+        OnClipboardWorker(() =>
+        {
+            TellDropped(_receiver.DropAll(), "the relay disconnected", show: true);
+            _streams.DropAll();
+        });
         var masters = await PeerState.GetMasters();
         _onScreenMasters.Clear();
         await ReleaseAll();
@@ -295,6 +495,23 @@ public class SlaveRelayConnection : RelayConnection
             _cursorHider.Show();
         await PeerState.PruneMasters([]);
         Log.LogWarning("Relay connection lost — cursor restored on slave");
+    }
+
+    protected override async Task OnShutdown(CancellationToken cancel)
+    {
+        // the worker finishes what is queued, unless a clipboard read outlasts the shutdown
+        _clipboardWork.Writer.TryComplete();
+        try
+        {
+            await _clipboardWorker.WaitAsync(cancel);
+        }
+        catch (OperationCanceledException) when (cancel.IsCancellationRequested)
+        {
+            Log.LogWarning("Clipboard work still running at shutdown");
+        }
+        _receiver.Dispose();
+        await _streams.DisposeAsync();
+        await base.OnShutdown(cancel);
     }
 
     protected override async Task OnPeers(string[] hostNames)
@@ -324,8 +541,37 @@ public class SlaveRelayConnection : RelayConnection
         // abort any transfer whose peer has left (e.g. a slave→slave send whose target vanished) so it
         // doesn't stream into the void and falsely report success
         _fileTransfer.AbortIfPeerGone(current, this);
+        OnClipboardWorker(() =>
+        {
+            TellDropped(_receiver.Retain(current), "it left the relay", show: true, present: current);
+            _streams.Retain(current);
+        });
         await base.OnPeers(hostNames);
     }
+
+    // a push this slave was waiting for that will never land (a stream dropped, or one a hash emptied the clipboard for
+    // from a master not in present, every master when null): an honest empty, logged, and shown once unless the screen is dark
+    private void TellDropped(IReadOnlyList<DroppedClipboardStream> dropped, string why, bool show, IReadOnlySet<string>? present = null)
+    {
+        var streams = ClipboardStreamReceiver.LogDropped(dropped, why, Log);
+        var awaited = _clipboard.ForgetAwaitedPushes(why, present);
+        if ((streams || awaited) && show) _osd.Show(ClipboardStreamReceiver.FailedOsd);
+    }
+
+    // dormancy drops streams both ways at once, so nothing pends until a watchdog fires an osd on a dark screen; awake again
+    // before the drop runs, it drops nothing, since a stream begun since is the wake's (one from before keeps its watchdog)
+    private void DropStreamsForDormancy() =>
+        OnClipboardWorker(() =>
+        {
+            if (!_dormancy.IsDormant)
+            {
+                if (Log.IsEnabled(LogLevel.Debug))
+                    Log.LogDebug("Dormancy over before its clipboard streams were dropped; none dropped");
+                return;
+            }
+            TellDropped(_receiver.DropAll(), "the displays went dormant", show: false);
+            _streams.AbortAll();
+        });
 
     // messages that mean a human is back, ActivityPing included (a master sends it only on real local input)
     private static bool IsWakeSignal(MessageKind kind) => kind is
@@ -334,7 +580,7 @@ public class SlaveRelayConnection : RelayConnection
         MessageKind.EnterScreen or MessageKind.ActivityPing;
 
     // true when the message must not reach its handler; what falls through keeps the bookkeeping right for the wake
-    private bool DropWhileDormant(string sourceHost, MessageKind kind)
+    private bool DropWhileDormant(string sourceHost, MessageKind kind, ReadOnlyMemory<byte> body)
     {
         if (IsWakeSignal(kind))
         {
@@ -349,6 +595,10 @@ public class SlaveRelayConnection : RelayConnection
             Log.LogDebug("Dormant: refused {Kind} from {Host}", kind, sourceHost);
         if (kind == MessageKind.FileSelectionQuery)
             AnswerSelectionQuery(sourceHost, FileSelectionResult.UnavailableMessage);
+        if (kind == MessageKind.ClipboardStreamBegin && body.ParseMessage<ClipboardStreamBeginMessage>(Log, sourceHost) is { } begin)
+            RefuseWhileDormant(sourceHost, begin);
+        if (kind == MessageKind.ClipboardPull && body.ParseMessage<ClipboardPullMessage>(Log, sourceHost) is { } pull)
+            RefuseWhileDormant(sourceHost, pull);
         return true;
     }
 

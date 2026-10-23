@@ -108,7 +108,10 @@ public class HeldButtonTests : ServicesFixture
                     Neighbours =
                     [
                         new NeighbourConfig { Direction = Direction.Left, Name = "home", Mirror = false },
-                        new NeighbourConfig { Direction = Direction.Right, Name = "remote", SourceScreen = "remote:1", DestScreen = "remote:0", Mirror = false },
+                        new NeighbourConfig
+                        {
+                            Direction = Direction.Right, Name = "remote", SourceScreen = "remote:1", DestScreen = "remote:0", Mirror = false,
+                        },
                     ],
                 },
             ],

@@ -41,7 +41,7 @@ public class CursorHiderServiceTests
         {
             show = new Thread(() => showCursor());
             show.Start();
-            atTheLock.Task.Wait(Bound);
+            Assert.That(atTheLock.Task.Wait(Bound), Is.True, "show reached the lock");
             // past the seam, only the state lock can block it
             SpinWait.SpinUntil(() => !show.IsAlive || show.ThreadState.HasFlag(ThreadState.WaitSleepJoin));
             showFinishedDuringThePin = !show.IsAlive;

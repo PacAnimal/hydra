@@ -301,7 +301,9 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         }
     }
 
-    public async ValueTask SendReliableAsync(string[] targetHosts, byte[] payload, CancellationToken cancel = default)
+    // virtual for tests alone: a test slave that never connects records a reliable send rather than throw, and no
+    // other seam reaches this method
+    public virtual async ValueTask SendReliableAsync(string[] targetHosts, byte[] payload, CancellationToken cancel = default)
     {
         OnSent(targetHosts, payload);
 

@@ -60,6 +60,8 @@ public class InputRouter(
     private CoalescingBatch<MouseInputKind, double>? _openMouseBatch;
     private int _postedMouseBatchCount;
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+    // how long stopping waits for the clipboard hash reads under way
+    private static readonly TimeSpan HashReadsTimeout = TimeSpan.FromSeconds(2);
     private ITimer? _mouseFlushTimer;
     private long _lastMouseBatchPostTick;
     private bool _mouseFlushArmed;
@@ -71,15 +73,43 @@ public class InputRouter(
     private readonly FileTransferService _fileTransfer = fileTransfer;
     private readonly IFileSelectionDetector _selectionDetector = selectionDetector;
     private readonly ClipboardMaster _clipboard = new(clipboardSync, log);
+    // all three made first thing in StartAsync, before any handler that uses them is subscribed, since they call back into this router
+    private ClipboardStreamSender _streams = null!;
+    private ClipboardStreamReceiver _receiver = null!;
+    private DeferredClipboardOffer _offer = null!;
+    // the remote host the cursor is on, null on the local screen; read off the actor by the stream sender
+    private volatile string? _cursorHost;
+    // per host, the latest visit or hash request; a hash read off the actor is sent only while its token is still current
+    private readonly Dictionary<string, int> _hashTokens = new(StringComparer.OrdinalIgnoreCase);
+    // per host told Pending whose wait ended, the token of the hash read it is owed, which goes wherever the cursor is
+    private readonly Dictionary<string, int> _owedHashes = new(StringComparer.OrdinalIgnoreCase);
+    // guards _hashTokens, _owedHashes, _hashReads, _visits and _visitIds, and every write of _cursorHost; held to check a
+    // hash and send it and to move the cursor's host, so no outdated hash follows an enter or leave; never held across a
+    // clipboard read
+    private readonly Lock _hashLock = new();
+    private readonly List<Task> _hashReads = [];
+    // per host, its latest visit, which its hashes carry and its pull requests echo; guarded by _hashLock
+    private readonly Dictionary<string, int> _visits = new(StringComparer.OrdinalIgnoreCase);
+    private int _visitIds;
     // cancelled when stopping begins: abandons a selection query and refuses new ones
     private readonly CancellationTokenSource _stopping = new();
 
-
     public async Task StartAsync(CancellationToken cancellationToken)
     {
+        _streams = new ClipboardStreamSender(relay, () => _cursorHost, log);
+        _receiver = new ClipboardStreamReceiver(clipboardSync, (host, _) => _clipboard.Begun(host), _clipboard.Rejected, _time, log,
+            MessageKind.ClipboardPullResponse);
+        _receiver.Abandoned += (host, id) => OnStreamGivenUp(host, null, id, abort: true, failed: false);
+        // on the timer thread too, so a newer stream from host may already be streaming: only the failed one's pull ends
+        _receiver.Failed += failed => OnStreamGivenUp(failed.Host, failed.PullId, failed.Id, abort: !failed.SenderGaveUp, failed: true);
+        _offer = new DeferredClipboardOffer(_time, log);
+        _offer.TimedOut += host => _ = OfferDeferred(host);
+        _offer.HeldWaitedOut += LandHeldInBackground;
+
         if (!platform.IsAccessibilityTrusted())
         {
-            log.LogWarning("Accessibility permission not granted — open System Settings › Privacy & Security › Accessibility and enable Hydra, then Hydra will continue automatically.");
+            log.LogWarning("Accessibility permission not granted — open System Settings › Privacy & Security › Accessibility and enable Hydra, "
+                + "then Hydra will continue automatically.");
             await platform.WaitForAccessibilityTrusted(cancellationToken);
             if (cancellationToken.IsCancellationRequested) return;
             log.LogInformation("Accessibility permission granted");
@@ -169,6 +199,7 @@ public class InputRouter(
         _commands.Writer.TryComplete();
         if (_consumerTask != null)
             await _consumerTask;
+        await AwaitHashReads(cancellationToken);
 
         // consumer is done; safe to access _state directly
         if (_state.Mouse.IsOnVirtualScreen)
@@ -176,6 +207,10 @@ public class InputRouter(
             platform.IsOnVirtualScreen = false;
             cursorHider.Show();
         }
+
+        _receiver.Dispose();
+        _offer.Dispose();
+        await _streams.DisposeAsync();
     }
 
     private async Task ProcessCommands()
@@ -310,6 +345,15 @@ public class InputRouter(
 
         // abort a transfer only if its own peer left, not the cursor's
         _fileTransfer.AbortIfPeerGone(current, relay);
+        _streams.Retain(current);
+        var dropped = _receiver.Retain(current);
+        // a host that left answers no pull, and one back under the same name must not have its answer taken
+        var landed = new List<HeldLanding>();
+        foreach (var pull in _clipboard.Outstanding.Where(p => !current.Contains(p.Host)))
+            landed.AddRange(_clipboard.ForgetPull(pull.Host));
+        await OfferDeferred(_offer.Retain(current));
+        await TellDropped(dropped, "it left the relay");
+        await Landed(landed);
 
         // send MasterConfig only to newly appeared peers that are configured as slaves
         foreach (var host in delta.NewPeers)
@@ -333,12 +377,41 @@ public class InputRouter(
 
         // reset known peers so all slaves get a fresh MasterConfig on reconnect
         await _peerState.ClearPeers();
+        _streams.DropAll();
+        var dropped = _receiver.DropAll();
+        var landed = _clipboard.ForgetPull();
+        _offer.Clear();
 
         if (disconnectedHost != null)
         {
             _fileTransfer.Abort(relay, "relay disconnected");
             log.LogWarning("Relay disconnected — returned to local screen from '{Host}'", disconnectedHost);
         }
+        await TellDropped(dropped, "the relay disconnected");
+        await Landed(landed);
+    }
+
+    // an answer a host was waiting for that will never land: an honest empty, told where the cursor is
+    private async ValueTask TellDropped(IReadOnlyList<DroppedClipboardStream> dropped, string why)
+    {
+        if (ClipboardStreamReceiver.LogDropped(dropped, why, log)) await ShowFailedWhereTheCursorIs();
+    }
+
+    // on the actor, which knows where the cursor is; once stopping, nothing is shown
+    private Task ShowFailedWhereTheCursorIs() => RunFence(st =>
+    {
+        ShowOsd(st, ClipboardStreamReceiver.FailedOsd);
+        return ValueTask.CompletedTask;
+    });
+
+    // a stream the receiver gave up on: its pull ends (failed: its answer not taken, so the next pull asks a resend), its
+    // sender stops if abort (told it failed if failed), and its deferred offer goes
+    private void OnStreamGivenUp(string host, int? pullId, long id, bool abort, bool failed)
+    {
+        _clipboard.StreamEnded(host, pullId, failed);
+        if (abort) relay.SendClipboardAbort(host, id, failed);
+        if (failed) _ = ShowFailedWhereTheCursorIs();
+        _ = OfferDeferred(_offer.Abandoned(host, streamOnly: true, pullId));
     }
 
     private void OnScreensaverActivated()
@@ -429,37 +502,224 @@ public class InputRouter(
     private ValueTask BroadcastLockScreen(LocalMasterState st) =>
         BroadcastToPeers(MessageKind.LockScreen, new LockScreenMessage(_getTickCount() - st.LastInputTick));
 
-    // sends master's clipboard hash to slave; slave decides whether to request the full push
-    private void PushClipboardToHost(string host)
+    // sends master's clipboard hash to slave; slave decides whether to request the full push. The read runs off the
+    // actor, after EnterScreen went out; its hash goes only if no newer entry or request for host came since and the
+    // cursor is still there, or, owed: host was told Pending and its wait ended, so it goes wherever the cursor is. A
+    // read replacing an owed one still under way is owed in its place
+    private void PushClipboardToHost(string host, bool owed = false)
     {
         if (!UseHydraClipboard(host)) return;
+        lock (_hashLock)
+        {
+            if (_stopping.IsCancellationRequested) return;
+            owed |= _owedHashes.ContainsKey(host);
+            if (owed) _owedHashes[host] = NextHashToken(host);
+            var token = owed ? _owedHashes[host] : NextHashToken(host);
+            TrackBackground(() => Task.Run(() => SendHashIfCurrent(host, token)));
+        }
+    }
+
+    // starts work off the caller's thread, among the reads StopAsync awaits, unless stopping, when none may start after it
+    private void TrackBackground(Func<Task> work)
+    {
+        lock (_hashLock)
+        {
+            if (_stopping.IsCancellationRequested) return;
+            _hashReads.RemoveAll(t => t.IsCompleted);
+            _hashReads.Add(work());
+        }
+    }
+
+    // the hosts told Pending whose wait ended, sent their hash wherever the cursor is, stamped with their latest visit;
+    // which they were
+    private IReadOnlyList<string> SendOwedHashes()
+    {
+        var due = _offer.TakeDue();
+        foreach (var host in due)
+        {
+            if (log.IsEnabled(LogLevel.Debug))
+                log.LogDebug("Clipboard hash to {Host}: told pending, its wait ended", host);
+            PushClipboardToHost(host, owed: true);
+        }
+        return due;
+    }
+
+    // for tests: runs as an owed read that found nothing is about to be owed on the clipboard still on its way
+    internal Action? OwingOnArriving { get; set; }
+
+    // completes once every hash read started so far has sent or dropped its hash
+    internal Task HashReads()
+    {
+        lock (_hashLock)
+            return Task.WhenAll([.. _hashReads]);
+    }
+
+    // after the actor drained: the hash reads under way, bounded, so none sends after the router stopped
+    private async ValueTask AwaitHashReads(CancellationToken cancellationToken)
+    {
+        var reads = HashReads();
+        if (reads.IsCompleted) return;
+        var waited = reads.WaitAsync(HashReadsTimeout, _time, cancellationToken);
+        if (log.IsEnabled(LogLevel.Debug))
+            log.LogDebug("Waiting for the clipboard hash reads under way");
         try
         {
-            if (_clipboard.Hash() is not { } hash)
-                return; // nothing to push
-            if (log.IsEnabled(LogLevel.Debug))
-                log.LogDebug("Sending clipboard hash to {Host}", host);
-            relay.Send(host, MessageKind.ClipboardHash, hash);
+            await waited;
+        }
+        catch (Exception ex) when (ex is TimeoutException or OperationCanceledException)
+        {
+            log.LogWarning("Clipboard hash reads still under way after {Timeout}; stopping without them", HashReadsTimeout);
+        }
+    }
+
+    // a new visit to host, or a new hash request for it, outdating every read still under way for it; under _hashLock
+    private int NextHashToken(string host) => _hashTokens[host] = _hashTokens.GetValueOrDefault(host) + 1;
+
+    private void SendHashIfCurrent(string host, int token)
+    {
+        try
+        {
+            // a host whose copy the master never took (or has yet to) keeps it rather than empty it for an older push
+            var read = _clipboard.Hash(host);
+            IReadOnlyList<OutstandingPull> landNow = [];
+            List<OutstandingPull> gone = [];
+            lock (_hashLock)
+            {
+                // a host owed its hash gets it wherever the cursor is
+                var owed = _owedHashes.TryGetValue(host, out var owedToken) && owedToken == token;
+                if (owed) _owedHashes.Remove(host);
+                var current = !_stopping.IsCancellationRequested && _hashTokens.TryGetValue(host, out var now) && now == token;
+                if (read is not { } hash)
+                {
+                    if (!owed || !current) return;
+                    // the master emptied for a clipboard still on its way (streaming, or held for a newer pull, within its
+                    // deadline): owed again once that lands, rather than told none follows
+                    if (_clipboard.StreamingIn is var streams && _clipboard.HeldFor is var held && streams.Count + held.Count > 0)
+                    {
+                        OwingOnArriving?.Invoke();
+                        if (log.IsEnabled(LogLevel.Debug))
+                            log.LogDebug("Clipboard hash to {Host}: nothing yet, owed once the clipboard on its way lands", host);
+                        landNow = _offer.OweOn(host, streams, held);
+                        // a stream that ended between the snapshot and the owing found no wait to end: it ends here
+                        foreach (var ended in streams.Where(p => !_clipboard.IsStreaming(p)))
+                            gone.Add(ended);
+                    }
+                    // nothing to push: a host owed its hash may await a push that was aborted, so it is told none follows
+                    else SendNoPush(host, _visits.GetValueOrDefault(host));
+                }
+                else if (!current || (!owed && !host.EqualsIgnoreCase(_cursorHost)))
+                {
+                    if (log.IsEnabled(LogLevel.Debug))
+                        log.LogDebug("Clipboard hash to {Host} dropped: outdated", host);
+                }
+                else
+                {
+                    if (log.IsEnabled(LogLevel.Debug))
+                        log.LogDebug("Sending clipboard hash to {Host}", host);
+                    relay.Send(host, MessageKind.ClipboardHash, hash with { Visit = _visits.GetValueOrDefault(host) });
+                }
+            }
+            // held for a pull waited out already: it lands now, which offers it to the hosts owed on it
+            foreach (var pull in landNow) LandHeldInBackground(pull);
+            foreach (var ended in gone) _ = OfferDeferred(_offer.Abandoned(ended.Host, streamOnly: true, ended.Id));
         }
         catch (Exception ex)
         {
+            // an owed read that failed is no longer under way, so the host's next ordinary read is not owed
+            lock (_hashLock)
+                if (_owedHashes.TryGetValue(host, out var owedToken) && owedToken == token) _owedHashes.Remove(host);
             log.LogWarning(ex, "Failed to send clipboard hash to {Host}", host);
         }
     }
 
-    // slave has compared hashes and determined it needs our clipboard; send the full push
-    private void OnClipboardPullRequest(string host)
+    // the clipboard hash on entering host, on the actor; while pulls to other hosts are outstanding it waits for their
+    // answers, which may change what the master offers, unless those pulls have already been waited out. owed: host is
+    // owed its hash (an owed read was under way), which its entry's read or wait stays
+    private void OfferClipboardOnEntry(string host, bool owed)
+    {
+        if (!UseHydraClipboard(host)) return;
+        var outstanding = _clipboard.Outstanding;
+        if (outstanding.Count > 0)
+        {
+            var offer = _offer.Defer(host, outstanding, _clipboard.IsStreaming, owed);
+            // answered meanwhile, before the wait was there to be ended: it ends here
+            if (offer != DeferredOffer.SendNow && _offer.Resolve(_clipboard.Outstanding) == null)
+            {
+                if (offer == DeferredOffer.WaitPending) SendPending(host);
+                SendOwedHashes();
+                return;
+            }
+        }
+        owed |= _offer.SendingNow(host, _clipboard.Outstanding);
+        SendOwedHashes();
+        PushClipboardToHost(host, owed);
+    }
+
+    // a deferred entry hash, once its wait has ended: to host, if the cursor is still there; any host told Pending whose
+    // wait ended is sent its own wherever the cursor is
+    private Task OfferDeferred(string? host)
+    {
+        var due = SendOwedHashes();
+        if (host == null || due.Contains(host, StringComparer.OrdinalIgnoreCase)) return Task.CompletedTask;
+        return RunFence(st =>
+        {
+            if (IsCursorOn(st, host)) PushClipboardToHost(host);
+            return ValueTask.CompletedTask;
+        });
+    }
+
+    // the pull's answer is streaming in, emptying the master's clipboard: host, waiting on it, empties its own meanwhile
+    private async ValueTask OfferPending(string? host)
+    {
+        if (host == null) return;
+        await RunFence(st =>
+        {
+            if (IsCursorOn(st, host)) SendPending(host);
+            return ValueTask.CompletedTask;
+        });
+    }
+
+    private void SendPending(string host)
+    {
+        if (log.IsEnabled(LogLevel.Debug))
+            log.LogDebug("Sending clipboard pending to {Host}", host);
+        // a host whose copy the master never took keeps it rather than empty it for the clipboard on its way
+        relay.Send(host, MessageKind.ClipboardHash, new ClipboardHashMessage(null, Pending: true, ResendFrom: _clipboard.ResendFrom(host)));
+    }
+
+    private static bool IsCursorOn(LocalMasterState st, string host) => st.Mouse.IsOnVirtualScreen && st.Mouse.CurrentScreen.Host.EqualsIgnoreCase(host);
+
+    // slave has compared hashes and determined it needs our clipboard; send the full push, or tell it none follows so it
+    // is not left waiting. On the relay receive path, never the actor
+    private void OnClipboardPullRequest(string host, int? visit)
     {
         if (!UseHydraClipboard(host)) return;
         try
         {
             if (_clipboard.Push() is { } push)
-                relay.Send(host, MessageKind.ClipboardPush, push);
+            {
+                // one that cannot be encoded never goes, so the slave is told none follows rather than wait on it
+                _streams.Send(host, MessageKind.ClipboardPush, push, () => SendNoPush(host, visit));
+                return;
+            }
+            if (log.IsEnabled(LogLevel.Debug))
+                log.LogDebug("Clipboard pull request from {Host}: nothing to push", host);
         }
         catch (Exception ex)
         {
             log.LogWarning(ex, "Failed to push clipboard to {Host}", host);
         }
+        SendNoPush(host, visit);
+    }
+
+    private void SendNoPush(string host, int? visit) => relay.Send(host, MessageKind.ClipboardPushNone, new ClipboardPushNoneMessage(visit));
+
+    // whether a pull request from host for visit is its latest visit's, which the cursor may have left since: that
+    // visit's hash emptied the slave's clipboard for the push, so it is still honoured
+    private bool IsLatestVisit(string host, int? visit)
+    {
+        lock (_hashLock)
+            return _visits.TryGetValue(host, out var latest) && latest == visit;
     }
 
     private void PullClipboardFromHost(string host)
@@ -467,7 +727,103 @@ public class InputRouter(
         if (!UseHydraClipboard(host)) return;
         if (log.IsEnabled(LogLevel.Debug))
             log.LogDebug("Pulling clipboard from {Host}", host);
-        relay.Send(host, MessageKind.ClipboardPull, _clipboard.Pull(host));
+        // a hash read under way for host is older than this pull, and would reach it after the pull's answer, emptying
+        // the copy it answered with: outdated; one owed is read afresh once the pull is out, unless the deferred offer
+        // owes it too, whose wait's end sends it
+        bool owed;
+        lock (_hashLock)
+        {
+            owed = _owedHashes.Remove(host);
+            NextHashToken(host);
+        }
+        relay.Send(host, MessageKind.ClipboardPull, _clipboard.Pull(host, _receiver.PendingFrom));
+        if (owed && !_offer.Owes(host)) PushClipboardToHost(host, owed: true);
+    }
+
+    // takes a slave's answer to a pull, whole or streamed, offering the cursor's remote the result; whether it was taken
+    private async ValueTask<bool> OnClipboardPullAnswer(string host, ClipboardPullResponseMessage answer)
+    {
+        var taken = _clipboard.TakePullAnswer(host, answer);
+        if (!taken.Taken) return false;
+        await Offer(new OutstandingPull(host, answer.PullId), taken);
+        return true;
+    }
+
+    // what an answer to pull did: the pushes of an older clipboard stop, each host whose push stopped, bar the cursor's,
+    // owed the new clipboard's hash wherever the cursor is; superseded streams go, and the cursor's remote is offered the result
+    private async ValueTask Offer(OutstandingPull pull, PullAnswer taken)
+    {
+        // held for a newer pull to its host, it lands with that pull's answer, or once that pull is waited out: what
+        // waited on it waits on that pull; one waited out already lands it now
+        if (taken.HeldFor is { } heldFor)
+        {
+            if (_offer.Held(heldFor)) await LandHeld(heldFor);
+            return;
+        }
+        if (taken.Failed) await ShowFailedWhereTheCursorIs();
+        IReadOnlyList<string> aborted = taken.Applied is { HasClipboard: true } ? _streams.AbortPushes() : [];
+        AbortSuperseded(taken.Superseded);
+        var waiting = _offer.Answered(pull, taken.Superseded);
+        var due = SendOwedHashes();
+        if (taken.Applied == null && waiting == null) return;
+        var activeHost = await RunFence(st => st.Mouse.CurrentScreen?.Host, null);
+        foreach (var host in aborted.Where(h => !h.EqualsIgnoreCase(activeHost) && !due.Contains(h, StringComparer.OrdinalIgnoreCase)))
+        {
+            if (log.IsEnabled(LogLevel.Debug))
+                log.LogDebug("Clipboard hash to {Host}: its push of the older clipboard was aborted", host);
+            PushClipboardToHost(host, owed: true);
+        }
+        // a host still waiting on another pull is offered the result once that one resolves too; the cursor's host, its
+        // push aborted, is owed it then, or now, wherever the cursor is
+        if (activeHost == null) return;
+        var activeAborted = aborted.Contains(activeHost, StringComparer.OrdinalIgnoreCase);
+        if (activeAborted) _offer.Owe(activeHost);
+        if (!_offer.IsWaiting(activeHost) && !due.Contains(activeHost, StringComparer.OrdinalIgnoreCase))
+            PushClipboardToHost(activeHost, owed: activeAborted);
+    }
+
+    // the newer pull an answer is held for was waited out: the held answer lands, offered as any answer, and what waited
+    // on that pull waits no more (the waits on the stream moved there); never once stopping
+    private async Task LandHeld(OutstandingPull pull)
+    {
+        if (_stopping.IsCancellationRequested) return;
+        if (_clipboard.LandHeld(pull) is { } landed) await Landed([landed]);
+        await OfferDeferred(_offer.Answered(pull, []));
+    }
+
+    // LandHeld off the caller's thread (a timer's, a hash read's), tracked as hash reads are, so stopping awaits it
+    private void LandHeldInBackground(OutstandingPull pull) => TrackBackground(() => Task.Run(() => LandHeld(pull)));
+
+    // a held answer landed as its host's pulls were forgotten, offered as any answer; one that could not be written is a
+    // failure, shown where the cursor is
+    private async ValueTask Landed(IReadOnlyList<HeldLanding> landed)
+    {
+        foreach (var held in landed)
+        {
+            if (held.Answer is { } answer) await Offer(held.Pull, answer);
+            else await ShowFailedWhereTheCursorIs();
+        }
+    }
+
+    // the answer streaming in for pull is a changed clipboard, so it supersedes the older pulls from its Begin: their
+    // streams are dropped and aborted, and a host whose entry hash waited only on them is offered the clipboard; replacing:
+    // the Begin replaced host's older stream, whose pull its accept forgot; resends: the Begin's Resends, which ranks it
+    private async ValueTask SupersedeFromBegin(OutstandingPull pull, bool replacing, int? resends)
+    {
+        var superseded = _clipboard.Streaming(pull, resends);
+        if (superseded.Count == 0 && !replacing) return;
+        // host's own older answer is the stream this one replaced, so nothing of it is left to abort
+        AbortSuperseded([.. superseded.Where(p => !p.Host.EqualsIgnoreCase(pull.Host))]);
+        await OfferDeferred(_offer.Resolve(_clipboard.Outstanding));
+    }
+
+    // the answers to superseded pulls are no longer wanted: their streams still arriving are dropped and aborted
+    private void AbortSuperseded(IReadOnlyList<OutstandingPull> superseded)
+    {
+        foreach (var older in superseded)
+        {
+            if (_receiver.Drop(older.Host) is { } dropped) relay.SendClipboardAbort(older.Host, dropped.Id);
+        }
     }
 
     private async Task OnMessageReceived(string sourceHost, MessageKind kind, ReadOnlyMemory<byte> body)
@@ -494,7 +850,8 @@ public class InputRouter(
                         await TryEnterRemoteOnly(st);
                     });
                     if (log.IsEnabled(LogLevel.Information))
-                        log.LogInformation("Screen info from {Host}: {Count} {Screens}", sourceHost, owned.Kept.Count, Pluralize.Of(owned.Kept.Count, "screen"));
+                        log.LogInformation("Screen info from {Host}: {Count} {Screens}",
+                            sourceHost, owned.Kept.Count, Pluralize.Of(owned.Kept.Count, "screen"));
                 }
                 break;
             case MessageKind.SlaveLog:
@@ -512,29 +869,109 @@ public class InputRouter(
             case MessageKind.ClipboardPullRequest:
                 {
                     if (!UseHydraClipboard(sourceHost)) break;
-                    // only honour if cursor is currently on that slave's screen
-                    var onThatScreen = await RunFence(
-                        st => st.Mouse.IsOnVirtualScreen && st.Mouse.CurrentScreen.Host.EqualsIgnoreCase(sourceHost),
-                        false);
-                    if (onThatScreen)
-                        OnClipboardPullRequest(sourceHost);
-                    else if (log.IsEnabled(LogLevel.Debug))
-                        log.LogDebug("Clipboard pull request from {Host} ignored (cursor not on that screen)", sourceHost);
+                    var visit = body.ParseMessage<ClipboardPullRequestMessage>(log, sourceHost)?.Visit;
+                    var onThatScreen = await RunFence(st => IsCursorOn(st, sourceHost), false);
+                    if (onThatScreen || IsLatestVisit(sourceHost, visit))
+                        OnClipboardPullRequest(sourceHost, visit);
+                    else
+                    {
+                        if (log.IsEnabled(LogLevel.Debug))
+                            log.LogDebug("Clipboard pull request from {Host} ignored (cursor not on that screen, and not its latest visit)", sourceHost);
+                        SendNoPush(sourceHost, visit);
+                    }
                     break;
                 }
             case MessageKind.ClipboardPullResponse:
-                if (!UseHydraClipboard(sourceHost)) break;
-                var clip = body.ParseMessage<ClipboardPullResponseMessage>(log, sourceHost);
-                if (clip != null)
                 {
-                    if (_clipboard.OnPullAnswer(sourceHost, clip) == null)
-                        break;
-                    // if cursor is currently on a remote screen, forward the clipboard to it
-                    var activeHost = await RunFence(st => st.Mouse.CurrentScreen?.Host, null);
-                    if (activeHost != null)
-                        PushClipboardToHost(activeHost);
+                    if (!UseHydraClipboard(sourceHost)) break;
+                    var clip = body.ParseMessage<ClipboardPullResponseMessage>(log, sourceHost);
+                    if (clip == null) break;
+                    // a changed whole answer is newer than any stream still pending from that host; an unchanged one
+                    // answers a newer pull beside it, the stream still landing as the answer to its own
+                    var changed = clip.Unchanged != true;
+                    if (changed) _receiver.Drop(sourceHost);
+                    await OnClipboardPullAnswer(sourceHost, clip);
+                    if (changed) _clipboard.StreamEnded(sourceHost);
+                    break;
                 }
-                break;
+            case MessageKind.ClipboardStreamBegin:
+                {
+                    if (!UseHydraClipboard(sourceHost)) break;
+                    if (body.ParseMessage<ClipboardStreamBeginMessage>(log, sourceHost) is not { } begin) break;
+                    // accepting the Begin notes its pull streaming in before the receiver takes it, so a pull made meanwhile
+                    // keeps it outstanding; it carries the stream's hash once the receiver has taken the Begin. Every end
+                    // below and in the receiver's events ends it
+                    var answering = begin is { Inner: MessageKind.ClipboardPullResponse, PullId: { } pullId } ? _clipboard.StreamFor(sourceHost, pullId) : null;
+                    // the Begin answers the pull an older answer was held for, which its accept dropped: so goes its deadline
+                    if (answering != null) _offer.HeldReplaced(answering);
+                    // a stream still pending from that host is replaced by this Begin, its pull no longer outstanding
+                    var replacing = answering != null && _receiver.PendingFrom(sourceHost) != null;
+                    // an answer to no outstanding pull (superseded by a newer copy, or forgotten) would only empty the clipboard
+                    if (begin.Inner == MessageKind.ClipboardPullResponse && answering == null)
+                    {
+                        if (log.IsEnabled(LogLevel.Debug))
+                            log.LogDebug("Clipboard stream {Id} from {Host} answers no outstanding pull; aborted", begin.Id, sourceHost);
+                        relay.SendClipboardAbort(sourceHost, begin.Id);
+                        break;
+                    }
+                    // a copy on the master since the pull is newer: the stream is refused before it empties that copy, and
+                    // replaces any older one from that host as a Begin taken would, whose pull its accept forgot
+                    if (answering != null && _clipboard.RefuseStream(answering))
+                    {
+                        if (replacing) _receiver.Drop(sourceHost);
+                        relay.SendClipboardAbort(sourceHost, begin.Id);
+                        await OfferDeferred(_offer.Answered(answering, []));
+                        if (replacing) await OfferDeferred(_offer.Resolve(_clipboard.Outstanding));
+                        break;
+                    }
+                    // a rejected Begin is no answer begun, so the wait runs on; one the receiver did not take answers nothing
+                    if (!_receiver.OnBegin(sourceHost, begin))
+                    {
+                        if (answering != null) _clipboard.StreamEnded(sourceHost, answering.Id);
+                        if (replacing) await OfferDeferred(_offer.Resolve(_clipboard.Outstanding));
+                        break;
+                    }
+                    if (answering != null)
+                    {
+                        await OfferPending(_offer.Streaming(sourceHost, answering.Id));
+                        await SupersedeFromBegin(answering, replacing, begin.Resends);
+                    }
+                    break;
+                }
+            case MessageKind.ClipboardStreamChunk:
+                {
+                    if (!UseHydraClipboard(sourceHost)) break;
+                    if (body.ParseMessage<ClipboardStreamChunkMessage>(log, sourceHost) is not { } chunk) break;
+                    // the receiver takes only pull answers, so a completed stream is one
+                    if (_receiver.OnChunk(sourceHost, chunk) is not { } completed) break;
+                    if (completed.Bytes.TryDecodeBody<ClipboardPullResponseMessage>() is not { } streamed)
+                    {
+                        _receiver.OnUnreadable(sourceHost, chunk.Id);
+                        break;
+                    }
+                    if (!await OnClipboardPullAnswer(sourceHost, streamed))
+                        await OfferDeferred(_offer.Abandoned(sourceHost, streamOnly: true));
+                    break;
+                }
+            case MessageKind.ClipboardStreamAbort:
+                {
+                    if (!UseHydraClipboard(sourceHost)) break;
+                    if (body.ParseMessage<ClipboardStreamAbortMessage>(log, sourceHost) is not { } abort) break;
+                    // each side's ids are its own, so each ignores one it doesn't hold
+                    var receiving = _receiver.PendingFrom(sourceHost) != null;
+                    _receiver.OnAbort(sourceHost, abort);
+                    _streams.OnAbort(sourceHost, abort);
+                    // the stream a waiting host was told is pending won't land; a newer one is applied and offered as usual; one
+                    // the sender gave up on ended as a failure
+                    if (receiving && abort.Failed != true && _receiver.PendingFrom(sourceHost) == null)
+                    {
+                        _clipboard.StreamEnded(sourceHost);
+                        // a newer pull to that host still out: its answer superseded the stream, so what waited on the stream waits on it
+                        if (_clipboard.Outstanding.LastOrDefault(p => p.Host.EqualsIgnoreCase(sourceHost)) is { } newer) _offer.Superseded(newer);
+                        else await OfferDeferred(_offer.Abandoned(sourceHost, streamOnly: true));
+                    }
+                    break;
+                }
             case MessageKind.FileSelectionResponse:
                 {
                     var response = body.ParseMessage<FileSelectionResponseMessage>(log, sourceHost);
@@ -704,7 +1141,8 @@ public class InputRouter(
         st.Screens = newScreens;
         st.Layout = newLayout;
         st.ActiveLocalScreen = st.ActiveLocalScreen == null ? null
-            : st.LocalScreens.FirstOrDefault(s => s.Name.EqualsIgnoreCase(st.ActiveLocalScreen.Name)) ?? st.LocalScreens.FirstOrDefault() ?? st.ActiveLocalScreen;
+            : st.LocalScreens.FirstOrDefault(s => s.Name.EqualsIgnoreCase(st.ActiveLocalScreen.Name))
+                ?? st.LocalScreens.FirstOrDefault() ?? st.ActiveLocalScreen;
 
         // prune stale relative-mode entries for screens that no longer exist
         var validNames = new HashSet<string>(st.Screens.Select(s => s.Name), StringComparer.OrdinalIgnoreCase);
@@ -937,7 +1375,8 @@ public class InputRouter(
             {
                 // repeats are master-driven: each OS auto-repeat is re-resolved (live modifier/dead-key state)
                 // and forwarded with IsRepeat set, so the slave injects the correct character every tick.
-                ForwardKeyToVirtualScreen(st, new KeyEventMessage(keyEvent.Type, keyEvent.Modifiers, keyEvent.Character, RemapKey(keyEvent.Key), IsRepeat: keyEvent.IsRepeat));
+                ForwardKeyToVirtualScreen(st,
+                    new KeyEventMessage(keyEvent.Type, keyEvent.Modifiers, keyEvent.Character, RemapKey(keyEvent.Key), IsRepeat: keyEvent.IsRepeat));
             }
         });
     }
@@ -1145,6 +1584,8 @@ public class InputRouter(
         var host = st.Mouse.CurrentScreen.Host;
         if (slaveReachable) FlushMouseDelta(st);
         st.Mouse.LeaveScreen();
+        lock (_hashLock)
+            _cursorHost = null;
         st.PendingDx = 0;
         st.PendingDy = 0;
         ShowCursorOnReturn();
@@ -1157,6 +1598,13 @@ public class InputRouter(
     // go to that host by name, since the cursor has already moved off it.
     private void LeaveHost(LocalMasterState st, string host, bool reachable)
     {
+        lock (_hashLock)
+        {
+            // before LeaveScreen goes: a hash read for this visit finishing from here on is dropped
+            if (host.EqualsIgnoreCase(_cursorHost)) _cursorHost = null;
+            // an owed read goes wherever the cursor is, so leaving does not outdate it
+            if (!_owedHashes.TryGetValue(host, out var owed) || owed != _hashTokens.GetValueOrDefault(host)) NextHashToken(host);
+        }
         if (reachable && relay.IsConnected)
         {
             foreach (var button in st.ForwardedButtons)
@@ -1473,8 +1921,18 @@ public class InputRouter(
     // sends EnterScreen relay message + pushes clipboard to destination host
     private void SendEnterScreen(ScreenRect dest, int entryX, int entryY)
     {
+        bool owed;
+        lock (_hashLock)
+        {
+            // a new visit: a hash read for an earlier one, even one this entry defers, is outdated; an owed one's hash is
+            // owed by the entry's instead
+            owed = _owedHashes.ContainsKey(dest.Host);
+            NextHashToken(dest.Host);
+            _visits[dest.Host] = ++_visitIds;
+            _cursorHost = dest.Host;
+        }
         SendEnterMessage(dest, entryX, entryY);
-        PushClipboardToHost(dest.Host);
+        OfferClipboardOnEntry(dest.Host, owed);
     }
 
     private void SendEnterMessage(ScreenRect dest, int entryX, int entryY) =>

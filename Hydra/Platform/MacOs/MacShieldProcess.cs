@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using Cathedral.Extensions;
 using Cathedral.Utils;
 using Hydra.FileTransfer;
 using Microsoft.Extensions.Hosting;
@@ -7,25 +6,29 @@ using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform.MacOs;
 
-// launches the hydra-shield Swift binary (shipped alongside the executable).
-// provides three services:
-//   1. cursor shielding window — controlled via stdin (CmdHide/CmdShow/CmdDebug)
-//      shield echoes the command back on stdout after applying state; C# holds the send lock until the echo arrives
-//   2. network state detection — send CmdWifi via stdin to activate; shield reports PfxSsid/PfxWifiAuth on stdout
-//   3. file transfer progress panel — fire-and-forget stdin commands, cancel via stdout
+// launches the hydra-shield Swift binary (shipped alongside the executable) and talks to it over a ShieldChannel, whose
+// header describes the messages. provides: the cursor shielding window, network state detection, the file transfer
+// progress panel (IFileTransferDialog) and on-screen notices (IOsdNotification).
 // always runs on macOS (both master and slave) so network detection is always available.
-internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsWifi) : IHostedService, IDisposable, IFileTransferDialog, IOsdNotification
+internal sealed class MacShieldProcess : IHostedService, IDisposable, IFileTransferDialog, IOsdNotification
 {
-    // stdin commands (C# → shield)
-    private const string CmdHide = "0"; // pass-through: ignoresMouseEvents = true
-    private const string CmdShow = "1"; // absorb: ignoresMouseEvents = false (invisible)
-    private const string CmdDebug = "2"; // absorb: ignoresMouseEvents = false (visible red)
-    private const string CmdWifi = "wifi"; // activate WiFi/location monitoring (no echo)
+    private const string StateHide = "hide"; // pass-through: ignoresMouseEvents = true
+    private const string StateShow = "show"; // absorb: ignoresMouseEvents = false (invisible)
+    private const string StateDebug = "debug"; // absorb: ignoresMouseEvents = false (visible red)
 
-    // stdout prefixes (shield → C#)
-    private const string PfxSsid = "ssid:";
-    private const string PfxWifiAuth = "wifiauth:";
-    private const string PfxTransferCancel = "transfer:cancel";
+    private readonly MacNetworkState _networkState;
+    private readonly bool _needsWifi;
+    // starts one shield, null when there is none to start; tests start a fake one
+    private readonly Func<ShieldInstance?> _launch;
+
+    public MacShieldProcess(MacNetworkState networkState, bool needsWifi) : this(networkState, needsWifi, Launch) { }
+
+    internal MacShieldProcess(MacNetworkState networkState, bool needsWifi, Func<ShieldInstance?> launch)
+    {
+        _networkState = networkState;
+        _needsWifi = needsWifi;
+        _launch = launch;
+    }
 
     // IFileTransferDialog
     public event Action? CancelRequested;
@@ -34,20 +37,42 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
     internal static string AppPath(string installDir) => Path.Combine(installDir, "Resources", "MacShield", "hydra-shield.app");
 
     internal static readonly string BinaryPath = Path.Combine(AppPath(AppContext.BaseDirectory), "Contents", "MacOS", "hydra-shield");
-    private readonly SemaphoreSlim _sendSemaphore = new(1, 1);
-    private volatile TaskCompletionSource<string>? _pendingReply; // completed by ReadOutput when echo arrives
-    private Process? _process;
+    private ShieldInstance? _process;
+    private volatile ShieldChannel? _channel;
     private TaskCompletionSource? _initialStateTcs;
     private volatile TaskCompletionSource? _authSettledTcs; // completed when location auth leaves notDetermined
     private readonly Toggle _stopping = new();
     private readonly Lock _processLock = new();
-    private volatile string _lastState = CmdHide; // last show/hide command; re-applied after unexpected restart
-    private const int SendReplyTimeoutMs = 5_000;     // how long to wait for shield to echo a command back
+    private volatile string _lastState = StateHide; // last show/hide state; re-applied after unexpected restart
+    // how long to wait for the shield's ack, and for a send
+    internal TimeSpan SendReplyTimeout { get; init; } = TimeSpan.FromSeconds(5);
     private const int RestartInitialDelayMs = 500;    // initial backoff before restarting a crashed shield
     private const int RestartMaxDelayMs = 30_000;     // backoff cap
 
-    // only accessed from ReadOutput's single async continuation — no locking needed; reset on healthy output
+    // how long a shield stays up after acking its state before its death no longer counts as a crash-loop
+    internal static readonly TimeSpan HealthyUptime = TimeSpan.FromSeconds(30);
+
+    // reset once a (re)started shield has stayed up HealthyUptime past acking its state, so one that acks and dies
+    // still backs off
     private readonly DoublingBackoff _restartDelayMs = new(RestartInitialDelayMs, RestartMaxDelayMs);
+    private readonly Lock _backoffLock = new();
+    // the channel whose shield last acked its first state, and when, under _backoffLock
+    private ShieldChannel? _ackedChannel;
+    private long _ackedAt;
+
+    // what HealthyUptime is measured on; tests advance a fake one
+    internal TimeProvider Clock { get; init; } = TimeProvider.System;
+
+    // how many times the shield has been started, for tests
+    internal int Starts => Volatile.Read(ref _starts);
+    private int _starts;
+
+    // how many started shields have acked their state, for tests
+    internal int StatesAcked => Volatile.Read(ref _statesAcked);
+    private int _statesAcked;
+
+    // the wait before a restart; tests record it rather than wait
+    internal Func<int, Task> RestartDelay { get; init; } = Task.Delay;
 
     // assigned after DI builds so post-startup state changes are logged through the normal pipeline
     internal ILogger? Log { get; set; }
@@ -73,11 +98,11 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
         if (_initialStateTcs.Task.IsCompleted) return;
 
         // if auth is still undetermined, wait for it to settle (location permission prompt)
-        if (networkState.WifiAuthStatus is null or 0)
+        if (_networkState.WifiAuthStatus is null or 0)
             await Task.WhenAny(_initialStateTcs.Task, _authSettledTcs.Task, Task.Delay(TimeSpan.FromSeconds(8)));
 
         // if auth is now authorized, give ssid a moment to arrive
-        if (!_initialStateTcs.Task.IsCompleted && networkState.WifiAuthStatus is 3 or 4)
+        if (!_initialStateTcs.Task.IsCompleted && _networkState.WifiAuthStatus is 3 or 4)
             await Task.WhenAny(_initialStateTcs.Task, Task.Delay(TimeSpan.FromSeconds(2)));
 
         _authSettledTcs = null;
@@ -99,42 +124,44 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
 
     internal Task Show()
     {
-        var target = DebugShield ? CmdDebug : CmdShow;
+        var target = DebugShield ? StateDebug : StateShow;
         if (_lastState != target && Log?.IsEnabled(LogLevel.Debug) == true) Log.LogDebug("Shield → {State} (show/absorb)", target);
         _lastState = target;
-        return SendWithReply(target);
+        return SendState(target);
     }
 
     internal Task Hide()
     {
-        if (_lastState != CmdHide) Log?.LogDebug("Shield → hide (pass-through)");
-        _lastState = CmdHide;
-        return SendWithReply(CmdHide);
+        if (_lastState != StateHide) Log?.LogDebug("Shield → hide (pass-through)");
+        _lastState = StateHide;
+        return SendState(StateHide);
     }
 
     // -- IFileTransferDialog --
 
-    public void ShowTransferring(FileTransferInfo info)
+    // initializes the panel with file info and shows it immediately in transferring mode
+    public void ShowTransferring(FileTransferInfo info) => Post(new ShieldMessage("transferBegin", new Dictionary<string, object?>
     {
-        // transfer:begin initializes the panel with file info and shows it immediately in transferring mode
-        var names = string.Join("|", info.FileNames.Select(n => Base64(n)));
-        _ = SendFireAndForget($"transfer:begin;{info.TotalBytes};{info.FileCount};{info.IsSender.ToString().ToLowerInvariant()};{names}");
-    }
+        ["totalBytes"] = info.TotalBytes,
+        ["fileCount"] = info.FileCount,
+        ["isSender"] = info.IsSender,
+        ["names"] = info.FileNames,
+    }));
 
-    public void SetCurrentFile(string fileName) => _ = SendFireAndForget($"transfer:file:{Base64(fileName)}");
+    public void SetCurrentFile(string fileName) => Post(new ShieldMessage("transferFile", new Dictionary<string, object?> { ["name"] = fileName }));
 
     public void UpdateProgress(long bytesTransferred, double bytesPerSecond)
-        => _ = SendFireAndForget($"transfer:progress:{bytesTransferred}:{bytesPerSecond:F0}");
+        => Post(new ShieldMessage("transferProgress", new Dictionary<string, object?> { ["bytes"] = bytesTransferred, ["speed"] = bytesPerSecond }));
 
-    public void ShowCompleted() => _ = SendFireAndForget("transfer:done");
+    public void ShowCompleted() => Post(new ShieldMessage("transferDone"));
 
-    public void ShowError(string message) => _ = SendFireAndForget($"transfer:error:{Base64(message)}");
+    public void ShowError(string message) => Post(new ShieldMessage("transferError", new Dictionary<string, object?> { ["message"] = message }));
 
-    public void Close() => _ = SendFireAndForget("transfer:close");
+    public void Close() => Post(new ShieldMessage("transferClose"));
 
     // -- IOsdNotification --
 
-    public void Show(string message) => _ = SendFireAndForget($"osd:{Base64(message)}");
+    public void Show(string message) => Post(new ShieldMessage("osd", new Dictionary<string, object?> { ["text"] = message }));
 
     public void Dispose()
     {
@@ -144,39 +171,58 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
 
     private void StartProcess()
     {
-        if (OperatingSystem.IsMacOS()) EnsureExecutable();
-        if (!File.Exists(BinaryPath)) return;
-
         // start under the process lock and re-check _stopping so a restart racing Stop() can't
         // resurrect the shield after shutdown (which would orphan an event-absorbing overlay window)
+        ShieldInstance? process;
         lock (_processLock)
         {
             if (_stopping) return;
-            _process?.Dispose();
-            _process = Process.Start(new ProcessStartInfo
-            {
-                FileName = BinaryPath,
-                UseShellExecute = false,
-                RedirectStandardInput = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-            });
+            Retire(_process);
+            _process = process = _launch();
+            if (process != null) Interlocked.Increment(ref _starts);
         }
 
-        if (_process == null) return;
+        if (process == null) return;
+        // a send given up mid-frame ends the channel; killing the shield ends its pipes too, so the read loop restarts it
+        var channel = new ShieldChannel(process.Output, process.Input, new ForwardingLog(this)) { OnBroken = process.Kill };
+        _channel = channel;
 
-        // apply the current show/hide state as a single ordered command. on first start _lastState is
-        // CmdHide (pass-through); after an unexpected restart it still holds the pre-crash state so the
+        // apply the current show/hide state as a single ordered message. on first start _lastState is
+        // StateHide (pass-through); after an unexpected restart it still holds the pre-crash state so the
         // shield resumes absorbing. sending it here rather than as a separate restore avoids a Hide/Show race.
-        _ = SendWithReply(_lastState);
+        _ = ApplyState(channel);
 
-        if (needsWifi)
-            _ = SendFireAndForget(CmdWifi); // activate WiFi monitoring + location on demand (no echo expected)
+        if (_needsWifi)
+            Post(new ShieldMessage("wifi")); // activate WiFi monitoring + location on demand (no ack expected)
         else
             _initialStateTcs?.TrySetResult(); // no SSID expected — unblock WaitForInitialState immediately
 
-        _ = Task.Run(ReadOutput);
-        _ = Task.Run(ReadErrors);
+        _ = Task.Run(() => ReadOutput(channel));
+        if (process.Errors is { } errors) _ = Task.Run(() => ReadErrors(errors));
+    }
+
+    // the real shield binary, null when it is not installed
+    private static ShieldInstance? Launch()
+    {
+        if (OperatingSystem.IsMacOS()) EnsureExecutable();
+        if (!File.Exists(BinaryPath)) return null;
+        var process = Process.Start(new ProcessStartInfo
+        {
+            FileName = BinaryPath,
+            UseShellExecute = false,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        });
+        return process == null ? null : new ShieldInstance.OfProcess(process);
+    }
+
+    // a shield whose channel ended may still be running, holding its overlay window; it goes before the next starts
+    private static void Retire(ShieldInstance? old)
+    {
+        if (old == null) return;
+        old.Kill();
+        old.Dispose();
     }
 
     private bool IsStopping()
@@ -188,69 +234,76 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
     {
         // set _stopping and capture the process under the same lock StartProcess uses, so a concurrent
         // (re)start either bails on _stopping or is captured here and killed — never left orphaned
-        Process? proc;
+        ShieldInstance? proc;
         lock (_processLock)
         {
             _stopping.TrySet();
             proc = _process;
         }
-        if (proc is null) return;
-        try
+        proc?.Kill();
+    }
+
+    // sends a shield state and waits for its ack; a dead shield or a missing ack gives up after SendReplyTimeout
+    private async Task SendState(string state)
+    {
+        if (_channel is not { } channel) return;
+        await SendState(channel, state);
+    }
+
+    private async ValueTask<bool> SendState(ShieldChannel channel, string state)
+    {
+        var acked = await channel.SendAndAwaitAck("shield", new Dictionary<string, object?> { ["state"] = state }, SendReplyTimeout, CancellationToken.None);
+        if (!acked && Log?.IsEnabled(LogLevel.Debug) == true) Log.LogDebug("Shield did not ack {State}", state);
+        return acked;
+    }
+
+    // a (re)started shield's state; a Show or Hide made while it started may have gone to the old channel, so the
+    // current state follows until the shield has acked it. its first ack starts the uptime that, once it reaches
+    // HealthyUptime, resets the restart backoff
+    private async Task ApplyState(ShieldChannel channel)
+    {
+        var state = _lastState;
+        var acked = false;
+        while (await SendState(channel, state))
         {
-            if (!proc.HasExited)
+            if (!acked)
             {
-                proc.Kill();
-                proc.WaitForExit(2000);
+                acked = true;
+                lock (_backoffLock)
+                {
+                    _ackedChannel = channel;
+                    _ackedAt = Clock.GetTimestamp();
+                }
+                Interlocked.Increment(ref _statesAcked);
             }
+            if (_lastState == state) break;
+            state = _lastState;
         }
-        catch (Exception) { /* already dead or not associated */ }
     }
 
-    // sends a command and holds the send lock until the shield echoes the command back
-    private async Task SendWithReply(string command)
+    // sends without waiting on the caller; the channel keeps concurrent sends whole and in order. a send that
+    // outlasts the timeout breaks the channel, which kills the shield so it restarts
+    private void Post(ShieldMessage message)
     {
-        if (_process is null || _process.HasExited) return;
-        var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var _ = await _sendSemaphore.WaitForDisposable();
-        _pendingReply = tcs;
-        if (!Write(_process, command))
-        {
-            _pendingReply = null;
-            return;
-        }
-        // safety timeout: if the shield dies without echoing, don't deadlock forever
-        await Task.WhenAny(tcs.Task, Task.Delay(SendReplyTimeoutMs));
-        _pendingReply = null;
+        if (_channel is { } channel) _ = SendQuietly(channel, message);
     }
 
-    // sends a command without waiting for a reply (e.g. "wifi" activation)
-    private async Task SendFireAndForget(string command)
-    {
-        if (_process is null || _process.HasExited) return;
-        using var _ = await _sendSemaphore.WaitForDisposable();
-        Write(_process, command);
-    }
-
-    // one line to the shield, under the send lock; false when the process has just died
-    private static bool Write(Process process, string command)
+    private async Task SendQuietly(ShieldChannel channel, ShieldMessage message)
     {
         try
         {
-            process.StandardInput.WriteLine(command);
-            process.StandardInput.Flush();
-            return true;
+            using var timeout = new CancellationTokenSource(SendReplyTimeout);
+            await channel.Send(message, timeout.Token);
         }
-        catch (Exception)
+        catch (Exception e) when (e is IOException or ObjectDisposedException or OperationCanceledException)
         {
-            return false;
+            // the shield has just died or stalled; the read loop restarts it
         }
     }
 
     // logs stderr lines from the shield as warnings
-    private async Task ReadErrors()
+    private async Task ReadErrors(TextReader reader)
     {
-        var reader = _process?.StandardError;
-        if (reader == null) return;
         try
         {
             while (true)
@@ -263,67 +316,67 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
         catch (Exception ex) { Log?.LogDebug(ex, "Shield stderr reader exited"); }
     }
 
-    // parses stdout lines from the shield and updates MacNetworkState
-    private async Task ReadOutput()
+    // dispatches messages from the shield and updates MacNetworkState; restarts the shield when its stdout ends,
+    // whatever ended it, unless stopping
+    private async Task ReadOutput(ShieldChannel channel)
     {
-        var reader = _process?.StandardOutput;
-        if (reader == null) return;
         try
         {
-            while (true)
+            await foreach (var message in channel.ReadAll(CancellationToken.None))
             {
-                var line = await reader.ReadLineAsync();
-                if (line == null)
+                try
                 {
-                    // EOF — process exited; unblock any pending SendWithReply
-                    _pendingReply?.TrySetResult("");
-                    break;
+                    Dispatch(message);
                 }
-
-                // any successful output means the process is healthy — reset restart backoff
-                _restartDelayMs.Reset();
-
-                if (line is CmdHide or CmdShow or CmdDebug)
+                catch (Exception ex)
                 {
-                    // echo from shield confirming show/hide state was applied
-                    _pendingReply?.TrySetResult(line);
+                    Log?.LogWarning(ex, "Shield message {Kind} could not be handled", message.Kind);
                 }
-                else if (line.StartsWith(PfxSsid, StringComparison.Ordinal))
-                {
-                    var ssid = line[PfxSsid.Length..];
-                    var newSsid = string.IsNullOrEmpty(ssid) ? null : ssid;
-                    var changed = newSsid != networkState.Ssid;
-                    networkState.Ssid = newSsid;
-                    _initialStateTcs?.TrySetResult();
-                    if (changed && (_initialStateTcs?.Task.IsCompleted ?? true)) OnNetworkStateChanged?.Invoke();
-                }
-                else if (line.StartsWith(PfxWifiAuth, StringComparison.Ordinal) && int.TryParse(line[PfxWifiAuth.Length..], out var authStatus))
-                {
-                    networkState.WifiAuthStatus = authStatus;
-                    if (Log?.IsEnabled(LogLevel.Debug) == true)
-                        Log.LogDebug("Location services auth: {Status}", MacNetworkState.AuthLabel(authStatus));
-                    if (authStatus != 0) _authSettledTcs?.TrySetResult();
-                }
-                else if (line == PfxTransferCancel)
-                {
-                    CancelRequested?.Invoke();
-                }
-            }
-
-            if (!IsStopping())
-            {
-                // unexpected exit — restart with exponential backoff to avoid rapid crash-loops.
-                // StartProcess re-applies _lastState, so the shield resumes its pre-crash absorb state.
-                var delayMs = _restartDelayMs.Next();
-                Log?.LogWarning("Shield process exited unexpectedly — restarting in {Delay}ms", delayMs);
-                await Task.Delay(delayMs);
-                StartProcess();
             }
         }
-        catch (Exception ex) { Log?.LogDebug(ex, "Shield stdout reader exited"); }
+        catch (Exception ex) { Log?.LogWarning(ex, "Shield stdout reader failed"); }
+
+        if (IsStopping()) return;
+        // unexpected exit — restart with exponential backoff to avoid rapid crash-loops.
+        // StartProcess re-applies _lastState, so the shield resumes its pre-crash absorb state.
+        int delayMs;
+        lock (_backoffLock)
+        {
+            if (_ackedChannel == channel && Clock.GetElapsedTime(_ackedAt) >= HealthyUptime) _restartDelayMs.Reset();
+            delayMs = _restartDelayMs.Next();
+        }
+        Log?.LogWarning("Shield process exited unexpectedly — restarting in {Delay}ms", delayMs);
+        try
+        {
+            await RestartDelay(delayMs);
+            StartProcess();
+        }
+        catch (Exception ex) { Log?.LogError(ex, "Shield restart failed"); }
     }
 
-    private static string Base64(string s) => Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(s));
+    private void Dispatch(ShieldMessage message)
+    {
+        switch (message.Kind)
+        {
+            case "ssid":
+                var newSsid = message.GetString("name") is { Length: > 0 } ssid ? ssid : null;
+                var changed = newSsid != _networkState.Ssid;
+                _networkState.Ssid = newSsid;
+                _initialStateTcs?.TrySetResult();
+                if (changed && (_initialStateTcs?.Task.IsCompleted ?? true)) OnNetworkStateChanged?.Invoke();
+                break;
+            case "wifiAuth" when message.GetLong("status") is { } status:
+                var authStatus = (int)status;
+                _networkState.WifiAuthStatus = authStatus;
+                if (Log?.IsEnabled(LogLevel.Debug) == true)
+                    Log.LogDebug("Location services auth: {Status}", MacNetworkState.AuthLabel(authStatus));
+                if (authStatus != 0) _authSettledTcs?.TrySetResult();
+                break;
+            case "transferCancel":
+                CancelRequested?.Invoke();
+                break;
+        }
+    }
 
     [System.Runtime.Versioning.SupportedOSPlatform("macos")]
     private static void EnsureExecutable()
@@ -332,5 +385,16 @@ internal sealed class MacShieldProcess(MacNetworkState networkState, bool needsW
         var mode = File.GetUnixFileMode(BinaryPath);
         if ((mode & UnixFileMode.UserExecute) == 0)
             File.SetUnixFileMode(BinaryPath, mode | UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute);
+    }
+
+    // the channel is made before DI assigns Log, so it logs through whatever Log is at the time
+    private sealed class ForwardingLog(MacShieldProcess owner) : ILogger
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => owner.Log?.BeginScope(state);
+
+        public bool IsEnabled(LogLevel logLevel) => owner.Log?.IsEnabled(logLevel) == true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+            => owner.Log?.Log(logLevel, eventId, state, exception, formatter);
     }
 }

@@ -50,7 +50,8 @@ public class PasteOutcomeTests
     public async Task MalformedDone_DoesNotShowPasted()
     {
         var relay = await StartReceivingFromRemote();
-        await relay.FireMessageReceived("remote", MessageKind.FileTransferStart, Json(MessageKind.FileTransferStart, new FileTransferStartMessage(["a.txt"], 5)));
+        await relay.FireMessageReceived("remote", MessageKind.FileTransferStart,
+            Json(MessageKind.FileTransferStart, new FileTransferStartMessage(["a.txt"], 5)));
         relay.Sent.Clear();
 
         await relay.FireMessageReceived("remote", MessageKind.FileTransferDone, "{");

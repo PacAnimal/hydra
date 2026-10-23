@@ -66,18 +66,25 @@ public static class TransitionTestHelper
     /// <param name="loggerFactory">Where the router's other loggers come from, for a test that reads what a peer logged through it.</param>
     public static TestServiceBundle CreateService(Func<long>? getTickCount = null, IActivityTracker? activityTracker = null, IWorldState? world = null,
         TimeProvider? timeProvider = null, IHydraProfile? profile = null, IFileSelectionDetector? selectionDetector = null, IOsdNotification? osd = null,
-        FileTransferService? fileTransfer = null, IScreenSaverSync? screenSaverSync = null, FakeScreenDetector? screens = null, ILogger<InputRouter>? log = null,
-        IClipboardSync? clipboard = null, PeerPlatform? localPlatform = null, ILoggerFactory? loggerFactory = null)
+        FileTransferService? fileTransfer = null, IScreenSaverSync? screenSaverSync = null, FakeScreenDetector? screens = null,
+        ILogger<InputRouter>? log = null, IClipboardSync? clipboard = null, PeerPlatform? localPlatform = null, ILoggerFactory? loggerFactory = null)
     {
         var platform = new FakePlatform();
         var relay = new FakeRelay();
         screens ??= new FakeScreenDetector();
         var config = profile ?? TestConfig;
-        var tracker = activityTracker ?? new ActivityTracker(config, new Lazy<IRelaySender>(() => relay), new WorldState(), new NullScreenSaverSync(), NullLogger<ActivityTracker>.Instance);
-        var service = new InputRouter(platform, platform, config, relay, screens, loggerFactory ?? NullLoggerFactory.Instance, log ?? NullLogger<InputRouter>.Instance, screenSaverSync ?? new NullScreenSaverSync(), clipboard ?? new NullClipboardSync(),
-            fileTransfer ?? FileTransferService.Null(), selectionDetector ?? new NullFileSelectionDetector(), osd ?? new NullOsdNotification(), tracker, peerState: world,
-            getTickCount: getTickCount, timeProvider: timeProvider, localPlatform: localPlatform);
-        platform.AfterFireCallback = service.Flush;
+        var tracker = activityTracker ?? new ActivityTracker(config, new Lazy<IRelaySender>(() => relay), new WorldState(), new NullScreenSaverSync(),
+            NullLogger<ActivityTracker>.Instance);
+        var service = new InputRouter(platform, platform, config, relay, screens, loggerFactory ?? NullLoggerFactory.Instance,
+            log ?? NullLogger<InputRouter>.Instance, screenSaverSync ?? new NullScreenSaverSync(), clipboard ?? new NullClipboardSync(),
+            fileTransfer ?? FileTransferService.Null(), selectionDetector ?? new NullFileSelectionDetector(), osd ?? new NullOsdNotification(), tracker,
+            peerState: world, getTickCount: getTickCount, timeProvider: timeProvider, localPlatform: localPlatform);
+        // the entry's hash, read off the actor, settled too, as when it was read in line; a test of that read sets Flush alone
+        platform.AfterFireCallback = async () =>
+        {
+            await service.Flush();
+            await service.HashReads();
+        };
         return new TestServiceBundle(platform, relay, service);
     }
 
@@ -108,6 +115,15 @@ public static class TransitionTestHelper
     {
         platform.FireMouseMove(2559, 720);
         Assert.That(platform.IsOnVirtualScreen, Is.True, "pre-condition: on the remote screen");
+    }
+
+    // pushes the cursor right, a remote at a time, until it enters host
+    public static void MoveRightTo(FakePlatform platform, FakeRelay relay, string host)
+    {
+        bool Entered() => relay.Sent.Of(MessageKind.EnterScreen, host).Count > 0;
+        for (var i = 0; i < 40 && !Entered(); i++)
+            platform.FireMouseDelta(100, 0);
+        Assert.That(Entered(), Is.True, $"pre-condition: on {host}");
     }
 
     // remote-only: single remote host "mac", no local screens
@@ -147,7 +163,8 @@ public static class TransitionTestHelper
     // advertises one host's monitors, laid out left to right and named as the host itself names them
     public static async Task AdvertiseScreens(FakeRelay relay, string host, int count, PeerPlatform platform = PeerPlatform.Linux)
     {
-        var entries = Enumerable.Range(0, count).Select(i => new ScreenInfoEntry(ScreenNaming.BuildScreenName(host, i, count), i * 2560, 0, 2560, 1440, 1.0m)).ToList();
+        var entries = Enumerable.Range(0, count)
+            .Select(i => new ScreenInfoEntry(ScreenNaming.BuildScreenName(host, i, count), i * 2560, 0, 2560, 1440, 1.0m)).ToList();
         var info = JsonSerializer.Serialize(new ScreenInfoMessage(entries, platform), SaneJson.Options);
         await relay.FireMessageReceived(host, MessageKind.ScreenInfo, info);
     }

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 
@@ -10,6 +11,10 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
     // how much of a property one read takes, in 32-bit units; owners send more than this by INCR
     private const int ReadPropertyLongs = 1_000_000 / 4;
     private const int ClipboardTimeoutMs = 2000;
+    // the longest an INCR transfer that keeps sending chunks may take
+    private const int ClipboardTotalTimeoutMs = 30_000;
+    // the properties reads take turns with after one gives up, so atoms never pile up on the server
+    private const int ReadProperties = 16;
 
     private readonly nint _display;
     private readonly nint _window;
@@ -17,34 +22,54 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
     // atoms
     private readonly nint _atomClipboard;
     private readonly nint _atomTargets;
+    private readonly nint _atomTimestamp;
     private readonly nint _atomUtf8String;
     private readonly nint _atomIncr;
     private readonly nint _atomImagePng;
     private readonly nint _atomTextHtml;
-    private readonly nint _atomHydraClipboard;  // property for CLIPBOARD ConvertSelection responses
-    private readonly nint _atomHydraPrimary;    // property for PRIMARY ConvertSelection responses
-    private readonly nint _atomHydraImageClip;  // property for image ConvertSelection responses
-    private readonly nint _atomHydraHtmlClip;   // property for html ConvertSelection responses
+    private readonly nint _atomPasswordHint;    // KDE's mark of a password manager's copy
 
-    // owned clipboard state (written by Set*, read by event loop thread). Ownership is checked and changed under it too,
-    // by Own, GetPrimaryText and SelectionClear, so a clear for an earlier loss never nulls new data and a selection
-    // another app has just taken is never answered with ours
+    // what the password hint holds for a concealed copy
+    private static readonly byte[] PasswordHintSecret = "secret"u8.ToArray();
+
+    // owned clipboard state (written by Set*, read by event loop thread). CLIPBOARD's ownership and change counter are
+    // checked and moved under it too, so a clear for an earlier loss never nulls new data and a selection another app
+    // has just taken is never answered with ours
     private readonly Lock _dataLock = new();
     private ClipboardSnapshot? _ownedClipboard;
     private string? _ownedPrimaryText;
-    private readonly ClipboardEchoFilter _echo = new(() => true);
+    // CLIPBOARD's change counter: moved by each of Hydra's own writes and each other client's taking of it, an owner
+    // taking it again (an identical re-copy) among them, which XFixes reports. Set once XFixes is known
+    private readonly OwnerCounter _counter;
+    // the count Hydra's own last taking of CLIPBOARD left, null before any
+    private long? _wroteAt;
+    // the newest owner notice counted or passed over: when its owner took CLIPBOARD, and who, so none counts twice; two
+    // clients may take it within one server millisecond
+    private uint? _lastTaken;
+    private nint _lastTaker;
+    // XFixes' first event number, -1 without the extension, when only owner changes seen here move the counter
+    private readonly int _fixesEventBase = -1;
 
-    // GetText/GetImagePng synchronization — only one read in flight at a time
+    // ReadAll synchronization — only one read in flight at a time
     private readonly Lock _getLock = new();
+    // the read's state, shared by the reader and the event loop
+    private readonly Lock _readLock = new();
     private volatile ManualResetEventSlim? _getSignal;
     private volatile byte[]? _getResult;
+    private volatile bool _getFailed; // true when the answer's property could not be read, unlike an owner with no such target
     private volatile bool _fallbackToString; // true when UTF8_STRING failed, retrying with STRING
     private volatile nint _activeReadSelection; // selection atom being read
     private volatile nint _activeReadProperty;  // property atom being read
     private volatile nint _activeReadTarget;    // target atom being read
 
-    // INCR receive: accumulates chunks for a large clipboard read
+    // the property reads are answered in; a read that gives up retires it, so a late owner never feeds a later read
+    private readonly nint[] _readProperties = new nint[ReadProperties];
+    private nint _readProperty;
+    private int _retiredProperties;
+
+    // INCR receive: accumulates chunks for a large clipboard read; its start and each chunk counted, so the read's wait re-arms
     private MemoryStream? _incrReceiveBuffer;
+    private volatile int _incrChunks;
 
     // INCR send: tracks in-progress large clipboard sends, keyed by requestor window
     private readonly Dictionary<nint, IncrSendState> _incrSends = [];
@@ -64,25 +89,27 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
 
         _atomClipboard = NativeMethods.XInternAtom(_display, "CLIPBOARD", false);
         _atomTargets = NativeMethods.XInternAtom(_display, "TARGETS", false);
+        _atomTimestamp = NativeMethods.XInternAtom(_display, "TIMESTAMP", false);
         _atomUtf8String = NativeMethods.XInternAtom(_display, "UTF8_STRING", false);
         _atomIncr = NativeMethods.XInternAtom(_display, "INCR", false);
         _atomImagePng = NativeMethods.XInternAtom(_display, "image/png", false);
         _atomTextHtml = NativeMethods.XInternAtom(_display, "text/html", false);
-        _atomHydraClipboard = NativeMethods.XInternAtom(_display, "HYDRA_CLIPBOARD", false);
-        _atomHydraPrimary = NativeMethods.XInternAtom(_display, "HYDRA_PRIMARY", false);
-        _atomHydraImageClip = NativeMethods.XInternAtom(_display, "HYDRA_IMAGE_CLIP", false);
-        _atomHydraHtmlClip = NativeMethods.XInternAtom(_display, "HYDRA_HTML_CLIP", false);
+        _atomPasswordHint = NativeMethods.XInternAtom(_display, "x-kde-passwordManagerHint", false);
+        for (var i = 0; i < ReadProperties; i++)
+            _readProperties[i] = NativeMethods.XInternAtom(_display, $"HYDRA_READ_{i}", false);
+        _readProperty = _readProperties[0];
+
+        if (NativeMethods.XFixesQueryExtension(_display, out var fixesEventBase, out _))
+        {
+            _fixesEventBase = fixesEventBase;
+            NativeMethods.XFixesSelectSelectionInput(_display, _window, _atomClipboard, NativeMethods.XFixesSetSelectionOwnerNotifyMask);
+        }
+        _counter = new OwnerCounter(_fixesEventBase >= 0);
 
         _running = true;
         _eventThread = new Thread(EventLoop) { IsBackground = true, Name = "HydraClipboardEventLoop" };
         _eventThread.Start();
     }
-
-    public string? GetText() => ReadForeignClipboard(_atomHydraClipboard, _atomUtf8String) is { } read ? _echo.FilterText(read.DecodeText()) : null;
-
-    // CLIPBOARD as another client holds it; null while we own it, so our own write is never synced back
-    private SelectionRead? ReadForeignClipboard(nint property, nint target) =>
-        NativeMethods.XGetSelectionOwner(_display, _atomClipboard) == _window ? null : ReadSelection(_atomClipboard, property, target);
 
     internal bool OwnsPrimary => NativeMethods.XGetSelectionOwner(_display, NativeMethods.XA_PRIMARY) == _window;
 
@@ -93,13 +120,82 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
         {
             if (OwnsPrimary && _ownedPrimaryText != null) return _ownedPrimaryText;
         }
-        return ReadSelection(NativeMethods.XA_PRIMARY, _atomHydraPrimary, _atomUtf8String)?.DecodeText();
+        try
+        {
+            return ReadSelection(NativeMethods.XA_PRIMARY, _atomUtf8String)?.DecodeText();
+        }
+        catch (ClipboardUnreadableException)
+        {
+            return null; // a selection that could not be read is none, as the interface has it
+        }
     }
 
-    public byte[]? GetImagePng() =>
-        _echo.FilterImage(ReadForeignClipboard(_atomHydraImageClip, _atomImagePng)?.Data);
+    // CLIPBOARD as another client holds it, every target it lists against one owner and timestamp; nothing while we own
+    // it, so our own write is never synced back, and nothing echo-filtered: what another client holds is its copy, even
+    // when it equals Hydra's last write. A copy made during the read is read again, once
+    public ClipboardRead ReadAll()
+    {
+        lock (_getLock)
+            return ReadAllOnce() ?? ReadAllOnce() ?? throw new ClipboardUnreadableException("the clipboard changed while it was read, twice");
+    }
 
-    public string? GetHtml() => _echo.FilterHtml(ReadForeignClipboard(_atomHydraHtmlClip, _atomTextHtml)?.DecodeText());
+    // null when the clipboard changed during the read
+    private ClipboardRead? ReadAllOnce()
+    {
+        var owner = NativeMethods.XGetSelectionOwner(_display, _atomClipboard);
+        if (owner == _window || owner == nint.Zero) return ClipboardRead.Empty;
+        // an owner that refuses TARGETS is asked for its text alone, UTF8_STRING then STRING
+        if (ReadSelection(_atomClipboard, _atomTargets) is not { } listed)
+        {
+            var plain = ReadSelection(_atomClipboard, _atomUtf8String);
+            if (NativeMethods.XGetSelectionOwner(_display, _atomClipboard) != owner) return null;
+            return new ClipboardRead(plain?.DecodeText(), null, null, null, false);
+        }
+        var targets = Atoms(listed.Data);
+        var stamped = targets.Contains(_atomTimestamp);
+        var stamp = stamped ? ReadSelection(_atomClipboard, _atomTimestamp)?.Data : null;
+        var text = targets.Contains(_atomUtf8String) ? ReadSelection(_atomClipboard, _atomUtf8String)
+            : targets.Contains(NativeMethods.XA_STRING) ? ReadSelection(_atomClipboard, NativeMethods.XA_STRING) : null;
+        var image = targets.Contains(_atomImagePng) ? ReadSelection(_atomClipboard, _atomImagePng)?.Data : null;
+        var html = targets.Contains(_atomTextHtml) ? ReadSelection(_atomClipboard, _atomTextHtml)?.DecodeText() : null;
+        var hint = targets.Contains(_atomPasswordHint) ? ReadSelection(_atomClipboard, _atomPasswordHint)?.Data : null;
+        if (NativeMethods.XGetSelectionOwner(_display, _atomClipboard) != owner) return null;
+        if (stamped && !stamp.AsSpan().SequenceEqual(ReadSelection(_atomClipboard, _atomTimestamp)?.Data)) return null;
+
+        return new ClipboardRead(text?.DecodeText(), image, html, null, hint.AsSpan().SequenceEqual(PasswordHintSecret));
+    }
+
+    // a 32-bit property's items, which Xlib hands back as longs
+    private static nint[] Atoms(byte[] data) => MemoryMarshal.Cast<byte, nint>(data).ToArray();
+
+    // whether CLIPBOARD is still Hydra's write: SelectionClear forgets it once another client takes it
+    public bool CanUseEchoFallback()
+    {
+        lock (_dataLock)
+            return _ownedClipboard != null;
+    }
+
+    // X11 keeps no counter, so this one moves on Hydra's own writes, on XFixes' owner notices, and on an owner change
+    // seen here (a read already sees the new owner before its notice is handled); without XFixes, on SelectionClear too,
+    // when a copy by the owner it already was goes unseen
+    public long? ChangeCount()
+    {
+        lock (_dataLock)
+        {
+            NoteOwner();
+            return _counter.Count;
+        }
+    }
+
+    // the count Hydra's own last write or clear left, not the counter as it stands
+    public long? WroteAt()
+    {
+        lock (_dataLock)
+            return _wroteAt;
+    }
+
+    // under _dataLock: CLIPBOARD's owner as it stands, counted once when it changed, however it was seen
+    private void NoteOwner() => _counter.Seen(NativeMethods.XGetSelectionOwner(_display, _atomClipboard));
 
     public bool SetPrimaryText(string text)
     {
@@ -108,15 +204,14 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
         return true;
     }
 
-    public bool SetClipboard(ClipboardSnapshot contents)
+    // the owner serves every format it holds, so none is refused
+    public ClipboardSnapshot SetClipboard(ClipboardSnapshot contents)
     {
-        _echo.Track(contents);
-
         // the snapshot is the authoritative new clipboard — replace all owned representations
         Own(_atomClipboard, () => _ownedClipboard = contents);
 
         if (contents.PrimaryText is { } primaryText) SetPrimaryText(primaryText);
-        return true;
+        return contents;
     }
 
     private void Own(nint selection, Action setData)
@@ -125,6 +220,10 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
         {
             setData();
             _ = NativeMethods.XSetSelectionOwner(_display, selection, _window, NativeMethods.CurrentTime);
+            if (selection == _atomClipboard)
+            {
+                _wroteAt = _counter.Own(_window);
+            }
         }
         _ = NativeMethods.XFlush(_display);
     }
@@ -171,7 +270,8 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
                 HandleSelectionRequest(ref ev);
                 break;
             case NativeMethods.SelectionNotify:
-                HandleSelectionNotify(ref ev);
+                lock (_readLock)
+                    HandleSelectionNotify(ref ev);
                 break;
             case NativeMethods.SelectionClear:
                 {
@@ -179,7 +279,11 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
                     lock (_dataLock)
                     {
                         if (NativeMethods.XGetSelectionOwner(_display, sel) == _window) break;
-                        if (sel == _atomClipboard) _ownedClipboard = null;
+                        if (sel == _atomClipboard)
+                        {
+                            _ownedClipboard = null;
+                            if (_fixesEventBase < 0) NoteOwner();
+                        }
                         else if (sel == NativeMethods.XA_PRIMARY) _ownedPrimaryText = null;
                     }
                     break;
@@ -187,6 +291,25 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
             case NativeMethods.PropertyNotify:
                 HandlePropertyNotify(ref ev);
                 break;
+            case var fixes when _fixesEventBase >= 0 && fixes == _fixesEventBase + NativeMethods.XFixesSelectionNotify:
+                OwnerChanged(ref ev);
+                break;
+        }
+    }
+
+    // another client took CLIPBOARD, perhaps again with what it already held: a copy, counted once by when it was
+    // taken (OwnerCounter: Hydra's own taking was counted by Own, a notice arriving after Hydra took it back is older
+    // than that write, and an owner ChangeCount already counted spends its credit)
+    private void OwnerChanged(ref XEvent ev)
+    {
+        if (ev.FixesSelectionSelection != _atomClipboard) return;
+        var taken = (uint)ev.FixesSelectionTimestamp;
+        lock (_dataLock)
+        {
+            if (_lastTaken is { } last && ((int)(taken - last) < 0 || (taken == last && ev.FixesSelectionOwner == _lastTaker))) return;
+            _lastTaken = taken;
+            _lastTaker = ev.FixesSelectionOwner;
+            _counter.Notice(ev.FixesSelectionOwner, NativeMethods.XGetSelectionOwner(_display, _atomClipboard), _window);
         }
     }
 
@@ -229,16 +352,25 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
             text = selection == NativeMethods.XA_PRIMARY ? _ownedPrimaryText : clipboard?.Text;
         }
 
+        // the placeholder carries the hint too, so clipboard managers never keep it
+        var hinted = clipboard is { Concealed: true } or { IsClear: true };
+
         if (target == _atomTargets)
         {
-            var atoms = new List<nint> { _atomTargets, _atomUtf8String, NativeMethods.XA_STRING };
+            // TARGETS always, and only what there is to serve beside it
+            var atoms = new List<nint> { _atomTargets };
+            if (text != null) atoms.AddRange([_atomUtf8String, NativeMethods.XA_STRING]);
             if (clipboard?.ImagePng != null) atoms.Add(_atomImagePng);
             if (clipboard?.Html != null) atoms.Add(_atomTextHtml);
+            if (hinted) atoms.Add(_atomPasswordHint);
 
             _ = NativeMethods.XChangeProperty(_display, requestor, property,
                 NativeMethods.XA_ATOM, 32, NativeMethods.PropModeReplace, atoms.ToArray(), atoms.Count);
             return property;
         }
+
+        if (target == _atomPasswordHint)
+            return hinted ? ServeBytes(requestor, property, _atomPasswordHint, PasswordHintSecret) : nint.Zero;
 
         if (target == _atomImagePng)
             return clipboard?.ImagePng is { } image ? ServeBytes(requestor, property, _atomImagePng, image) : nint.Zero;
@@ -299,36 +431,75 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
 
     // -- reading data from another app --
 
-    // returns the selection bytes plus whether they came from the STRING fallback, or null on failure/timeout
-    private SelectionRead? ReadSelection(nint selectionAtom, nint propertyAtom, nint targetAtom)
+    // returns the selection bytes plus whether they came from the STRING fallback, or null when the owner has no such
+    // target; an owner that does not answer in time, or an answer that cannot be read, leaves it unreadable
+    private SelectionRead? ReadSelection(nint selectionAtom, nint targetAtom)
     {
         lock (_getLock)
         {
-            _getResult = null;
-            _fallbackToString = false;
-            _activeReadSelection = selectionAtom;
-            _activeReadProperty = propertyAtom;
-            _activeReadTarget = targetAtom;
             using var signal = new ManualResetEventSlim(false);
-            _getSignal = signal;
+            nint propertyAtom;
+            lock (_readLock)
+            {
+                propertyAtom = _readProperty;
+                _getResult = null;
+                _getFailed = false;
+                _fallbackToString = false;
+                _activeReadSelection = selectionAtom;
+                _activeReadProperty = propertyAtom;
+                _activeReadTarget = targetAtom;
+                _getSignal = signal;
+            }
+            var answered = false;
             try
             {
                 _ = NativeMethods.XConvertSelection(_display, selectionAtom, targetAtom,
                     propertyAtom, _window, NativeMethods.CurrentTime);
                 _ = NativeMethods.XFlush(_display);
 
-                if (!signal.Wait(ClipboardTimeoutMs) || _getResult == null)
-                    return null;
-
-                return new SelectionRead(_getResult, _fallbackToString);
+                answered = AwaitAnswer(signal);
+                if (!answered)
+                    throw new ClipboardUnreadableException($"the selection's owner did not answer within {ClipboardTimeoutMs} ms");
+                if (_getFailed) throw new ClipboardUnreadableException("the selection's answer could not be read");
+                return _getResult is { } data ? new SelectionRead(data, _fallbackToString || targetAtom == NativeMethods.XA_STRING) : null;
             }
             finally
             {
-                _getSignal = null;
-                _activeReadSelection = nint.Zero;
-                _activeReadProperty = nint.Zero;
-                _activeReadTarget = nint.Zero;
+                lock (_readLock)
+                {
+                    _getSignal = null;
+                    _activeReadSelection = nint.Zero;
+                    _activeReadProperty = nint.Zero;
+                    _activeReadTarget = nint.Zero;
+                    // a read given up on, perhaps mid-INCR: its transfer is dropped, and its property retired so a late
+                    // answer or chunk never feeds or re-arms a later read
+                    if (!answered) RetireReadProperty();
+                }
             }
+        }
+    }
+
+    // under _readLock
+    private void RetireReadProperty()
+    {
+        _incrReceiveBuffer?.Dispose();
+        _incrReceiveBuffer = null;
+        _retiredProperties = (_retiredProperties + 1) % ReadProperties;
+        _readProperty = _readProperties[_retiredProperties];
+    }
+
+    // whether the answer came: the wait starts over with each INCR chunk, so a slow transfer that still progresses is
+    // never given up on, though none outlasts ClipboardTotalTimeoutMs
+    private bool AwaitAnswer(ManualResetEventSlim signal)
+    {
+        var total = Stopwatch.StartNew();
+        while (true)
+        {
+            var chunks = _incrChunks;
+            var left = ClipboardTotalTimeoutMs - (int)total.ElapsedMilliseconds;
+            if (left <= 0) return false;
+            if (signal.Wait(Math.Min(ClipboardTimeoutMs, left))) return true;
+            if (_incrChunks == chunks) return false;
         }
     }
 
@@ -363,13 +534,10 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
         }
 
         // read the property — delete=true to signal the owner we consumed it (required for INCR)
-        var rc = NativeMethods.XGetWindowProperty(_display, _window, propertyAtom,
-            nint.Zero, ReadPropertyLongs, true, NativeMethods.AnyPropertyType,
-            out var actualType, out var format, out var nitems, out _, out var prop);
-
-        if (rc != 0)
+        if (!ReadProperty(propertyAtom, out var actualType, out var data))
         {
             _getResult = null;
+            _getFailed = true;
             SignalGet();
             return;
         }
@@ -377,13 +545,39 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
         if (actualType == _atomIncr)
         {
             // large transfer — chunks will arrive via PropertyNotify
-            if (prop != nint.Zero) _ = NativeMethods.XFree(prop);
             _incrReceiveBuffer = new MemoryStream();
+            Interlocked.Increment(ref _incrChunks);
             return;
         }
 
-        _getResult = TakeProperty(prop, nitems, format);
+        _getResult = data;
         SignalGet();
+    }
+
+    // the whole of a property, ReadPropertyLongs at a time, deleted once read to its end; data null when it held nothing,
+    // false when Xlib could not read it
+    private bool ReadProperty(nint propertyAtom, out nint actualType, out byte[]? data)
+    {
+        using var whole = new MemoryStream();
+        for (nint offset = 0; ; offset += ReadPropertyLongs)
+        {
+            var rc = NativeMethods.XGetWindowProperty(_display, _window, propertyAtom,
+                offset, ReadPropertyLongs, true, NativeMethods.AnyPropertyType,
+                out actualType, out var format, out var nitems, out var bytesAfter, out var prop);
+            if (rc != 0)
+            {
+                if (prop != nint.Zero) _ = NativeMethods.XFree(prop);
+                data = null;
+                return false;
+            }
+            if (TakeProperty(prop, nitems, format) is { } piece) whole.Write(piece);
+            // bytes after this read: it took a whole ReadPropertyLongs, so the next starts there
+            if (bytesAfter == nint.Zero)
+            {
+                data = whole.Length == 0 ? null : whole.ToArray();
+                return true;
+            }
+        }
     }
 
     // copies a property XGetWindowProperty returned and frees it; null when it held nothing
@@ -393,7 +587,8 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
         byte[]? data = null;
         if (nitems != nint.Zero)
         {
-            data = new byte[(int)nitems * (format / 8)];
+            // Xlib hands back 32-bit items as longs
+            data = new byte[(int)nitems * (format == 32 ? nint.Size : format / 8)];
             Marshal.Copy(prop, data, 0, data.Length);
         }
         _ = NativeMethods.XFree(prop);
@@ -406,12 +601,15 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
         var atom = ev.PropertyNotifyAtom;
         var state = ev.PropertyNotifyState;
 
-        // INCR receive: owner wrote a new chunk to our window's property
-        if (_incrReceiveBuffer != null && window == _window
-            && atom == _activeReadProperty && state == NativeMethods.PropertyNewValue)
+        // INCR receive: owner wrote a new chunk to the property of the read still waiting for it
+        lock (_readLock)
         {
-            HandleIncrReceiveChunk();
-            return;
+            if (_incrReceiveBuffer != null && _getSignal != null && window == _window
+                && atom == _activeReadProperty && state == NativeMethods.PropertyNewValue)
+            {
+                HandleIncrReceiveChunk();
+                return;
+            }
         }
 
         // INCR send: requestor deleted its property, ready for next chunk
@@ -425,28 +623,20 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
 
     private void HandleIncrReceiveChunk()
     {
-        // read timed out — discard remaining chunks and clean up
-        if (_getSignal == null)
-        {
-            _incrReceiveBuffer?.Dispose();
-            _incrReceiveBuffer = null;
-            return;
-        }
-
         var propertyAtom = _activeReadProperty;
-        var rc = NativeMethods.XGetWindowProperty(_display, _window, propertyAtom,
-            nint.Zero, ReadPropertyLongs, true, NativeMethods.AnyPropertyType,
-            out _, out var format, out var nitems, out _, out var prop);
-
-        if (rc != 0)
+        if (!ReadProperty(propertyAtom, out _, out var chunk))
         {
-            if (prop != nint.Zero) _ = NativeMethods.XFree(prop);
+            _getFailed = true;
             FinishIncrReceive(null);
             return;
         }
 
         // a zero-length chunk ends the transfer
-        if (TakeProperty(prop, nitems, format) is { } chunk) _incrReceiveBuffer!.Write(chunk);
+        if (chunk != null)
+        {
+            _incrReceiveBuffer!.Write(chunk);
+            Interlocked.Increment(ref _incrChunks);
+        }
         else FinishIncrReceive(_incrReceiveBuffer!.ToArray());
     }
 

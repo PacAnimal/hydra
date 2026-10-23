@@ -150,7 +150,7 @@ public class ClipboardUtilsRichTests
     {
         var sync = new FakeClipboardSync();
         sync.SetClipboard(new ClipboardSnapshot("plain", null, null, Html: "<b>rich</b>", Rtf: [5, 6]));
-        var result = ClipboardUtils.ReadWithFallback(sync, null, Log, "read");
+        var result = ClipboardUtils.ReadWithFallback(sync, null, Log, "read")!;
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result.Text, Is.EqualTo("plain"));
@@ -165,7 +165,7 @@ public class ClipboardUtilsRichTests
         var sync = new FakeClipboardSync();
         // image present alongside html: an image copy wins outright, rich/text are not carried
         sync.SetClipboard(new ClipboardSnapshot("t", null, Image, Html: "<b>x</b>"));
-        var result = ClipboardUtils.ReadWithFallback(sync, null, Log, "read");
+        var result = ClipboardUtils.ReadWithFallback(sync, null, Log, "read")!;
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result.ImagePng, Is.EqualTo(Image));
@@ -177,9 +177,9 @@ public class ClipboardUtilsRichTests
     [Test]
     public void ReadWithFallback_UsesFallbackWhenEverythingEchoSuppressed()
     {
-        var sync = new FakeClipboardSync(); // all getters return null
+        var sync = new FakeClipboardSync(); // ReadAll reads nothing
         var fallback = new ClipboardSnapshot("ft", null, null, Html: "<i>fh</i>", Rtf: [1]);
-        var result = ClipboardUtils.ReadWithFallback(sync, fallback, Log, "read");
+        var result = ClipboardUtils.ReadWithFallback(sync, fallback, Log, "read")!;
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result.Text, Is.EqualTo("ft"));
@@ -194,7 +194,7 @@ public class ClipboardUtilsRichTests
         var sync = new FakeClipboardSync { HasFileClipboardValue = true };
         var fallback = new ClipboardSnapshot("stale", null, null);
 
-        var result = ClipboardUtils.ReadWithFallback(sync, fallback, Log, "read");
+        var result = ClipboardUtils.ReadWithFallback(sync, fallback, Log, "read")!;
 
         Assert.That(result, Is.EqualTo(new ClipboardSnapshot(null, null, null)));
     }
@@ -205,9 +205,57 @@ public class ClipboardUtilsRichTests
         var sync = new FakeClipboardSync { CanUseEchoFallbackValue = false };
         var fallback = new ClipboardSnapshot("stale", null, null);
 
-        var result = ClipboardUtils.ReadWithFallback(sync, fallback, Log, "read");
+        var result = ClipboardUtils.ReadWithFallback(sync, fallback, Log, "read")!;
 
         Assert.That(result, Is.EqualTo(new ClipboardSnapshot(null, null, null)));
+    }
+
+    [Test]
+    public void ReadWithFallback_CarriesConcealed()
+    {
+        var sync = new FakeClipboardSync { ConcealedValue = true };
+        sync.SetupText("hunter2");
+
+        var result = ClipboardUtils.ReadWithFallback(sync, null, Log, "read")!;
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Text, Is.EqualTo("hunter2"));
+            Assert.That(result.Concealed, Is.True);
+        }
+    }
+
+    [Test]
+    public void ReadWithFallback_PlainCopy_IsNotConcealed()
+    {
+        var sync = new FakeClipboardSync();
+        sync.SetupText("plain");
+
+        Assert.That(ClipboardUtils.ReadWithFallback(sync, null, Log, "read")!.Concealed, Is.False);
+    }
+
+    [Test]
+    public void ReadWithFallback_EchoFallback_KeepsTheFallbacksConcealed()
+    {
+        var sync = new FakeClipboardSync(); // ReadAll reads nothing: Hydra's own write, echo-suppressed
+        var fallback = new ClipboardSnapshot("hunter2", null, null, Concealed: true);
+
+        var result = ClipboardUtils.ReadWithFallback(sync, fallback, Log, "read")!;
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Text, Is.EqualTo("hunter2"));
+            Assert.That(result.Concealed, Is.True);
+        }
+    }
+
+    [Test]
+    public void ReadWithFallback_ExternalOwner_DoesNotTakeTheFallbacksConcealed()
+    {
+        var sync = new FakeClipboardSync { CanUseEchoFallbackValue = false };
+        var fallback = new ClipboardSnapshot("hunter2", null, null, Concealed: true);
+
+        Assert.That(ClipboardUtils.ReadWithFallback(sync, fallback, Log, "read")!.Concealed, Is.False);
     }
 
     // -- primary selection: a selection of its own, beside the clipboard --
@@ -218,7 +266,7 @@ public class ClipboardUtilsRichTests
         var sync = new FakeClipboardSync();
         sync.SetClipboard(new ClipboardSnapshot("alt text", "selection", Image));
 
-        var result = ClipboardUtils.ReadWithFallback(sync, null, Log, "read");
+        var result = ClipboardUtils.ReadWithFallback(sync, null, Log, "read")!;
 
         using (Assert.EnterMultipleScope())
         {
@@ -236,7 +284,7 @@ public class ClipboardUtilsRichTests
         sync.SetPrimaryText("current selection");
         var fallback = new ClipboardSnapshot(null, "older selection", Image);
 
-        var result = ClipboardUtils.ReadWithFallback(sync, fallback, Log, "read");
+        var result = ClipboardUtils.ReadWithFallback(sync, fallback, Log, "read")!;
 
         using (Assert.EnterMultipleScope())
         {
@@ -251,7 +299,7 @@ public class ClipboardUtilsRichTests
         var sync = new FakeClipboardSync();
         var fallback = new ClipboardSnapshot("echoed", "older selection", null);
 
-        var result = ClipboardUtils.ReadWithFallback(sync, fallback, Log, "read");
+        var result = ClipboardUtils.ReadWithFallback(sync, fallback, Log, "read")!;
 
         Assert.That(result, Is.EqualTo(new ClipboardSnapshot("echoed", null, null)));
     }
@@ -262,7 +310,7 @@ public class ClipboardUtilsRichTests
         var sync = new FakeClipboardSync { HasFileClipboardValue = true };
         sync.SetPrimaryText("selection");
 
-        var result = ClipboardUtils.ReadWithFallback(sync, null, Log, "read");
+        var result = ClipboardUtils.ReadWithFallback(sync, null, Log, "read")!;
 
         Assert.That(result, Is.EqualTo(new ClipboardSnapshot(null, "selection", null)));
     }
@@ -338,12 +386,34 @@ public class ClipboardUtilsRichTests
     }
 
     [Test]
+    public void ApplyPreservingFiles_ConcealedMarkersRefused_ReportsOnlyTheSelection()
+    {
+        var sync = new FakeClipboardSync { RefusesMarkersValue = true };
+
+        var applied = ClipboardUtils.ApplyPreservingFiles(sync, new ClipboardSnapshot("secret", "selection", null, Concealed: true), Log, "test");
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(applied, Is.EqualTo(new ClipboardSnapshot(null, "selection", null)));
+            Assert.That(sync.Text, Is.Null);
+        }
+    }
+
+    [Test]
+    public void ApplyPreservingFiles_AClear_IsApplied()
+    {
+        var sync = new FakeClipboardSync();
+
+        Assert.That(ClipboardUtils.ApplyPreservingFiles(sync, ClipboardSnapshot.Placeholder, Log, "test"), Is.EqualTo(ClipboardSnapshot.Placeholder));
+    }
+
+    [Test]
     public void ReadWithFallback_FileClipboard_TrimsTheSelection()
     {
         var sync = new FakeClipboardSync { HasFileClipboardValue = true };
         sync.SetPrimaryText(OversizedText());
 
-        Assert.That(ClipboardUtils.ReadWithFallback(sync, null, Log, "read").PrimaryText, Is.Null);
+        Assert.That(ClipboardUtils.ReadWithFallback(sync, null, Log, "read")!.PrimaryText, Is.Null);
     }
 
     [Test]
@@ -387,5 +457,109 @@ public class ClipboardUtilsRichTests
             Assert.That(applied, Is.Null);
             Assert.That(sync.SetClipboardCallCount, Is.Zero);
         }
+    }
+
+    // -- an unreadable clipboard, and a partially refused write --
+
+    [Test]
+    public void ReadWithFallback_Unreadable_IsUnknownNotEmpty()
+    {
+        var sync = new FakeClipboardSync { ReadFailsValue = true };
+        var fallback = new ClipboardSnapshot("echoed", null, null);
+
+        Assert.That(ClipboardUtils.ReadWithFallback(sync, fallback, Log, "read"), Is.Null);
+    }
+
+    // the placeholder carries the no-history markers, which read like a password manager's
+    [Test]
+    public void ReadWithFallback_MarkedPlaceholder_IsNeitherContentNorConcealed()
+    {
+        var sync = new FakeClipboardSync { CanUseEchoFallbackValue = false, ConcealedValue = true };
+        sync.SetupText(ClipboardSnapshot.PlaceholderText);
+
+        Assert.That(ClipboardUtils.ReadWithFallback(sync, null, Log, "read"), Is.EqualTo(ClipboardSnapshot.Empty));
+    }
+
+    [Test]
+    public void ReadWithFallback_TakesOneReadOfEveryFormat()
+    {
+        var sync = new SnapshotOnlySync(new ClipboardRead("plain", null, "<b>rich</b>", null, Concealed: true));
+
+        var result = ClipboardUtils.ReadWithFallback(sync, null, Log, "read");
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.EqualTo(new ClipboardSnapshot("plain", null, null, Html: "<b>rich</b>", Concealed: true)));
+            Assert.That(sync.Reads, Is.EqualTo(1));
+        }
+    }
+
+    [Test]
+    public void ReadWithFallback_FilesInTheOneRead_AreLeftAlone()
+    {
+        var sync = new SnapshotOnlySync(ClipboardRead.Files);
+
+        Assert.That(ClipboardUtils.ReadWithFallback(sync, new ClipboardSnapshot("stale", null, null), Log, "read"), Is.EqualTo(ClipboardSnapshot.Empty));
+    }
+
+    // a platform whose one read is ReadAll, as Windows reads under one open; asking it for files apart fails the test
+    private sealed class SnapshotOnlySync(ClipboardRead read) : IClipboardSync
+    {
+        public int Reads { get; private set; }
+
+        public ClipboardRead ReadAll()
+        {
+            Reads++;
+            return read;
+        }
+
+        public bool HasFileClipboard() => throw new AssertionException("read outside ReadAll");
+        public bool CanUseEchoFallback() => false;
+        public ClipboardSnapshot SetClipboard(ClipboardSnapshot contents) => contents;
+    }
+
+    [Test]
+    public void WriteAll_RefusedFormat_IsLeftOutOfWhatWasWritten()
+    {
+        var contents = new ClipboardSnapshot("plain", "selection", null, Html: "<b>rich</b>", Rtf: [1]);
+
+        var written = ClipboardUtils.WriteAll(Log, contents,
+            new FormatWrite(ClipboardFormat.Html, () => false), null, new FormatWrite(ClipboardFormat.Text, () => true),
+            new FormatWrite(ClipboardFormat.Rtf, () => false));
+
+        Assert.That(written, Is.EqualTo(new ClipboardSnapshot("plain", "selection", null)));
+    }
+
+    [Test]
+    public void WriteAll_EveryFormatTaken_IsTheWholeWrite()
+    {
+        var contents = new ClipboardSnapshot("plain", null, null, Html: "<b>rich</b>");
+
+        var written = ClipboardUtils.WriteAll(Log, contents,
+            new FormatWrite(ClipboardFormat.Html, () => true), new FormatWrite(ClipboardFormat.Text, () => true));
+
+        Assert.That(written, Is.SameAs(contents));
+    }
+
+    [Test]
+    public void ApplyPreservingFiles_RefusedFormat_ReportsOnlyWhatWasWritten()
+    {
+        var sync = new FakeClipboardSync();
+        sync.RefusedFormats.Add(ClipboardFormat.Rtf);
+
+        var applied = ClipboardUtils.ApplyPreservingFiles(sync, new ClipboardSnapshot("plain", null, null, Html: "<b>x</b>", Rtf: [7]), Log, "test");
+
+        Assert.That(applied, Is.EqualTo(new ClipboardSnapshot("plain", null, null, Html: "<b>x</b>")));
+    }
+
+    [Test]
+    public void ApplyPreservingFiles_EveryFormatRefused_ReportsOnlyTheSelection()
+    {
+        var sync = new FakeClipboardSync();
+        sync.RefusedFormats.Add(ClipboardFormat.Text);
+
+        var applied = ClipboardUtils.ApplyPreservingFiles(sync, new ClipboardSnapshot("plain", "selection", null), Log, "test");
+
+        Assert.That(applied, Is.EqualTo(new ClipboardSnapshot(null, "selection", null)));
     }
 }

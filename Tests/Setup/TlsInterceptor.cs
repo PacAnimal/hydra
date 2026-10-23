@@ -84,7 +84,8 @@ public sealed class TlsInterceptor : IAsyncDisposable
             var reader = new StreamReader(tls, Encoding.ASCII);
             line = await reader.ReadLineAsync(_stop.Token);
             while (!string.IsNullOrEmpty(await reader.ReadLineAsync(_stop.Token))) { }
-            await tls.WriteAsync(Encoding.ASCII.GetBytes($"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: {EmbeddedRelayTls.ProofLength}\r\n\r\n"), _stop.Token);
+            var proof = $"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: {EmbeddedRelayTls.ProofLength}\r\n\r\n";
+            await tls.WriteAsync(Encoding.ASCII.GetBytes(proof), _stop.Token);
             await tls.WriteAsync(new byte[EmbeddedRelayTls.ProofLength], _stop.Token);
         }
         catch (Exception) { /* the client hanging up is its answer */ }

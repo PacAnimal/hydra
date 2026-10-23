@@ -210,4 +210,22 @@ public class CfHtmlTests
             Assert.That(CfHtml.Unwrap(blob), Does.Contain("<!--StartFragment--><!--EndFragment-->"));
         }
     }
+
+    [TestCase("<b>hi</b>")]
+    [TestCase("")]
+    [TestCase("<p>café 中 🎉</p>")]
+    public void Read_HydrasOwnWrap_ReadsBackAsWritten(string html) => Assert.That(CfHtml.Read(CfHtml.Wrap(html)), Is.EqualTo(html));
+
+    [Test]
+    public void Read_AnotherAppsDocument_KeepsItsContext()
+    {
+        const string body = "<html><body><!--StartFragment--><b>Bold</b><!--EndFragment--></body><style>b{}</style></html>";
+        static string H(int a, int b, int c, int d) =>
+            $"Version:1.0\r\nStartHTML:{a:D10}\r\nEndHTML:{b:D10}\r\nStartFragment:{c:D10}\r\nEndFragment:{d:D10}\r\n";
+        var hlen = H(0, 0, 0, 0).Length;
+        var sf = hlen + "<html><body><!--StartFragment-->".Length;
+        var blob = Encoding.UTF8.GetBytes(H(hlen, hlen + body.Length, sf, sf + "<b>Bold</b>".Length) + body);
+
+        Assert.That(CfHtml.Read(blob), Is.EqualTo(body));
+    }
 }

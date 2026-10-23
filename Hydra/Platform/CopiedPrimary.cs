@@ -25,6 +25,12 @@ public sealed class CopiedPrimary(Func<long> version, Func<string?> readTextCopy
     // whether the clipboard is still what Hydra's last write left
     public bool Owns() => Guarded("check clipboard ownership", false, () => _written >= 0 && version() == _written);
 
+    // the version Hydra's last write left the clipboard at, as that write reported it; null before any
+    public long? WrittenAt()
+    {
+        lock (_gate) return _written >= 0 ? _written : null;
+    }
+
     // a copy made before the selection arrived is older than it; whether it was kept
     public bool Relay(string incoming) => Guarded("keep the primary selection", false, () =>
     {
@@ -96,7 +102,7 @@ public sealed class CopiedPrimary(Func<long> version, Func<string?> readTextCopy
             return false;
         }
         _seen = at;
-        if (text != null) _current = text;
+        if (text != null && !ClipboardSnapshot.IsPlaceholder(text, null, null, null)) _current = text;
         return true;
     }
 

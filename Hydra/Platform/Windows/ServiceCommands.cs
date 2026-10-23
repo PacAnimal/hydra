@@ -21,7 +21,8 @@ internal static class ServiceCommands
         // remove the "downloaded from internet" mark so windows doesn't block the service binary
         File.Delete(exePath + ":Zone.Identifier");
 
-        RunSc($"create {ServiceName} binPath= {HydraArgs.QuoteWindowsArgument(HydraArgs.ServiceCommandLine(exePath, configPath))} start= auto obj= LocalSystem");
+        var binPath = HydraArgs.QuoteWindowsArgument(HydraArgs.ServiceCommandLine(exePath, configPath));
+        RunSc($"create {ServiceName} binPath= {binPath} start= auto obj= LocalSystem");
         RunSc($"description {ServiceName} \"Hydra KVM — seamless mouse and keyboard sharing\"");
         RunSc($"failure {ServiceName} reset= 0 actions= restart/5000/restart/5000/restart/5000");
 

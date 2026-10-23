@@ -439,7 +439,8 @@ internal static partial class NativeMethods
     [LibraryImport(User32)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     [return: MarshalAs(UnmanagedType.Bool)]
-    internal static partial bool UpdateLayeredWindow(nint hwnd, nint hdcDst, ref WINPOINT pptDst, ref WINSIZE psize, nint hdcSrc, ref WINPOINT pptSrc, uint crKey, ref BLENDFUNCTION pblend, uint dwFlags);
+    internal static partial bool UpdateLayeredWindow(nint hwnd, nint hdcDst, ref WINPOINT pptDst, ref WINSIZE psize, nint hdcSrc, ref WINPOINT pptSrc,
+        uint crKey, ref BLENDFUNCTION pblend, uint dwFlags);
 
     [LibraryImport(User32)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]

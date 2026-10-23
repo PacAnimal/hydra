@@ -451,7 +451,8 @@ internal static partial class NativeMethods
 
     [LibraryImport(IOKit)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    internal static partial int IOHIDPostEvent(uint connect, uint eventType, IOGPoint location, in NXEventData eventData, uint eventDataVersion, uint eventFlags, uint options);
+    internal static partial int IOHIDPostEvent(uint connect, uint eventType, IOGPoint location, in NXEventData eventData, uint eventDataVersion,
+        uint eventFlags, uint options);
 
     // -- IOKit: IORegistry (screen lock detection) --
 

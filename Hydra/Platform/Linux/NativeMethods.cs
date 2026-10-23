@@ -267,6 +267,20 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void XFixesShowCursor(nint display, nint window);
 
+    // -- selection owner changes (XFixes) --
+
+    internal const int XFixesSelectionNotify = 0;
+    internal const nuint XFixesSetSelectionOwnerNotifyMask = 1;
+
+    [LibraryImport(XFixes)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool XFixesQueryExtension(nint display, out int eventBase, out int errorBase);
+
+    [LibraryImport(XFixes)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void XFixesSelectSelectionInput(nint display, nint window, nint selection, nuint eventMask);
+
     // -- XTest input injection --
 
     private const string XTest = "libXtst.so.6";
@@ -486,7 +500,8 @@ internal static partial class NativeMethods
 
     [LibraryImport(X11)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    internal static partial nint XCreateSimpleWindow(nint display, nint parent, int x, int y, uint width, uint height, uint borderWidth, nint border, nint background);
+    internal static partial nint XCreateSimpleWindow(nint display, nint parent, int x, int y, uint width, uint height, uint borderWidth,
+        nint border, nint background);
 
     // format=8: text/binary data; nelements = byte count
     [LibraryImport(X11)]
@@ -580,6 +595,11 @@ internal struct XEvent
 
     // XSelectionClearEvent (type = SelectionClear = 29) — selection at offset 40
     [FieldOffset(40)] internal nint SelectionClearSelection;
+
+    // XFixesSelectionNotifyEvent (type = XFixes event base + XFixesSelectionNotify) — LP64 offsets
+    [FieldOffset(48)] internal nint FixesSelectionOwner;
+    [FieldOffset(56)] internal nint FixesSelectionSelection;
+    [FieldOffset(72)] internal nuint FixesSelectionTimestamp;   // when the owner took it, which the notice is for
 
     // XPropertyEvent (type = PropertyNotify = 28) — LP64 offsets
     // window field reuses EventWindow at offset 32

@@ -285,8 +285,10 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
         if (eventRef == nint.Zero) return;
 
         // set 16.16 fixed-point line deltas for sub-line precision (reverses the input handler's conversion)
-        NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventFixedPtDeltaAxis1, (long)msg.YDelta * 65536 / MouseScrollEvent.Notch);
-        NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventFixedPtDeltaAxis2, (long)msg.XDelta * 65536 / MouseScrollEvent.Notch);
+        var yFixed = (long)msg.YDelta * 65536 / MouseScrollEvent.Notch;
+        var xFixed = (long)msg.XDelta * 65536 / MouseScrollEvent.Notch;
+        NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventFixedPtDeltaAxis1, yFixed);
+        NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventFixedPtDeltaAxis2, xFixed);
         NativeHelpers.PostAndRelease(eventRef);
     }
 
@@ -341,7 +343,8 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
         return kr == 0;
     }
 
-    private static readonly nint SelOtherEvent = NativeMethods.sel_registerName("otherEventWithType:location:modifierFlags:timestamp:windowNumber:context:subtype:data1:data2:");
+    private static readonly nint SelOtherEvent =
+        NativeMethods.sel_registerName("otherEventWithType:location:modifierFlags:timestamp:windowNumber:context:subtype:data1:data2:");
     private static readonly nint SelCgEvent = NativeMethods.sel_registerName("CGEvent");
 
     // tries the real API on a down press; on release, replays legacy NX injection only if the down
