@@ -212,7 +212,9 @@ jobs:
           channel=(--latest)
           title="Hydra $VERSION"
           if [ "$EDGE" == "true" ]; then channel=(--prerelease --latest=false); title="$title (edge)"; fi
+          # the tag goes on the commit this run built; left out, GitHub creates it on main's head, wrong for every edge push
           gh release create "v$VERSION" \
+            --target "$GITHUB_SHA" \
             --title "$title" \
             "${channel[@]}" \
             "${notes[@]}" \
