@@ -87,7 +87,9 @@ public sealed class XorgInputHandler : IPlatformInput
             {
                 _ = NativeMethods.XUngrabKeyboard(_display, NativeMethods.CurrentTime);
                 _ = NativeMethods.XFlush(_display);
-            });
+            },
+            gaveUp: () => CaptureFailed?.Invoke(),
+            wonLate: () => KeyboardCapturedLate?.Invoke());
 
         _pointer = new XGrabSession("Pointer", _grabLock, log,
             preGrab: () =>
@@ -109,7 +111,8 @@ public sealed class XorgInputHandler : IPlatformInput
             {
                 _ = NativeMethods.XUngrabPointer(_display, NativeMethods.CurrentTime);
                 _ = NativeMethods.XFlush(_display);
-            });
+            },
+            gaveUp: () => CaptureFailed?.Invoke());
     }
 
     public void WarpCursor(int x, int y)
@@ -140,6 +143,9 @@ public sealed class XorgInputHandler : IPlatformInput
         _cursorHidden = false;
         return ValueTask.CompletedTask;
     }
+
+    public event Action? CaptureFailed;
+    public event Action? KeyboardCapturedLate;
 
     public bool IsOnVirtualScreen
     {
@@ -225,15 +231,9 @@ public sealed class XorgInputHandler : IPlatformInput
         return (mask & 0x1F00) != 0;
     }
 
-    // a grab on the root window, released at once: the one on entry would fail the same way, after the cursor had gone
-    public bool KeyboardHeldElsewhere()
-    {
-        var r = NativeMethods.XGrabKeyboard(_display, _rootWindow, false,
-            NativeMethods.GrabModeAsync, NativeMethods.GrabModeAsync, NativeMethods.CurrentTime);
-        if (r == NativeMethods.GrabSuccess) _ = NativeMethods.XUngrabKeyboard(_display, NativeMethods.CurrentTime);
-        _ = NativeMethods.XFlush(_display);
-        return r != NativeMethods.GrabSuccess;
-    }
+    public bool KeyboardCaptured => _keyboard.IsGrabbed;
+
+    public bool AnyKeyHeld() => XorgDisplayHelper.HeldKeycodes(_display).Count > 0;
 
     public void StopEventTap()
     {

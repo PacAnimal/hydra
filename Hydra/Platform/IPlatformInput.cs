@@ -44,9 +44,20 @@ public interface IPlatformInput : IAsyncDisposable, ICursor, ILocalEventTap
 
     bool AnyMouseButtonHeld();
 
-    // True when another client holds the keyboard, so a visit would take the mouse and leave the typing here (Xorg: an
-    // open dmenu, a window manager's menu). The other platforms capture beneath any such grab and never refuse.
-    bool KeyboardHeldElsewhere() => false;
+    // Raised when a visit's grab could not be had through every retry (Xorg: an open dmenu or a window manager's menu
+    // keeps the keyboard), so the input would stay here while the cursor is away. The other platforms never raise it.
+    event Action? CaptureFailed;
+
+    // True while a key is down here: a visit starting now would take the typing mid-chord (Xorg: a held key also hands
+    // its window manager binding's grab the keyboard). The platforms that cannot ask cheaply say false.
+    bool AnyKeyHeld() => false;
+
+    // False while a visit's keyboard grab is still being retried (Xorg), so the typing is still here: the router tells
+    // the remote nothing until it is true (KeyboardCapturedLate), and CaptureFailed ends the visit if it never becomes so.
+    bool KeyboardCaptured => true;
+
+    // Raised when a retry wins the keyboard grab KeyboardCaptured said was missing at entry (Xorg): the visit can begin.
+    event Action? KeyboardCapturedLate;
 
     // True when AnyMouseButtonHeld sees this button though the event tap swallowed it (macOS; Xorg's Left/Middle/Right). A
     // Windows hook hides it from GetAsyncKeyState, and evdev cannot ask at all.

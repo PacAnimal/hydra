@@ -4,31 +4,30 @@ using Tests.Setup;
 
 namespace Tests.Screen;
 
-// Another client holding the keyboard (Xorg: an open dmenu, a window manager's menu) keeps the cursor home: a visit would
-// take the mouse to the remote and leave the typing here.
+// A key held here keeps the cursor home: a visit starting now would take the typing mid-chord.
 [TestFixture]
-public class HeldKeyboardTests : ServicesFixture
+public class HeldKeyEntryTests : ServicesFixture
 {
     private Task<TestServiceBundle> Started(ILogger<InputRouter>? log = null) =>
         Services.StartOnline(TransitionTestHelper.CreateService(log: log), "remote");
 
-    private static int Refusals(CapturingLog<InputRouter> log) => log.Messages.Count(m => m.Contains("holds the keyboard"));
+    private static int Refusals(CapturingLog<InputRouter> log) => log.Messages.Count(m => m.Contains("a key is held"));
 
     [Test]
-    public async Task Edge_WhileAnotherClientHoldsTheKeyboard_StaysHomeUntilItLetsGo()
+    public async Task Edge_WhileAKeyIsHeld_StaysHomeUntilItsUp()
     {
         var bundle = await Started();
-        bundle.Platform.KeyboardHeldElsewhere = true;
+        bundle.Platform.AnyKeyHeld = true;
 
         bundle.Platform.FireMouseMove(2559, 720);
         var whileHeld = bundle.Platform.IsOnVirtualScreen;
-        bundle.Platform.KeyboardHeldElsewhere = false;
+        bundle.Platform.AnyKeyHeld = false;
         bundle.Platform.FireMouseMove(2559, 721);
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(whileHeld, Is.False, "refused while the keyboard is held");
-            Assert.That(bundle.Platform.IsOnVirtualScreen, Is.True, "entered once it is let go");
+            Assert.That(whileHeld, Is.False, "refused while the key is held");
+            Assert.That(bundle.Platform.IsOnVirtualScreen, Is.True, "entered on the next move after its up");
         }
     }
 
@@ -37,16 +36,16 @@ public class HeldKeyboardTests : ServicesFixture
     {
         var log = new CapturingLog<InputRouter>(LogLevel.Information);
         var bundle = await Started(log);
-        bundle.Platform.KeyboardHeldElsewhere = true;
+        bundle.Platform.AnyKeyHeld = true;
 
         for (var y = 700; y < 710; y++) bundle.Platform.FireMouseMove(2559, y);
         var once = Refusals(log);
-        bundle.Platform.KeyboardHeldElsewhere = false;
+        bundle.Platform.AnyKeyHeld = false;
         TransitionTestHelper.EnterRemote(bundle.Platform);
         bundle.Platform.PressHotkey('l');
         bundle.Platform.PressHotkey('l');
         bundle.Platform.FireMouseMove(1000, 720);
-        bundle.Platform.KeyboardHeldElsewhere = true;
+        bundle.Platform.AnyKeyHeld = true;
         bundle.Platform.FireMouseMove(2559, 720);
 
         using (Assert.EnterMultipleScope())
@@ -57,19 +56,19 @@ public class HeldKeyboardTests : ServicesFixture
     }
 
     [Test]
-    public async Task RemoteOnlyAutoEntry_WhileAnotherClientHoldsTheKeyboard_IsRetriedOnTheNextLocalMove()
+    public async Task RemoteOnlyAutoEntry_WhileAKeyIsHeld_IsRetriedOnTheNextLocalMove()
     {
         var created = TransitionTestHelper.CreateRemoteOnlyService();
-        created.Platform.KeyboardHeldElsewhere = true;
+        created.Platform.AnyKeyHeld = true;
         var bundle = await Services.StartOnline(created, "mac");
         var whileHeld = bundle.Platform.IsOnVirtualScreen;
 
-        bundle.Platform.KeyboardHeldElsewhere = false;
+        bundle.Platform.AnyKeyHeld = false;
         bundle.Platform.FireMouseMove(100, 100);
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(whileHeld, Is.False, "refused while the keyboard is held");
+            Assert.That(whileHeld, Is.False, "refused while the key is held");
             Assert.That(bundle.Platform.IsOnVirtualScreen, Is.True, "entered on the next local move");
         }
     }

@@ -46,6 +46,10 @@ public sealed class FakePlatform : IPlatformInput, ICursorHider
     public void FireKeyEvent(KeyEvent e) { _onKeyEvent?.Invoke(e); Flush(); }
     public void FireMouseButton(MouseButtonEvent e) { _onMouseButton?.Invoke(e); Flush(); }
     public void FireMouseScroll(MouseScrollEvent e) { _onMouseScroll?.Invoke(e); Flush(); }
+    public void FireCaptureFailed() { CaptureFailed?.Invoke(); Flush(); }
+    public event Action? CaptureFailed;
+    public void FireKeyboardCapturedLate() { KeyboardCapturedLate?.Invoke(); Flush(); }
+    public event Action? KeyboardCapturedLate;
 
     // the hotkey chord with this letter, pressed (or, with up, released)
     public void PressHotkey(char ch, bool up = false) => FireKeyEvent(KeyEvent.Char(up ? KeyEventType.KeyUp : KeyEventType.KeyDown, ch, HotkeyChord.Modifiers));
@@ -69,8 +73,9 @@ public sealed class FakePlatform : IPlatformInput, ICursorHider
     }
 
     public bool AnyMouseButtonHeld { get; set; }
-    public bool KeyboardHeldElsewhere { get; set; }
-    bool IPlatformInput.KeyboardHeldElsewhere() => KeyboardHeldElsewhere;
+    public bool AnyKeyHeld { get; set; }
+    public bool KeyboardCaptured { get; set; } = true;
+    bool IPlatformInput.AnyKeyHeld() => AnyKeyHeld;
     public bool CursorIsVisible { get; set; }
     public bool RecentresItself { get; set; }
     // the default for SeesSwallowed, less UnseenButtons

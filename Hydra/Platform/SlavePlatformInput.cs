@@ -21,6 +21,8 @@ internal sealed class SlavePlatformInput(ICursor cursor) : IPlatformInput
     public void StopEventTap() { }
     public bool RecentresItself => false;
     public bool AnyMouseButtonHeld() => false;
+    public event Action? CaptureFailed { add { } remove { } }
+    public event Action? KeyboardCapturedLate { add { } remove { } }
     public bool SeesSwallowed(MouseButton button) => false;
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }

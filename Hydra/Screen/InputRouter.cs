@@ -171,6 +171,8 @@ public class InputRouter(
         _screenSaverSync.ScreensaverDeactivated += OnScreensaverDeactivated;
         _screenSaverSync.ScreenLocked += OnLockDetected;
         _screenSaverSync.ScreenUnlocked += OnScreenUnlocked;
+        platform.CaptureFailed += OnCaptureFailed;
+        platform.KeyboardCapturedLate += OnKeyboardCapturedLate;
         if (profile.HideCursor)
             cursorHider.Hide();
     }
@@ -189,6 +191,8 @@ public class InputRouter(
         _screenSaverSync.ScreensaverDeactivated -= OnScreensaverDeactivated;
         _screenSaverSync.ScreenLocked -= OnLockDetected;
         _screenSaverSync.ScreenUnlocked -= OnScreenUnlocked;
+        platform.CaptureFailed -= OnCaptureFailed;
+        platform.KeyboardCapturedLate -= OnKeyboardCapturedLate;
         platform.StopEventTap();
 
         // no more samples can arrive, so nothing may post a batch after the writer completes
@@ -412,6 +416,33 @@ public class InputRouter(
         if (abort) relay.SendClipboardAbort(host, id, failed);
         if (failed) _ = ShowFailedWhereTheCursorIs();
         _ = OfferDeferred(_offer.Abandoned(host, streamOnly: true, pullId));
+    }
+
+    // A visit whose grab failed would take the mouse and leave the typing here, so it ends. A grab that lets go once the
+    // cursor leaves its window (xfreerdp, as the input sink covers it) is won by a retry and never gets here.
+    private void OnCaptureFailed()
+    {
+        _ = _commands.Writer.TryWrite(st =>
+        {
+            // a visit still waiting for the keyboard was never announced, so the host has nothing to leave
+            var announced = !st.EnterPending;
+            if (ReturnHome(st, LocalLandingPoint(st), slaveReachable: announced) is { } host && log.IsEnabled(LogLevel.Warning))
+                log.LogWarning("Returned to local screen from '{Host}': another client holds the keyboard or pointer", host);
+            return ValueTask.CompletedTask;
+        });
+    }
+
+    // The keyboard grab missing at entry was won by a retry: the visit is announced now, where the cursor entered, since
+    // no motion moved it meanwhile.
+    private void OnKeyboardCapturedLate()
+    {
+        _ = _commands.Writer.TryWrite(st =>
+        {
+            if (!st.EnterPending || !st.Mouse.IsOnVirtualScreen) return ValueTask.CompletedTask;
+            st.EnterPending = false;
+            SendEnterScreen(st.Mouse.CurrentScreen, (int)st.Mouse.X, (int)st.Mouse.Y);
+            return ValueTask.CompletedTask;
+        });
     }
 
     private void OnScreensaverActivated()
@@ -1399,6 +1430,8 @@ public class InputRouter(
             st.LastInputTick = _getTickCount();
             st.EdgeRefusalLogged = false;
             await activityTracker.LocalActivity();
+            // nothing reaches a remote not yet told of the visit
+            if (st.EnterPending) return;
             if (st.Mouse.IsOnVirtualScreen && relay.IsConnected)
             {
                 if (log.IsEnabled(LogLevel.Debug))
@@ -1424,6 +1457,8 @@ public class InputRouter(
         {
             st.LastInputTick = _getTickCount();
             await activityTracker.LocalActivity();
+            // nothing reaches a remote not yet told of the visit
+            if (st.EnterPending) return;
             if (st.Mouse.IsOnVirtualScreen && relay.IsConnected)
             {
                 if (log.IsEnabled(LogLevel.Debug))
@@ -1543,6 +1578,13 @@ public class InputRouter(
         // bogus filter: drop delta that looks like a warp-displacement artifact
         if (Math.Abs(dx) > st.HalfW - 10 || Math.Abs(dy) > st.HalfH - 10) return;
 
+        // the keyboard is not ours yet, so nothing moves over there; the cursor stays parked here meanwhile
+        if (!platform.KeyboardCaptured)
+        {
+            if (!platform.RecentresItself) Recenter(st);
+            return;
+        }
+
         var prevScreen = st.Mouse.ApplyDelta(dx, dy);
         if (prevScreen != null)
             HandleIntraHostTransition(st);
@@ -1582,6 +1624,7 @@ public class InputRouter(
     {
         if (!st.Mouse.IsOnVirtualScreen) return null;
         var host = st.Mouse.CurrentScreen.Host;
+        st.EnterPending = false;
         if (slaveReachable) FlushMouseDelta(st);
         st.Mouse.LeaveScreen();
         lock (_hashLock)
@@ -1625,18 +1668,18 @@ public class InputRouter(
     // Every entry from the local screen to a remote one; callers keep their own gates and log line. exitEdge is what
     // a return with no edge of its own comes back through (see LocalLandingPoint), null when the entry had no edge.
     // Refused (false) while a mouse button is held: it went down here, and its up would be swallowed during the visit.
-    // Refused too while another client holds the keyboard: the visit would take the mouse and leave the typing here.
+    // Refused too while a key is held, logged once per hold: the visit would take the typing mid-chord.
     private async ValueTask<bool> EnterFromLocal(LocalMasterState st, ScreenRect dest, int x, int y, ScreenEdge? exitEdge)
     {
         if (platform.AnyMouseButtonHeld()) return false;
-        if (platform.KeyboardHeldElsewhere())
+        if (platform.AnyKeyHeld())
         {
-            if (!st.KeyboardRefusalLogged && log.IsEnabled(LogLevel.Warning))
-                log.LogWarning("Entry to '{Name}' refused: another client holds the keyboard", dest.Name);
-            st.KeyboardRefusalLogged = true;
+            if (!st.KeyRefusalLogged && log.IsEnabled(LogLevel.Information))
+                log.LogInformation("Entry to '{Name}' refused: a key is held", dest.Name);
+            st.KeyRefusalLogged = true;
             return false;
         }
-        st.KeyboardRefusalLogged = false;
+        st.KeyRefusalLogged = false;
         st.SavedScreenName = null;
         st.ExitEdge = exitEdge;
         var remoteInfo = await RemoteInfoFor(st, dest);
@@ -1645,7 +1688,10 @@ public class InputRouter(
         st.ForgetForwarded();
         ApplyEnterScreen(st, dest, remoteInfo, x, y);
         await ParkOnEntry(st);
-        SendEnterScreen(dest, x, y);
+        // without the keyboard the remote is not told yet, so no cursor shows there: a late grab announces the visit,
+        // and a grab never won ends it unannounced
+        st.EnterPending = !platform.KeyboardCaptured;
+        if (!st.EnterPending) SendEnterScreen(dest, x, y);
         return true;
     }
 
@@ -1660,7 +1706,7 @@ public class InputRouter(
     // enters remote-only mode targeting the first remote screen with known dimensions; must be called from consumer.
     // returns whether it entered. It does nothing when not remote-only, already virtual or unlocked, during the
     // screensaver (its end restores the visit, or enters here), or with no screen or relay ready; while a mouse button
-    // is held it is refused, and retried on the button's release and on local moves (a held keyboard: on local moves).
+    // is held it is refused, and retried on the button's release and on local moves (a held key: on local moves).
     private async ValueTask<bool> TryEnterRemoteOnly(LocalMasterState st)
     {
         if (!profile.RemoteOnly || st.Mouse.IsOnVirtualScreen || st.ScreensaverActive) return false;
@@ -1769,6 +1815,8 @@ public class InputRouter(
     private async ValueTask HandleMouseDelta(LocalMasterState st, double dx, double dy)
     {
         if (!st.Mouse.IsOnVirtualScreen) return;
+        // the keyboard is not ours yet, so nothing moves over there
+        if (!platform.KeyboardCaptured) return;
 
         var leavingScreen = st.Mouse.CurrentScreen!;
         var prevScreen = st.Mouse.ApplyDelta(dx, dy);
@@ -2019,8 +2067,10 @@ public class InputRouter(
 
         // whether the current button state has already logged a refused edge; any button event resets it
         public bool EdgeRefusalLogged;
-        // whether the current hold of the keyboard by another client has already logged a refused entry
-        public bool KeyboardRefusalLogged;
+        // whether the current local key hold has already logged a refused entry
+        public bool KeyRefusalLogged;
+        // on a remote whose visit is not announced yet: the keyboard grab is still being retried
+        public bool EnterPending;
 
         public void ForgetForwarded()
         {

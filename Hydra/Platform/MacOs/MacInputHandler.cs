@@ -178,6 +178,8 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
     public bool RecentresItself => false;
 
     public bool SeesSwallowed(MouseButton button) => true;
+    public event Action? CaptureFailed { add { } remove { } }
+    public event Action? KeyboardCapturedLate { add { } remove { } }
 
     // The session's button scoreboard, which our swallowing tap does not hide: what Carbon's GetCurrentButtonState
     // reads, and what Deskflow's OSXScreen::isAnyMouseButtonDown relies on under the same kCGHIDEventTap.
