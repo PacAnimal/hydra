@@ -28,6 +28,7 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
     private readonly nint _atomImagePng;
     private readonly nint _atomTextHtml;
     private readonly nint _atomPasswordHint;    // KDE's mark of a password manager's copy
+    private readonly nint _atomStamp;           // our own property, appended to for a server timestamp
 
     // what the password hint holds for a concealed copy
     private static readonly byte[] PasswordHintSecret = "secret"u8.ToArray();
@@ -61,6 +62,17 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
     private volatile nint _activeReadSelection; // selection atom being read
     private volatile nint _activeReadProperty;  // property atom being read
     private volatile nint _activeReadTarget;    // target atom being read
+    private uint _activeReadTime;               // the server time the read's conversion was sent with, under _readLock
+    private nint _activeReadOwner;              // the selection's owner when the read began, under _readLock
+    // reads given up on, under the owner they asked, whose late refusal may still come; under _readLock
+    private readonly HashSet<GivenUp> _givenUp = [];
+
+    // server timestamps, from the notice of a zero-length append to our own property
+    private readonly Lock _stampLock = new();
+    private readonly ManualResetEventSlim _stampArrived = new(false);
+    private uint _stampSeen;
+    // the stamp the last conversion was sent with, under _getLock
+    private uint? _lastStamp;
 
     // the property reads are answered in; a read that gives up retires it, so a late owner never feeds a later read
     private readonly nint[] _readProperties = new nint[ReadProperties];
@@ -84,7 +96,7 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
         var root = NativeMethods.XDefaultRootWindow(_display);
         _window = NativeMethods.XCreateSimpleWindow(_display, root, 0, 0, 1, 1, 0, nint.Zero, nint.Zero);
 
-        // need PropertyChange events for INCR receive
+        // need PropertyChange events for INCR receive and server timestamps
         _ = NativeMethods.XSelectInput(_display, _window, NativeMethods.PropertyChangeMask);
 
         _atomClipboard = NativeMethods.XInternAtom(_display, "CLIPBOARD", false);
@@ -95,6 +107,7 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
         _atomImagePng = NativeMethods.XInternAtom(_display, "image/png", false);
         _atomTextHtml = NativeMethods.XInternAtom(_display, "text/html", false);
         _atomPasswordHint = NativeMethods.XInternAtom(_display, "x-kde-passwordManagerHint", false);
+        _atomStamp = NativeMethods.XInternAtom(_display, "HYDRA_STAMP", false);
         for (var i = 0; i < ReadProperties; i++)
             _readProperties[i] = NativeMethods.XInternAtom(_display, $"HYDRA_READ_{i}", false);
         _readProperty = _readProperties[0];
@@ -234,6 +247,7 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
         SignalGet(); // unblock any waiting read
         _eventThread?.Join(TimeSpan.FromSeconds(2));
         _eventThread = null;
+        _stampArrived.Dispose();
 
         _incrReceiveBuffer?.Dispose();
         _incrReceiveBuffer = null;
@@ -437,6 +451,8 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
     {
         lock (_getLock)
         {
+            var owner = NativeMethods.XGetSelectionOwner(_display, selectionAtom);
+            var time = ServerTime();
             using var signal = new ManualResetEventSlim(false);
             nint propertyAtom;
             lock (_readLock)
@@ -448,13 +464,17 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
                 _activeReadSelection = selectionAtom;
                 _activeReadProperty = propertyAtom;
                 _activeReadTarget = targetAtom;
+                _activeReadTime = time;
+                _activeReadOwner = owner;
                 _getSignal = signal;
+                // only the owner asked can still refuse late, so a new one's requests are no longer in doubt
+                _givenUp.RemoveWhere(g => g.Selection == selectionAtom && g.Owner != owner);
             }
             var answered = false;
             try
             {
                 _ = NativeMethods.XConvertSelection(_display, selectionAtom, targetAtom,
-                    propertyAtom, _window, NativeMethods.CurrentTime);
+                    propertyAtom, _window, time);
                 _ = NativeMethods.XFlush(_display);
 
                 answered = AwaitAnswer(signal);
@@ -467,6 +487,7 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
             {
                 lock (_readLock)
                 {
+                    if (!answered) _givenUp.Add(new GivenUp(selectionAtom, _fallbackToString ? NativeMethods.XA_STRING : targetAtom, owner));
                     _getSignal = null;
                     _activeReadSelection = nint.Zero;
                     _activeReadProperty = nint.Zero;
@@ -476,6 +497,28 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
                     if (!answered) RetireReadProperty();
                 }
             }
+        }
+    }
+
+    // a server timestamp later than the last conversion's, so two within one server millisecond still differ; under
+    // _getLock
+    private uint ServerTime()
+    {
+        while (true)
+        {
+            lock (_stampLock)
+                _stampArrived.Reset();
+            _ = NativeMethods.XChangeProperty(_display, _window, _atomStamp, NativeMethods.XA_STRING, 8,
+                NativeMethods.PropModeAppend, Array.Empty<byte>(), 0);
+            _ = NativeMethods.XFlush(_display);
+            if (!_stampArrived.Wait(ClipboardTimeoutMs))
+                throw new ClipboardUnreadableException($"the X server gave no timestamp within {ClipboardTimeoutMs} ms");
+            uint stamp;
+            lock (_stampLock)
+                stamp = _stampSeen;
+            if (_lastStamp is { } last && (int)(stamp - last) <= 0) continue;
+            _lastStamp = stamp;
+            return stamp;
         }
     }
 
@@ -509,10 +552,10 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
         var propertyAtom = _activeReadProperty;
         var targetAtom = _activeReadTarget;
 
-        // a late answer to a read that already timed out names another target or property
+        // a late answer to a read that already timed out names another target, property or time
         var expectedTarget = _fallbackToString ? NativeMethods.XA_STRING : targetAtom;
         if (activeSelection == nint.Zero || ev.SelectionNotifySelection != activeSelection || ev.SelectionNotifyTarget != expectedTarget
-            || (ev.SelectionNotifyProperty != nint.Zero && ev.SelectionNotifyProperty != propertyAtom))
+            || (ev.SelectionNotifyProperty != nint.Zero && ev.SelectionNotifyProperty != propertyAtom) || !AnswersTheRead(ref ev, expectedTarget))
             return;
 
         if (ev.SelectionNotifyProperty == nint.Zero)
@@ -525,9 +568,11 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
             }
             else
             {
+                // the read's own stamp again: no other request was sent with it, and none for STRING, so its answer
+                // is still told apart, and this thread cannot wait for a fresh one's notice
                 _fallbackToString = true;
                 _ = NativeMethods.XConvertSelection(_display, activeSelection, NativeMethods.XA_STRING,
-                    propertyAtom, _window, NativeMethods.CurrentTime);
+                    propertyAtom, _window, _activeReadTime);
                 _ = NativeMethods.XFlush(_display);
             }
             return;
@@ -552,6 +597,17 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
 
         _getResult = data;
         SignalGet();
+    }
+
+    // whether a notice names the read's own request. One with CurrentTime ties itself to none: its data is still the
+    // read's, in a property no earlier read used, but its refusal is taken only while no read of this selection and
+    // target from this owner was given up on, whose late refusal it may be; else the read times out, unreadable. Under
+    // _readLock
+    private bool AnswersTheRead(ref XEvent ev, nint target)
+    {
+        if (ev.SelectionNotifyTime != NativeMethods.CurrentTime) return (uint)ev.SelectionNotifyTime == _activeReadTime;
+        return ev.SelectionNotifyProperty != nint.Zero
+            || !_givenUp.Any(g => g.Selection == _activeReadSelection && g.Target == target && g.Owner == _activeReadOwner);
     }
 
     // the whole of a property, ReadPropertyLongs at a time, deleted once read to its end; data null when it held nothing,
@@ -600,6 +656,16 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
         var window = ev.EventWindow;
         var atom = ev.PropertyNotifyAtom;
         var state = ev.PropertyNotifyState;
+
+        if (window == _window && atom == _atomStamp)
+        {
+            lock (_stampLock)
+            {
+                _stampSeen = (uint)ev.PropertyNotifyTime;
+                _stampArrived.Set();
+            }
+            return;
+        }
 
         // INCR receive: owner wrote a new chunk to the property of the read still waiting for it
         lock (_readLock)
@@ -660,6 +726,9 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
     {
         public string DecodeText() => (Latin1 ? Encoding.Latin1 : Encoding.UTF8).GetString(Data);
     }
+
+    // a read given up on: what it asked for and of whom
+    private sealed record GivenUp(nint Selection, nint Target, nint Owner);
 
     private sealed class IncrSendState
     {

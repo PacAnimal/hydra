@@ -681,6 +681,41 @@ public class XorgClipboardSyncTests
         });
     }
 
+    // a TARGETS request given up on, refused by its owner only once the next read has asked again: the refusal is the
+    // first request's, so the next read still lists the targets and reads the image
+    [Test]
+    public async Task ReadAll_LateRefusalOfTargetsGivenUpOn_NeverAnswersTheNextRead()
+    {
+        await WithForeignOwner(async owner =>
+        {
+            var png = NativeMethods.XInternAtom(owner, "image/png", false);
+            using var reader = new XorgClipboardSync();
+            var first = ReadOffThread(reader, r => r.ImagePng);
+            var stalled = await Task.Run(() => NextRequest(owner)).WaitAsync(Bound);
+            Assert.That(async () => await first.WaitAsync(Bound), Throws.TypeOf<ClipboardUnreadableException>());
+
+            var second = ReadOffThread(reader, r => r.ImagePng);
+            var asked = new List<nint>();
+            var served = Task.Run(() =>
+            {
+                var targets = NextRequest(owner);
+                Notify(owner, stalled, stalled.SelectionRequestTarget, nint.Zero);
+                ServeTargets(owner, targets, [png]);
+                var image = NextRequest(owner);
+                asked.Add(image.SelectionRequestTarget);
+                ServeBytes(owner, image, TestImages.Png);
+            });
+
+            await served.WaitAsync(Bound);
+            var read = await second.WaitAsync(Bound);
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(read, Is.EqualTo(TestImages.Png));
+                Assert.That(asked, Is.EqualTo([png]));
+            }
+        });
+    }
+
     // one field of a read on another thread, while the test serves it
     private static Task<T> ReadOffThread<T>(XorgClipboardSync reader, Func<ClipboardRead, T> field) => Task.Run(() => field(reader.ReadAll()));
 

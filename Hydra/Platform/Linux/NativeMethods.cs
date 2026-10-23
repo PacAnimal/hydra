@@ -24,6 +24,7 @@ internal static partial class NativeMethods
     // -- property mode / event mask --
 
     internal const int PropModeReplace = 0;
+    internal const int PropModeAppend = 2;
     internal const int PropertyNewValue = 0;
     internal const int PropertyDelete = 1;
     internal const nint AnyPropertyType = 0;

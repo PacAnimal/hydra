@@ -332,6 +332,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     protected virtual void OnSentDelta(string[] targetHosts, int dx, int dy) { }
 
     // IStyxClient
+    // the SignalR client runs these handlers one at a time, in arrival order, each awaited; ClientDispatchOrderTests pins it
     public async Task Receive(string sourceHost, string sourceIp, byte[] payload)
     {
         if (_encryption == null) return;
