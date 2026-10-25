@@ -118,7 +118,8 @@ public static class PeerPlatforms
     };
 }
 
-public record ScreenInfoMessage(List<ScreenInfoEntry> Screens, PeerPlatform Platform);
+// KeypadKeys: the slave takes keypad navigation keys and syncs NumLock only for keypad keys; null from one that predates them
+public record ScreenInfoMessage(List<ScreenInfoEntry> Screens, PeerPlatform Platform, bool? KeypadKeys = null);
 public record MasterConfigMessage(LogLevel? LogLevel);
 public record SlaveLogMessage(int Level, string Category, string Message, string? Exception);
 // IsRepeat marks an OS auto-repeat the master re-resolved (with live modifier/dead-key state) and forwarded, only for a

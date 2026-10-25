@@ -19,6 +19,7 @@ public sealed class XorgOutputHandler : IPlatformOutput, ICursor
     private readonly Dictionary<ulong, uint> _naturalHeld = [];  // keysym → keycode injected via natural path (stable key-up even after layout switch)
     private readonly Lock _lock = new();                 // protects _tempBindings, _unusedKeycodes, _naturalHeld
     private readonly ILogger<XorgOutputHandler> _log;
+    private readonly ShiftedKeypad _shiftedKeypad = new();
     private int _keysymsPerKeycode = 4;  // actual server value; overridden in FindUnusedKeycodes
     private ulong[] _emptyCharSlots = [0UL, 0UL, 0UL, 0UL];  // pre-allocated; sized after FindUnusedKeycodes
 
@@ -79,6 +80,7 @@ public sealed class XorgOutputHandler : IPlatformOutput, ICursor
     public void InjectKey(KeyEventMessage msg)
     {
         var isDown = msg.Type == KeyEventType.KeyDown;
+        if (msg.Key is { } keypadKey) msg = msg with { Key = _shiftedKeypad.Injected(keypadKey, msg.Type, msg.Modifiers) };
 
         // sync CapsLock/NumLock state before injecting (skip when injecting the lock keys themselves)
         if (isDown && msg.Key is not (SpecialKey.CapsLock or SpecialKey.NumLock))

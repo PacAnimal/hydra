@@ -791,7 +791,7 @@ public class SlaveRelayConnection : RelayConnection
     {
         if (Log.IsEnabled(LogLevel.Information))
             Log.LogInformation("Sending screen info to {Master}: {Count} {Screens}", masterHost, entries.Count, Pluralize.Of(entries.Count, "screen"));
-        this.Send(masterHost, MessageKind.ScreenInfo, new ScreenInfoMessage(entries, PeerPlatforms.Local));
+        this.Send(masterHost, MessageKind.ScreenInfo, new ScreenInfoMessage(entries, PeerPlatforms.Local, KeypadKeys: true));
     }
 
     private sealed record SelectionQueryOrigin(string Host, CancellationToken Connection)
