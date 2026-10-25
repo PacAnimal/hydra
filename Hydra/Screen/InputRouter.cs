@@ -872,7 +872,6 @@ public class InputRouter(
                     await _peerState.SetPeerScreens(sourceHost, owned.Kept);
 
                     _peerState.SetPeerPlatform(sourceHost, info.Platform);
-                    _peerState.SetPeerTakesKeypadKeys(sourceHost, info.KeypadKeys == true);
                     if (!UseHydraClipboard(sourceHost) && log.IsEnabled(LogLevel.Information))
                         log.LogInformation("Clipboard sync with {Host}: using macOS Universal Clipboard; Hydra is standing down", sourceHost);
                     var snapshot = await _peerState.GetPeerScreensSnapshot();
@@ -1534,16 +1533,8 @@ public class InputRouter(
     {
         var target = st.Mouse.CurrentScreen?.Host;
         if (target == null) return;
-        relay.SendKeyEvent([target], _peerState.PeerTakesKeypadKeys(target) ? message : ForOlderSlave(message, _localPlatform));
+        relay.SendKeyEvent([target], message);
     }
-
-    // a slave that predates keypad keys drops keypad navigation, so it gets the dedicated key, and syncs NumLock on
-    // every key, so it gets none from a macOS master, where NumLock is the numeric pad flag rather than a lock
-    internal static KeyEventMessage ForOlderSlave(KeyEventMessage message, PeerPlatform localPlatform) => message with
-    {
-        Key = message.Key?.WithoutKeypad(),
-        Modifiers = localPlatform == PeerPlatform.MacOs ? message.Modifiers & ~KeyModifiers.NumLock : message.Modifiers,
-    };
 
     private void OnMouseMove(double x, double y)
     {

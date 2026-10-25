@@ -62,6 +62,11 @@ public sealed class WindowsOutputHandler(ILogger<WindowsOutputHandler> log, IScr
         _dispatcher.Dispatch(new InjectMouseScrollCommand(msg));
     }
 
+    public void RestoreLocks()
+    {
+        _dispatcher.Dispatch(new RestoreLocksCommand());
+    }
+
     public ScreenPoint? GetCursorPosition() => WindowsDisplayHelper.CursorPosition();
 
     public ValueTask HideCursor() { _cursor.Hide(); return ValueTask.CompletedTask; }

@@ -79,6 +79,11 @@ public sealed class CoalescingOutputWrapper : IPlatformOutput
         PostControl(() => _inner.InjectMouseButton(msg));
     }
 
+    public void RestoreLocks()
+    {
+        PostControl(_inner.RestoreLocks);
+    }
+
     public void InjectMouseScroll(MouseScrollMessage msg)
     {
         PostControl(() => _inner.InjectMouseScroll(msg));

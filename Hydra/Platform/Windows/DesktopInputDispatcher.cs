@@ -38,6 +38,7 @@ internal sealed class DesktopInputDispatcher : IDisposable
 
     private readonly ILogger _log;
     private readonly BlockingCollection<InputCommand> _queue = [];
+    private readonly NumLockRestore _numLockRestore = new();
     private readonly Timer _pollTimer;
     private readonly Timer _relativeRestoreTimer;
     private readonly Lock _desktopLock = new();
@@ -237,6 +238,12 @@ internal sealed class DesktopInputDispatcher : IDisposable
                     ExecuteInjectMouseScroll(s.Msg);
                     break;
                 }
+            case RestoreLocksCommand:
+                {
+                    if (_numLockRestore.Take() is { } before)
+                        SyncLockKey(WinVirtualKey.Numlock, before, extendedKey: true);
+                    break;
+                }
         }
     }
 
@@ -317,6 +324,7 @@ internal sealed class DesktopInputDispatcher : IDisposable
     private uint ExecuteInjectKey(KeyEventMessage msg)
     {
         var isUp = msg.Type == KeyEventType.KeyUp;
+        if (!isUp && msg.Key == SpecialKey.NumLock) _numLockRestore.Toggled();
 
         // sync CapsLock/NumLock state before injecting (skip when injecting the lock keys themselves)
         if (!isUp && msg.Key is not (SpecialKey.CapsLock or SpecialKey.NumLock))
@@ -480,15 +488,18 @@ internal sealed class DesktopInputDispatcher : IDisposable
     private void SyncLockState(KeyModifiers mods, bool numLock)
     {
         SyncLockKey(WinVirtualKey.Capital, want: (mods & KeyModifiers.CapsLock) != 0, extendedKey: false);
-        if (numLock)
-            SyncLockKey(WinVirtualKey.Numlock, want: (mods & KeyModifiers.NumLock) != 0, extendedKey: true);
+        var wantNumLock = (mods & KeyModifiers.NumLock) != 0;
+        if (numLock && SyncLockKey(WinVirtualKey.Numlock, wantNumLock, extendedKey: true))
+            _numLockRestore.Synced(had: !wantNumLock);
     }
 
-    private void SyncLockKey(int vk, bool want, bool extendedKey)
+    // returns whether it flipped the lock
+    private bool SyncLockKey(int vk, bool want, bool extendedKey)
     {
         var have = (NativeMethods.GetKeyState(vk) & 0x01) != 0;
-        if (have == want) return;
+        if (have == want) return false;
         InputSender.VkTap(vk, extendedKey ? NativeMethods.KEYEVENTF_EXTENDEDKEY : 0u).WarnIfFailed(_log, "lock key");
+        return true;
     }
 
     // injects the buffered Win down (unless a shortcut already did) and marks Win as used as a modifier.
@@ -564,5 +575,6 @@ record MoveMouseRelativeCommand(int Dx, int Dy) : InputCommand;
 record InjectKeyCommand(KeyEventMessage Msg) : InputCommand;
 record InjectMouseButtonCommand(MouseButtonMessage Msg) : InputCommand;
 record InjectMouseScrollCommand(MouseScrollMessage Msg) : InputCommand;
+record RestoreLocksCommand : InputCommand;
 record RestoreMouseSettingsCommand(bool Force = false) : InputCommand;
 record SwitchDesktopCommand(nint NewDesktop, nint OldDesktop, string Name) : InputCommand;

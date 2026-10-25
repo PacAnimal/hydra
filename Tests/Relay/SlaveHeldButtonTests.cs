@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Cathedral.Config;
+using Hydra.Keyboard;
 using Hydra.Mouse;
 using Hydra.Relay;
 using Tests.Setup;
@@ -34,6 +35,22 @@ public class SlaveHeldButtonTests
         await relay.SimulateReceive(Master, MessageKind.LeaveScreen, "{}");
 
         Assert.That(relay.Output.Buttons, Is.EqualTo([LeftDown, LeftUp]));
+    }
+
+    [Test]
+    public async Task LeaveScreen_RestoresLocks_AfterReleasingWhatIsHeld()
+    {
+        var relay = await Pressed();
+        var keyDown = new KeyEventMessage(KeyEventType.KeyDown, KeyModifiers.NumLock, null, SpecialKey.KP_4);
+        await relay.SimulateReceive(Master, MessageKind.KeyEvent, JsonSerializer.Serialize(keyDown, SaneJson.Options));
+
+        await relay.SimulateReceive(Master, MessageKind.LeaveScreen, "{}");
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(relay.Output.Keys.Select(k => k.Type), Is.EqualTo([KeyEventType.KeyDown, KeyEventType.KeyUp]));
+            Assert.That(relay.Output.LockRestores, Is.EqualTo([2]), "once, after the held key's up");
+        }
     }
 
     [Test]

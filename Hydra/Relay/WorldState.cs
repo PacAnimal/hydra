@@ -30,8 +30,6 @@ public interface IWorldState
     // -- master-side (peer platform) --
     void SetPeerPlatform(string host, PeerPlatform platform);
     PeerPlatform PeerPlatformOf(string host);
-    void SetPeerTakesKeypadKeys(string host, bool takes);
-    bool PeerTakesKeypadKeys(string host);
 }
 
 public class WorldState : IWorldState
@@ -40,7 +38,6 @@ public class WorldState : IWorldState
     private readonly SemaphoreSlimValue<SlaveState> _slave = new(new SlaveState(), disposeValue: false);
     private readonly ConcurrentDictionary<string, SimpleAesKey> _remoteKeys = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, PeerPlatform> _peerPlatforms = new(StringComparer.OrdinalIgnoreCase);
-    private readonly ConcurrentDictionary<string, bool> _peerKeypadKeys = new(StringComparer.OrdinalIgnoreCase);
 
     private readonly ConcurrentDictionary<string, ILogger> _loggers = new(StringComparer.OrdinalIgnoreCase);
 
@@ -151,10 +148,6 @@ public class WorldState : IWorldState
     public void SetPeerPlatform(string host, PeerPlatform platform) => _peerPlatforms[host] = platform;
 
     public PeerPlatform PeerPlatformOf(string host) => _peerPlatforms.GetValueOrDefault(host, PeerPlatform.Unknown);
-
-    public void SetPeerTakesKeypadKeys(string host, bool takes) => _peerKeypadKeys[host] = takes;
-
-    public bool PeerTakesKeypadKeys(string host) => _peerKeypadKeys.GetValueOrDefault(host);
 
     public ValueTask SetRemoteKey(string host, SimpleAesKey key)
     {

@@ -763,6 +763,7 @@ public class SlaveRelayConnection : RelayConnection
         foreach (var button in _heldButtons)
             _output.InjectMouseButton(new MouseButtonMessage(button, false));
         _heldButtons.Clear();
+        _output.RestoreLocks();
     }
 
     private async Task HandleMasterConfig(string masterHost, ReadOnlyMemory<byte> body)
@@ -791,7 +792,7 @@ public class SlaveRelayConnection : RelayConnection
     {
         if (Log.IsEnabled(LogLevel.Information))
             Log.LogInformation("Sending screen info to {Master}: {Count} {Screens}", masterHost, entries.Count, Pluralize.Of(entries.Count, "screen"));
-        this.Send(masterHost, MessageKind.ScreenInfo, new ScreenInfoMessage(entries, PeerPlatforms.Local, KeypadKeys: true));
+        this.Send(masterHost, MessageKind.ScreenInfo, new ScreenInfoMessage(entries, PeerPlatforms.Local));
     }
 
     private sealed record SelectionQueryOrigin(string Host, CancellationToken Connection)

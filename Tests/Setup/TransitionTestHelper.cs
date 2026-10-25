@@ -160,13 +160,12 @@ public static class TransitionTestHelper
         return CreateService(getTickCount, profile: config ?? RemoteOnlyConfig, screenSaverSync: screenSaverSync, screens: screens);
     }
 
-    // advertises one host's monitors, laid out left to right and named as the host itself names them;
-    // keypadKeys false is a slave that predates them
-    public static async Task AdvertiseScreens(FakeRelay relay, string host, int count, PeerPlatform platform = PeerPlatform.Linux, bool keypadKeys = true)
+    // advertises one host's monitors, laid out left to right and named as the host itself names them
+    public static async Task AdvertiseScreens(FakeRelay relay, string host, int count, PeerPlatform platform = PeerPlatform.Linux)
     {
         var entries = Enumerable.Range(0, count)
             .Select(i => new ScreenInfoEntry(ScreenNaming.BuildScreenName(host, i, count), i * 2560, 0, 2560, 1440, 1.0m)).ToList();
-        var info = JsonSerializer.Serialize(new ScreenInfoMessage(entries, platform, keypadKeys ? true : null), SaneJson.Options);
+        var info = JsonSerializer.Serialize(new ScreenInfoMessage(entries, platform), SaneJson.Options);
         await relay.FireMessageReceived(host, MessageKind.ScreenInfo, info);
     }
 
