@@ -65,6 +65,41 @@ public class WindowsInputHandlerHeldKeyTests
         Assert.That(h.Up(WinVirtualKey.Return, NativeMethods.LLKHF_EXTENDED), Is.True);
     }
 
+    [Test]
+    public void LeftHeldWithNoRecord_ItsUpPassesThrough()
+    {
+        // held before the hook saw it (or its record cleared): the OS state is all there is, and no twin has a record
+        var h = new HookedHandler();
+        h.OsHeld.Add(WinVirtualKey.Left);
+        h.Handler.IsOnVirtualScreen = true;
+
+        Assert.That(h.Up(WinVirtualKey.Left, NativeMethods.LLKHF_EXTENDED), Is.False);
+    }
+
+    [Test]
+    public void KeypadLeftPressedDuringAVisit_ReleasedAsNumpad4_ItsUpIsSwallowed()
+    {
+        var h = new HookedHandler();
+        h.Handler.IsOnVirtualScreen = true;
+        Assert.That(h.Down(WinVirtualKey.Left), Is.True, "pre-condition: swallowed during the visit");
+        h.Handler.IsOnVirtualScreen = false;
+
+        Assert.That(h.Up(WinVirtualKey.Numpad4), Is.True);
+    }
+
+    [Test]
+    public void KeypadLeftPressedDuringAVisit_WhileLeftIsHeldLocally_ItsUpIsSwallowed()
+    {
+        // both are VK_LEFT to the OS, so the held arrow says nothing about the keypad key
+        var h = new HookedHandler();
+        h.PressLocally(WinVirtualKey.Left, NativeMethods.LLKHF_EXTENDED);
+        h.Handler.IsOnVirtualScreen = true;
+        Assert.That(h.Down(WinVirtualKey.Left), Is.True, "pre-condition: swallowed during the visit");
+        h.Handler.IsOnVirtualScreen = false;
+
+        Assert.That(h.Up(WinVirtualKey.Left), Is.True);
+    }
+
     [TestCase(nameof(HookedHandler.Click))]
     [TestCase(nameof(HookedHandler.Wheel))]
     public void LeftCtrlHeldAtEntry_AMouseEventHandsNoControlDown_ItsUpPassesThroughAndIsHanded(string mouse)

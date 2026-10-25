@@ -217,7 +217,8 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
                 PostNsMediaKey(nxType, isDown);
             else if (MacSpecialKeyMap.OutputOverrides.TryGetValue(key2, out var ovr))
                 PostCgKey(ovr.Vk, isDown, flags | ovr.ExtraFlags, isRepeat);
-            else if (MacSpecialKeyMap.Instance.Reverse.TryGetValue(key2, out var vk))
+            // macOS has no numlock: a keypad navigation key is its dedicated twin
+            else if (MacSpecialKeyMap.Instance.Reverse.TryGetValue(key2.WithoutKeypad(), out var vk))
             {
                 // non-modifier special key: IOHIDPostEvent-first, CGEvent fallback
                 PostKey((ushort)vk, isDown, flags, isRepeat);

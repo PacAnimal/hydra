@@ -167,10 +167,9 @@ internal sealed class EvdevKeyResolver : IDisposable
         }
         else
         {
-            // numlock off: emit standard navigation; also handle xkbcommon XOR numeric → nav
+            // numlock off: emit keypad navigation, also when xkbcommon's XOR gave numeric (shift+numlock-off)
             if (XorgKeyResolver.IsKpNumeric(keysym))
-                keysym = XorgKeyResolver.KpNumericToNav(keysym);  // shift+numlock-off XOR gave numeric; remap to nav
-            keysym = XorgKeyResolver.MapKpNavToStandard(keysym);
+                keysym = XorgKeyResolver.KpNumericToNav(keysym);
         }
         return keysym;
     }

@@ -16,9 +16,28 @@ internal sealed class WinKeyResolver
 
     private readonly Dictionary<int, CharClassification> _keyDownId = [];
 
-    // synthetic tracking key for KP_Enter: VK_RETURN (0x0D) is shared with regular Return.
-    // using a distinct key lets both be held simultaneously without overwriting each other.
-    private const int KpEnterTrackingVk = WinVirtualKey.Return | 0x10000;
+    // a keypad key sharing its VK with a dedicated key (KP_Enter and Return, KP_Left and Left) is tracked under the VK
+    // with this bit, so both can be held at once without overwriting each other
+    internal const int KeypadTrackingBit = 0x10000;
+
+    // a keypad position's VK with NumLock on and its VK with NumLock off: Shift flips which one Windows gives
+    private static readonly Dictionary<int, int> KeypadPositions = new()
+    {
+        { WinVirtualKey.Numpad0, WinVirtualKey.Insert },
+        { WinVirtualKey.Numpad1, WinVirtualKey.End },
+        { WinVirtualKey.Numpad2, WinVirtualKey.Down },
+        { WinVirtualKey.Numpad3, WinVirtualKey.Next },
+        { WinVirtualKey.Numpad4, WinVirtualKey.Left },
+        { WinVirtualKey.Numpad5, WinVirtualKey.Clear },
+        { WinVirtualKey.Numpad6, WinVirtualKey.Right },
+        { WinVirtualKey.Numpad7, WinVirtualKey.Home },
+        { WinVirtualKey.Numpad8, WinVirtualKey.Up },
+        { WinVirtualKey.Numpad9, WinVirtualKey.Prior },
+        { WinVirtualKey.Decimal, WinVirtualKey.Delete },
+    };
+
+    private static readonly Dictionary<int, int> KeypadPositionsNumLockOff = KeypadPositions.ToDictionary(kv => kv.Value, kv => kv.Key);
+    private const int KpEnterTrackingVk = WinVirtualKey.Return | KeypadTrackingBit;
 
     // pending dead key combining character (e.g. '\u0301' for acute accent)
     private char _pendingDeadKey;
@@ -32,21 +51,51 @@ internal sealed class WinKeyResolver
 
     internal KeyEvent[]? Resolve(int wParam, KBDLLHOOKSTRUCT info)
     {
-        var events = ResolveEvents(wParam, info);
-        KeyResolver.StampPhysicalKey(events, TrackingVk(info));
+        var tracking = Tracking(info);
+        var events = ResolveEvents(wParam, info, tracking);
+        KeyResolver.StampPhysicalKey(events, tracking);
         return events;
     }
 
     internal static bool IsKeyUp(int wParam) => wParam is NativeMethods.WM_KEYUP or NativeMethods.WM_SYSKEYUP;
 
-    // the key _keyDownId tracks this hook event under
-    internal static int TrackingVk(KBDLLHOOKSTRUCT info) => IsKpEnter(info) ? KpEnterTrackingVk : (int)info.vkCode;
+    // the key this hook event is tracked under. Shift flips what NumLock gives a keypad key, so a held key's repeats and
+    // release can arrive as the other VK of its position: with no press of their own, they belong to the press there
+    internal int Tracking(KBDLLHOOKSTRUCT info)
+    {
+        var key = TrackingVk(info);
+        if (_keyDownId.ContainsKey(key)) return key;
+        return OtherAtKeypadPosition(info) is { } other && _keyDownId.ContainsKey(other) ? other : key;
+    }
+
+    private static int TrackingVk(KBDLLHOOKSTRUCT info) =>
+        IsKpEnter(info) || IsKeypadNavigation(info) ? (int)info.vkCode | KeypadTrackingBit : (int)info.vkCode;
+
+    private static int? OtherAtKeypadPosition(KBDLLHOOKSTRUCT info)
+    {
+        var vk = (int)info.vkCode;
+        if (KeypadPositions.TryGetValue(vk, out var numLockOff))
+            return numLockOff == WinVirtualKey.Clear ? numLockOff : numLockOff | KeypadTrackingBit;
+        if ((vk == WinVirtualKey.Clear || IsKeypadNavigation(info)) && KeypadPositionsNumLockOff.TryGetValue(vk, out var numLockOn))
+            return numLockOn;
+        return null;
+    }
+
+    // whether the OS key state of a VK is shared by a dedicated key and its keypad twin, so says nothing about either
+    internal static bool IsSharedVk(uint vk) => vk == WinVirtualKey.Return || DedicatedNavigation(vk);
 
     // numpad Enter: VK_RETURN with the extended-key flag, distinct from regular Enter
     private static bool IsKpEnter(KBDLLHOOKSTRUCT info) =>
         info.vkCode == WinVirtualKey.Return && (info.flags & NativeMethods.LLKHF_EXTENDED) != 0;
 
-    private KeyEvent[]? ResolveEvents(int wParam, KBDLLHOOKSTRUCT info)
+    // numlock off, the keypad gives the dedicated navigation keys' VKs without their extended flag. A tool that injects
+    // an arrow often leaves the flag off too, and Windows still takes it as the arrow
+    private static bool IsKeypadNavigation(KBDLLHOOKSTRUCT info) =>
+        (info.flags & (NativeMethods.LLKHF_EXTENDED | NativeMethods.LLKHF_INJECTED)) == 0 && DedicatedNavigation(info.vkCode);
+
+    private static bool DedicatedNavigation(uint vk) => WinSpecialKeyMap.Instance.TryGet(vk, out var key) && key.KeypadTwin() is not null;
+
+    private KeyEvent[]? ResolveEvents(int wParam, KBDLLHOOKSTRUCT info, int tracking)
     {
         var vk = (int)info.vkCode;
         var isKeyUp = IsKeyUp(wParam);
@@ -64,7 +113,7 @@ internal sealed class WinKeyResolver
         {
             _injectedLCtrlPending = false;
             var prefix = FlushDeferredLCtrl();
-            var up = KeyResolver.ReplayKeyUp(_keyDownId, TrackingVk(info), mods);
+            var up = KeyResolver.ReplayKeyUp(_keyDownId, tracking, mods);
             return KeyResolver.Concat([prefix], [up]);
         }
 
@@ -100,6 +149,10 @@ internal sealed class WinKeyResolver
         // flush deferred LCtrl — it was not followed by same-timestamp RMenu, so it's a real Ctrl press
         var flushed = FlushDeferredLCtrl();
 
+        // a keypad key held across a Shift change repeats as what it was pressed as
+        if (tracking != TrackingVk(info))
+            return KeyResolver.Concat([flushed, KeyResolver.ReplayRepeat(_keyDownId[tracking], mods)]);
+
         // numpad digits: only delivered when NumLock is on (NumLock off gives navigation VKs instead).
         // emit as KP_0-KP_9 SpecialKey events so the slave injects the physical numpad key.
         if (vk is >= WinVirtualKey.Numpad0 and <= WinVirtualKey.Numpad9)
@@ -133,11 +186,13 @@ internal sealed class WinKeyResolver
 
         if (WinSpecialKeyMap.Instance.TryGet((ulong)vk, out var specialKey))
         {
+            if (IsKeypadNavigation(info) && specialKey.KeypadTwin() is { } keypadKey) specialKey = keypadKey;
+
             // suppress auto-repeat — only emit on initial press, not while held.
             // key type check guards against cross-type collision (e.g. KP_Enter vs Return sharing VK_RETURN).
             // note: KP_Enter hits the vk==Return && LLKHF_EXTENDED branch above before reaching here,
             // so the tracked.Key == specialKey guard never needs a KP_Enter carve-out.
-            if (_keyDownId.TryGetValue(vk, out var tracked) && tracked.Key == specialKey)
+            if (_keyDownId.TryGetValue(tracking, out var tracked) && tracked.Key == specialKey)
             {
                 // modifiers don't repeat-type; other held specials (arrows, F-keys) forward a repeat
                 if (specialKey.IsModifier()) return KeyResolver.Concat([flushed]);
@@ -154,7 +209,7 @@ internal sealed class WinKeyResolver
                 return KeyResolver.Concat([flushed], flushedDead);
             }
 
-            _keyDownId[vk] = new CharClassification(null, specialKey);
+            _keyDownId[tracking] = new CharClassification(null, specialKey);
             return KeyResolver.Concat([flushed], flushedDead, [KeyEvent.Special(KeyEventType.KeyDown, specialKey, mods)]);
         }
 

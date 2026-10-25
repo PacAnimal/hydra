@@ -480,17 +480,19 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
     internal bool HandleKey(int msg, KBDLLHOOKSTRUCT info)
     {
         _lastKeyboardCallbackTick = TickCount();
+        var key = _keyResolver.Tracking(info);
         // always resolve to track modifier state even on the real screen
         var keyEvents = _keyResolver.Resolve(msg, info);
         if (keyEvents is not null)
             foreach (var keyEvent in keyEvents)
                 HandOver(keyEvent);
-        return _keyFates.Swallow(WinKeyResolver.TrackingVk(info), WinKeyResolver.IsKeyUp(msg), repeat: null,
-            osHolds: OsHoldsKey(info.vkCode), IsOnVirtualScreen);
+        return _keyFates.Swallow(key, WinKeyResolver.IsKeyUp(msg), repeat: null, osHolds: OsHoldsKey(info.vkCode, key), IsOnVirtualScreen);
     }
 
-    // both Enter keys are VK_RETURN to the OS, so its state says nothing about either: each relies on its record
-    private bool OsHoldsKey(uint vk) => vk != WinVirtualKey.Return && IsKeyDown((int)vk);
+    // both Enter keys are VK_RETURN to the OS, and an arrow and its keypad twin both VK_LEFT: its state speaks for one
+    // only while the other has no record
+    private bool OsHoldsKey(uint vk, int key) =>
+        IsKeyDown((int)vk) && !(WinKeyResolver.IsSharedVk(vk) && _keyFates.Knows(key ^ WinKeyResolver.KeypadTrackingBit));
 
     // Every event goes to the router, whose AdmitKey decides, except the deferred left Ctrl of a key the OS holds:
     // flushed during a visit by whatever follows it, the router would take it for the visit's own press.

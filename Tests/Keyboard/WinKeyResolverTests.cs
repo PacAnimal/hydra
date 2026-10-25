@@ -221,6 +221,85 @@ public class WinKeyResolverTests
 
         Assert.That(events.Select(e => (e.Key, e.PhysicalKey)), Is.EqualTo([(SpecialKey.AltGr, WinVirtualKey.RMenu)]));
     }
+
+    // numlock off, the keypad gives the navigation VKs without the extended flag the dedicated keys carry
+
+    [TestCase((uint)WinVirtualKey.Left, SpecialKey.KP_Left)]
+    [TestCase((uint)WinVirtualKey.Home, SpecialKey.KP_Home)]
+    [TestCase((uint)WinVirtualKey.Next, SpecialKey.KP_PageDown)]
+    [TestCase((uint)WinVirtualKey.Delete, SpecialKey.KP_Delete)]
+    [TestCase((uint)WinVirtualKey.Clear, SpecialKey.KP_Begin)]
+    public void KeypadNavigation_IsTheKeypadKey(uint vk, SpecialKey expected)
+    {
+        var r = new WinKeyResolver();
+        Assert.That(Down(r, vk)!.Select(e => e.Key), Is.EqualTo([expected]));
+    }
+
+    [Test]
+    public void ExtendedNavigation_IsTheDedicatedKey()
+    {
+        var r = new WinKeyResolver();
+        Assert.That(Down(r, WinVirtualKey.Left, NativeMethods.LLKHF_EXTENDED)!.Select(e => e.Key), Is.EqualTo([SpecialKey.Left]));
+    }
+
+    [Test]
+    public void InjectedNavigation_WithoutTheExtendedFlag_IsTheDedicatedKey()
+    {
+        // tools that SendInput an arrow often leave the extended flag off; Windows still takes it as the arrow
+        var r = new WinKeyResolver();
+        Assert.That(Down(r, WinVirtualKey.Left, NativeMethods.LLKHF_INJECTED)!.Select(e => e.Key), Is.EqualTo([SpecialKey.Left]));
+    }
+
+    // Shift changes what NumLock gives a keypad key, so a key's up can arrive as the other VK of its keypad position
+
+    [Test]
+    public void KeypadLeft_ReleasedAsNumpad4_ReleasesKeypadLeft()
+    {
+        var r = new WinKeyResolver();
+        Down(r, WinVirtualKey.Left);
+        var up = Up(r, WinVirtualKey.Numpad4);
+        Assert.That(up!.Select(e => (e.Type, e.Key, e.PhysicalKey)), Is.EqualTo([(KeyEventType.KeyUp, SpecialKey.KP_Left, r.Tracking(Hook(WinVirtualKey.Left)))]));
+    }
+
+    [Test]
+    public void KeypadLeft_RepeatingAsNumpad4_RepeatsKeypadLeft()
+    {
+        var r = new WinKeyResolver();
+        Down(r, WinVirtualKey.Left);
+        var repeat = Down(r, WinVirtualKey.Numpad4);
+        var up = Up(r, WinVirtualKey.Numpad4);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(repeat!.Select(e => (e.Key, e.IsRepeat)), Is.EqualTo([(SpecialKey.KP_Left, true)]));
+            Assert.That(up!.Select(e => (e.Type, e.Key)), Is.EqualTo([(KeyEventType.KeyUp, SpecialKey.KP_Left)]));
+        }
+    }
+
+    [Test]
+    public void Numpad4_ReleasedAsKeypadLeft_ReleasesKp4()
+    {
+        var r = new WinKeyResolver();
+        Down(r, WinVirtualKey.Numpad4);
+        var up = Up(r, WinVirtualKey.Left);
+        Assert.That(up!.Select(e => (e.Type, e.Key, e.PhysicalKey)), Is.EqualTo([(KeyEventType.KeyUp, SpecialKey.KP_4, WinVirtualKey.Numpad4)]));
+    }
+
+    [Test]
+    public void KeypadLeft_AndLeft_HeldTogether_AreTrackedApart()
+    {
+        var r = new WinKeyResolver();
+        Down(r, WinVirtualKey.Left, NativeMethods.LLKHF_EXTENDED);
+        var kpDown = Down(r, WinVirtualKey.Left);
+
+        var leftUp = Up(r, WinVirtualKey.Left, NativeMethods.LLKHF_EXTENDED);
+        var kpUp = Up(r, WinVirtualKey.Left);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(kpDown!.Select(e => (e.Key, e.IsRepeat)), Is.EqualTo([(SpecialKey.KP_Left, false)]), "a press of its own, not a repeat");
+            Assert.That(leftUp!.Select(e => e.Key), Is.EqualTo([SpecialKey.Left]));
+            Assert.That(kpUp!.Select(e => e.Key), Is.EqualTo([SpecialKey.KP_Left]));
+        }
+    }
 }
 
 // character-resolution tests require ToUnicodeEx (Windows only)
@@ -228,6 +307,14 @@ public class WinKeyResolverTests
 [Platform("Win")]
 public class WinKeyResolverCharTests
 {
+    [Test]
+    public void KeypadDecimal_ReleasedAsKeypadDelete_IsTrackedAsTheDecimal()
+    {
+        var r = new WinKeyResolver();
+        Down(r, WinVirtualKey.Decimal);
+        Assert.That(r.Tracking(Hook(WinVirtualKey.Delete)), Is.EqualTo(WinVirtualKey.Decimal));
+    }
+
     [Test]
     public void ShiftedKey_ProducesShiftedCharacter()
     {

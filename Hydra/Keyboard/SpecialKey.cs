@@ -37,6 +37,17 @@ public enum SpecialKey : uint
 
     // keypad
     KP_Space = 0x01FF80,
+    KP_Home = 0x01FF95,
+    KP_Left = 0x01FF96,
+    KP_Up = 0x01FF97,
+    KP_Right = 0x01FF98,
+    KP_Down = 0x01FF99,
+    KP_PageUp = 0x01FF9A,    // XK_KP_Prior
+    KP_PageDown = 0x01FF9B,  // XK_KP_Next
+    KP_End = 0x01FF9C,
+    KP_Begin = 0x01FF9D,
+    KP_Insert = 0x01FF9E,
+    KP_Delete = 0x01FF9F,
     KP_Tab = 0x01FF89,
     KP_Enter = 0x01FF8D,
     KP_Equal = 0x01FFBD,

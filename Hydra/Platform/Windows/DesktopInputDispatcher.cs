@@ -320,7 +320,7 @@ internal sealed class DesktopInputDispatcher : IDisposable
 
         // sync CapsLock/NumLock state before injecting (skip when injecting the lock keys themselves)
         if (!isUp && msg.Key is not (SpecialKey.CapsLock or SpecialKey.NumLock))
-            SyncLockState(msg.Modifiers);
+            SyncLockState(msg.Modifiers, msg.Key?.IsNumLockSensitive() == true);
 
         if (msg.Character is { } ch)
         {
@@ -430,7 +430,7 @@ internal sealed class DesktopInputDispatcher : IDisposable
             if (isUp) return 1;
             return InputSender.UnicodeTap('=');
         }
-        else if (msg.Key is { } key && WinSpecialKeyMap.Instance.Reverse.TryGetValue(key, out var vk))
+        else if (msg.Key is { } key && WinSpecialKeyMap.Instance.Reverse.TryGetValue(key.WithoutKeypad(), out var vk))
         {
             var isWin = vk == WinVirtualKey.LWin || vk == WinVirtualKey.RWin;
             if (isWin)
@@ -466,7 +466,8 @@ internal sealed class DesktopInputDispatcher : IDisposable
             if (_winKeyDown && !isWin) FlushWin(isUp);
 
             var flags = UpFlag(isUp);
-            if (ExtendedKeys.Contains(vk))
+            // a keypad navigation key is its dedicated twin's VK without the extended flag
+            if (ExtendedKeys.Contains(vk) && key.WithoutKeypad() == key)
                 flags |= NativeMethods.KEYEVENTF_EXTENDEDKEY;
             return InputSender.Key((int)vk, flags);
         }
@@ -476,10 +477,11 @@ internal sealed class DesktopInputDispatcher : IDisposable
 
     private static uint UpFlag(bool isUp) => isUp ? NativeMethods.KEYEVENTF_KEYUP : 0u;
 
-    private void SyncLockState(KeyModifiers mods)
+    private void SyncLockState(KeyModifiers mods, bool numLock)
     {
         SyncLockKey(WinVirtualKey.Capital, want: (mods & KeyModifiers.CapsLock) != 0, extendedKey: false);
-        SyncLockKey(WinVirtualKey.Numlock, want: (mods & KeyModifiers.NumLock) != 0, extendedKey: true);
+        if (numLock)
+            SyncLockKey(WinVirtualKey.Numlock, want: (mods & KeyModifiers.NumLock) != 0, extendedKey: true);
     }
 
     private void SyncLockKey(int vk, bool want, bool extendedKey)

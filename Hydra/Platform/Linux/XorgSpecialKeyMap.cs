@@ -38,6 +38,17 @@ internal sealed class XorgSpecialKeyMap : SpecialKeyMap
 
         // keypad
         { XorgVirtualKey.KP_Space, SpecialKey.KP_Space },
+        { XorgVirtualKey.KP_Home, SpecialKey.KP_Home },
+        { XorgVirtualKey.KP_Left, SpecialKey.KP_Left },
+        { XorgVirtualKey.KP_Up, SpecialKey.KP_Up },
+        { XorgVirtualKey.KP_Right, SpecialKey.KP_Right },
+        { XorgVirtualKey.KP_Down, SpecialKey.KP_Down },
+        { XorgVirtualKey.KP_Prior, SpecialKey.KP_PageUp },
+        { XorgVirtualKey.KP_Next, SpecialKey.KP_PageDown },
+        { XorgVirtualKey.KP_End, SpecialKey.KP_End },
+        { XorgVirtualKey.KP_Begin, SpecialKey.KP_Begin },
+        { XorgVirtualKey.KP_Insert, SpecialKey.KP_Insert },
+        { XorgVirtualKey.KP_Delete, SpecialKey.KP_Delete },
         { XorgVirtualKey.KP_Tab, SpecialKey.KP_Tab },
         { XorgVirtualKey.KP_Enter, SpecialKey.KP_Enter },
         { XorgVirtualKey.KP_Equal, SpecialKey.KP_Equal },

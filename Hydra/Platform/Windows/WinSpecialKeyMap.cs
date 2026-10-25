@@ -51,7 +51,8 @@ internal sealed class WinSpecialKeyMap : SpecialKeyMap
         { WinVirtualKey.F19, SpecialKey.F19 },
         { WinVirtualKey.F20, SpecialKey.F20 },
 
-        // keypad
+        // keypad (numlock off, the navigation VKs without the extended flag are keypad keys too: WinKeyResolver)
+        { WinVirtualKey.Clear, SpecialKey.KP_Begin },
         { WinVirtualKey.Numpad0, SpecialKey.KP_0 },
         { WinVirtualKey.Numpad1, SpecialKey.KP_1 },
         { WinVirtualKey.Numpad2, SpecialKey.KP_2 },

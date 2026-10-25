@@ -74,8 +74,6 @@ internal sealed class XorgKeyResolver
                 var sym2 = NativeMethods.XkbKeycodeToKeysym(display, keycode, group, 0);
                 if (sym2 is >= 0xFF95 and <= 0xFF9F) keysym = sym2;
             }
-            // map KP navigation keysyms to their standard counterparts so the slave's numlock state doesn't matter
-            keysym = MapKpNavToStandard(keysym);
         }
 
         // X11 state lags by one: the modifier being pressed/released is not yet reflected.
@@ -311,23 +309,9 @@ internal sealed class XorgKeyResolver
         _ => 0,
     };
 
-    // maps KP navigation keysyms (0xFF95-0xFF9F, numlock-off) to their standard navigation equivalents.
-    // this decouples the slave from needing its own numlock off to produce navigation behavior.
-    // KP_Begin (0xFF9D, center 5) has no standard nav equivalent and passes through.
-    internal static ulong MapKpNavToStandard(ulong keysym) => keysym switch
-    {
-        0xFF95 => 0xFF50,  // KP_Home → Home
-        0xFF96 => 0xFF51,  // KP_Left → Left
-        0xFF97 => 0xFF52,  // KP_Up → Up
-        0xFF98 => 0xFF53,  // KP_Right → Right
-        0xFF99 => 0xFF54,  // KP_Down → Down
-        0xFF9A => 0xFF55,  // KP_Prior → PageUp
-        0xFF9B => 0xFF56,  // KP_Next → PageDown
-        0xFF9C => 0xFF57,  // KP_End → End
-        0xFF9E => 0xFF63,  // KP_Insert → Insert
-        0xFF9F => 0xFFFF,  // KP_Delete → Delete
-        _ => keysym,
-    };
+    // the NumLock that makes a keypad key type itself, or null for a key NumLock leaves alone. X11 picks a keypad key's
+    // level by NumLock XOR Shift, so a digit wants NumLock unless Shift is held, and navigation wants it only then
+    internal static bool? KeypadNumLock(SpecialKey key, bool shift) => key.IsNumLockSensitive() ? key.IsKeypadNumeric() != shift : null;
 
     // maps KP navigation keysyms to their digit/decimal chars (for numlock-on handling in evdev).
     // the standard numpad layout: 7=Home, 8=Up, 9=PgUp, 4=Left, 5=Begin, 6=Right, 1=End, 2=Down, 3=PgDn, 0=Insert, .=Delete

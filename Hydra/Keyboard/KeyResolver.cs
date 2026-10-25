@@ -94,6 +94,12 @@ internal static class KeyResolver
         return null;
     }
 
+    // a repeat of the key event that was emitted on key-down
+    internal static KeyEvent? ReplayRepeat(CharClassification down, KeyModifiers mods) =>
+        down.Ch is { } ch ? KeyEvent.Char(KeyEventType.KeyDown, ch, mods) with { IsRepeat = true }
+        : down.Key is { } key ? KeyEvent.Special(KeyEventType.KeyDown, key, mods) with { IsRepeat = true }
+        : null;
+
     // stamps the key a Resolve call was for onto every event it returns that does not already carry one
     internal static void StampPhysicalKey(KeyEvent?[]? events, int physicalKey)
     {

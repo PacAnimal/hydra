@@ -181,32 +181,24 @@ public class XorgKeyResolverTests
     }
 
 
-    [TestCase(0xFF95UL, 0xFF50UL)]  // KP_Home → Home
-    [TestCase(0xFF96UL, 0xFF51UL)]  // KP_Left → Left
-    [TestCase(0xFF97UL, 0xFF52UL)]  // KP_Up → Up
-    [TestCase(0xFF98UL, 0xFF53UL)]  // KP_Right → Right
-    [TestCase(0xFF99UL, 0xFF54UL)]  // KP_Down → Down
-    [TestCase(0xFF9AUL, 0xFF55UL)]  // KP_Prior → PageUp
-    [TestCase(0xFF9BUL, 0xFF56UL)]  // KP_Next → PageDown
-    [TestCase(0xFF9CUL, 0xFF57UL)]  // KP_End → End
-    [TestCase(0xFF9EUL, 0xFF63UL)]  // KP_Insert → Insert
-    [TestCase(0xFF9FUL, 0xFFFFUL)]  // KP_Delete → Delete
-    public void MapKpNavToStandard_MapsAllNavigationKeys(ulong kpKeysym, ulong expected)
+    [TestCase(0xFF95UL, SpecialKey.KP_Home)]
+    [TestCase(0xFF96UL, SpecialKey.KP_Left)]
+    [TestCase(0xFF97UL, SpecialKey.KP_Up)]
+    [TestCase(0xFF98UL, SpecialKey.KP_Right)]
+    [TestCase(0xFF99UL, SpecialKey.KP_Down)]
+    [TestCase(0xFF9AUL, SpecialKey.KP_PageUp)]
+    [TestCase(0xFF9BUL, SpecialKey.KP_PageDown)]
+    [TestCase(0xFF9CUL, SpecialKey.KP_End)]
+    [TestCase(0xFF9DUL, SpecialKey.KP_Begin)]
+    [TestCase(0xFF9EUL, SpecialKey.KP_Insert)]
+    [TestCase(0xFF9FUL, SpecialKey.KP_Delete)]
+    public void ResolveKeysym_KeypadNavigation_StaysOnTheKeypad(ulong kpKeysym, SpecialKey expected)
     {
-        Assert.That(XorgKeyResolver.MapKpNavToStandard(kpKeysym), Is.EqualTo(expected));
-    }
-
-    [Test]
-    public void MapKpNavToStandard_KpBegin_PassesThrough()
-    {
-        // KP_Begin (center 5) has no standard navigation equivalent
-        Assert.That(XorgKeyResolver.MapKpNavToStandard(0xFF9DUL), Is.EqualTo(0xFF9DUL));
-    }
-
-    [Test]
-    public void MapKpNavToStandard_NonKpKey_PassesThrough()
-    {
-        Assert.That(XorgKeyResolver.MapKpNavToStandard(0xFF51UL), Is.EqualTo(0xFF51UL));
+        // numlock off: the slave gets the keypad key, not its dedicated twin
+        var dead = '\0';
+        var spacing = '\0';
+        var ev = XorgKeyResolver.ResolveKeysym(kpKeysym, 1, [], ref dead, ref spacing, KeyModifiers.None);
+        Assert.That(ev, Is.EqualTo([KeyEvent.Special(KeyEventType.KeyDown, expected, KeyModifiers.None)]));
     }
 
     [TestCase(0xFF9EUL, '0')]  // KP_Insert → 0
@@ -241,14 +233,21 @@ public class XorgKeyResolverTests
         Assert.That(XorgKeyResolver.KpNumericToNav(kpNumeric), Is.EqualTo(expectedNav));
     }
 
-    [Test]
-    public void KpNumericToNav_FollowedByMapKpNavToStandard_ProducesStandardNav()
-    {
-        // round-trip: KP_7 → KP_Home → Home (Left arrow block)
-        var nav = XorgKeyResolver.KpNumericToNav(0xFFB7UL);
-        var standard = XorgKeyResolver.MapKpNavToStandard(nav);
-        Assert.That(standard, Is.EqualTo(0xFF50UL)); // Home
-    }
+    // X11 picks a keypad key's level by NumLock XOR Shift, so the NumLock a slave needs depends on Shift
+
+    [TestCase(SpecialKey.KP_4, false, true)]
+    [TestCase(SpecialKey.KP_4, true, false)]
+    [TestCase(SpecialKey.KP_Decimal, true, false)]
+    [TestCase(SpecialKey.KP_Left, false, false)]
+    [TestCase(SpecialKey.KP_Left, true, true)]
+    [TestCase(SpecialKey.KP_Begin, true, true)]
+    public void KeypadNumLock_IsWhatTypesTheKeyUnderShift(SpecialKey key, bool shift, bool numLock) =>
+        Assert.That(XorgKeyResolver.KeypadNumLock(key, shift), Is.EqualTo(numLock));
+
+    [TestCase(SpecialKey.Left)]
+    [TestCase(SpecialKey.KP_Enter)]
+    public void KeypadNumLock_KeyNumLockLeavesAlone_IsNull(SpecialKey key) =>
+        Assert.That(XorgKeyResolver.KeypadNumLock(key, shift: true), Is.Null);
 
     // -- ResolveDown --
 

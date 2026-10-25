@@ -408,6 +408,7 @@ Names are case-insensitive. Any of them combines with any modifiers.
 | Locks | `CapsLock` `NumLock` `ScrollLock` |
 | PC extras | `Pause` `PrintScreen` `Menu` |
 | Numpad | `KP_0` `KP_1` `KP_2` `KP_3` `KP_4` `KP_5` `KP_6` `KP_7` `KP_8` `KP_9` `KP_Enter` `KP_Add` `KP_Subtract` `KP_Multiply` `KP_Divide` `KP_Decimal` `KP_Equal` `KP_Space` `KP_Tab` |
+| Numpad, NumLock off | `KP_Home` `KP_End` `KP_PageUp` `KP_PageDown` `KP_Left` `KP_Right` `KP_Up` `KP_Down` `KP_Begin` `KP_Insert` `KP_Delete` |
 | Media | `AudioMute` `AudioVolumeUp` `AudioVolumeDown` `AudioPlay` `AudioStop` `AudioNext` `AudioPrev` |
 | System | `BrightnessUp` `BrightnessDown` `Eject` `MissionControl` |
 | macOS text | `MoveToBeginningOfLine` `MoveToEndOfLine` |

@@ -82,7 +82,7 @@ public sealed class XorgOutputHandler : IPlatformOutput, ICursor
 
         // sync CapsLock/NumLock state before injecting (skip when injecting the lock keys themselves)
         if (isDown && msg.Key is not (SpecialKey.CapsLock or SpecialKey.NumLock))
-            SyncLockState(msg.Modifiers);
+            SyncLockState(msg.Modifiers, msg.Key is { } k ? XorgKeyResolver.KeypadNumLock(k, (msg.Modifiers & KeyModifiers.Shift) != 0) : null);
 
         if (msg.Character is { } ch)
         {
@@ -266,7 +266,8 @@ public sealed class XorgOutputHandler : IPlatformOutput, ICursor
         return XorgSpecialKeyMap.Instance.Reverse.TryGetValue(key, out var keysym) ? keysym : 0;
     }
 
-    private void SyncLockState(KeyModifiers mods)
+    // numLock: what the key about to be injected needs, or null to leave NumLock alone
+    private void SyncLockState(KeyModifiers mods, bool? numLock)
     {
         byte lockedMods;
         if (_pendingLockedMods.HasValue)
@@ -280,7 +281,8 @@ public sealed class XorgOutputHandler : IPlatformOutput, ICursor
         }
 
         SyncLockKey(XorgVirtualKey.CapsLock, NativeMethods.LockMask, (mods & KeyModifiers.CapsLock) != 0, ref lockedMods);
-        SyncLockKey(XorgVirtualKey.NumLock, NativeMethods.Mod2Mask, (mods & KeyModifiers.NumLock) != 0, ref lockedMods);
+        if (numLock is { } wantNumLock)
+            SyncLockKey(XorgVirtualKey.NumLock, NativeMethods.Mod2Mask, wantNumLock, ref lockedMods);
         _pendingLockedMods = lockedMods;
     }
 
