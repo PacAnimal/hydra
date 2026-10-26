@@ -1,4 +1,4 @@
-import type { HydraProfile, HostConfig } from '../types'
+import type { FormState, HydraProfile, HostConfig } from '../types'
 import { deriveHostsFromLayout } from './layout'
 
 export interface ValidationError {
@@ -27,11 +27,29 @@ function checkHostName(name: string, path: string, errors: ValidationError[]) {
   }
 }
 
+// a size Hydra reads: bytes, or a number and a unit (KB is 1000, KiB 1024; a bare lowercase b is bits, which it refuses)
+const LOG_SIZE = /^\s*(?:[Nn][Oo][Nn][Ee]|\d+|\d+(?:\.\d+)?\s*(?:B|[KkMmGgTtPp][Ii]?[Bb]))\s*$/
+
+export type LogCap = Pick<FormState, 'logMaxSize' | 'logHistory' | 'logTrimPercent'>
+
+function checkLogCap(log: LogCap, errors: ValidationError[]) {
+  if (log.logMaxSize !== undefined && !LOG_SIZE.test(log.logMaxSize)) {
+    errors.push({ path: 'logMaxSize', message: 'logMaxSize must be a size such as 10 MiB or 512 KB, a number of bytes, or 0 or none for no cap' })
+  }
+  if (log.logHistory !== undefined && (!Number.isInteger(log.logHistory) || log.logHistory < 0)) {
+    errors.push({ path: 'logHistory', message: 'logHistory must be a whole number, 0 or more' })
+  }
+  if (log.logTrimPercent !== undefined && (!Number.isInteger(log.logTrimPercent) || log.logTrimPercent < 1 || log.logTrimPercent > 100)) {
+    errors.push({ path: 'logTrimPercent', message: 'logTrimPercent must be a whole number from 1 to 100' })
+  }
+}
+
 // name is the root name, which names this machine's screens
-export function validate(profiles: HydraProfile[], name?: string): ValidationError[] {
+export function validate(profiles: HydraProfile[], name?: string, log: LogCap = {}): ValidationError[] {
   const errors: ValidationError[] = []
 
   if (name) checkHostName(name, 'name', errors)
+  checkLogCap(log, errors)
 
   const defaults = profiles.filter(isUnconditional)
   if (defaults.length > 1) {

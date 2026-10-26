@@ -31,6 +31,18 @@ export function GlobalSettings({ config, serverError, onChange }: Props) {
               onChange={e => onChange({ deadCorners: e.target.value ? Number(e.target.value) : undefined })}
             />
           </div>
+          <div className="field">
+            <label htmlFor="gs-clipboardsync" title="Hydra syncs clipboards itself. System lets a macOS master leave Mac peers to Universal Clipboard. Off shares no clipboard or files with any peer">Clipboard</label>
+            <select
+              id="gs-clipboardsync"
+              value={config.clipboardSync ?? 'Hydra'}
+              onChange={e => onChange({ clipboardSync: e.target.value === 'System' || e.target.value === 'Off' ? e.target.value : undefined })}
+            >
+              <option value="Hydra">Hydra's own sync</option>
+              <option value="System">System (Universal Clipboard)</option>
+              <option value="Off">Off (no clipboard or file transfer)</option>
+            </select>
+          </div>
           {!isMaster && (
             <>
               <div className="field">

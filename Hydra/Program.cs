@@ -195,7 +195,7 @@ if (logFileSetting is { } logFile)
     var logPath = HydraConfigFile.Beside(configPath, logFile);
     if (configFile.LogTruncate && File.Exists(logPath))
         new FileStream(logPath, FileMode.Truncate).Dispose();
-    services.AddSereneFileLogging(logPath, c => c.MinLogLevel = profile.LogLevel);
+    services.AddSereneFileLogging(logPath, c => configFile.ConfigureFileLog(c, profile.LogLevel));
 }
 
 var startupLog = await services.CreateLogger<HydraProfile>();
@@ -203,6 +203,7 @@ if (startupLog.IsEnabled(LogLevel.Information))
 {
     startupLog.LogInformation("Active profile: {ProfileName}", profile.ProfileName ?? "<none>");
     startupLog.LogInformation("Process priority: {Priority}", priorityResult);
+    if (profile.SharingOff) startupLog.LogInformation("Clipboard sync and file transfer: off");
 }
 
 foreach (var hotkeyError in profile.Hotkeys.Errors)
@@ -336,7 +337,10 @@ if (config != null)
     else
         services.AddSingleton<IScreenSaverSync, NullScreenSaverSync>();
 
-    if (OperatingSystem.IsMacOS())
+    // clipboardSync Off never reads or writes the clipboard
+    if (profile.SharingOff)
+        services.AddSingleton<IClipboardSync, NullClipboardSync>();
+    else if (OperatingSystem.IsMacOS())
         services.AddSingleton<IClipboardSync, MacClipboardSync>();
     else if (OperatingSystem.IsWindows())
         services.AddSingleton<IClipboardSync, WindowsClipboardSync>();

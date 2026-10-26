@@ -1,6 +1,7 @@
 import type {
   HydraProfile, HostConfig, NeighbourConfig, ScreenDefinition, ConfigConditions,
   Direction, Mode, LogLevel, UpdateChannel, FormState, EmbeddedStyxConfig, EmbeddedStyxServerConfig, NetworkType,
+  ClipboardSyncMode,
 } from '../types'
 import { inferLayoutFromHosts } from './layout'
 
@@ -118,6 +119,23 @@ function parseEmbeddedStyxServer(obj: Record<string, unknown>): EmbeddedStyxServ
   }
 }
 
+// a plain decimal number, given as a number or a string, as Hydra reads one (not hex, not exponents)
+function optNumber(v: unknown): number | undefined {
+  if (typeof v === 'number') return v
+  if (typeof v === 'string' && /^\s*-?\d+(\.\d+)?\s*$/.test(v)) return Number(v)
+  return undefined
+}
+
+// Hydra reads an enum by name in any case, or by number, given as a number or a string (Hydra = 0, System = 1, Off = 2)
+const clipboardSyncModes: ClipboardSyncMode[] = ['Hydra', 'System', 'Off']
+function coerceClipboardSync(v: unknown): ClipboardSyncMode | undefined {
+  const number = optNumber(v)
+  if (number !== undefined) return clipboardSyncModes[number]
+  if (typeof v !== 'string') return undefined
+  const lower = v.trim().toLowerCase()
+  return clipboardSyncModes.find(m => m.toLowerCase() === lower)
+}
+
 function parseProfile(obj: Record<string, unknown>): HydraProfile {
   if (typeof obj !== 'object' || obj === null || Array.isArray(obj)) {
     throw new Error('profile must be a JSON object')
@@ -151,6 +169,7 @@ function parseProfile(obj: Record<string, unknown>): HydraProfile {
     syncScreensaver: optBool(obj.syncScreensaver),
     screenLockPropagation: optBool(obj.screenLockPropagation),
     debugShield: optBool(obj.debugShield),
+    clipboardSync: coerceClipboardSync(obj.clipboardSync),
     deadCorners: optNum(obj.deadCorners),
     conditions: obj.conditions ? parseConditions(obj.conditions as Record<string, unknown>) : undefined,
   }
@@ -182,6 +201,9 @@ export function deserialize(json: string): FormState {
     lockFile: optStr(root.lockFile),
     logFile: optStr(root.logFile),
     sessionLogFile: optStr(root.sessionLogFile),
+    logMaxSize: root.logMaxSize === null ? 'none' : typeof root.logMaxSize === 'number' ? String(root.logMaxSize) : optStr(root.logMaxSize),
+    logHistory: optNumber(root.logHistory),
+    logTrimPercent: optNumber(root.logTrimPercent),
     profiles: root.profiles.map(parseProfile),
     activeIndex: 0,
   }

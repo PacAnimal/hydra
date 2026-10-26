@@ -3,6 +3,7 @@ export type Direction = 'Left' | 'Right' | 'Up' | 'Down'
 export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'critical'
 export type UpdateChannel = 'stable' | 'edge'
 export type NetworkType = 'config' | 'embeddedStyx' | 'embeddedStyxServer'
+export type ClipboardSyncMode = 'Hydra' | 'System' | 'Off'
 
 export interface NeighbourConfig {
   id?: string
@@ -82,6 +83,7 @@ export interface HydraProfile {
   syncScreensaver?: boolean
   screenLockPropagation?: boolean
   accelerateMouseWheel?: boolean
+  clipboardSync?: ClipboardSyncMode
   debugShield?: boolean
   deadCorners?: number
   conditions?: ConfigConditions
@@ -97,9 +99,14 @@ export interface FormState {
   lockFile?: string
   logFile?: string
   sessionLogFile?: string
+  // a size as Hydra reads one ("10 MiB", "512 KB" or bytes), or 'none' for no cap; unset is Hydra's 10 MiB
+  logMaxSize?: string
+  logHistory?: number
+  logTrimPercent?: number
   profiles: HydraProfile[]
   activeIndex: number
 }
 
 // the root-level fields the Global Settings section edits
-export type RootSettingsPatch = Partial<Pick<FormState, 'name' | 'autoUpdate' | 'updateChannel' | 'managementListener' | 'logLevel' | 'lockFile' | 'logFile' | 'sessionLogFile'>>
+export type RootSettingsPatch = Partial<Pick<FormState, 'name' | 'autoUpdate' | 'updateChannel' | 'managementListener' | 'logLevel' | 'lockFile' | 'logFile' | 'sessionLogFile'
+  | 'logMaxSize' | 'logHistory' | 'logTrimPercent'>>

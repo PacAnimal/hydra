@@ -32,6 +32,12 @@ public class MessageDeserializerTests
     public void DecodeBody_ReadsAPeerPlatform_InAnyCasing() =>
         Assert.That(Body("""{"screens":[],"platform":"MacOS"}""").DecodeBody<ScreenInfoMessage>()!.Platform, Is.EqualTo(PeerPlatform.MacOs));
 
+    // a slave from before clipboardSync Off sends no sharingOff, which reads as sharing
+    [TestCase("""{"screens":[],"platform":"Linux"}""", false)]
+    [TestCase("""{"screens":[],"platform":"Linux","sharingOff":true}""", true)]
+    public void DecodeBody_ReadsScreenInfosSharingOff(string json, bool off) =>
+        Assert.That(Body(json).DecodeBody<ScreenInfoMessage>()!.SharingOff, Is.EqualTo(off));
+
     [Test]
     public void ParseMessage_IsNullAndWarns_OnAMalformedBody()
     {
