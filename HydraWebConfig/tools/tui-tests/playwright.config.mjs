@@ -2,7 +2,8 @@ import { defineConfig } from '@playwright/test';
 
 export default defineConfig({
   testDir: '.',
-  timeout: 20_000,
+  // a hang guard: room for a few of the harness's waits, each of which returns as soon as it can
+  timeout: 120_000,
   // Each test spawns its own hydra process, pty, and browser page — parallelism just adds
   // resource contention (and pty/CPU-scheduling flakiness) without a runtime benefit here.
   fullyParallel: false,

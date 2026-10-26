@@ -109,6 +109,11 @@ export function recordPty(term) {
   return recording;
 }
 
+// A hang guard for a launch, never its expected time. A freshly built binary is vetted by the OS (and any
+// antivirus) on every launch until its verdict is cached, which can hold each launch for over a minute for
+// minutes after a build; a warm launch draws in well under a second.
+export const LAUNCH_TIMEOUT_MS = 120_000;
+
 // Resolves with drawnFrameEnd's offset once a frame at or after `from` has drawn `needle`. Rejects when the
 // process exits first, or at the deadline, with the tail of what it did write.
 export function waitForDraw(recording, needle, { timeoutMs, from = 0 }) {

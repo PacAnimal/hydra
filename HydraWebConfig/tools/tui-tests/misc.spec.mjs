@@ -3,7 +3,7 @@ import { test, expect } from './harness.mjs';
 test.describe('quitting and other cross-cutting behavior', () => {
   test('Esc quits the TUI process (Hydra itself keeps running is a separate concern)', async ({ tui }) => {
     tui.key('escape');
-    await tui.waitForExit(3000);
+    await tui.waitForExit();
   });
 
   // the demo counts F5 refreshes in Diagnostics, which the 2 s auto-refresh never touches

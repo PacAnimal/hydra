@@ -14,7 +14,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pty from 'node-pty';
-import { hydraBinary, recordPty, spawnHydraTui, waitForDraw } from './pty-helpers.mjs';
+import { hydraBinary, LAUNCH_TIMEOUT_MS, recordPty, spawnHydraTui, waitForDraw } from './pty-helpers.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -24,8 +24,6 @@ const OUT_DIR = resolve(args.out ?? join(__dirname, 'output'));
 const COLS = Number(args.cols ?? 130);
 const ROWS = Number(args.rows ?? 42);
 const GOTO = typeof args.goto === 'string' ? args.goto : null;
-// covers a freshly built binary's cold first launch
-const DRAW_TIMEOUT_MS = 120_000;
 // text only that tab shows once it has data, by --goto letter
 const TAB_MARKERS = {
   p: 'Local Screens',
@@ -63,10 +61,10 @@ async function captureTui() {
   const term = spawnHydraTui({ pty, bin: HYDRA_BIN, cols: COLS, rows: ROWS });
   const recording = recordPty(term);
   try {
-    let end = await waitForDraw(recording, CONNECTED, { timeoutMs: DRAW_TIMEOUT_MS });
+    let end = await waitForDraw(recording, CONNECTED, { timeoutMs: LAUNCH_TIMEOUT_MS });
     if (GOTO) {
       term.write(`\x1b${GOTO}`);
-      end = await waitForDraw(recording, TAB_MARKERS[GOTO], { timeoutMs: DRAW_TIMEOUT_MS, from: end });
+      end = await waitForDraw(recording, TAB_MARKERS[GOTO], { timeoutMs: LAUNCH_TIMEOUT_MS, from: end });
     }
     return recording.output.slice(0, end);
   } finally {
