@@ -39,7 +39,7 @@ internal static class ServiceHost
         services.AddSereneConsoleLogging(c => c.MinLogLevel = profile.LogLevel);
 
         if (configFile.LogFile is { } logFileSetting)
-            services.AddSereneFileLogging(HydraConfigFile.Beside(configPath, logFileSetting), c => c.MinLogLevel = profile.LogLevel);
+            services.AddSereneFileLogging(HydraConfigFile.Beside(configPath, logFileSetting), c => configFile.ConfigureFileLog(c, profile.LogLevel));
 
         services.AddSingleton<IHydraProfile>(profile);
         services.AddHostedSingleton(sp =>

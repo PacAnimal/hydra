@@ -874,7 +874,10 @@ public class InputRouter(
                     await _peerState.SetPeerScreens(sourceHost, owned.Kept);
 
                     _peerState.SetPeerPlatform(sourceHost, info.Platform);
-                    if (!UseHydraClipboard(sourceHost) && log.IsEnabled(LogLevel.Information))
+                    _peerState.SetPeerSharingOff(sourceHost, info.SharingOff);
+                    if (info.SharingOff && log.IsEnabled(LogLevel.Information))
+                        log.LogInformation("Clipboard sync and file transfer with {Host}: off on that host", sourceHost);
+                    else if (SharesWith(sourceHost) && !UseHydraClipboard(sourceHost) && log.IsEnabled(LogLevel.Information))
                         log.LogInformation("Clipboard sync with {Host}: using macOS Universal Clipboard; Hydra is standing down", sourceHost);
                     var snapshot = await _peerState.GetPeerScreensSnapshot();
                     await RunFence(async st =>
@@ -1040,6 +1043,8 @@ public class InputRouter(
                             var abort = body.TryDecodeBody<FileTransferAbortMessage>();
                             if (abort?.Reason == FileTransferService.ReasonNoFolder)
                                 SendOsd(sourceHost, FileTransferService.InvalidTargetOsd);
+                            else if (abort?.Reason == FileTransferService.ReasonSharingOff)
+                                SendOsd(sourceHost, FileTransferService.SharingOffOsd);
                         }
                     }
                     if (await _fileTransfer.OnMessage(sourceHost, kind, body, relay))
@@ -1331,7 +1336,12 @@ public class InputRouter(
                 }
                 else if (hotkeyAction == HotkeyAction.CopyFiles)
                 {
-                    if (_fileTransfer.FileTransferOngoing)
+                    if (profile.SharingOff || (st.Mouse.IsOnVirtualScreen && !SharesWith(st.Mouse.CurrentScreen.Host)))
+                    {
+                        log.LogInformation("Copy hotkey: file transfer is off");
+                        ShowOsd(st, FileTransferService.SharingOffOsd);
+                    }
+                    else if (_fileTransfer.FileTransferOngoing)
                     {
                         ShowOsd(st, FileTransferService.InProgressOsd);
                     }
@@ -1365,7 +1375,12 @@ public class InputRouter(
                 }
                 else if (hotkeyAction == HotkeyAction.PasteFiles)
                 {
-                    if (_fileTransfer.FileTransferOngoing)
+                    if (profile.SharingOff)
+                    {
+                        log.LogInformation("Paste hotkey: file transfer is off");
+                        ShowOsd(st, FileTransferService.SharingOffOsd);
+                    }
+                    else if (_fileTransfer.FileTransferOngoing)
                     {
                         ShowOsd(st, FileTransferService.InProgressOsd);
                     }
@@ -1384,7 +1399,13 @@ public class InputRouter(
                         var targetHost = st.Mouse.IsOnVirtualScreen
                             ? st.Mouse.CurrentScreen.Host
                             : profile.Name;
-                        if (copyBuffer.SourceHost.EqualsIgnoreCase(targetHost))
+                        if (!SharesWith(targetHost) || !SharesWith(copyBuffer.SourceHost))
+                        {
+                            if (log.IsEnabled(LogLevel.Information))
+                                log.LogInformation("Paste hotkey: file transfer is off on {Host}", SharesWith(targetHost) ? copyBuffer.SourceHost : targetHost);
+                            ShowOsd(st, FileTransferService.SharingOffOsd);
+                        }
+                        else if (copyBuffer.SourceHost.EqualsIgnoreCase(targetHost))
                         {
                             if (log.IsEnabled(LogLevel.Information))
                                 log.LogInformation("Paste hotkey: source and target are the same host ({Host}), nothing to do", targetHost);
@@ -2007,7 +2028,11 @@ public class InputRouter(
         PullClipboardFromHost(host);
     }
 
-    private bool UseHydraClipboard(string host) => UseHydraClipboard(profile.ClipboardSync, _localPlatform, _peerState.PeerPlatformOf(host));
+    // clipboard sync and file transfer, which either side's clipboardSync Off turns off
+    private bool SharesWith(string host) => !profile.SharingOff && !_peerState.PeerSharingOff(host);
+
+    private bool UseHydraClipboard(string host) =>
+        SharesWith(host) && UseHydraClipboard(profile.ClipboardSync, _localPlatform, _peerState.PeerPlatformOf(host));
 
     internal static bool UseHydraClipboard(ClipboardSyncMode mode, PeerPlatform localPlatform, PeerPlatform remotePlatform) =>
         mode != ClipboardSyncMode.System || localPlatform != PeerPlatform.MacOs || remotePlatform != PeerPlatform.MacOs;

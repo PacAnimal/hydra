@@ -189,6 +189,14 @@ describe('deserialize', () => {
     expect(state.sessionLogFile).toBe('/tmp/s.log')
   })
 
+  it('parses the root log cap, a null size as none', () => {
+    const set = deserialize(asFile('[{"mode":"Master"}]', '"logMaxSize":"5 MiB","logHistory":0,"logTrimPercent":"25"'))
+    const bytes = deserialize(asFile('[{"mode":"Master"}]', '"logMaxSize":1048576'))
+    const none = deserialize(asFile('[{"mode":"Master"}]', '"logMaxSize":null'))
+    expect([set.logMaxSize, set.logHistory, set.logTrimPercent]).toEqual(['5 MiB', 0, 25])
+    expect([bytes.logMaxSize, none.logMaxSize]).toEqual(['1048576', 'none'])
+  })
+
   it('infers layoutItems from hosts on import', () => {
     const json = asFile(JSON.stringify([{
       mode: 'Master',
@@ -245,6 +253,9 @@ describe('deserialize', () => {
     it('reads clipboardSync by number and maxMouseHz from a string, as Hydra does', () => {
       const p = deserialize(asFile('[{"mode":"Master","clipboardSync":1,"maxMouseHz":"300"}]')).profiles[0]
       expect([p.clipboardSync, p.maxMouseHz]).toEqual(['System', 300])
+      expect(deserialize(asFile('[{"mode":"Slave","clipboardSync":2}]')).profiles[0].clipboardSync).toEqual('Off')
+      expect(deserialize(asFile('[{"mode":"Slave","clipboardSync":"OFF"}]')).profiles[0].clipboardSync).toEqual('Off')
+      expect(deserialize(asFile('[{"mode":"Slave","clipboardSync":3}]')).profiles[0].clipboardSync).toBeUndefined()
       expect(deserialize(asFile('[{"mode":"Master","clipboardSync":"1"}]')).profiles[0].clipboardSync).toBe('System')
     })
 

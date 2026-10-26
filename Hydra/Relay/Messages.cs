@@ -53,6 +53,14 @@ public enum MessageKind : byte
     ClipboardPushNone = 40,     // master → slave: no push follows your pull request
 }
 
+public static class MessageKinds
+{
+    // every kind of the clipboard handshake and its streams, either direction
+    public static bool IsClipboard(MessageKind kind) => kind is MessageKind.ClipboardHash or MessageKind.ClipboardPush or MessageKind.ClipboardPull
+        or MessageKind.ClipboardPullRequest or MessageKind.ClipboardPullResponse or MessageKind.ClipboardPushNone or MessageKind.ClipboardStreamBegin
+        or MessageKind.ClipboardStreamChunk or MessageKind.ClipboardStreamAbort;
+}
+
 /// <summary>
 /// Which of the relay's two outbound lanes a message travels on: each is ordered, with no order between them, so a
 /// file chunk never queues in front of a keystroke. Sending only; a slave's receive path still handles frames in turn.
@@ -118,7 +126,8 @@ public static class PeerPlatforms
     };
 }
 
-public record ScreenInfoMessage(List<ScreenInfoEntry> Screens, PeerPlatform Platform);
+// SharingOff: the slave's clipboardSync is Off, so its master sends it no clipboard or file transfer
+public record ScreenInfoMessage(List<ScreenInfoEntry> Screens, PeerPlatform Platform, bool SharingOff = false);
 public record MasterConfigMessage(LogLevel? LogLevel);
 public record SlaveLogMessage(int Level, string Category, string Message, string? Exception);
 // IsRepeat marks an OS auto-repeat the master re-resolved (with live modifier/dead-key state) and forwarded, only for a

@@ -174,6 +174,17 @@ describe('serialize', () => {
     expect(json.sessionLogFile).toBeUndefined()
   })
 
+  it("writes the log cap only where it differs from Hydra's defaults", () => {
+    const set = JSON.parse(serialize(state({ mode: 'Slave' }, { logMaxSize: ' 5 MiB ', logHistory: 0, logTrimPercent: 25 })))
+    const bytes = JSON.parse(serialize(state({ mode: 'Slave' }, { logMaxSize: '1048576' })))
+    const none = JSON.parse(serialize(state({ mode: 'Slave' }, { logMaxSize: 'None' })))
+    const defaults = JSON.parse(serialize(state({ mode: 'Slave' }, { logHistory: 1, logTrimPercent: 50 })))
+    expect([set.logMaxSize, set.logHistory, set.logTrimPercent]).toEqual(['5 MiB', 0, 25])
+    expect(bytes.logMaxSize).toBe(1048576)
+    expect('logMaxSize' in none && none.logMaxSize === null).toBe(true)
+    expect(['logMaxSize' in defaults, 'logHistory' in defaults, 'logTrimPercent' in defaults]).toEqual([false, false, false])
+  })
+
   it('derives hosts from layoutItems when layoutItems is non-empty', () => {
     const json = JSON.parse(serialize(state({
       mode: 'Master',
@@ -306,6 +317,8 @@ describe('serialize', () => {
       const unset = JSON.parse(serialize(state({ mode: 'Slave', allowSystemSleep: false, clipboardSync: 'Hydra' }))).profiles[0]
       expect([set.allowSystemSleep, set.clipboardSync]).toEqual([true, 'System'])
       expect(['allowSystemSleep' in unset, 'clipboardSync' in unset]).toEqual([false, false])
+      const off = JSON.parse(serialize(state({ mode: 'Slave', clipboardSync: 'Off' }))).profiles[0]
+      expect(off.clipboardSync).toEqual('Off')
     })
 
     it('writes each hotkey action typed, one chord per line, and leaves out the empty ones', () => {

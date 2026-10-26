@@ -23,6 +23,9 @@ public sealed class FileTransferService : IDisposable
     // abort reason sent when the receiver has no file manager window open — checked by master for OSD routing
     public const string ReasonNoFolder = "no folder to paste into";
 
+    // abort reason sent by a host whose clipboardSync is Off
+    public const string ReasonSharingOff = "file transfer is off";
+
     // shown for an abort that arrives without a readable reason
     public const string ReasonUnknown = "no reason given";
 
@@ -37,6 +40,7 @@ public sealed class FileTransferService : IDisposable
     public const string InProgressOsd = "Transfer in progress";
     public const string InvalidTargetOsd = "Invalid paste target";
     public const string NotSupportedOsd = "Action not supported";
+    public const string SharingOffOsd = "File transfer is off";
 
     // copy buffer (set on copy hotkey; consumed on paste hotkey)
     private FileCopyState? _copyBuffer;

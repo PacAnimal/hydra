@@ -30,6 +30,8 @@ public interface IWorldState
     // -- master-side (peer platform) --
     void SetPeerPlatform(string host, PeerPlatform platform);
     PeerPlatform PeerPlatformOf(string host);
+    void SetPeerSharingOff(string host, bool off);
+    bool PeerSharingOff(string host);
 }
 
 public class WorldState : IWorldState
@@ -38,6 +40,7 @@ public class WorldState : IWorldState
     private readonly SemaphoreSlimValue<SlaveState> _slave = new(new SlaveState(), disposeValue: false);
     private readonly ConcurrentDictionary<string, SimpleAesKey> _remoteKeys = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, PeerPlatform> _peerPlatforms = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, bool> _peerSharingOff = new(StringComparer.OrdinalIgnoreCase);
 
     private readonly ConcurrentDictionary<string, ILogger> _loggers = new(StringComparer.OrdinalIgnoreCase);
 
@@ -61,8 +64,11 @@ public class WorldState : IWorldState
                     _loggers.TryRemove(k, out _);
             }
             s.KnownPeers.UnionWith(currentPeers);
-            foreach (var host in _peerPlatforms.Keys.Where(h => !currentPeers.Contains(h)).ToList())
+            foreach (var host in _peerPlatforms.Keys.Concat(_peerSharingOff.Keys).Where(h => !currentPeers.Contains(h)).ToList())
+            {
                 _peerPlatforms.TryRemove(host, out _);
+                _peerSharingOff.TryRemove(host, out _);
+            }
             snapshot = s.PeerScreens.ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase);
         }
 
@@ -141,6 +147,7 @@ public class WorldState : IWorldState
         s.KnownPeers.Clear();
         s.PeerScreens.Clear();
         _peerPlatforms.Clear();
+        _peerSharingOff.Clear();
         _loggers.Clear();
         _remoteKeys.Clear(); // keys are re-derived from the message salt on reconnect
     }
@@ -148,6 +155,10 @@ public class WorldState : IWorldState
     public void SetPeerPlatform(string host, PeerPlatform platform) => _peerPlatforms[host] = platform;
 
     public PeerPlatform PeerPlatformOf(string host) => _peerPlatforms.GetValueOrDefault(host, PeerPlatform.Unknown);
+
+    public void SetPeerSharingOff(string host, bool off) => _peerSharingOff[host] = off;
+
+    public bool PeerSharingOff(string host) => _peerSharingOff.GetValueOrDefault(host);
 
     public ValueTask SetRemoteKey(string host, SimpleAesKey key)
     {

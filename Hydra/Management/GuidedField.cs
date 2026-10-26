@@ -83,7 +83,7 @@ internal static class GuidedFields
         "Master: how many mouse updates a second are sent to a slave. Higher costs master CPU.")
     { DefaultHint = $"{HydraProfile.DefaultMaxMouseHz} Hz" };
     internal static readonly GuidedField ClipboardSync = new(GuidedSection.Profile, 13, 0, null, "clipboardSync", GuidedFieldKind.Choice, "Clipboard",
-        "Hydra syncs clipboards itself. System lets a macOS master leave Mac peers to Universal Clipboard.")
+        "Hydra syncs clipboards itself. System lets a macOS master leave Mac peers to Universal Clipboard. Off shares no clipboard or files with any peer.")
     {
         DefaultHint = nameof(ClipboardSyncMode.Hydra),
         ChoiceEnum = typeof(ClipboardSyncMode)

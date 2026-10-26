@@ -339,7 +339,7 @@ public class ClipboardEdgeSlaveStateTests : MasterClipboardFixture
         await service.Flush();
         await service.HashReads();
 
-        Assert.That(relay.Sent.Snapshot().Where(s => IsClipboardKind(s.Kind)), Is.Empty);
+        Assert.That(relay.Sent.Snapshot().Where(s => MessageKinds.IsClipboard(s.Kind)), Is.Empty);
     }
 
     [Test]
@@ -362,7 +362,7 @@ public class ClipboardEdgeSlaveStateTests : MasterClipboardFixture
             Assert.That(clipboard.ClearClipboardCallCount, Is.Zero);
             Assert.That(clipboard.SetClipboardCallCount, Is.Zero);
             Assert.That(clipboard.Text, Is.EqualTo("handled by Universal Clipboard"));
-            Assert.That(relay.Sent.Snapshot().Where(s => IsClipboardKind(s.Kind)), Is.Empty);
+            Assert.That(relay.Sent.Snapshot().Where(s => MessageKinds.IsClipboard(s.Kind)), Is.Empty);
         }
     }
 
@@ -403,9 +403,6 @@ public class ClipboardEdgeSlaveStateTests : MasterClipboardFixture
 
     private static readonly IHydraProfile SystemSync = TransitionTestHelper.ProfileWith(clipboardSync: ClipboardSyncMode.System);
 
-    private static bool IsClipboardKind(MessageKind kind) => kind is MessageKind.ClipboardHash or MessageKind.ClipboardPush or MessageKind.ClipboardPull
-        or MessageKind.ClipboardPullRequest or MessageKind.ClipboardPullResponse or MessageKind.ClipboardStreamBegin or MessageKind.ClipboardStreamChunk
-        or MessageKind.ClipboardStreamAbort;
 
     private TestableSlaveRelay Slave() => _slaves.New(_clipboard, _osd, _clock);
 }

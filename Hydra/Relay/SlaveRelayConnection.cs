@@ -192,9 +192,9 @@ public class SlaveRelayConnection : RelayConnection
     private void AnswerPull(string host, ClipboardPullMessage pull) =>
         _streams.Send(host, MessageKind.ClipboardPullResponse, _clipboard.OnPull(pull, host));
 
-    // a clipboard message refused while dormant, which its master needs told (dormancy dropped every stream both ways, so
-    // nothing else does): a pull answered unchanged, the user away and nothing copied here, so its pull resolves
-    private void RefuseWhileDormant(string host, ClipboardPullMessage pull) =>
+    // a pull refused, dormant or with sharing off, answered unchanged so it resolves: nothing is offered, and nothing else
+    // would tell its master (dormancy dropped every stream both ways)
+    private void AnswerPullUnchanged(string host, ClipboardPullMessage pull) =>
         _streams.Send(host, MessageKind.ClipboardPullResponse, new ClipboardPullResponseMessage(pull.PullId, null, Unchanged: true));
 
     // ... and a Begin told it failed, so its master stops streaming rather than wait for a watchdog
@@ -293,6 +293,8 @@ public class SlaveRelayConnection : RelayConnection
 
     protected override async Task OnReceive(string sourceHost, MessageKind kind, ReadOnlyMemory<byte> body)
     {
+        // sharing off first, so a dormant slave refuses as itself rather than as dormant (it claims no wake signal)
+        if (Profile.SharingOff && RefuseWhileSharingOff(sourceHost, kind, body)) return;
         if (_dormancy.IsDormant && DropWhileDormant(sourceHost, kind, body)) return;
 
         switch (kind)
@@ -414,7 +416,7 @@ public class SlaveRelayConnection : RelayConnection
             case MessageKind.ClipboardPull:
                 {
                     if (body.ParseMessage<ClipboardPullMessage>(Log, sourceHost) is { } pull)
-                        OnClipboardWorkerAwake(sourceHost, kind, () => AnswerPull(sourceHost, pull), () => RefuseWhileDormant(sourceHost, pull));
+                        OnClipboardWorkerAwake(sourceHost, kind, () => AnswerPull(sourceHost, pull), () => AnswerPullUnchanged(sourceHost, pull));
                     break;
                 }
             case MessageKind.ClipboardStreamBegin:
@@ -598,9 +600,43 @@ public class SlaveRelayConnection : RelayConnection
         if (kind == MessageKind.ClipboardStreamBegin && body.ParseMessage<ClipboardStreamBeginMessage>(Log, sourceHost) is { } begin)
             RefuseWhileDormant(sourceHost, begin);
         if (kind == MessageKind.ClipboardPull && body.ParseMessage<ClipboardPullMessage>(Log, sourceHost) is { } pull)
-            RefuseWhileDormant(sourceHost, pull);
+            AnswerPullUnchanged(sourceHost, pull);
         return true;
     }
+
+    // clipboardSync Off, for a master that does not read SharingOff in our screen info: what it waits on is answered so it
+    // stops waiting (a pull unchanged, a Begin aborted silently, a file request aborted), the rest dropped
+    private bool RefuseWhileSharingOff(string sourceHost, MessageKind kind, ReadOnlyMemory<byte> body)
+    {
+        switch (kind)
+        {
+            case MessageKind.ClipboardPull when body.ParseMessage<ClipboardPullMessage>(Log, sourceHost) is { } pull:
+                AnswerPullUnchanged(sourceHost, pull);
+                return true;
+            case MessageKind.ClipboardStreamBegin when body.ParseMessage<ClipboardStreamBeginMessage>(Log, sourceHost) is { } begin:
+                this.SendClipboardAbort(sourceHost, begin.Id);
+                return true;
+            case MessageKind.FileSelectionQuery:
+                AnswerSelectionQuery(sourceHost, FileTransferService.SharingOffOsd);
+                return true;
+            case MessageKind.FileTransferRequest:
+                SendSharingOffAbort(sourceHost);
+                return true;
+            case MessageKind.FileStreamRequest:
+                {
+                    SendSharingOffAbort(sourceHost);
+                    // a target another slave set up for our stream waits on it, so it is told too
+                    if (body.ParseMessage<FileStreamRequestMessage>(Log, sourceHost) is { } req && !req.TargetHost.EqualsIgnoreCase(sourceHost))
+                        SendSharingOffAbort(req.TargetHost);
+                    return true;
+                }
+            default:
+                return MessageKinds.IsClipboard(kind) || FileTransferService.IsFileTransferMessage(kind);
+        }
+    }
+
+    private void SendSharingOffAbort(string host) =>
+        this.Send(host, MessageKind.FileTransferAbort, new FileTransferAbortMessage(FileTransferService.ReasonSharingOff));
 
     // the master keeps its copy pending until the query is answered, so one we drop still gets a reply
     private void AnswerSelectionQuery(string sourceHost, string message) =>
@@ -792,7 +828,7 @@ public class SlaveRelayConnection : RelayConnection
     {
         if (Log.IsEnabled(LogLevel.Information))
             Log.LogInformation("Sending screen info to {Master}: {Count} {Screens}", masterHost, entries.Count, Pluralize.Of(entries.Count, "screen"));
-        this.Send(masterHost, MessageKind.ScreenInfo, new ScreenInfoMessage(entries, PeerPlatforms.Local));
+        this.Send(masterHost, MessageKind.ScreenInfo, new ScreenInfoMessage(entries, PeerPlatforms.Local, Profile.SharingOff));
     }
 
     private sealed record SelectionQueryOrigin(string Host, CancellationToken Connection)

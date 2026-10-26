@@ -76,6 +76,43 @@ export function RootSettings({ state, onChange }: Props) {
           />
         </div>
       </div>
+      <div className="field-row">
+        <div className="field">
+          <label htmlFor="gs-logmaxsize" title="How large a log file may grow before it is cut down, e.g. 10 MiB or 512 KB; none never cuts">Log Max Size</label>
+          <input
+            id="gs-logmaxsize"
+            type="text"
+            value={state.logMaxSize ?? ''}
+            placeholder="10 MiB"
+            onChange={e => onChange({ logMaxSize: e.target.value || undefined })}
+          />
+        </div>
+        <div className="field">
+          <label htmlFor="gs-loghistory" title="How many cut-off log files to keep beside it (log.1, log.2…); 0 trims the log in place instead">Log History</label>
+          <input
+            id="gs-loghistory"
+            type="number"
+            min="0"
+            step="1"
+            value={state.logHistory ?? ''}
+            placeholder="1"
+            onChange={e => onChange({ logHistory: e.target.value === '' ? undefined : Number(e.target.value) })}
+          />
+        </div>
+        <div className="field">
+          <label htmlFor="gs-logtrimpercent" title="With no log history: how much of a full log to cut from its start, 1 to 100">Log Trim %</label>
+          <input
+            id="gs-logtrimpercent"
+            type="number"
+            min="1"
+            max="100"
+            step="1"
+            value={state.logTrimPercent ?? ''}
+            placeholder="50"
+            onChange={e => onChange({ logTrimPercent: e.target.value === '' ? undefined : Number(e.target.value) })}
+          />
+        </div>
+      </div>
       <div className="checkbox-group">
         <label className="checkbox-label">
           <input

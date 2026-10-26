@@ -88,6 +88,9 @@ Use `Esc` to close the TUI. It does not change Hydra's running state.
 - `logFile` — path to a file where log output is also written (in addition to the console); relative paths are resolved from the config file's directory (default: none)
 - `sessionLogFile` — Windows service mode only: path to a file where the session child's log output is written. The service spawns a child process in the interactive session to run the input hooks and the relay, so this is the log that records what actually happened. Defaults to `logFile` with a `.session.log` extension, so it is only worth setting to move it elsewhere.
 - `logTruncate` — if `true`, truncate `logFile` and `sessionLogFile` to 0 bytes on each startup so they don't grow unbounded (default: `false`)
+- `logMaxSize` — how large `logFile` and `sessionLogFile` may grow before they are cut down, as a size (`"10 MiB"`, `"512 KB"`; `KB` is 1000 bytes and `KiB` 1024, and a lowercase `b`, bits, is refused) or a number of bytes; `null` never cuts (default: `"10 MiB"`)
+- `logHistory` — how many cut-off log files to keep beside the log. A full log becomes `hydra.log.1`, the older ones moving up to `.2`, `.3`… into the first free number, and the oldest is dropped once all are taken. `0` keeps no history and trims the log in place instead (default: `1`)
+- `logTrimPercent` — with `logHistory` at `0`, how much of a full log to cut from its start, 1 to 100, rounded up to a whole line; `100` empties it (default: `50`)
 - `autoUpdate` — `false` to disable automatic updates
 - `updateChannel` — `stable` (default) follows full releases; `edge` follows the newest release of any kind, including prereleases built from the `edge` branch, and moves back onto a stable release once one overtakes them. Testing ground only: switching back to `stable` does not downgrade, it waits for the next stable release
 - `lockFile` — path to a lock file to prevent multiple instances (default: none)
@@ -113,7 +116,7 @@ Use `Esc` to close the TUI. It does not change Hydra's running state.
 - `maxMouseHz` — how many mouse updates a second the master sends to a slave (master only; default `125`, range `1`–`1000`). This also sets how long raw samples are coalesced before they are processed, so the two stay in step. **Raising it costs CPU on the master**: a mouse commonly reports up to 1000 samples a second, and each one sent is a relay message. The ceiling is that rate — at `1000` every sample such a mouse reports is already sent on its own. Rates that do not divide 1000 evenly land on the next rate up, because the interval is whole milliseconds (`300` gives a 3ms interval, so 333 Hz).
 - `hotkeys` — rebind Hydra's hotkeys, as action name to an array of chords (master only; see [Customising hotkeys](#customising-hotkeys))
 - `remoteOnly` — `true` to forward all input to remote machines immediately at startup, with no local screen involved (see [Remote-only mode](#remote-only-mode))
-- `clipboardSync` — `Hydra` uses Hydra's cross-platform clipboard protocol (default). `System` makes a macOS master stand down for macOS peers so Universal Clipboard can operate without competing pasteboard writes; Hydra continues syncing with Windows and Linux peers.
+- `clipboardSync` — `Hydra` uses Hydra's cross-platform clipboard protocol (default). `System` makes a macOS master stand down for macOS peers so Universal Clipboard can operate without competing pasteboard writes; Hydra continues syncing with Windows and Linux peers. `Off` shares no clipboard and no files with any peer, in either direction, on a master or a slave (see [Turning clipboard and file sharing off](#turning-clipboard-and-file-sharing-off)).
 - `syncScreensaver` — `false` to disable screensaver synchronisation (default: `true`)
 - `allowSystemSleep` — `true` lets the operating system's normal idle policy put this machine fully to sleep. Hydra stops treating background peer activity as local activity, leaves the relay when a screen-count condition no longer matches, and closes the relay before OS suspend (default: `false`).
 - `screenLockPropagation` — propagate a Mac/Windows master's local lock to connected slaves (master only; default: `false`)
@@ -443,6 +446,10 @@ When you move the cursor to a remote machine, Hydra pushes the local clipboard t
 
 For Mac-to-Mac peers already using Apple's Universal Clipboard, set `"clipboardSync": "System"` on the active master profile. Hydra then sends no clipboard hash, push, or pull messages for macOS peers, while retaining its normal clipboard sync for Windows and Linux peers. Hydra cannot detect whether both Macs share an Apple Account or whether Handoff is enabled, so this mode is explicit rather than automatic. It does not disable Hydra's separate file-transfer hotkeys.
 
+### Turning clipboard and file sharing off
+
+Set `"clipboardSync": "Off"` on a profile to keep this machine's clipboard and files to itself. Whichever side sets it, master or slave, no clipboard crosses between them in either direction and the file transfer hotkeys show "File transfer is off" instead of copying or pasting. A slave says so to its master, which then sends it nothing; a master from before this setting still gets nothing from it, as the slave answers its requests without touching the clipboard. Hydra does not read or write the clipboard at all while it is off.
+
 On macOS and Windows, a clipboard holding copied files (from Finder or Explorer) is always preserved: Hydra neither treats it as an empty clipboard nor overwrites it with an automatic clipboard transition.
 
 Synced content:
@@ -468,6 +475,8 @@ Copy files and folders between machines using the same muscle memory as a local 
 The notification shows how many items were copied (e.g. `3 items copied`). Transfers are compressed and verified with a SHA-256 checksum. Only one transfer can be in flight at a time; a progress panel shows speed and allows cancellation. Transfers are aborted automatically if the screensaver activates or the connection drops.
 
 **Platform support:** macOS and Windows. Linux is not supported as a source or destination.
+
+`"clipboardSync": "Off"` on the master, the source or the target turns file transfer off along with the clipboard (see [Turning clipboard and file sharing off](#turning-clipboard-and-file-sharing-off)).
 
 All transfer topologies work: local → remote, remote → local, and remote → remote (via the relay).
 

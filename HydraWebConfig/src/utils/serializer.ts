@@ -79,7 +79,7 @@ function serializeProfile(p: HydraProfile): Record<string, unknown> {
   if (p.debugShield === true) out.debugShield = true
   if (p.accelerateMouseWheel === false) out.accelerateMouseWheel = false
   if (p.allowSystemSleep === true) out.allowSystemSleep = true
-  if (p.clipboardSync === 'System') out.clipboardSync = 'System'
+  if (p.clipboardSync === 'System' || p.clipboardSync === 'Off') out.clipboardSync = p.clipboardSync
 
   if (p.mode === 'Master') {
     if (p.hideCursor === true) out.hideCursor = true
@@ -126,6 +126,10 @@ export function serialize(state: FormState): string {
   if (state.lockFile?.trim()) out.lockFile = state.lockFile.trim()
   if (state.logFile?.trim()) out.logFile = state.logFile.trim()
   if (state.sessionLogFile?.trim()) out.sessionLogFile = state.sessionLogFile.trim()
+  const logMaxSize = state.logMaxSize?.trim()
+  if (logMaxSize) out.logMaxSize = logMaxSize.toLowerCase() === 'none' ? null : /^\d+$/.test(logMaxSize) ? Number(logMaxSize) : logMaxSize
+  if (state.logHistory !== undefined && state.logHistory !== 1) out.logHistory = state.logHistory
+  if (state.logTrimPercent !== undefined && state.logTrimPercent !== 50) out.logTrimPercent = state.logTrimPercent
   out.profiles = state.profiles.map(serializeProfile)
   return JSON.stringify(out, null, 2)
 }

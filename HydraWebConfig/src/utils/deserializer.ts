@@ -127,14 +127,14 @@ function optNumber(v: unknown): number | undefined {
   return undefined
 }
 
-// Hydra reads an enum by name in any case, or by number, given as a number or a string (Hydra = 0, System = 1)
+// Hydra reads an enum by name in any case, or by number, given as a number or a string (Hydra = 0, System = 1, Off = 2)
+const clipboardSyncModes: ClipboardSyncMode[] = ['Hydra', 'System', 'Off']
 function coerceClipboardSync(v: unknown): ClipboardSyncMode | undefined {
   const number = optNumber(v)
-  if (number === 1) return 'System'
-  if (number === 0) return 'Hydra'
+  if (number !== undefined) return clipboardSyncModes[number]
   if (typeof v !== 'string') return undefined
   const lower = v.trim().toLowerCase()
-  return lower === 'system' ? 'System' : lower === 'hydra' ? 'Hydra' : undefined
+  return clipboardSyncModes.find(m => m.toLowerCase() === lower)
 }
 
 // each action's chords, one per line for its field, under the action's own spelling: Hydra matches action names in any
@@ -222,6 +222,9 @@ export function deserialize(json: string): FormState {
     lockFile: optStr(root.lockFile),
     logFile: optStr(root.logFile),
     sessionLogFile: optStr(root.sessionLogFile),
+    logMaxSize: root.logMaxSize === null ? 'none' : typeof root.logMaxSize === 'number' ? String(root.logMaxSize) : optStr(root.logMaxSize),
+    logHistory: optNumber(root.logHistory),
+    logTrimPercent: optNumber(root.logTrimPercent),
     profiles: root.profiles.map(parseProfile),
     activeIndex: 0,
   }
