@@ -50,4 +50,20 @@ public class LinuxKeyResolverPhysicalKeyTests
 
         Assert.That(events.Select(e => (e!.Character, e.PhysicalKey)), Is.EqualTo([('a', (int)keyA), ('a', (int)keyA), ('a', (int)keyA)]));
     }
+
+    [Test]
+    public void Evdev_OnlyTheKeypadsDecimalKey_IsStampedAsIt()
+    {
+        const uint keyKpDot = 83, keyDot = 52;
+        using var resolver = new EvdevKeyResolver(new LinuxInputConfig.XkbNames("us", "pc105", null, null));
+
+        KeyEvent?[] keypad = [.. resolver.Resolve(keyKpDot, 1)!, .. resolver.Resolve(keyKpDot, 0)!];
+        KeyEvent?[] mainRow = [.. resolver.Resolve(keyDot, 1)!, .. resolver.Resolve(keyDot, 0)!];
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(keypad.Select(e => e!.IsKeypadDecimal), Is.EqualTo([true, true]));
+            Assert.That(mainRow.Select(e => e!.IsKeypadDecimal), Is.EqualTo([false, false]));
+        }
+    }
 }

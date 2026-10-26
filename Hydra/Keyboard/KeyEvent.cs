@@ -16,6 +16,10 @@ public sealed record KeyEvent(KeyEventType Type, KeyModifiers Modifiers)
     // pairs a repeat or key-up with its down, see InputRouter's forwarded-keys gate.
     internal int PhysicalKey { get; init; } = Unstamped;
 
+    // the keypad's decimal key, stamped beside PhysicalKey; never on the wire. With NumLock on a resolver sends its
+    // character ('.' or the layout's ',') like any other, and this is how modifierNumLock tells it from the main row's
+    internal bool IsKeypadDecimal { get; init; }
+
     // no key yet, see KeyResolver.StampPhysicalKey; every real key is >= 0, macOS's 'a' being 0
     internal const int Unstamped = -1;
 

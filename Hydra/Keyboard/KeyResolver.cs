@@ -101,11 +101,12 @@ internal static class KeyResolver
         : null;
 
     // stamps the key a Resolve call was for onto every event it returns that does not already carry one
-    internal static void StampPhysicalKey(KeyEvent?[]? events, int physicalKey)
+    internal static void StampPhysicalKey(KeyEvent?[]? events, int physicalKey, bool keypadDecimal = false)
     {
         if (events is null) return;
         for (var i = 0; i < events.Length; i++)
-            if (events[i] is { PhysicalKey: KeyEvent.Unstamped } e) events[i] = e with { PhysicalKey = physicalKey };
+            if (events[i] is { PhysicalKey: KeyEvent.Unstamped } e)
+                events[i] = e with { PhysicalKey = physicalKey, IsKeypadDecimal = keypadDecimal };
     }
 }
 

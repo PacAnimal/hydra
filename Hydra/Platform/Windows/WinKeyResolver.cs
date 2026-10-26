@@ -53,7 +53,7 @@ internal sealed class WinKeyResolver
     {
         var tracking = Tracking(info);
         var events = ResolveEvents(wParam, info, tracking);
-        KeyResolver.StampPhysicalKey(events, tracking);
+        KeyResolver.StampPhysicalKey(events, tracking, tracking == WinVirtualKey.Decimal);   // NumLock off, it tracks as Delete and is a key
         return events;
     }
 

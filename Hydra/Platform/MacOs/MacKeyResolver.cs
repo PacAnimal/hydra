@@ -24,7 +24,7 @@ internal sealed class MacKeyResolver
             events = ResolveKeyEvent(eventType, vkCode, eventRef);
         else
             events = ResolveModifierChange(vkCode, eventRef) is { } ev ? [ev] : null;
-        KeyResolver.StampPhysicalKey(events, vkCode);
+        KeyResolver.StampPhysicalKey(events, vkCode, (ulong)vkCode == MacVirtualKey.KeypadDecimal);
         return events;
     }
 

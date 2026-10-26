@@ -6,6 +6,27 @@ namespace Tests.Config;
 [TestFixture]
 public class HydraConfigValidationTests
 {
+    // ─── modifierNumLock ──────────────────────────────────────────────────────
+
+    [TestCase("true")]
+    [TestCase("false")]
+    public void Validate_ModifierNumLock_OnSlave_Throws(string value)
+    {
+        var json = AsFile($$"""[{"mode":"Slave","embeddedStyx":{"server":"https://localhost:5000","password":"pw"},"modifierNumLock":{{value}}}]""");
+        var ex = Assert.Throws<InvalidOperationException>(() => HydraConfig.ParseAndValidate(json));
+        Assert.That(ex!.Message, Does.Contain("modifierNumLock is master-only"));
+    }
+
+    [TestCase("", null)]
+    [TestCase(",\"modifierNumLock\":null", null)]
+    [TestCase(",\"modifierNumLock\":true", true)]
+    [TestCase(",\"modifierNumLock\":false", false)]
+    public void ModifierNumLock_OnMaster_IsReadAsGiven_NullByDefault(string field, bool? expected)
+    {
+        var json = AsFile($$"""[{"mode":"Master","embeddedStyx":{"server":"https://localhost:5000","password":"pw"}{{field}}}]""");
+        Assert.That(HydraConfig.ParseAndValidate(json)[0].ModifierNumLock, Is.EqualTo(expected));
+    }
+
     // ─── maxMouseHz ───────────────────────────────────────────────────────────
 
     [Test]

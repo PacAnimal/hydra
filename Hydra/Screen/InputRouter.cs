@@ -38,6 +38,8 @@ public class InputRouter(
     // held before it is processed. Both come off the one number, so raising it moves them together.
     // Integer division truncates, so a rate that does not divide 1000 lands on the next rate up.
     private readonly int _minMouseIntervalMs = Math.Max(1, 1000 / profile.MaxMouseHz);
+    // the keypad's NumLock under a modifier (modifierNumLock); only the actor touches it
+    private readonly ModifierNumLock _modifierNumLock = new(profile.ModifierNumLock);
 
     // How far the physical cursor may drift from the warp point, as a fraction of the half-screen,
     // before it is parked back. It only has to stay clear of the local screen edges while the pointer
@@ -1406,8 +1408,9 @@ public class InputRouter(
             {
                 // repeats are master-driven: each OS auto-repeat is re-resolved (live modifier/dead-key state)
                 // and forwarded with IsRepeat set, so the slave injects the correct character every tick.
+                var sent = _modifierNumLock.Apply(keyEvent);
                 ForwardKeyToVirtualScreen(st,
-                    new KeyEventMessage(keyEvent.Type, keyEvent.Modifiers, keyEvent.Character, RemapKey(keyEvent.Key), IsRepeat: keyEvent.IsRepeat));
+                    new KeyEventMessage(sent.Type, sent.Modifiers, sent.Character, RemapKey(sent.Key), IsRepeat: sent.IsRepeat));
             }
         });
     }

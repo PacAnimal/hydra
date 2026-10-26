@@ -16,6 +16,17 @@ public class StampPhysicalKeyTests
         Assert.That(events[0]!.PhysicalKey, Is.EqualTo(11));
     }
 
+    [TestCase(true)]
+    [TestCase(false)]
+    public void TheKeypadDecimalFlag_IsStampedWithTheKey(bool keypadDecimal)
+    {
+        KeyEvent?[] events = [KeyEvent.Char(KeyEventType.KeyDown, '.', KeyModifiers.NumLock)];
+
+        KeyResolver.StampPhysicalKey(events, 83, keypadDecimal);
+
+        Assert.That(events[0]!.IsKeypadDecimal, Is.EqualTo(keypadDecimal));
+    }
+
     [Test]
     public void AnEventPreStampedWithKeyZero_KeepsIt()
     {

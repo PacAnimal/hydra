@@ -73,6 +73,9 @@ public class HydraConfig
     public bool AllowSystemSleep { get; init; }
     public bool ScreenLockPropagation { get; init; } = false;  // master only (Mac/Windows) — propagate machine lock to connected slaves
     public bool AccelerateMouseWheel { get; init; } = true;
+    // master only — the NumLock the keypad crosses with while Super, Control or Alt is held: true digits, false
+    // navigation, null (the default) the master's own NumLock. Each key keeps it until released (ModifierNumLock)
+    public bool? ModifierNumLock { get; init; }
     // master only — action name to the chords bound to it, e.g. "toggleCursorLock": ["ScrollLock"].
     // a listed array replaces that action's default entirely; see docs/CONFIGURATION.md for both lists.
     public Dictionary<string, List<string>>? Hotkeys { get; init; }
@@ -241,6 +244,8 @@ public class HydraConfig
                 throw new InvalidOperationException("mouseScale is slave-only. Remove it from master profiles.");
             if (cfg.Mode == Mode.Master && cfg.ScreenDefinitions.Count > 0)
                 throw new InvalidOperationException("screenDefinitions is slave-only. Remove it from master profiles.");
+            if (cfg.Mode == Mode.Slave && cfg.ModifierNumLock != null)
+                throw new InvalidOperationException("modifierNumLock is master-only. Remove it from slave profiles.");
             if (cfg.Mode == Mode.Slave && cfg.MaxMouseHz != null)
                 throw new InvalidOperationException("maxMouseHz is master-only. Remove it from slave profiles.");
             // The ceiling is the sample rate itself: at 1000 Hz every sample a mouse reports is already
