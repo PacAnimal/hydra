@@ -17,7 +17,7 @@
     </PropertyGroup>
 
     <ItemGroup>
-        <PackageReference Include="Cathedral" Version="0.0.490" />
+        <PackageReference Include="Cathedral" Version="0.0.493" />
         <PackageReference Include="Microsoft.AspNetCore.SignalR.Protocols.MessagePack" Version="10.0.13" />
         <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.13" />
         <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" Version="10.9.0" />

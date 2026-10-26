@@ -279,7 +279,7 @@ public class GuidedConfigDocumentTests
         profile[GuidedFields.ClipboardSync] = "Automatic";
 
         Assert.That(() => document.WriteProfile(0, profile),
-            Throws.InvalidOperationException.With.Message.EqualTo("Clipboard must be one of: Hydra, System."));
+            Throws.InvalidOperationException.With.Message.EqualTo("Clipboard must be one of: Hydra, System, Off."));
     }
 
     // mode is required, so an absent one stays absent for the validator to refuse rather than becoming a slave
@@ -299,7 +299,7 @@ public class GuidedConfigDocumentTests
     }
 
     // values the loader would refuse too, named on save rather than thrown from deep inside it
-    [TestCase("""{"profiles":[{"mode":"Slave","clipboardSync":7}]}""", "Clipboard must be one of: Hydra, System.")]
+    [TestCase("""{"profiles":[{"mode":"Slave","clipboardSync":7}]}""", "Clipboard must be one of: Hydra, System, Off.")]
     [TestCase("""{"profiles":[{"mode":9}]}""", "Mode must be one of: Master, Slave.")]
     [TestCase("""{"profiles":[{"mode":"Slave","deadCorners":5.0}]}""", "Dead Corners must be a whole number.")]
     public void AValueTheFormCannotWriteIsRefusedByName(string json, string message)

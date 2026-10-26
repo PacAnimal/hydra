@@ -1,5 +1,8 @@
+using ByteSizeLib;
+using Cathedral.Logging;
 using Hydra.Config;
 using Hydra.Screen;
+using Microsoft.Extensions.Logging;
 using static Tests.Setup.ConfigJson;
 
 namespace Tests.Config;
@@ -31,6 +34,87 @@ public class HydraConfigTests
         {
             Assert.That(defaults[0].ClipboardSync, Is.EqualTo(ClipboardSyncMode.Hydra));
             Assert.That(system[0].ClipboardSync, Is.EqualTo(ClipboardSyncMode.System));
+        }
+    }
+
+    [Test]
+    public void ClipboardSync_ParsesOff_WhichTurnsSharingOff()
+    {
+        var off = HydraConfig.ParseAndValidate(AsFile($$"""[{"mode":"Slave","clipboardSync":"off"{{Relay}}}]"""));
+        var file = HydraConfigFile.Parse(AsFile($$"""[{"mode":"Slave"{{Relay}}}]"""), "test.conf");
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(off[0].ClipboardSync, Is.EqualTo(ClipboardSyncMode.Off));
+            Assert.That(new HydraProfile(file, off[0]).SharingOff, Is.True);
+            Assert.That(new HydraProfile(file, file.Profiles[0]).SharingOff, Is.False);
+        }
+    }
+
+    [Test]
+    public void LogCap_DefaultsToTenMebibytes_OneHistoryFile_AndHalf()
+    {
+        var file = WithRoot("");
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(file.LogMaxSize, Is.EqualTo(ByteSize.FromMebiBytes(10)));
+            Assert.That(file.LogHistory, Is.EqualTo(1));
+            Assert.That(file.LogTrimPercent, Is.EqualTo(50));
+        }
+    }
+
+    [TestCase("\"5 MiB\"", 5 * 1024 * 1024)]
+    [TestCase("\"512 KB\"", 512_000)]
+    [TestCase("2048", 2048)]
+    public void LogMaxSize_ReadsASizeOrBytes(string json, long bytes) =>
+        Assert.That(WithRoot($"\"logMaxSize\":{json},").LogMaxSize, Is.EqualTo(ByteSize.FromBytes(bytes)));
+
+    [Test]
+    public void LogMaxSize_NullNeverCuts() => Assert.That(WithRoot("\"logMaxSize\":null,").LogMaxSize, Is.Null);
+
+    private static SereneLogging.FileConfig FileLog() => new()
+    {
+        DotNetLogLevelNames = true,
+        FilterMicrosoftSpam = true,
+        MinLogLevel = LogLevel.Information,
+        PrintCategory = true,
+        PrintLogLevel = true,
+        TimestampFormat = null,
+        TimestampUtc = true
+    };
+
+    [TestCase("0")]
+    [TestCase("\"0 B\"")]
+    public void LogMaxSize_ZeroNeverCuts(string json)
+    {
+        var log = FileLog();
+        log.MaxFileSize = ByteSize.FromMebiBytes(1);
+        WithRoot($"\"logMaxSize\":{json},").ConfigureFileLog(log, LogLevel.Debug);
+        Assert.That(log.MaxFileSize, Is.Null);
+    }
+
+    [TestCase("\"logMaxSize\":\"10 b\",")]
+    [TestCase("\"logMaxSize\":\"0.5 B\",")]
+    [TestCase("\"logMaxSize\":\"lots\",")]
+    [TestCase("\"logHistory\":-1,")]
+    [TestCase("\"logTrimPercent\":0,")]
+    [TestCase("\"logTrimPercent\":101,")]
+    public void LogCap_RefusesWhatTheFileLoggerWouldNotTake(string root) => Assert.That(() => WithRoot(root), Throws.Exception);
+
+    [Test]
+    public void ConfigureFileLog_HandsTheLevelAndTheCapToTheFileLogger()
+    {
+        var log = FileLog();
+
+        WithRoot("\"logMaxSize\":\"5 MiB\",\"logHistory\":0,\"logTrimPercent\":25,").ConfigureFileLog(log, LogLevel.Debug);
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(log.MinLogLevel, Is.EqualTo(LogLevel.Debug));
+            Assert.That(log.MaxFileSize, Is.EqualTo(ByteSize.FromMebiBytes(5)));
+            Assert.That(log.HistoryFiles, Is.Zero);
+            Assert.That(log.TrimPercent, Is.EqualTo(25));
         }
     }
 
@@ -202,7 +286,7 @@ public class HydraConfigTests
     {
         var json = $$"""{"logLevel":"warn","profiles":[{"mode":"Master"{{Relay}}}]}""";
         var file = HydraConfigFile.Parse(json, "<test>");
-        Assert.That(file.LogLevel, Is.EqualTo(Microsoft.Extensions.Logging.LogLevel.Warning));
+        Assert.That(file.LogLevel, Is.EqualTo(LogLevel.Warning));
     }
 
     [Test]
@@ -794,4 +878,8 @@ public class HydraConfigTests
             """);
         Assert.That(() => HydraConfig.ParseAndValidate(json), Throws.Nothing);
     }
+
+    // a config file with these root settings ahead of one profile
+    private static HydraConfigFile WithRoot(string root) =>
+        HydraConfigFile.Parse($$"""{{{root}}"profiles":[{"mode":"Master"{{Relay}}}]}""", "test.conf");
 }

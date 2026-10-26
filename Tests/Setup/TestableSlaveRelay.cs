@@ -42,10 +42,12 @@ public sealed class TestableSlaveRelay : SlaveRelayConnection
         IFileSelectionDetector? selectionDetector = null,
         IOsdNotification? osd = null,
         FileTransferService? fileTransfer = null,
-        ILogger<RelayConnection>? log = null)
+        ILogger<RelayConnection>? log = null,
+        ClipboardSyncMode clipboardSync = ClipboardSyncMode.Hydra)
         : this(MakeShared(worldState, screenSaverSync, trackerClock), clipboard, cursorHider, screenSaverSync,
             dormancy ?? new DormancyState(NullLogger<DormancyState>.Instance), screens ?? new FakeScreenDetector(), new NullPlatformOutput(),
-            selectionDetector ?? new NullFileSelectionDetector(), osd ?? new NullOsdNotification(), fileTransfer: fileTransfer, log: log)
+            selectionDetector ?? new NullFileSelectionDetector(), osd ?? new NullOsdNotification(), fileTransfer: fileTransfer, log: log,
+            clipboardSync: clipboardSync)
     { }
 
     // ActivityTracker and SlaveRelayConnection must share the same WorldState — chaining lets us build it once
@@ -61,9 +63,10 @@ public sealed class TestableSlaveRelay : SlaveRelayConnection
         IOsdNotification osd,
         string? networkConfig = null,
         FileTransferService? fileTransfer = null,
-        ILogger<RelayConnection>? log = null)
+        ILogger<RelayConnection>? log = null,
+        ClipboardSyncMode clipboardSync = ClipboardSyncMode.Hydra)
         : base(
-            TransitionTestHelper.Profile("slave", new HydraConfig { Mode = Mode.Slave, NetworkConfig = networkConfig }),
+            TransitionTestHelper.Profile("slave", new HydraConfig { Mode = Mode.Slave, NetworkConfig = networkConfig, ClipboardSync = clipboardSync }),
             log ?? NullLogger<RelayConnection>.Instance,
             output,
             screens,

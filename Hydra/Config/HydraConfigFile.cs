@@ -1,6 +1,9 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using ByteSizeLib;
 using Cathedral.Extensions;
+using Cathedral.Logging;
+using Cathedral.Serialization;
 using Microsoft.Extensions.Logging;
 
 namespace Hydra.Config;
@@ -26,6 +29,14 @@ public class HydraConfigFile
 
     // if true, truncate logFile/sessionLogFile to 0 bytes on startup
     public bool LogTruncate { get; init; } = false;
+
+    // logFile/sessionLogFile are cut down before passing this; null or 0 never cuts
+    [JsonConverter(typeof(ByteSizeJsonConverter))]
+    public ByteSize? LogMaxSize { get; init; } = ByteSize.FromMebiBytes(10);
+
+    // cut-off files kept beside the log (.1, .2…); 0 trims the log in place by logTrimPercent instead
+    public int LogHistory { get; init; } = 1;
+    public int LogTrimPercent { get; init; } = 50;
 
     // optional — defaults to machine hostname without domain
     public string? Name { get; init; }
@@ -66,7 +77,26 @@ public class HydraConfigFile
             ?? throw new InvalidOperationException($"Failed to deserialize {path}");
         file.Profiles.ForEach(p => HydraConfig.ExpandMirrors(p.Hosts));
         HydraConfig.Validate(file.Profiles, file.ResolvedName, file.Profile);
+        file.ValidateLogCap();
         return file;
+    }
+
+    // the same bounds the file logger enforces, refused here as a config error rather than at logger setup
+    private void ValidateLogCap()
+    {
+        if (LogMaxSize is { Bytes: not 0 } max && !(max.Bytes >= 1 && double.IsFinite(max.Bytes)))
+            throw new InvalidOperationException($"logMaxSize must be 0 or at least 1 B, not {max}");
+        if (LogHistory < 0) throw new InvalidOperationException($"logHistory must not be negative, not {LogHistory}");
+        if (LogTrimPercent is < 1 or > 100) throw new InvalidOperationException($"logTrimPercent must be 1 to 100, not {LogTrimPercent}");
+    }
+
+    // every file log Hydra writes: the service's, the session child's and a direct run's
+    internal void ConfigureFileLog(SereneLogging.FileConfig log, LogLevel level)
+    {
+        log.MinLogLevel = level;
+        log.MaxFileSize = LogMaxSize is { Bytes: 0 } ? null : LogMaxSize;
+        log.HistoryFiles = LogHistory;
+        log.TrimPercent = LogTrimPercent;
     }
 
     // a failure startup waits out and retries rather than exiting into a supervisor's relaunch storm
