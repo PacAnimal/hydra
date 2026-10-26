@@ -75,14 +75,12 @@ internal sealed class EvdevKeyResolver : IDisposable
         if (_state == 0) throw new InvalidOperationException("Failed to create xkb state.");
     }
 
-    private const uint KeyKpDot = 83, KeyKpComma = 121;   // the keypad's decimal key, and a layout's comma for it
-
     // value=1 → KeyDown, value=0 → KeyUp, value=2 → auto-repeat
     internal KeyEvent?[]? Resolve(uint evdevCode, int value)
     {
         KeyEvent?[]? events;
         lock (_stateLock) events = ResolveLocked(evdevCode, value);
-        KeyResolver.StampPhysicalKey(events, (int)evdevCode, evdevCode is KeyKpDot or KeyKpComma);
+        KeyResolver.StampPhysicalKey(events, (int)evdevCode, KeypadDecimalKey.Evdev(evdevCode));
         return events;
     }
 

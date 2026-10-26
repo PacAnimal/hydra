@@ -307,6 +307,17 @@ public class WinKeyResolverTests
 [Platform("Win")]
 public class WinKeyResolverCharTests
 {
+    [TestCase((uint)WinVirtualKey.Decimal, 0u, true)]
+    [TestCase((uint)0xBE /* VK_OEM_PERIOD */, 0u, false)]
+    [TestCase((uint)WinVirtualKey.Delete, 0u, false)]   // the decimal with NumLock off: a key, not a character
+    public void TheKeypadsDecimalKeys_AreStampedAsIt_DownAndUp(uint vk, uint flags, bool keypadDecimal)
+    {
+        var r = new WinKeyResolver();
+        KeyEvent[] events = [.. Down(r, vk, flags) ?? [], .. Up(r, vk, flags) ?? []];
+        Assume.That(events, Is.Not.Empty, "the running layout gives this key something");
+        Assert.That(events.Select(e => e.IsKeypadDecimal), Is.All.EqualTo(keypadDecimal));
+    }
+
     [Test]
     public void KeypadDecimal_ReleasedAsKeypadDelete_IsTrackedAsTheDecimal()
     {

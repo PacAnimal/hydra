@@ -43,6 +43,21 @@ function serializeConditions(c: ConfigConditions): Record<string, unknown> {
   return out
 }
 
+// the chords typed for an action, one per line: a line break is the one thing no chord can contain, since a chord's
+// key may be ',' or '+'. An action with none keeps its default and is left out
+export function splitChords(text: string): string[] {
+  return text.split(/\r?\n/).map(c => c.trim()).filter(Boolean)
+}
+
+function serializeHotkeys(hotkeys: Record<string, string> | undefined): Record<string, string[]> | undefined {
+  const out: Record<string, string[]> = {}
+  for (const [action, text] of Object.entries(hotkeys ?? {})) {
+    const chords = splitChords(text)
+    if (chords.length > 0) out[action] = chords
+  }
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
 function serializeProfile(p: HydraProfile): Record<string, unknown> {
   const out: Record<string, unknown> = { profileName: p.profileName, mode: p.mode }
 
@@ -63,8 +78,16 @@ function serializeProfile(p: HydraProfile): Record<string, unknown> {
   if (p.screenLockPropagation === true) out.screenLockPropagation = true
   if (p.debugShield === true) out.debugShield = true
   if (p.accelerateMouseWheel === false) out.accelerateMouseWheel = false
+  if (p.allowSystemSleep === true) out.allowSystemSleep = true
+  if (p.clipboardSync === 'System') out.clipboardSync = 'System'
 
   if (p.mode === 'Master') {
+    if (p.hideCursor === true) out.hideCursor = true
+    if (p.maxMouseHz !== undefined) out.maxMouseHz = p.maxMouseHz
+    if (p.modifierNumLock !== undefined) out.modifierNumLock = p.modifierNumLock
+    const hotkeys = serializeHotkeys(p.hotkeys)
+    if (hotkeys) out.hotkeys = hotkeys
+
     // prefer layoutItems when present and non-empty; fall back to explicit hosts
     const layoutHosts = (p.layoutItems && p.layoutItems.length > 0)
       ? deriveHostsFromLayout(p.layoutItems)

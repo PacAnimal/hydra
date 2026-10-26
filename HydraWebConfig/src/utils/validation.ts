@@ -73,6 +73,10 @@ export function validate(profiles: HydraProfile[], name?: string): ValidationErr
       errors.push({ path: `profiles[${i}].remoteOnly`, message: 'remoteOnly requires Master mode' })
     }
 
+    if (p.mode === 'Master' && p.maxMouseHz !== undefined && (!Number.isInteger(p.maxMouseHz) || p.maxMouseHz < 1 || p.maxMouseHz > 1000)) {
+      errors.push({ path: `profiles[${i}].maxMouseHz`, message: 'maxMouseHz must be a whole number from 1 to 1000' })
+    }
+
     if (p.syncScreensaver === false && p.mode !== 'Master') {
       errors.push({ path: `profiles[${i}].syncScreensaver`, message: 'syncScreensaver requires Master mode' })
     }

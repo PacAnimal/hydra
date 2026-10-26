@@ -1,13 +1,14 @@
 namespace Hydra.Keyboard;
 
 // modifierNumLock, on a master: a keypad key pressed while Super, Control or Alt is held crosses as NumLock set to the
-// setting would make it, true its digit (KP_4) and false its navigation key (KP_Left), with the NumLock bit to match,
-// whatever the master's own NumLock. Every master's keys pass through here (InputRouter), so it is one rule for all of
-// them; a macOS master's keypad always types digits, so only false changes anything there. The key keeps what it was
-// pressed as through its repeats and up, whichever is let go first, so it never releases as a different key than it
-// pressed as. The decimal key, which every resolver sends as its character with NumLock on, is known by
-// IsKeypadDecimal: false makes it KP_Delete, and true leaves its character, which is what NumLock on types.
-// Null, the default, leaves every key alone.
+// setting would make it on this master, true its digit (KP_4) and false its navigation key (KP_Left), with the NumLock bit
+// to match, whatever the master's own NumLock. Every master's keys pass through here (InputRouter), before the hotkeys
+// see them, so it is one rule for all of them, and a hotkey binds the form the setting gives: the digit under true, the
+// navigation key under false. A macOS master's keypad always types digits, so only false changes anything there. The
+// key keeps what it was pressed as through its repeats and up, whichever is let go first, so it never releases as a
+// different key than it pressed as. The decimal key, which every resolver sends as its character with NumLock on, is
+// known by IsKeypadDecimal (KeypadDecimalKey): false makes it KP_Delete, true leaves its character, which is what NumLock
+// on types. A keypad comma NumLock does not change is left alone. Null, the default, leaves every key alone.
 internal sealed class ModifierNumLock(bool? setting)
 {
     private const KeyModifiers Trigger = KeyModifiers.Super | KeyModifiers.Control | KeyModifiers.Alt;
@@ -20,6 +21,8 @@ internal sealed class ModifierNumLock(bool? setting)
         if (setting is not { } numLock || keyEvent.PhysicalKey == KeyEvent.Unstamped) return keyEvent;
         var key = keyEvent.Key ?? (keyEvent is { IsKeypadDecimal: true, Character: not null } ? SpecialKey.KP_Decimal : null);
         if (key is not { } pressed || !pressed.IsNumLockSensitive()) return keyEvent;
+        // KP_Decimal from any key but the decimal (X11's KP_Decimal-based keypad comma) has no NumLock-off form to give
+        if (pressed == SpecialKey.KP_Decimal && !keyEvent.IsKeypadDecimal) return keyEvent;
 
         if (keyEvent.Type == KeyEventType.KeyUp)
         {

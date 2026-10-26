@@ -33,6 +33,27 @@ public class MacKeyResolverTests
         return ev;
     }
 
+    // -- the keypad's decimal key, for modifierNumLock --
+
+    [TestCase(MacVirtualKey.KeypadDecimal, true)]
+    [TestCase(0x2FUL /* kVK_ANSI_Period */, false)]
+    public void TheKeypadsDecimalKeys_AreStampedAsIt_DownAndUp(ulong vk, bool keypadDecimal)
+    {
+        var resolver = new MacKeyResolver();
+        var down = KeyDownEvent(vk);
+        try
+        {
+            KeyEvent[] events =
+            [
+                .. (resolver.Resolve(NativeMethods.KCGEventKeyDown, down) ?? []).OfType<KeyEvent>(),
+                .. (resolver.Resolve(NativeMethods.KCGEventKeyUp, down) ?? []).OfType<KeyEvent>(),
+            ];
+            Assume.That(events, Is.Not.Empty, "the running layout gives this key something");
+            Assert.That(events.Select(e => e.IsKeypadDecimal), Is.All.EqualTo(keypadDecimal));
+        }
+        finally { NativeMethods.CFRelease(down); }
+    }
+
     // -- ScrollLock toggle --
 
     [Test]

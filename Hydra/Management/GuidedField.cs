@@ -4,7 +4,8 @@ namespace Hydra.Management;
 
 internal enum GuidedSection { Global, Profile, Relay, Behaviour }
 
-internal enum GuidedFieldKind { Text, Secret, Choice, Integer, Decimal, Toggle, Power }
+// OptionalToggle: a nullable bool typed as on, off, or nothing (the key left out)
+internal enum GuidedFieldKind { Text, Secret, Choice, Integer, Decimal, Toggle, Power, OptionalToggle }
 
 /// <summary>A JSON object holding some of the form's fields.</summary>
 /// <param name="AllOrNothing">Its fields are required members, so the form refuses to write only some of them.</param>
@@ -117,12 +118,15 @@ internal static class GuidedFields
     internal static readonly GuidedField AllowSystemSleep = new(GuidedSection.Behaviour, 10, 0, null, "allowSystemSleep", GuidedFieldKind.Toggle,
         "Allow System Sleep", "Let the OS sleep this machine on its normal idle policy; Hydra leaves the relay before it suspends.")
     { Fallback = GuidedValues.Off };
+    internal static readonly GuidedField ModifierNumLock = new(GuidedSection.Behaviour, 12, 0, null, "modifierNumLock", GuidedFieldKind.OptionalToggle,
+        "Keypad NumLock", "Master: NumLock for a keypad key pressed with Super, Ctrl or Alt. on = digits, off = navigation, empty = as the master's NumLock says.")
+    { DefaultHint = "as pressed" };
     internal static readonly IReadOnlyList<GuidedField> All =
     [
         Name, LogLevel, ProfileOverride, AutoUpdate, UpdateChannel, DebugShield, DebugMouse,
         ProfileName, Mode, Ssid, ScreenCount, ClipboardSync, IsPluggedIn, MouseScale, RelativeMouseScale, DeadCorners, MaxMouseHz,
         NetworkConfig, EmbeddedServer, EmbeddedPassword, EmbeddedPort, EmbeddedServerPassword,
-        HideCursor, RemoteOnly, SyncScreensaver, ScreenLockPropagation, AccelerateMouseWheel, AllowSystemSleep
+        HideCursor, RemoteOnly, SyncScreensaver, ScreenLockPropagation, AccelerateMouseWheel, AllowSystemSleep, ModifierNumLock
     ];
 
     internal static readonly IReadOnlyList<GuidedField> Root = [.. All.Where(f => f.IsRoot)];

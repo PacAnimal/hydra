@@ -1243,11 +1243,14 @@ public class InputRouter(
         return new RemoteScreenInfo(screens, scaleMap, relativeScaleMap);
     }
 
-    private void OnKeyEvent(KeyEvent keyEvent)
+    private void OnKeyEvent(KeyEvent pressed)
     {
         SealMouseBatch();
         _ = _commands.Writer.TryWrite(async st =>
         {
+            // the key as modifierNumLock makes it, for the hotkeys as well as the slave: every key passes through, home or
+            // away, so a key's repeats and up always find what its down was made
+            var keyEvent = _modifierNumLock.Apply(pressed);
             st.LastInputTick = _getTickCount();
             await activityTracker.LocalActivity();
             if (st.Mouse.IsOnVirtualScreen && log.IsEnabled(LogLevel.Debug))
@@ -1408,9 +1411,8 @@ public class InputRouter(
             {
                 // repeats are master-driven: each OS auto-repeat is re-resolved (live modifier/dead-key state)
                 // and forwarded with IsRepeat set, so the slave injects the correct character every tick.
-                var sent = _modifierNumLock.Apply(keyEvent);
                 ForwardKeyToVirtualScreen(st,
-                    new KeyEventMessage(sent.Type, sent.Modifiers, sent.Character, RemapKey(sent.Key), IsRepeat: sent.IsRepeat));
+                    new KeyEventMessage(keyEvent.Type, keyEvent.Modifiers, keyEvent.Character, RemapKey(keyEvent.Key), IsRepeat: keyEvent.IsRepeat));
             }
         });
     }

@@ -27,9 +27,8 @@ internal sealed class XorgKeyResolver
         {
             if (evType == NativeMethods.KeyRelease) _seeded.Remove(keycode);
             var events = ResolveEvents(evType, keycode, state, display);
-            // the keypad's decimal key is the one whose base keysym is KP_Delete (the main Delete is its own keysym)
             KeyResolver.StampPhysicalKey(events, (int)keycode,
-                events is not null && NativeMethods.XkbKeycodeToKeysym(display, keycode, 0, 0) == XorgVirtualKey.KP_Delete);
+                events is not null && KeypadDecimalKey.Xorg(NativeMethods.XkbKeycodeToKeysym(display, keycode, 0, 0)));
             return events;
         }
     }

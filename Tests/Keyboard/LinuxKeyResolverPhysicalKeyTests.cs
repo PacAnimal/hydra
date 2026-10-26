@@ -40,6 +40,33 @@ public class LinuxKeyResolverPhysicalKeyTests
         }
     }
 
+    [TestCase(0xFF9FUL /* KP_Delete: the keypad's decimal key */, true)]
+    [TestCase(0x2EUL /* period, on the main row */, false)]
+    [TestCase(0xFFFFUL /* Delete, the dedicated key */, false)]
+    public void Xorg_OnlyTheKeypadsDecimalKey_IsStampedAsIt(ulong keysym, bool keypadDecimal)
+    {
+        var display = NativeMethods.XOpenDisplay(null);
+        Assert.That(display, Is.Not.EqualTo(nint.Zero), "pre-condition: an X server");
+        try
+        {
+            var resolver = new XorgKeyResolver();
+            var keycode = NativeMethods.XKeysymToKeycode(display, keysym);
+            Assert.That(keycode, Is.Not.Zero, "pre-condition: the keymap has the key");
+
+            KeyEvent?[] events =
+            [
+                .. resolver.Resolve(NativeMethods.KeyPress, keycode, NativeMethods.Mod2Mask, display)!,
+                .. resolver.Resolve(NativeMethods.KeyRelease, keycode, NativeMethods.Mod2Mask, display)!,
+            ];
+
+            Assert.That(events.Select(e => e!.IsKeypadDecimal), Is.EqualTo([keypadDecimal, keypadDecimal]));
+        }
+        finally
+        {
+            _ = NativeMethods.XCloseDisplay(display);
+        }
+    }
+
     [Test]
     public void Evdev_DownRepeatAndUp_CarryTheEvdevCode()
     {
@@ -54,15 +81,17 @@ public class LinuxKeyResolverPhysicalKeyTests
     [Test]
     public void Evdev_OnlyTheKeypadsDecimalKey_IsStampedAsIt()
     {
-        const uint keyKpDot = 83, keyDot = 52;
+        const uint keyKpDot = 83, keyKpComma = 121, keyDot = 52;
         using var resolver = new EvdevKeyResolver(new LinuxInputConfig.XkbNames("us", "pc105", null, null));
 
         KeyEvent?[] keypad = [.. resolver.Resolve(keyKpDot, 1)!, .. resolver.Resolve(keyKpDot, 0)!];
+        KeyEvent?[] keypadComma = [.. resolver.Resolve(keyKpComma, 1)!, .. resolver.Resolve(keyKpComma, 0)!];
         KeyEvent?[] mainRow = [.. resolver.Resolve(keyDot, 1)!, .. resolver.Resolve(keyDot, 0)!];
 
         using (Assert.EnterMultipleScope())
         {
             Assert.That(keypad.Select(e => e!.IsKeypadDecimal), Is.EqualTo([true, true]));
+            Assert.That(keypadComma.Select(e => e!.IsKeypadDecimal), Is.EqualTo([true, true]));
             Assert.That(mainRow.Select(e => e!.IsKeypadDecimal), Is.EqualTo([false, false]));
         }
     }

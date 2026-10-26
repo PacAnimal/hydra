@@ -135,6 +135,22 @@ public class ModifierNumLockTests
     }
 
     [Test]
+    public void False_AKpDecimalFromAKeypadComma_IsLeftAlone()
+    {
+        // X11's KP_Decimal-based keypad comma: KP_Decimal with NumLock off too, so it has no navigation form to give
+        var comma = Key(KeyEventType.KeyDown, SpecialKey.KP_Decimal, KeyModifiers.Control, physical: 129);
+        Assert.That(new ModifierNumLock(false).Apply(comma), Is.SameAs(comma));
+    }
+
+    [Test]
+    public void False_KpDecimalFromTheDecimalKey_IsKpDelete()
+    {
+        // a macOS master's decimal repeats as KP_Decimal
+        var repeat = Key(KeyEventType.KeyDown, SpecialKey.KP_Decimal, KeyModifiers.Super, physical: 65) with { IsKeypadDecimal = true };
+        Assert.That(new ModifierNumLock(false).Apply(repeat).Key, Is.EqualTo(SpecialKey.KP_Delete));
+    }
+
+    [Test]
     public void TheMainRowsCharacter_IsLeftAlone()
     {
         var dot = Decimal(KeyEventType.KeyDown, '.', KeyModifiers.Control, keypad: false);

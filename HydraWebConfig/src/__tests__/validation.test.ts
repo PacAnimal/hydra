@@ -160,4 +160,19 @@ describe('validate', () => {
     const hosts = [{ name: 'laptop', neighbours: [{ direction: 'Up' as const, name: 'desk', sourceScreen: 'laptop:1', destScreen: 'desk:0' }] }, { name: 'desk' }]
     expect(validate([p({ hosts })])).toHaveLength(0)
   })
+
+  describe('maxMouseHz', () => {
+    const master = (maxMouseHz: number) => ({ profileName: 'a', mode: 'Master' as const, maxMouseHz })
+
+    it('accepts 1 to 1000', () => {
+      expect(validate([master(1)]).filter(e => e.path.endsWith('maxMouseHz'))).toEqual([])
+      expect(validate([master(1000)]).filter(e => e.path.endsWith('maxMouseHz'))).toEqual([])
+    })
+
+    it('refuses 0, more than 1000, and fractions', () => {
+      for (const hz of [0, 1001, 12.5]) {
+        expect(validate([master(hz)]).some(e => e.path === 'profiles[0].maxMouseHz')).toBe(true)
+      }
+    })
+  })
 })

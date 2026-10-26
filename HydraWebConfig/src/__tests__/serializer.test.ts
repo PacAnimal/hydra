@@ -275,4 +275,53 @@ describe('serialize', () => {
     expect(json.profiles[0].hosts[0].neighbours).toHaveLength(1)
     expect(json.profiles[0].hosts[0].neighbours[0].name).toBe('mac')
   })
+
+  describe('modifierNumLock', () => {
+    it('is left out when unset', () => {
+      const json = JSON.parse(serialize(state({ mode: 'Master' })))
+      expect('modifierNumLock' in json.profiles[0]).toBe(false)
+    })
+
+    it('writes true and false on a master', () => {
+      expect(JSON.parse(serialize(state({ mode: 'Master', modifierNumLock: true }))).profiles[0].modifierNumLock).toBe(true)
+      expect(JSON.parse(serialize(state({ mode: 'Master', modifierNumLock: false }))).profiles[0].modifierNumLock).toBe(false)
+    })
+
+    it('is never written on a slave, which Hydra would refuse', () => {
+      const json = JSON.parse(serialize(state({ mode: 'Slave', modifierNumLock: true })))
+      expect('modifierNumLock' in json.profiles[0]).toBe(false)
+    })
+  })
+
+  describe('the other profile settings Hydra has', () => {
+    it('writes hideCursor and maxMouseHz on a master only', () => {
+      const master = JSON.parse(serialize(state({ mode: 'Master', hideCursor: true, maxMouseHz: 250 }))).profiles[0]
+      const slave = JSON.parse(serialize(state({ mode: 'Slave', hideCursor: true, maxMouseHz: 250 }))).profiles[0]
+      expect([master.hideCursor, master.maxMouseHz]).toEqual([true, 250])
+      expect(['hideCursor' in slave, 'maxMouseHz' in slave]).toEqual([false, false])
+    })
+
+    it('writes allowSystemSleep and clipboardSync only when not the default', () => {
+      const set = JSON.parse(serialize(state({ mode: 'Slave', allowSystemSleep: true, clipboardSync: 'System' }))).profiles[0]
+      const unset = JSON.parse(serialize(state({ mode: 'Slave', allowSystemSleep: false, clipboardSync: 'Hydra' }))).profiles[0]
+      expect([set.allowSystemSleep, set.clipboardSync]).toEqual([true, 'System'])
+      expect(['allowSystemSleep' in unset, 'clipboardSync' in unset]).toEqual([false, false])
+    })
+
+    it('writes each hotkey action typed, one chord per line, and leaves out the empty ones', () => {
+      const json = JSON.parse(serialize(state({
+        mode: 'Master',
+        hotkeys: { toggleCursorLock: 'Ctrl+Alt+Super+L\nScrollLock', copyFiles: '  \n', pasteFiles: 'Ctrl+,\r\nCtrl++\nCtrl + ,' },
+      })))
+      expect(json.profiles[0].hotkeys).toEqual({
+        toggleCursorLock: ['Ctrl+Alt+Super+L', 'ScrollLock'],
+        pasteFiles: ['Ctrl+,', 'Ctrl++', 'Ctrl + ,'],
+      })
+    })
+
+    it('leaves hotkeys out when every action is empty', () => {
+      const json = JSON.parse(serialize(state({ mode: 'Master', hotkeys: { toggleCursorLock: '' } })))
+      expect('hotkeys' in json.profiles[0]).toBe(false)
+    })
+  })
 })
