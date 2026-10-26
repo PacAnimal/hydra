@@ -300,9 +300,9 @@ public class RelaySocketConnectorTests
     }
 
     [Test]
-    public void Connect_NoResolvedAddresses_ReportsHostNotFound()
+    public async Task Connect_NoResolvedAddresses_ReportsHostNotFound()
     {
-        var error = Assert.ThrowsAsync<SocketException>(async () =>
+        var error = await Assert.ThrowsAsync<SocketException>(async () =>
             await RelaySocketConnector.Connect(
                 [],
                 51600,

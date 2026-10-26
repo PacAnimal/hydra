@@ -99,7 +99,7 @@ public class TarGzStreamerTests
         cts.Cancel();
         var token = cts.Token;
 
-        Assert.ThrowsAsync<OperationCanceledException>(async () =>
+        await Assert.ThrowsAsync<OperationCanceledException>(async () =>
             await TarGzStreamer.Compress([file],
                 (_, _, _) => ValueTask.CompletedTask,
                 NoFileStart, token));

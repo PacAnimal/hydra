@@ -111,7 +111,7 @@ public class OsaScriptTests
 
         await cancel.CancelAsync();
 
-        Assert.CatchAsync<OperationCanceledException>(() => run.WaitAsync(Bound), "the script ran on past the cancel");
+        await Assert.CatchAsync<OperationCanceledException>(() => run.WaitAsync(Bound), "the script ran on past the cancel");
         Assert.Throws<ArgumentException>(() => Process.GetProcessById(pid).Dispose(), "the script outlived the cancel");
     }
 

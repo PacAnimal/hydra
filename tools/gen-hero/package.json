@@ -7,7 +7,7 @@
     "generate": "node generate.mjs"
   },
   "dependencies": {
-    "@napi-rs/canvas": "^0.1.68",
+    "@napi-rs/canvas": "^1.0.13",
     "gif-encoder-2": "^1.0.5"
   }
 }

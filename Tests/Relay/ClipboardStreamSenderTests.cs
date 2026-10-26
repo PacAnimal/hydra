@@ -553,7 +553,7 @@ public class ClipboardStreamSenderTests
             Assert.That(received.Html, Is.EqualTo(push.Html));
             Assert.That(received.Rtf, Is.EqualTo(push.Rtf));
             Assert.That(received.Text, Is.EqualTo("caption"));
-            Assert.That(_log.Entries.Where(e => e.Level == LogLevel.Warning).Select(e => e.Message), Has.Exactly(1).Matches<string>(m => m.Contains("image")));
+            Assert.That(_log.Entries.Where(e => e.Level == LogLevel.Warning).Select(e => e.Message), Has.Exactly(1).Matches(Does.Contain("image")));
         }
     }
 
@@ -571,7 +571,7 @@ public class ClipboardStreamSenderTests
         {
             Assert.That(encoded.Message, Is.EqualTo(push with { PrimaryText = null }));
             var warnings = _log.Entries.Where(e => e.Level == LogLevel.Warning).Select(e => e.Message);
-            Assert.That(warnings, Has.Exactly(1).Matches<string>(m => m.Contains("primary text")));
+            Assert.That(warnings, Has.Exactly(1).Matches(Does.Contain("primary text")));
         }
     }
 

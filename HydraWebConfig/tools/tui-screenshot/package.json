@@ -11,8 +11,8 @@
     "postinstall": "node -e \"for (const a of ['arm64', 'x64']) try { require('fs').chmodSync('node_modules/node-pty/prebuilds/darwin-' + a + '/spawn-helper', 0o755) } catch {}\""
   },
   "devDependencies": {
-    "@xterm/xterm": "^5.5.0",
+    "@xterm/xterm": "^6.0.0",
     "node-pty": "^1.1.0",
-    "playwright": "^1.48.0"
+    "playwright": "^1.64.1"
   }
 }
