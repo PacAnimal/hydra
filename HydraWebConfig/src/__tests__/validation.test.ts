@@ -179,14 +179,14 @@ describe('validate', () => {
     const logErrors = (log: Parameters<typeof validate>[2]) => validate([p({})], undefined, log).map(e => e.path)
 
     it('passes sizes Hydra reads, and the bounds', () => {
-      for (const logMaxSize of ['10 MiB', '512 KB', '1048576', '1.5 GiB', '2048 B', 'none', 'None', '10 mb'])
+      for (const logMaxSize of ['10 MiB', '512 KB', '1048576', '1.5 GiB', '2048 B', 'none', 'None', '10 mb', '0', '0 B'])
         expect(logErrors({ logMaxSize })).toEqual([])
       expect(logErrors({ logHistory: 0, logTrimPercent: 1 })).toEqual([])
       expect(logErrors({ logHistory: 9, logTrimPercent: 100 })).toEqual([])
     })
 
     it('refuses what Hydra would refuse at startup', () => {
-      for (const logMaxSize of ['10 b', '1.5', 'lots', '10 MiB extra', '0', '0 B', '0.0 KiB'])
+      for (const logMaxSize of ['10 b', '1.5', 'lots', '10 MiB extra'])
         expect(logErrors({ logMaxSize })).toEqual(['logMaxSize'])
       expect(logErrors({ logHistory: -1, logTrimPercent: 0 })).toEqual(['logHistory', 'logTrimPercent'])
       expect(logErrors({ logHistory: 1.5, logTrimPercent: 101 })).toEqual(['logHistory', 'logTrimPercent'])

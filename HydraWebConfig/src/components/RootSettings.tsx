@@ -78,7 +78,7 @@ export function RootSettings({ state, onChange }: Props) {
       </div>
       <div className="field-row">
         <div className="field">
-          <label htmlFor="gs-logmaxsize" title="How large a log file may grow before it is cut down, e.g. 10 MiB or 512 KB; none never cuts">Log Max Size</label>
+          <label htmlFor="gs-logmaxsize" title="How large a log file may grow before it is cut down, e.g. 10 MiB or 512 KB; 0 or none never cuts">Log Max Size</label>
           <input
             id="gs-logmaxsize"
             type="text"

@@ -73,8 +73,29 @@ public class HydraConfigTests
     [Test]
     public void LogMaxSize_NullNeverCuts() => Assert.That(WithRoot("\"logMaxSize\":null,").LogMaxSize, Is.Null);
 
+    private static SereneLogging.FileConfig FileLog() => new()
+    {
+        DotNetLogLevelNames = true,
+        FilterMicrosoftSpam = true,
+        MinLogLevel = LogLevel.Information,
+        PrintCategory = true,
+        PrintLogLevel = true,
+        TimestampFormat = null,
+        TimestampUtc = true
+    };
+
+    [TestCase("0")]
+    [TestCase("\"0 B\"")]
+    public void LogMaxSize_ZeroNeverCuts(string json)
+    {
+        var log = FileLog();
+        log.MaxFileSize = ByteSize.FromMebiBytes(1);
+        WithRoot($"\"logMaxSize\":{json},").ConfigureFileLog(log, LogLevel.Debug);
+        Assert.That(log.MaxFileSize, Is.Null);
+    }
+
     [TestCase("\"logMaxSize\":\"10 b\",")]
-    [TestCase("\"logMaxSize\":0,")]
+    [TestCase("\"logMaxSize\":\"0.5 B\",")]
     [TestCase("\"logMaxSize\":\"lots\",")]
     [TestCase("\"logHistory\":-1,")]
     [TestCase("\"logTrimPercent\":0,")]
@@ -84,16 +105,7 @@ public class HydraConfigTests
     [Test]
     public void ConfigureFileLog_HandsTheLevelAndTheCapToTheFileLogger()
     {
-        var log = new SereneLogging.FileConfig
-        {
-            DotNetLogLevelNames = true,
-            FilterMicrosoftSpam = true,
-            MinLogLevel = LogLevel.Information,
-            PrintCategory = true,
-            PrintLogLevel = true,
-            TimestampFormat = null,
-            TimestampUtc = true
-        };
+        var log = FileLog();
 
         WithRoot("\"logMaxSize\":\"5 MiB\",\"logHistory\":0,\"logTrimPercent\":25,").ConfigureFileLog(log, LogLevel.Debug);
 

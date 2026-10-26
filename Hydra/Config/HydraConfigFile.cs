@@ -30,7 +30,7 @@ public class HydraConfigFile
     // if true, truncate logFile/sessionLogFile to 0 bytes on startup
     public bool LogTruncate { get; init; } = false;
 
-    // logFile/sessionLogFile are cut down before passing this; null never cuts
+    // logFile/sessionLogFile are cut down before passing this; null or 0 never cuts
     [JsonConverter(typeof(ByteSizeJsonConverter))]
     public ByteSize? LogMaxSize { get; init; } = ByteSize.FromMebiBytes(10);
 
@@ -84,8 +84,8 @@ public class HydraConfigFile
     // the same bounds the file logger enforces, refused here as a config error rather than at logger setup
     private void ValidateLogCap()
     {
-        if (LogMaxSize is { } max && !(max.Bytes >= 1 && double.IsFinite(max.Bytes)))
-            throw new InvalidOperationException($"logMaxSize must be at least 1 B, not {max}");
+        if (LogMaxSize is { Bytes: not 0 } max && !(max.Bytes >= 1 && double.IsFinite(max.Bytes)))
+            throw new InvalidOperationException($"logMaxSize must be 0 or at least 1 B, not {max}");
         if (LogHistory < 0) throw new InvalidOperationException($"logHistory must not be negative, not {LogHistory}");
         if (LogTrimPercent is < 1 or > 100) throw new InvalidOperationException($"logTrimPercent must be 1 to 100, not {LogTrimPercent}");
     }
@@ -94,7 +94,7 @@ public class HydraConfigFile
     internal void ConfigureFileLog(SereneLogging.FileConfig log, LogLevel level)
     {
         log.MinLogLevel = level;
-        log.MaxFileSize = LogMaxSize;
+        log.MaxFileSize = LogMaxSize is { Bytes: 0 } ? null : LogMaxSize;
         log.HistoryFiles = LogHistory;
         log.TrimPercent = LogTrimPercent;
     }
