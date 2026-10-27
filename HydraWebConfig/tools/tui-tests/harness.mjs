@@ -105,9 +105,13 @@ export class HydraTui {
     this.pty.write(bytes);
   }
 
-  /** Alt+<letter> — the mnemonic convention this TUI uses for tab/section navigation. */
+  /**
+   * Alt+<letter> — the mnemonic convention this TUI uses for tab/section navigation. Sent in the kitty keyboard
+   * protocol, which the TUI turns on once replyTo answers its query: as the legacy ESC+letter, a loaded machine could
+   * read the ESC alone as Esc, so the letter still opened a dialog while a Quit waited for it to close.
+   */
   alt(letter) {
-    this.send(`\x1b${letter}`);
+    this.send(`\x1b[${letter.charCodeAt(0)};3u`);
   }
 
   /**
