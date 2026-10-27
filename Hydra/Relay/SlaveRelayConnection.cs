@@ -46,6 +46,10 @@ public class SlaveRelayConnection : RelayConnection
     // masters whose cursor is currently on this slave's screen; receive handlers and OnDisconnected/OnPeers both change it
     private readonly ConcurrentHashSet<string> _onScreenMasters = new([], StringComparer.OrdinalIgnoreCase);
 
+    // on-screen masters a monitor switch brought here: the switch is made with the keyboard, so the cursor stays hidden
+    // until their mouse is used (ShowCursorFor), not shown at the centre of the screen for the next keystroke to hide
+    private readonly ConcurrentHashSet<string> _hiddenUntilMouse = new([], StringComparer.OrdinalIgnoreCase);
+
     private readonly IActivityTracker _activityTracker;
 
     // the one clipboard worker's queue, see OnClipboardWorker
@@ -357,13 +361,23 @@ public class SlaveRelayConnection : RelayConnection
                         }
                         _onScreenMasters.Add(sourceHost);
                         OnClipboardWorker(() => _clipboard.Entered(sourceHost));
-                        _cursorHider.Show();
+                        if (enter.Focus)
+                        {
+                            _hiddenUntilMouse.Add(sourceHost);
+                            _cursorHider.Hide();
+                        }
+                        else
+                        {
+                            _hiddenUntilMouse.Remove(sourceHost);
+                            _cursorHider.Show();
+                        }
                     }
                     break;
                 }
             case MessageKind.LeaveScreen:
                 await ReleaseAll();
                 _onScreenMasters.Remove(sourceHost);
+                _hiddenUntilMouse.Remove(sourceHost);
                 if (!_onScreenMasters.Any() && _isReady)
                     _cursorHider.Hide();
                 break;
@@ -498,6 +512,7 @@ public class SlaveRelayConnection : RelayConnection
         });
         var masters = await PeerState.GetMasters();
         _onScreenMasters.Clear();
+        _hiddenUntilMouse.Clear();
         await ReleaseAll();
         if (masters.Length > 0)
             _cursorHider.Show();
@@ -677,20 +692,23 @@ public class SlaveRelayConnection : RelayConnection
     {
         var msg = body.ParseMessage<T>(Log, sourceHost);
         if (msg == null) return;
-        ShowCursorFor(sourceHost);
+        ShowCursorFor(sourceHost, mouse: true);
         handler(msg);
     }
 
-    private void ShowCursorFor(string sourceHost)
+    // input from a master on screen shows the cursor; after a monitor switch, only its mouse does (_hiddenUntilMouse)
+    private void ShowCursorFor(string sourceHost, bool mouse)
     {
-        if (_onScreenMasters.Contains(sourceHost))
-            _cursorHider.Show();
+        if (!_onScreenMasters.Contains(sourceHost)) return;
+        if (mouse) _hiddenUntilMouse.Remove(sourceHost);
+        else if (_hiddenUntilMouse.Contains(sourceHost)) return;
+        _cursorHider.Show();
     }
 
     // applies key events in order; shows cursor if the master is actively on screen
     private async Task ApplyKeyEvents(string sourceHost, KeyEventMessage[] events)
     {
-        ShowCursorFor(sourceHost);
+        ShowCursorFor(sourceHost, mouse: false);
         foreach (var keyEvent in events)
             await HandleKeyEvent(keyEvent);
     }
@@ -698,7 +716,7 @@ public class SlaveRelayConnection : RelayConnection
     // tracked like a key, so a release-all lets go of it
     private async Task HandleMouseButton(string sourceHost, MouseButtonMessage msg)
     {
-        ShowCursorFor(sourceHost);
+        ShowCursorFor(sourceHost, mouse: true);
         using (await _heldLock.WaitForDisposable())
         {
             if (msg.IsPressed)
