@@ -56,6 +56,12 @@ public interface IPlatformInput : IAsyncDisposable, ICursor, ILocalEventTap
     // the remote nothing until it is true (KeyboardCapturedLate), and CaptureFailed ends the visit if it never becomes so.
     bool KeyboardCaptured => true;
 
+    // Whether the user sees the cursor at home now, for a monitor switch to carry where it lands. Where the OS cannot
+    // say, it is read from the input as hide-on-typing tools read it: typed is a key gone down since the mouse was last
+    // used, other a modifier's or a hotkey's. Default: X11's xbanish and unclutter hide on any key, the switch's own
+    // included, and X11 has no query for another client's hide.
+    bool CursorShownAtHome(bool typed, bool other) => !(typed || other);
+
     // Raised when a retry wins the keyboard grab KeyboardCaptured said was missing at entry (Xorg): the visit can begin.
     event Action? KeyboardCapturedLate;
 

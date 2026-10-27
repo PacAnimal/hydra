@@ -25,7 +25,8 @@ public class MonitorSwitchTests : ServicesFixture
         {
             Assert.That(beforeRelease, Is.Zero, "nothing moves until the arrow is let go");
             Assert.That(platform.IsOnVirtualScreen, Is.True);
-            Assert.That(Entered(relay, "remote"), Is.EqualTo(new EnterScreenMessage("remote", 1280, 720, 2560, 1440, Focus: true)));
+            // the fake reads the input as X11 does, where the switch's own keys hide the cursor (xbanish)
+            Assert.That(Entered(relay, "remote"), Is.EqualTo(new EnterScreenMessage("remote", 1280, 720, 2560, 1440, Focus: true, CursorHidden: true)));
         }
     }
 
@@ -303,6 +304,98 @@ public class MonitorSwitchTests : ServicesFixture
 
     private static void Modifier(FakePlatform platform, KeyEventType type) =>
         platform.FireKeyEvent(KeyEvent.Special(type, SpecialKey.Super_L, type == KeyEventType.KeyDown ? KeyModifiers.Super : KeyModifiers.None) with { PhysicalKey = 55 });
+
+    // -- the cursor's visibility goes with the switch (CursorHiddenAt) --
+
+    [Test]
+    public async Task FromHome_WithTheCursorShown_ArrivesShown()
+    {
+        var (platform, relay, _) = await Services.StartOnline(TransitionTestHelper.CreateService());
+        platform.ShownAtHome = true;
+
+        Switch(platform, SpecialKey.Right);
+
+        Assert.That(Entered(relay, "remote")?.CursorHidden, Is.False);
+    }
+
+    [Test]
+    public async Task FromHome_WithTheCursorHidden_ArrivesHidden()
+    {
+        var (platform, relay, _) = await Services.StartOnline(TransitionTestHelper.CreateService());
+        platform.ShownAtHome = false;
+
+        Switch(platform, SpecialKey.Right);
+
+        Assert.That(Entered(relay, "remote")?.CursorHidden, Is.True);
+    }
+
+    // on a remote, its hide-on-typing tool sees only what is forwarded, and the switch's own arrow never is
+    [Test]
+    public async Task FromARemote_TheMouseUsedLast_ArrivesShown()
+    {
+        var (platform, relay, _) = await Services.StartOnline(TransitionTestHelper.CreateService(profile: TransitionTestHelper.ChainConfig), "remote", "remote2");
+        TransitionTestHelper.EnterRemote(platform);
+        Type(platform, 'a');
+        platform.FireMouseDelta(5, 0);
+
+        Switch(platform, SpecialKey.Right);
+
+        Assert.That(Entered(relay, "remote2")?.CursorHidden, Is.False);
+    }
+
+    [Test]
+    public async Task FromARemote_TypedSinceTheMouse_ArrivesHidden()
+    {
+        var (platform, relay, _) = await Services.StartOnline(TransitionTestHelper.CreateService(profile: TransitionTestHelper.ChainConfig), "remote", "remote2");
+        TransitionTestHelper.EnterRemote(platform);
+        Type(platform, 'a');
+
+        Switch(platform, SpecialKey.Right);
+
+        Assert.That(Entered(relay, "remote2")?.CursorHidden, Is.True);
+    }
+
+    [Test]
+    public async Task HomeFromARemote_TypedSinceTheMouse_StaysHiddenUntilTheMouseMoves()
+    {
+        var (platform, _, _) = await Services.Visiting(TransitionTestHelper.CreateService());
+        Type(platform, 'a');
+        platform.Calls.Clear();
+
+        Switch(platform, SpecialKey.Left);
+        var atReturn = platform.Calls.ToList();
+        platform.Calls.Clear();
+        platform.FireMouseMove(1290, 720);
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(atReturn.SkipWhile(c => c != "return").Skip(1), Does.Contain("hide"), "hidden after the return");
+            Assert.That(platform.Calls, Does.Contain("show"), "shown once the mouse moves");
+        }
+    }
+
+    [Test]
+    public async Task HomeFromARemote_TheMouseUsedLast_ArrivesShown()
+    {
+        var (platform, _, _) = await Services.Visiting(TransitionTestHelper.CreateService());
+        Type(platform, 'a');
+        platform.FireMouseDelta(5, 0);
+        platform.Calls.Clear();
+
+        Switch(platform, SpecialKey.Left);
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(platform.Calls, Does.Contain("return"));
+            Assert.That(platform.Calls.SkipWhile(c => c != "return"), Does.Not.Contain("hide"));
+        }
+    }
+
+    private static void Type(FakePlatform platform, char ch)
+    {
+        platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyDown, ch, KeyModifiers.None));
+        platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyUp, ch, KeyModifiers.None));
+    }
 
     private static void Switch(FakePlatform platform, SpecialKey arrow)
     {

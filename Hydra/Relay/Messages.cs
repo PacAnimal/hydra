@@ -151,8 +151,9 @@ public record KeyEventMessage(KeyEventType Type, KeyModifiers Modifiers, char? C
 public record KeyEventBatchMessage(KeyEventMessage[] Events);
 public record MouseButtonMessage(MouseButton Button, bool IsPressed);
 public record MouseScrollMessage(short XDelta, short YDelta);
-// Focus: bring forward the window last worked in on that screen, as the monitor switch hotkey does on arrival
-public record EnterScreenMessage(string Screen, int X, int Y, int Width, int Height, bool Focus = false);
+// Focus: bring forward the window last worked in on that screen, as the monitor switch hotkey does on arrival.
+// CursorHidden: the switch started where the user saw no cursor, so it stays hidden here until the mouse is used
+public record EnterScreenMessage(string Screen, int X, int Y, int Width, int Height, bool Focus = false, bool CursorHidden = false);
 public record ScreensaverSyncMessage(bool Active);
 public record LeaveScreenMessage;
 // ResendFrom: the first pull to this host whose answer the master did not take, so a clipboard synced by the full answer

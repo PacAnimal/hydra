@@ -292,6 +292,9 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
 
     public bool RecentresItself => true;
 
+    // "Hide pointer while typing" hides for typing, not for a modifier or a hotkey
+    public bool CursorShownAtHome(bool typed, bool other) => !typed;
+
     // the async key state never sees a button our hook swallowed
     public bool SeesSwallowed(MouseButton button) => false;
     public event Action? CaptureFailed { add { } remove { } }

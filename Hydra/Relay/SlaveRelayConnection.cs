@@ -46,8 +46,8 @@ public class SlaveRelayConnection : RelayConnection
     // masters whose cursor is currently on this slave's screen; receive handlers and OnDisconnected/OnPeers both change it
     private readonly ConcurrentHashSet<string> _onScreenMasters = new([], StringComparer.OrdinalIgnoreCase);
 
-    // on-screen masters a monitor switch brought here: the switch is made with the keyboard, so the cursor stays hidden
-    // until their mouse is used (ShowCursorFor), not shown at the centre of the screen for the next keystroke to hide
+    // on-screen masters whose monitor switch arrived with the cursor hidden where it started (CursorHidden): it stays
+    // hidden until their mouse is used (ShowCursorFor), not shown at the centre of the screen for the next keystroke to hide
     private readonly ConcurrentHashSet<string> _hiddenUntilMouse = new([], StringComparer.OrdinalIgnoreCase);
 
     private readonly IActivityTracker _activityTracker;
@@ -361,7 +361,7 @@ public class SlaveRelayConnection : RelayConnection
                         }
                         _onScreenMasters.Add(sourceHost);
                         OnClipboardWorker(() => _clipboard.Entered(sourceHost));
-                        if (enter.Focus)
+                        if (enter.CursorHidden)
                         {
                             _hiddenUntilMouse.Add(sourceHost);
                             _cursorHider.Hide();

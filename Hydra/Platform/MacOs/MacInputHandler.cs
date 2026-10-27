@@ -58,6 +58,9 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
 
     public bool CursorIsVisible => NativeMethods.CGCursorIsVisible();
 
+    // macOS says so itself, hide-while-typing included
+    public bool CursorShownAtHome(bool typed, bool other) => NativeMethods.CGCursorIsVisible();
+
     public ScreenPoint? GetCursorPosition() => MacDisplayHelper.CursorPosition();
 
     public async ValueTask HideCursor()

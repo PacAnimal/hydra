@@ -81,6 +81,9 @@ public sealed class FakePlatform : IPlatformInput, ICursorHider
     public bool KeyboardCaptured { get; set; } = true;
     bool IPlatformInput.AnyKeyHeld() => AnyKeyHeld;
     public bool CursorIsVisible { get; set; }
+    // what CursorShownAtHome answers; null reads the input as X11's tools do, the interface's default
+    public bool? ShownAtHome { get; set; }
+    public bool CursorShownAtHome(bool typed, bool other) => ShownAtHome ?? !(typed || other);
     public bool RecentresItself { get; set; }
     // the default for SeesSwallowed, less UnseenButtons
     public bool SeesSwallowedButtons { get; set; }

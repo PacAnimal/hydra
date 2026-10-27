@@ -6,7 +6,8 @@ using Tests.Setup;
 
 namespace Tests.Relay;
 
-// the monitor switch is made with the keyboard, so a slave it arrives on keeps the cursor hidden until the mouse is used
+// a monitor switch that started where the cursor was hidden arrives with it hidden, until the mouse is used; one that
+// started with it shown shows it
 [TestFixture]
 public class SlaveSwitchCursorTests
 {
@@ -22,17 +23,27 @@ public class SlaveSwitchCursorTests
     {
         var (slave, cursor) = await Slave();
 
-        await Enter(slave, focus: false);
+        await slave.SimulateReceive(Master, MessageKind.EnterScreen, new EnterScreenMessage("home:0", 5, 5, 2560, 1440).ToSaneJson());
 
         Assert.That(cursor.IsHidden, Is.False);
     }
 
     [Test]
-    public async Task AnEntryByTheSwitch_KeepsTheCursorHidden()
+    public async Task ASwitchWithTheCursorShown_ShowsIt()
     {
         var (slave, cursor) = await Slave();
 
-        await Enter(slave, focus: true);
+        await Enter(slave, hidden: false);
+
+        Assert.That(cursor.IsHidden, Is.False);
+    }
+
+    [Test]
+    public async Task ASwitchWithTheCursorHidden_KeepsItHidden()
+    {
+        var (slave, cursor) = await Slave();
+
+        await Enter(slave, hidden: true);
 
         Assert.That(cursor.IsHidden, Is.True);
     }
@@ -41,7 +52,7 @@ public class SlaveSwitchCursorTests
     public async Task AfterTheSwitch_TypingKeepsTheCursorHidden()
     {
         var (slave, cursor) = await Slave();
-        await Enter(slave, focus: true);
+        await Enter(slave, hidden: true);
 
         await slave.SimulateReceive(Master, MessageKind.KeyEvent, new KeyEventMessage(KeyEventType.KeyDown, KeyModifiers.None, 'a', null).ToSaneJson());
 
@@ -52,7 +63,7 @@ public class SlaveSwitchCursorTests
     public async Task AfterTheSwitch_MovingTheMouseShowsTheCursor()
     {
         var (slave, cursor) = await Slave();
-        await Enter(slave, focus: true);
+        await Enter(slave, hidden: true);
 
         await slave.SimulateReceive(Master, MessageKind.MouseMove, new MouseMoveMessage("home:0", 1290, 720).ToSaneJson());
 
@@ -63,7 +74,7 @@ public class SlaveSwitchCursorTests
     public async Task AfterTheSwitch_AClickShowsTheCursor()
     {
         var (slave, cursor) = await Slave();
-        await Enter(slave, focus: true);
+        await Enter(slave, hidden: true);
 
         await slave.SimulateReceive(Master, MessageKind.MouseButton, new MouseButtonMessage(MouseButton.Left, true).ToSaneJson());
 
@@ -75,7 +86,7 @@ public class SlaveSwitchCursorTests
     public async Task OnceTheMouseHasMoved_TypingShowsTheCursorAgain()
     {
         var (slave, cursor) = await Slave();
-        await Enter(slave, focus: true);
+        await Enter(slave, hidden: true);
         await slave.SimulateReceive(Master, MessageKind.MouseMove, new MouseMoveMessage("home:0", 1290, 720).ToSaneJson());
         cursor.Hide();
 
@@ -89,10 +100,10 @@ public class SlaveSwitchCursorTests
     public async Task AnOrdinaryEntryAfterTheSwitch_ShowsTheCursor()
     {
         var (slave, cursor) = await Slave();
-        await Enter(slave, focus: true);
+        await Enter(slave, hidden: true);
         await slave.SimulateReceive(Master, MessageKind.LeaveScreen, new LeaveScreenMessage().ToSaneJson());
 
-        await Enter(slave, focus: false);
+        await slave.SimulateReceive(Master, MessageKind.EnterScreen, new EnterScreenMessage("home:0", 5, 5, 2560, 1440).ToSaneJson());
 
         Assert.That(cursor.IsHidden, Is.False);
     }
@@ -106,6 +117,6 @@ public class SlaveSwitchCursorTests
         return (slave, cursor);
     }
 
-    private static Task Enter(TestableSlaveRelay slave, bool focus) =>
-        slave.SimulateReceive(Master, MessageKind.EnterScreen, new EnterScreenMessage("home:0", 1280, 720, 2560, 1440, focus).ToSaneJson());
+    private static Task Enter(TestableSlaveRelay slave, bool hidden) =>
+        slave.SimulateReceive(Master, MessageKind.EnterScreen, new EnterScreenMessage("home:0", 1280, 720, 2560, 1440, Focus: true, CursorHidden: hidden).ToSaneJson());
 }
