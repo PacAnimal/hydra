@@ -1956,8 +1956,10 @@ public class InputRouter(
         if (from == null || st.Layout == null || st.ScreensaverActive || st.EnterPending) return;
         if (st.Layout.SwitchTarget(from, request.Edge, request.Third, includeLocal: !profile.RemoteOnly) is not { } target)
         {
-            if (log.IsEnabled(LogLevel.Debug))
-                log.LogDebug("Monitor switch {Edge} {Third}: no screen there", request.Edge, request.Third);
+            // at info: a switch that does nothing leaves the user wondering, and a peer away (locked, restarting) is why
+            if (log.IsEnabled(LogLevel.Information))
+                log.LogInformation("Monitor switch {Direction} from '{From}': no screen there, or its host is offline",
+                    request.Third is { } third ? $"{request.Edge}+{third}" : request.Edge.ToString(), from.Name);
             return;
         }
         if (st.Mouse.IsOnVirtualScreen && ButtonHoldsHost(st, from, target)) return;
