@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using Cathedral.Utils;
+using Hydra.Config;
 using Hydra.Keyboard;
 using Hydra.Mouse;
 using Hydra.Screen;
@@ -13,7 +14,7 @@ public sealed class XorgInputHandler : IPlatformInput
     private readonly nint _rootWindow;
     private readonly nint _inputSink;
     private readonly int _xiOpcode;
-    private readonly int _lockKeycode;
+    private readonly List<GrabbedKey> _hotkeys;
     private readonly bool _detectableAutoRepeat;
     private readonly XorgKeyResolver _keyResolver = new();
 
@@ -42,10 +43,7 @@ public sealed class XorgInputHandler : IPlatformInput
         0,
     ];
 
-    // Ctrl+Alt+Super+L — baseMods = ControlMask|Mod1Mask|Mod4Mask
-    private static readonly uint LockBaseMods = NativeMethods.ControlMask | NativeMethods.Mod1Mask | NativeMethods.Mod4Mask;
-
-    public XorgInputHandler(ILogger<XorgInputHandler> log)
+    public XorgInputHandler(ILogger<XorgInputHandler> log, IHydraProfile profile)
     {
         _log = log;
         _display = XlibRuntime.OpenDisplayOrThrow("input capture");
@@ -53,7 +51,7 @@ public sealed class XorgInputHandler : IPlatformInput
         _rootWindow = NativeMethods.XDefaultRootWindow(_display);
         _inputSink = CreateInputSink();
         _xiOpcode = DetectXi2();
-        _lockKeycode = (int)NativeMethods.XKeysymToKeycode(_display, 0x006C); // XK_l
+        _hotkeys = XorgHotkeyGrab.Keys(_display, profile.Hotkeys);
         _keyResolver.Init(_display);
         _detectableAutoRepeat = XorgDisplayHelper.EnableDetectableAutoRepeat(_display);
         if (!_detectableAutoRepeat)
@@ -186,7 +184,7 @@ public sealed class XorgInputHandler : IPlatformInput
         _eventThread = new Thread(() =>
         {
             RegisterXi2Events();
-            GrabLockHotkey();
+            GrabHotkeys();
             ready.TrySetResult(true);
 
             var xFd = NativeMethods.XConnectionNumber(_display);
@@ -246,7 +244,7 @@ public sealed class XorgInputHandler : IPlatformInput
         StopEventTap();
         _keyboard.Ungrab();
         _pointer.Ungrab();
-        UngrabLockHotkey();
+        UngrabHotkeys();
         if (_cursorHidden) await ShowCursor();
         if (_inputSink != nint.Zero) _ = NativeMethods.XDestroyWindow(_display, _inputSink);
         if (_display != nint.Zero) _ = NativeMethods.XCloseDisplay(_display);
@@ -346,21 +344,28 @@ public sealed class XorgInputHandler : IPlatformInput
         _keyResolver.Reset(held);
     }
 
-    // passive grab for Ctrl+Alt+Super+L — 4 variants for NumLock/CapsLock combinations
-    private void GrabLockHotkey()
+    // passive grabs for the hotkeys used from home (XorgHotkeyGrab), each in 4 variants for NumLock/CapsLock combinations;
+    // a chord another client already grabs (a desktop's own shortcut) is refused, and then works only on a remote
+    private void GrabHotkeys()
     {
-        if (_lockKeycode == 0) return;
-        foreach (var extra in LockModVariants())
-            _ = NativeMethods.XGrabKey(_display, _lockKeycode, LockBaseMods | extra, _rootWindow, true,
-                NativeMethods.GrabModeAsync, NativeMethods.GrabModeAsync);
-        _ = NativeMethods.XFlush(_display);
+        foreach (var key in _hotkeys)
+        {
+            var grabbed = XErrors.Succeeds(_display, () =>
+            {
+                foreach (var extra in LockModVariants())
+                    _ = NativeMethods.XGrabKey(_display, key.Keycode, key.Mods | extra, _rootWindow, true,
+                        NativeMethods.GrabModeAsync, NativeMethods.GrabModeAsync);
+            });
+            if (!grabbed && _log.IsEnabled(LogLevel.Warning))
+                _log.LogWarning("A hotkey for {Action} is taken by another application, so it works only on a remote", key.Action);
+        }
     }
 
-    private void UngrabLockHotkey()
+    private void UngrabHotkeys()
     {
-        if (_lockKeycode == 0) return;
-        foreach (var extra in LockModVariants())
-            _ = NativeMethods.XUngrabKey(_display, _lockKeycode, LockBaseMods | extra, _rootWindow);
+        foreach (var key in _hotkeys)
+            foreach (var extra in LockModVariants())
+                _ = NativeMethods.XUngrabKey(_display, key.Keycode, key.Mods | extra, _rootWindow);
         _ = NativeMethods.XFlush(_display);
     }
 

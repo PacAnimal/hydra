@@ -97,7 +97,7 @@ public sealed class XorgOutputHandler : IPlatformOutput, ICursor
         if (msg.Character is { } ch)
         {
             // unicode char → keysym, injected on its natural keycode when the layout has it there, else temp-bound
-            var keysym = ch <= '\xFF' ? (ulong)ch : 0x01000000u | ch;
+            var keysym = XorgKeysym.Of(ch);
             InjectCharKeysym(keysym, isDown, msg.Modifiers);
         }
         else if (msg.Key is SpecialKey.MoveToBeginningOfLine or SpecialKey.MoveToEndOfLine)
@@ -117,7 +117,13 @@ public sealed class XorgOutputHandler : IPlatformOutput, ICursor
         }
         else if (msg.Key is { } key)
         {
-            var keysym = SpecialKeyToKeysym(key);
+            // a key between Super's press and release, so GNOME and KDE take it as used and open no overview for it
+            if (!isDown && msg.Chorded == true && key is SpecialKey.Super_L or SpecialKey.Super_R)
+            {
+                InjectKeysym(XorgVirtualKey.VoidSymbol, true);
+                InjectKeysym(XorgVirtualKey.VoidSymbol, false);
+            }
+            var keysym = XorgKeysym.Of(key);
             if (keysym != 0)
                 InjectKeysym(keysym, isDown);
             // invalidate tracked state so next sync re-queries from server
@@ -268,12 +274,6 @@ public sealed class XorgOutputHandler : IPlatformOutput, ICursor
             _unusedKeycodes.Enqueue(tempKeycode);
             _tempBindings.Remove(keysym);
         }
-    }
-
-    private static ulong SpecialKeyToKeysym(SpecialKey key)
-    {
-        // every key Hydra can inject on X11 is in the map; 0 means "no keysym", which the caller treats as unsupported
-        return XorgSpecialKeyMap.Instance.Reverse.TryGetValue(key, out var keysym) ? keysym : 0;
     }
 
     // numLock: what the key about to be injected needs, or null to leave NumLock alone

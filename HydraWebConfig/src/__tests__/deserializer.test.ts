@@ -263,6 +263,11 @@ describe('deserialize', () => {
       expect(deserialize(asFile('[{"mode":"Master","maxMouseHz":"0x10"}]')).profiles[0].maxMouseHz).toBeUndefined()
     })
 
+    it('reads an empty list as none, so saving keeps the action off', () => {
+      const p = deserialize(asFile('[{"mode":"Master","hotkeys":{"switchMonitorLeft":[]}}]')).profiles[0]
+      expect(p.hotkeys).toEqual({ switchMonitorLeft: 'none' })
+    })
+
     it('reads hotkeys as each action\'s chords, one per line', () => {
       const p = deserialize(asFile('[{"mode":"Master","hotkeys":{"toggleCursorLock":["Ctrl++","ScrollLock"]}}]')).profiles[0]
       expect(p.hotkeys).toEqual({ toggleCursorLock: 'Ctrl++\nScrollLock' })

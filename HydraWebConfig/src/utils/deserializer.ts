@@ -3,7 +3,7 @@ import type {
   Direction, Mode, LogLevel, UpdateChannel, FormState, EmbeddedStyxConfig, EmbeddedStyxServerConfig, NetworkType,
   ClipboardSyncMode,
 } from '../types'
-import { HOTKEY_ACTIONS } from '../types'
+import { HOTKEY_ACTIONS, HOTKEY_DISABLED } from '../types'
 import { inferLayoutFromHosts } from './layout'
 
 const VALID_MODES: Mode[] = ['Master', 'Slave']
@@ -137,15 +137,16 @@ function coerceClipboardSync(v: unknown): ClipboardSyncMode | undefined {
   return clipboardSyncModes.find(m => m.toLowerCase() === lower)
 }
 
-// each action's chords, one per line for its field, under the action's own spelling: Hydra matches action names in any
-// case, and takes the first of two that differ only in case, as this does
+// each action's chords, one per line for its field (an empty list, which turns it off, as HOTKEY_DISABLED), under the
+// action's own spelling: Hydra matches action names in any case, and takes the first of two that differ only in case,
+// as this does
 function parseHotkeys(v: unknown): Record<string, string> | undefined {
   if (typeof v !== 'object' || v === null || Array.isArray(v)) return undefined
   const out: Record<string, string> = {}
   for (const [name, chords] of Object.entries(v as Record<string, unknown>)) {
     const action = HOTKEY_ACTIONS.find(a => a.action.toLowerCase() === name.toLowerCase())?.action ?? name
     if (Array.isArray(chords) && !(action in out))
-      out[action] = chords.filter((c): c is string => typeof c === 'string').join('\n')
+      out[action] = chords.length === 0 ? HOTKEY_DISABLED : chords.filter((c): c is string => typeof c === 'string').join('\n')
   }
   return Object.keys(out).length > 0 ? out : undefined
 }

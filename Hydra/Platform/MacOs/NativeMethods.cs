@@ -66,14 +66,68 @@ internal static partial class NativeMethods
 
     [LibraryImport(ApplicationServices)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    [return: MarshalAs(UnmanagedType.Bool)]
+    [return: MarshalAs(UnmanagedType.U1)]
     internal static partial bool AXIsProcessTrustedWithOptions(nint options);
+
+    // -- ApplicationServices: accessibility elements, to raise one window of another app --
+
+    internal const int KAXErrorSuccess = 0;
+    internal const int KAXValueCGPointType = 1;
+    internal const int KAXValueCGSizeType = 2;
+
+    [LibraryImport(ApplicationServices)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint AXUIElementCreateApplication(int pid);
+
+    // value is a CFTypeRef the caller releases
+    [LibraryImport(ApplicationServices)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int AXUIElementCopyAttributeValue(nint element, nint attribute, out nint value);
+
+    [LibraryImport(ApplicationServices)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int AXUIElementSetAttributeValue(nint element, nint attribute, nint value);
+
+    [LibraryImport(ApplicationServices)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int AXUIElementPerformAction(nint element, nint action);
+
+    // seconds; caps how long a call to an app that has stopped answering blocks
+    [LibraryImport(ApplicationServices)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int AXUIElementSetMessagingTimeout(nint element, float timeoutInSeconds);
+
+    [LibraryImport(ApplicationServices)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    [return: MarshalAs(UnmanagedType.U1)]
+    internal static partial bool AXValueGetValue(nint value, int theType, out CGPoint valuePtr);
 
     // -- CoreGraphics: display --
 
     [LibraryImport(CoreGraphics)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial uint CGMainDisplayID();
+
+    // -- CoreGraphics: the window list, front to back --
+
+    internal const uint KCGWindowListOptionOnScreenOnly = 1;
+    internal const uint KCGWindowListExcludeDesktopElements = 16;
+    internal const int KCFNumberSInt32Type = 3;
+
+    // a CFArray of CFDictionary the caller releases
+    [LibraryImport(CoreGraphics)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint CGWindowListCopyWindowInfo(uint option, uint relativeToWindow);
+
+    [LibraryImport(CoreGraphics)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    [return: MarshalAs(UnmanagedType.U1)]
+    internal static partial bool CGRectMakeWithDictionaryRepresentation(nint dict, out CGRect rect);
+
+    [LibraryImport(CoreFoundation)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    [return: MarshalAs(UnmanagedType.U1)]
+    internal static partial bool CFNumberGetValue(nint number, int theType, out int valuePtr);
 
     [LibraryImport(CoreGraphics)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]

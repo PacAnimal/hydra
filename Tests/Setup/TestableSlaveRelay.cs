@@ -46,11 +46,12 @@ public sealed class TestableSlaveRelay : SlaveRelayConnection
         FileTransferService? fileTransfer = null,
         ILogger<RelayConnection>? log = null,
         TimeProvider? clock = null,
-        ClipboardSyncMode clipboardSync = ClipboardSyncMode.Hydra)
+        ClipboardSyncMode clipboardSync = ClipboardSyncMode.Hydra,
+        IWindowFocus? windowFocus = null)
         : this(MakeShared(worldState, screenSaverSync, trackerClock), clipboard, cursorHider, screenSaverSync,
             dormancy ?? new DormancyState(NullLogger<DormancyState>.Instance), screens ?? new FakeScreenDetector(), new NullPlatformOutput(),
             selectionDetector ?? new NullFileSelectionDetector(), osd ?? new NullOsdNotification(), fileTransfer: fileTransfer, log: log, clock: clock,
-            clipboardSync: clipboardSync)
+            clipboardSync: clipboardSync, windowFocus: windowFocus)
     { }
 
     // ActivityTracker and SlaveRelayConnection must share the same WorldState — chaining lets us build it once
@@ -68,7 +69,8 @@ public sealed class TestableSlaveRelay : SlaveRelayConnection
         FileTransferService? fileTransfer = null,
         ILogger<RelayConnection>? log = null,
         TimeProvider? clock = null,
-        ClipboardSyncMode clipboardSync = ClipboardSyncMode.Hydra)
+        ClipboardSyncMode clipboardSync = ClipboardSyncMode.Hydra,
+        IWindowFocus? windowFocus = null)
         : base(
             TransitionTestHelper.Profile("slave", new HydraConfig { Mode = Mode.Slave, NetworkConfig = networkConfig, ClipboardSync = clipboardSync }),
             log ?? NullLogger<RelayConnection>.Instance,
@@ -79,7 +81,7 @@ public sealed class TestableSlaveRelay : SlaveRelayConnection
             screenSaverSync ?? new NullScreenSaverSync(),
             clipboard ?? new NullClipboardSync(),
             fileTransfer ?? FileTransferService.Null(), selectionDetector, osd,
-            deps.Tracker, dormancy, clock)
+            deps.Tracker, dormancy, clock, windowFocus)
     {
         Tracker = deps.Tracker;
         Dormancy = new DrainingDormancy(dormancy, ClipboardIdle);

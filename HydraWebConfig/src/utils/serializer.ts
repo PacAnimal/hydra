@@ -1,4 +1,5 @@
 import type { FormState, HydraProfile, NeighbourConfig, HostConfig, ScreenDefinition, ConfigConditions } from '../types'
+import { HOTKEY_DISABLED } from '../types'
 import { deriveHostsFromLayout } from './layout'
 
 const RANGE_START_DEFAULT = 0
@@ -53,7 +54,8 @@ function serializeHotkeys(hotkeys: Record<string, string> | undefined): Record<s
   const out: Record<string, string[]> = {}
   for (const [action, text] of Object.entries(hotkeys ?? {})) {
     const chords = splitChords(text)
-    if (chords.length > 0) out[action] = chords
+    if (chords.length === 1 && chords[0].toLowerCase() === HOTKEY_DISABLED) out[action] = []
+    else if (chords.length > 0) out[action] = chords
   }
   return Object.keys(out).length > 0 ? out : undefined
 }

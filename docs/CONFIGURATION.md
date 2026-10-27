@@ -331,8 +331,8 @@ A common setup: at home your stationary desktop controls your laptop (the laptop
 
 ## Hotkeys
 
-By default every hotkey uses **Ctrl+Alt+Super** (Super = ⌘ on macOS, Win on Windows) plus one letter. All of
-them can be rebound — see [Customising hotkeys](#customising-hotkeys) below.
+By default every hotkey uses **Ctrl+Alt+Super** (Super = ⌘ on macOS, Win on Windows) plus a letter or an arrow. All
+of them can be rebound or turned off — see [Customising hotkeys](#customising-hotkeys) below.
 
 | Default hotkey | Action name | Action |
 |--------|--------|--------|
@@ -342,6 +342,10 @@ them can be rebound — see [Customising hotkeys](#customising-hotkeys) below.
 | `Ctrl+Alt+Super+V` | `pasteFiles` | Paste previously copied files to the current machine |
 | `Ctrl+Alt+Super+K` | `lockSlaves` | Lock every connected slave |
 | `Ctrl+Alt+Super+Z` | `missionControl` | Send Mission Control to the current remote screen (macOS slave) |
+| `Ctrl+Alt+Super+Up` | `switchMonitorUp` | Move to the screen above (see [Switching monitors](#switching-monitors)) |
+| `Ctrl+Alt+Super+Down` | `switchMonitorDown` | Move to the screen below |
+| `Ctrl+Alt+Super+Left` | `switchMonitorLeft` | Move to the screen on the left |
+| `Ctrl+Alt+Super+Right` | `switchMonitorRight` | Move to the screen on the right |
 
 **Lock all slaves:** `Ctrl+Alt+Super+K` sends a lock to every connected slave — the same action `screenLockPropagation` performs when the master's own machine locks. It is the only way to trigger it from a **remote-only master**, which has no screen of its own to lock and therefore never fires the underlying event. It is not gated on `screenLockPropagation`: that setting governs automatic propagation, while the hotkey is an explicit request. A slave that has seen local input more recently than the master still declines to lock, on the assumption that someone is sitting at it.
 
@@ -349,6 +353,26 @@ them can be rebound — see [Customising hotkeys](#customising-hotkeys) below.
 
 - **With a local screen** (a desktop or laptop set `remoteOnly`), the hotkey is a remote/local toggle: press once to pass input through to the physical machine running Hydra, press again to re-lock to remote. The OSD reads `Input: local` / `Input: remote`.
 - **Headless** (a Pi with no display), there is nothing to pass input *to*, so the hotkey keeps the meaning it has everywhere else: it confines the cursor to the current remote screen, and pressing it again lets the cursor roam between slaves. The OSD reads `Cursor lock: On` / `Cursor lock: Off`. Before this, unlocking on a headless master handed input to a local screen that did not exist and the keyboard and mouse went dead until the hotkey was pressed again.
+
+### Switching monitors
+
+Hold `Ctrl+Alt+Super` and tap an arrow to move to the next screen that way, whether it is another monitor of the same
+machine or another machine. The cursor lands in the middle of that screen (hidden if it is hidden now), and the window
+you last worked in there comes forward. The move happens when you let go of the arrow.
+
+When several screens share that edge, a second arrow picks which: hold the first and press a perpendicular one, then
+let go of either. `Up` then `Right` goes to a screen along the right third of the top edge; `Right` then `Up` to one
+along the upper third of the right edge. A lone arrow aims at the middle third. Whichever screen is closest to the
+aimed third is picked, ties going to the left or upper one; with only one screen that way, every combination starting
+with that arrow reaches it. An arrow along the same edge (`Up` then `Down`) cancels the move.
+
+The switch moves the cursor even when it is locked to a screen, since it is an explicit request; a mouse button held
+on a remote still keeps the cursor there, as at an edge. A remote-only master never lands on its own screens.
+
+Like every hotkey, the chord still reaches the master's own apps while the cursor is at home on macOS and Windows. On a
+Mac running Rectangle, `Ctrl+Opt+Cmd+Left`/`Right` is also its "next display" shortcut, so rebind one of the two. On an
+X11 master the chords are grabbed while at home; one that another application already holds works only on a remote,
+and a warning at startup says so.
 
 **Relative mouse:** relative mode sends mouse deltas instead of absolute coordinates — useful for games or 3D apps that capture the cursor. Toggled per-screen; an on-screen notification confirms the current state.
 
@@ -371,7 +395,13 @@ nothing.
 
 Each value is an **array**, so one action can have several chords — useful for keeping the default while adding
 something reachable one-handed. A listed array **replaces** that action's default entirely: to keep the default
-as well, list it, as `toggleCursorLock` does above. Actions you don't mention keep their defaults.
+as well, list it, as `toggleCursorLock` does above. Actions you don't mention keep their defaults, and an empty
+array, `[]`, turns an action off (logged at startup). A chord bound to two actions stays with the one listed first in
+the table above, with a warning.
+
+The monitor switch's directions combine only when their chords share modifiers: `"switchMonitorUp": ["Ctrl+Alt+KP_8"]`
+pairs with `"switchMonitorRight": ["Ctrl+Alt+KP_6"]`, but not with the default `Ctrl+Alt+Super+Right`. A direction
+that can never pair with a perpendicular one is warned about at startup.
 
 **Writing a chord.** Join parts with `+`, in any order, case-insensitively: `Ctrl+Alt+Super+L`, `cmd+alt+ctrl+l`
 and `L+Ctrl+Alt+Super` are the same binding. Modifier names, with aliases:

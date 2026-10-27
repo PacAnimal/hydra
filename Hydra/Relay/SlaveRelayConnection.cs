@@ -24,6 +24,7 @@ public class SlaveRelayConnection : RelayConnection
     private readonly IFileSelectionDetector _selectionDetector;
     private readonly IOsdNotification _osd;
     private readonly IDormancyState _dormancy;
+    private readonly IWindowFocus _windowFocus;
 
     // keys and buttons currently held down on the slave (for release-all on screen leave). access under _heldLock,
     // which serialises their injection against the release-all paths run by disconnect/screen-leave handlers.
@@ -56,9 +57,10 @@ public class SlaveRelayConnection : RelayConnection
     public SlaveRelayConnection(IHydraProfile profile, ILogger<RelayConnection> log, IPlatformOutput output, IScreenDetector screens, IWorldState peerState,
         ICursorHider cursorHider, IScreenSaverSync screenSaverSync, IClipboardSync clipboardSync, FileTransferService fileTransfer,
         IFileSelectionDetector selectionDetector, IOsdNotification osd, IActivityTracker activityTracker, IDormancyState dormancy,
-        TimeProvider? clock = null)
+        TimeProvider? clock = null, IWindowFocus? windowFocus = null)
         : base(profile, log, peerState)
     {
+        _windowFocus = windowFocus ?? new NullWindowFocus();
         _output = output;
         _screens = screens;
         _cursorHider = cursorHider;
@@ -348,7 +350,11 @@ public class SlaveRelayConnection : RelayConnection
                     var enter = body.ParseMessage<EnterScreenMessage>(Log, sourceHost);
                     if (enter != null)
                     {
-                        if (!_dormancy.IsDormant) MoveToCachedScreen(enter.Screen, enter.X, enter.Y);
+                        if (!_dormancy.IsDormant)
+                        {
+                            MoveToCachedScreen(enter.Screen, enter.X, enter.Y);
+                            if (enter.Focus) FocusOnScreen(enter.Screen);
+                        }
                         _onScreenMasters.Add(sourceHost);
                         OnClipboardWorker(() => _clipboard.Entered(sourceHost));
                         _cursorHider.Show();
@@ -822,6 +828,13 @@ public class SlaveRelayConnection : RelayConnection
             _output.MoveMouse(screen.X + x, screen.Y + y);
         else
             _output.MoveMouse(x, y);
+    }
+
+    // the monitor switch hotkey arriving: the window last worked in on that screen comes forward
+    private void FocusOnScreen(string screenName)
+    {
+        if (_cachedScreens?.Screens.FirstOrDefault(s => s.Name.EqualsIgnoreCase(screenName)) is { } screen)
+            _windowFocus.FocusFrontmostOn(screen.Bounds);
     }
 
     private void SendScreenInfo(string masterHost, List<ScreenInfoEntry> entries)

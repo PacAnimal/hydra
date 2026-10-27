@@ -13,7 +13,14 @@ export const HOTKEY_ACTIONS: { action: string; label: string; defaultChord: stri
   { action: 'pasteFiles', label: 'Paste Files', defaultChord: 'Ctrl+Alt+Super+V' },
   { action: 'lockSlaves', label: 'Lock Slaves', defaultChord: 'Ctrl+Alt+Super+K' },
   { action: 'missionControl', label: 'Mission Control', defaultChord: 'Ctrl+Alt+Super+Z' },
+  { action: 'switchMonitorUp', label: 'Monitor Up', defaultChord: 'Ctrl+Alt+Super+Up' },
+  { action: 'switchMonitorDown', label: 'Monitor Down', defaultChord: 'Ctrl+Alt+Super+Down' },
+  { action: 'switchMonitorLeft', label: 'Monitor Left', defaultChord: 'Ctrl+Alt+Super+Left' },
+  { action: 'switchMonitorRight', label: 'Monitor Right', defaultChord: 'Ctrl+Alt+Super+Right' },
 ]
+
+// what a hotkey field holds for an action turned off, which Hydra spells as an empty list
+export const HOTKEY_DISABLED = 'none'
 
 export interface NeighbourConfig {
   id?: string

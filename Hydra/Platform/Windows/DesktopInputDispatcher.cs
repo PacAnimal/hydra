@@ -5,6 +5,7 @@ using Cathedral.Utils;
 using Hydra.Keyboard;
 using Hydra.Mouse;
 using Hydra.Relay;
+using Hydra.Screen;
 using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform.Windows;
@@ -35,6 +36,9 @@ internal sealed class DesktopInputDispatcher : IDisposable
         WinVirtualKey.Divide,   // numpad /
         WinVirtualKey.Numlock,  // MSDN: VK_NUMLOCK requires extended flag for correct toggle behavior
     ];
+
+    // VK 0xE8 is unassigned: injecting it reaches no app as a key
+    private const int UnassignedVk = 0xE8;
 
     private readonly ILogger _log;
     private readonly BlockingCollection<InputCommand> _queue = [];
@@ -242,6 +246,12 @@ internal sealed class DesktopInputDispatcher : IDisposable
                 {
                     if (_numLockRestore.Take() is { } before)
                         SyncLockKey(WinVirtualKey.Numlock, before, extendedKey: true);
+                    break;
+                }
+            case FocusWindowCommand f:
+                {
+                    // on the input desktop, from the thread whose injected input makes this process the foreground's
+                    WindowsWindowFocus.FocusFrontmostOn(f.Screen);
                     break;
                 }
         }
@@ -457,6 +467,7 @@ internal sealed class DesktopInputDispatcher : IDisposable
                 else
                 {
                     _winKeyDown = false;
+                    if (msg.Chorded == true) _winUsedAsModifier = true;
                     if (!_winUsedAsModifier)
                     {
                         // bare win tap — win was never injected, so inject down+up now to open start menu
@@ -472,6 +483,10 @@ internal sealed class DesktopInputDispatcher : IDisposable
 
             // flush buffered Win key before injecting a non-Win special key
             if (_winKeyDown && !isWin) FlushWin(isUp);
+
+            // an unassigned key between Alt's press and release, so apps take it as used and open no menu bar for it
+            if (isUp && msg.Chorded == true && vk is WinVirtualKey.LMenu or WinVirtualKey.RMenu)
+                _ = InputSender.VkTap(UnassignedVk);
 
             var flags = UpFlag(isUp);
             // a keypad navigation key is its dedicated twin's VK without the extended flag
@@ -578,3 +593,4 @@ record InjectMouseScrollCommand(MouseScrollMessage Msg) : InputCommand;
 record RestoreLocksCommand : InputCommand;
 record RestoreMouseSettingsCommand(bool Force = false) : InputCommand;
 record SwitchDesktopCommand(nint NewDesktop, nint OldDesktop, string Name) : InputCommand;
+record FocusWindowCommand(ScreenBounds Screen) : InputCommand;

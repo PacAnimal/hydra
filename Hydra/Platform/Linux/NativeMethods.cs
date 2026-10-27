@@ -344,9 +344,6 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial int XSync(nint display, [MarshalAs(UnmanagedType.Bool)] bool discard);
 
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    internal delegate int XErrorHandlerDelegate(nint display, nint errorEvent);
-
     [LibraryImport(X11)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial nint XSetErrorHandler(nint handler);
@@ -421,8 +418,7 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial int XScreenSaverQueryInfo(nint display, nint drawable, nint saverInfo);
 
-    // XScreenSaverInfo.state values
-    internal const int ScreenSaverOff = 0;
+    // XScreenSaverInfo.state, when the saver is running
     internal const int ScreenSaverOn = 1;
 
     // -- screensaver control (libX11) --
@@ -525,6 +521,48 @@ internal static partial class NativeMethods
     [LibraryImport(X11)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial int XDeleteProperty(nint display, nint window, nint property);
+
+    // -- window stacking and focus --
+
+    internal const int IsViewable = 2;
+    internal const int InputOutput = 1;
+    internal const int RevertToParent = 2;
+    internal const int ClientMessage = 33;
+    internal const nint SubstructureNotifyMask = 1 << 19;
+    internal const nint SubstructureRedirectMask = 1 << 20;
+    internal const nint XA_WINDOW = 33;
+
+    // children are bottom to top; XFree it
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool XQueryTree(nint display, nint window, out nint root, out nint parent, out nint children, out uint nchildren);
+
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int XGetWindowAttributes(nint display, nint window, out XWindowAttributes attributes);
+
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool XTranslateCoordinates(nint display, nint src, nint dest, int srcX, int srcY, out int destX, out int destY, out nint child);
+
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int XGetInputFocus(nint display, out nint focus, out int revertTo);
+}
+
+// XWindowAttributes — 136 bytes on LP64; only the fields read here
+[StructLayout(LayoutKind.Explicit, Size = 136)]
+internal struct XWindowAttributes
+{
+    [FieldOffset(0)] internal int X;
+    [FieldOffset(4)] internal int Y;
+    [FieldOffset(8)] internal int Width;
+    [FieldOffset(12)] internal int Height;
+    [FieldOffset(40)] internal int Class;
+    [FieldOffset(92)] internal int MapState;
+    [FieldOffset(120)] internal int OverrideRedirect;
 }
 
 // XkbStateRec — filled by XkbGetState; only Group (effective layout index) is used here
@@ -601,6 +639,13 @@ internal struct XEvent
     [FieldOffset(48)] internal nint FixesSelectionOwner;
     [FieldOffset(56)] internal nint FixesSelectionSelection;
     [FieldOffset(72)] internal nuint FixesSelectionTimestamp;   // when the owner took it, which the notice is for
+
+    // XClientMessageEvent (type = ClientMessage = 33) — LP64 offsets; window is EventWindow at 32, data.l from 56
+    [FieldOffset(40)] internal nint ClientMessageType;
+    [FieldOffset(48)] internal int ClientMessageFormat;
+    [FieldOffset(56)] internal nint ClientMessageData0;
+    [FieldOffset(64)] internal nint ClientMessageData1;
+    [FieldOffset(72)] internal nint ClientMessageData2;
 
     // XPropertyEvent (type = PropertyNotify = 28) — LP64 offsets
     // window field reuses EventWindow at offset 32

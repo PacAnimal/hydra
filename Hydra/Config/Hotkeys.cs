@@ -1,5 +1,6 @@
 using Cathedral.Extensions;
 using Hydra.Keyboard;
+using Hydra.Screen;
 
 namespace Hydra.Config;
 
@@ -13,6 +14,11 @@ public enum HotkeyAction
     CopyFiles,
     PasteFiles,
     MissionControl,
+    // the cursor to the next screen that way; a second, perpendicular one held with it picks a third of that edge
+    SwitchMonitorUp,
+    SwitchMonitorDown,
+    SwitchMonitorLeft,
+    SwitchMonitorRight,
 }
 
 // one parsed hotkey: the modifiers that must be held, plus either a named key or a literal character.
@@ -63,9 +69,12 @@ public sealed record HotkeyBinding(KeyModifiers Modifiers, SpecialKey? Key, char
         ["bracketright"] = ']',
     };
 
+    // the modifiers a chord is made of, lock states left out
+    public static KeyModifiers ChordModifiers(KeyEvent ev) => ev.Modifiers & ~LockStates;
+
     public bool Matches(KeyEvent ev)
     {
-        if ((ev.Modifiers & ~LockStates) != Modifiers) return false;
+        if (ChordModifiers(ev) != Modifiers) return false;
         if (Key.HasValue) return ev.Key == Key.Value;
         return ev.Character.HasValue && char.ToLowerInvariant(ev.Character.Value) == Character;
     }
@@ -177,30 +186,49 @@ public sealed class HotkeyBindings
         [HotkeyAction.CopyFiles] = ["Ctrl+Alt+Super+C"],
         [HotkeyAction.PasteFiles] = ["Ctrl+Alt+Super+V"],
         [HotkeyAction.MissionControl] = ["Ctrl+Alt+Super+Z"],
+        [HotkeyAction.SwitchMonitorUp] = ["Ctrl+Alt+Super+Up"],
+        [HotkeyAction.SwitchMonitorDown] = ["Ctrl+Alt+Super+Down"],
+        [HotkeyAction.SwitchMonitorLeft] = ["Ctrl+Alt+Super+Left"],
+        [HotkeyAction.SwitchMonitorRight] = ["Ctrl+Alt+Super+Right"],
     };
 
     private readonly Dictionary<HotkeyAction, HotkeyBinding[]> _bindings;
 
-    // parse failures are collected rather than thrown: one bad string must not stop Hydra starting, and
-    // the action keeps its default so the user is never left with no way to trigger it.
+    // problems are collected rather than thrown, since one bad string must not stop Hydra starting: an action whose
+    // configured chords all fail keeps its default, and one left with no chord (its default bound elsewhere) is warned of
     public IReadOnlyList<string> Errors { get; }
 
-    private HotkeyBindings(Dictionary<HotkeyAction, HotkeyBinding[]> bindings, List<string> errors)
+    // the actions an empty list turned off
+    public IReadOnlyList<HotkeyAction> Disabled { get; }
+
+    private HotkeyBindings(Dictionary<HotkeyAction, HotkeyBinding[]> bindings, List<string> errors, List<HotkeyAction> disabled)
     {
         _bindings = bindings;
         Errors = errors;
+        Disabled = disabled;
     }
 
     public static HotkeyBindings Build(Dictionary<string, List<string>>? configured)
     {
         var errors = new List<string>();
+        var disabled = new List<HotkeyAction>();
         var bindings = new Dictionary<HotkeyAction, HotkeyBinding[]>();
+        // a chord bound twice stays with the first action to claim it, in Defaults' order, or Match would pick by accident
+        var claimed = new Dictionary<HotkeyBinding, HotkeyAction>();
 
         foreach (var (action, defaultSpecs) in Defaults)
         {
-            var parsed = Parse(FindConfigured(configured, action, errors) ?? defaultSpecs.AsEnumerable(), action, errors);
-            // every action keeps a working chord even when all of its configured strings were rejected
-            bindings[action] = parsed.Length > 0 ? parsed : Parse(defaultSpecs, action, null);
+            var configuredSpecs = FindConfigured(configured, action);
+            if (configuredSpecs is [])
+            {
+                disabled.Add(action);
+                bindings[action] = [];
+                continue;
+            }
+            HotkeyBinding[] kept = [.. Parse(configuredSpecs ?? defaultSpecs.AsEnumerable(), action, errors).Where(b => Claim(claimed, b, action, errors))];
+            // an action whose configured strings were all rejected or taken falls back on its default
+            if (kept.Length == 0 && configuredSpecs != null) kept = [.. Parse(defaultSpecs, action, null).Where(b => Claim(claimed, b, action, errors))];
+            bindings[action] = kept;
         }
 
         if (configured != null)
@@ -212,7 +240,39 @@ public sealed class HotkeyBindings
             }
         }
 
-        return new HotkeyBindings(bindings, errors);
+        WarnUncombinable(bindings, errors);
+        return new HotkeyBindings(bindings, errors, disabled);
+    }
+
+    private static bool Claim(Dictionary<HotkeyBinding, HotkeyAction> claimed, HotkeyBinding binding, HotkeyAction action, List<string> errors)
+    {
+        if (claimed.TryAdd(binding, action)) return true;
+        if (claimed[binding] != action)
+            errors.Add($"a hotkey for {action} is already bound to {claimed[binding]}; it stays there");
+        return false;
+    }
+
+    // the monitor switch's direction, for its four actions
+    public static Direction? SwitchDirection(HotkeyAction action) => action switch
+    {
+        HotkeyAction.SwitchMonitorUp => Direction.Up,
+        HotkeyAction.SwitchMonitorDown => Direction.Down,
+        HotkeyAction.SwitchMonitorLeft => Direction.Left,
+        HotkeyAction.SwitchMonitorRight => Direction.Right,
+        _ => null,
+    };
+
+    // a second direction counts only with the first's modifiers, so a direction none of whose chords shares them with
+    // a perpendicular one can never pick a third
+    private static void WarnUncombinable(Dictionary<HotkeyAction, HotkeyBinding[]> bindings, List<string> errors)
+    {
+        var directions = bindings.Where(kv => SwitchDirection(kv.Key) != null && kv.Value.Length > 0).ToList();
+        foreach (var (action, chords) in directions)
+        {
+            var perpendicular = directions.Where(other => SwitchDirection(action)!.Value.IsPerpendicularTo(SwitchDirection(other.Key)!.Value)).ToList();
+            if (perpendicular.Count > 0 && !chords.Any(c => perpendicular.Any(other => other.Value.Any(o => o.Modifiers == c.Modifiers))))
+                errors.Add($"no hotkey for {action} shares its modifiers with one for a perpendicular direction, so it never picks a third of an edge");
+        }
     }
 
     private static HotkeyBinding[] Parse(IEnumerable<string> specs, HotkeyAction action, List<string>? errors)
@@ -228,18 +288,10 @@ public sealed class HotkeyBindings
         return [.. parsed];
     }
 
-    private static List<string>? FindConfigured(Dictionary<string, List<string>>? configured, HotkeyAction action, List<string> errors)
-    {
-        if (configured == null) return null;
-        foreach (var (name, specs) in configured)
-        {
-            if (!name.EqualsIgnoreCase(action.ToString())) continue;
-            if (specs.Count != 0) return specs;
-            errors.Add($"hotkey list for {action} is empty; keeping the default");
-            return null;
-        }
-        return null;
-    }
+    private static List<string>? FindConfigured(Dictionary<string, List<string>>? configured, HotkeyAction action) =>
+        configured?.FirstOrDefault(kv => kv.Key.EqualsIgnoreCase(action.ToString())).Value;
+
+    public IReadOnlyList<HotkeyBinding> For(HotkeyAction action) => _bindings[action];
 
     public HotkeyAction? Match(KeyEvent ev)
     {

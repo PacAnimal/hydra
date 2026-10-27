@@ -65,10 +65,12 @@ public static class TransitionTestHelper
     /// <param name="clipboard">The local clipboard, for a test of clipboard sync.</param>
     /// <param name="localPlatform">The platform the router believes it runs on, rather than the one the test does.</param>
     /// <param name="loggerFactory">Where the router's other loggers come from, for a test that reads what a peer logged through it.</param>
+    /// <param name="windowFocus">What brings a window forward, for a test of the monitor switch's arrival.</param>
     public static TestServiceBundle CreateService(Func<long>? getTickCount = null, IActivityTracker? activityTracker = null, IWorldState? world = null,
         TimeProvider? timeProvider = null, IHydraProfile? profile = null, IFileSelectionDetector? selectionDetector = null, IOsdNotification? osd = null,
         FileTransferService? fileTransfer = null, IScreenSaverSync? screenSaverSync = null, FakeScreenDetector? screens = null,
-        ILogger<InputRouter>? log = null, IClipboardSync? clipboard = null, PeerPlatform? localPlatform = null, ILoggerFactory? loggerFactory = null)
+        ILogger<InputRouter>? log = null, IClipboardSync? clipboard = null, PeerPlatform? localPlatform = null, ILoggerFactory? loggerFactory = null,
+        IWindowFocus? windowFocus = null)
     {
         var platform = new FakePlatform();
         var relay = new FakeRelay();
@@ -79,7 +81,7 @@ public static class TransitionTestHelper
         var service = new InputRouter(platform, platform, config, relay, screens, loggerFactory ?? NullLoggerFactory.Instance,
             log ?? NullLogger<InputRouter>.Instance, screenSaverSync ?? new NullScreenSaverSync(), clipboard ?? new NullClipboardSync(),
             fileTransfer ?? FileTransferService.Null(), selectionDetector ?? new NullFileSelectionDetector(), osd ?? new NullOsdNotification(), tracker,
-            peerState: world, getTickCount: getTickCount, timeProvider: timeProvider, localPlatform: localPlatform);
+            peerState: world, getTickCount: getTickCount, timeProvider: timeProvider, localPlatform: localPlatform, windowFocus: windowFocus);
         // the entry's hash, read off the actor, settled too, as when it was read in line; a test of that read sets Flush alone
         platform.AfterFireCallback = async () =>
         {

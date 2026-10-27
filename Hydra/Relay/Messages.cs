@@ -132,7 +132,9 @@ public record MasterConfigMessage(LogLevel? LogLevel);
 public record SlaveLogMessage(int Level, string Category, string Message, string? Exception);
 // IsRepeat marks an OS auto-repeat the master re-resolved (with live modifier/dead-key state) and forwarded, only for a
 // key whose down it forwarded; the slave injects it as a repeat of that held key.
-public record KeyEventMessage(KeyEventType Type, KeyModifiers Modifiers, char? Character, SpecialKey? Key, bool IsRepeat = false);
+// Chorded marks the release of a modifier a hotkey was pressed under on the master, which swallowed that key: the
+// release is no bare tap, so the slave opens no Start menu, overview or menu bar for it
+public record KeyEventMessage(KeyEventType Type, KeyModifiers Modifiers, char? Character, SpecialKey? Key, bool IsRepeat = false, bool? Chorded = null);
 
 /// <summary>
 /// Several key events in one frame, to be applied IN ORDER.
@@ -149,7 +151,8 @@ public record KeyEventMessage(KeyEventType Type, KeyModifiers Modifiers, char? C
 public record KeyEventBatchMessage(KeyEventMessage[] Events);
 public record MouseButtonMessage(MouseButton Button, bool IsPressed);
 public record MouseScrollMessage(short XDelta, short YDelta);
-public record EnterScreenMessage(string Screen, int X, int Y, int Width, int Height);
+// Focus: bring forward the window last worked in on that screen, as the monitor switch hotkey does on arrival
+public record EnterScreenMessage(string Screen, int X, int Y, int Width, int Height, bool Focus = false);
 public record ScreensaverSyncMessage(bool Active);
 public record LeaveScreenMessage;
 // ResendFrom: the first pull to this host whose answer the master did not take, so a clipboard synced by the full answer

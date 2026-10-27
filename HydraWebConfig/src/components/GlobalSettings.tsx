@@ -165,7 +165,7 @@ export function GlobalSettings({ config, serverError, onChange }: Props) {
           <div className="field-row">
             {HOTKEY_ACTIONS.map(({ action, label, defaultChord }) => (
               <div className="field" key={action}>
-                <label htmlFor={`gs-hotkey-${action}`} title="Chords joined with + (Ctrl+Alt+Super+L), one per line. Listing any replaces the default; empty keeps it">{label}</label>
+                <label htmlFor={`gs-hotkey-${action}`} title="Chords joined with + (Ctrl+Alt+Super+L), one per line. Listing any replaces the default; empty keeps it; none turns it off">{label}</label>
                 <textarea
                   id={`gs-hotkey-${action}`}
                   rows={2}

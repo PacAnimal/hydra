@@ -31,9 +31,12 @@ public class InputRouter(
     IWorldState? peerState = null,
     Func<long>? getTickCount = null,
     PeerPlatform? localPlatform = null,
-    TimeProvider? timeProvider = null)
+    TimeProvider? timeProvider = null,
+    IWindowFocus? windowFocus = null)
     : IHostedService
 {
+    private readonly IWindowFocus _windowFocus = windowFocus ?? new NullWindowFocus();
+
     // How often a mouse position is sent to a slave, and therefore how long a batch of raw samples is
     // held before it is processed. Both come off the one number, so raising it moves them together.
     // Integer division truncates, so a rate that does not divide 1000 lands on the next rate up.
@@ -442,7 +445,7 @@ public class InputRouter(
         {
             if (!st.EnterPending || !st.Mouse.IsOnVirtualScreen) return ValueTask.CompletedTask;
             st.EnterPending = false;
-            SendEnterScreen(st.Mouse.CurrentScreen, (int)st.Mouse.X, (int)st.Mouse.Y);
+            SendEnterScreen(st.Mouse.CurrentScreen, (int)st.Mouse.X, (int)st.Mouse.Y, focus: st.FocusOnArrival);
             return ValueTask.CompletedTask;
         });
     }
@@ -1266,6 +1269,9 @@ public class InputRouter(
             // held before the chord formed is still released on the slave
             var hotkeyAction = profile.Hotkeys.Match(keyEvent);
             var hotkeyConsumed = hotkeyAction.HasValue;
+            // the keys held on the remote as a hotkey goes down there were used, not tapped
+            if (hotkeyConsumed && keyEvent.Type == KeyEventType.KeyDown && st.Mouse.IsOnVirtualScreen) st.ChordedKeys.UnionWith(st.ForwardedKeys);
+            if (st.MonitorSwitch.OnKey(keyEvent, hotkeyAction) is { } monitorSwitch) await SwitchMonitor(st, monitorSwitch);
             // !IsRepeat: an auto-repeat of a held hotkey must not re-fire the toggle every tick
             if (hotkeyConsumed && keyEvent.Type == KeyEventType.KeyDown && !keyEvent.IsRepeat)
             {
@@ -1432,8 +1438,10 @@ public class InputRouter(
             {
                 // repeats are master-driven: each OS auto-repeat is re-resolved (live modifier/dead-key state)
                 // and forwarded with IsRepeat set, so the slave injects the correct character every tick.
+                var chorded = keyEvent.Type == KeyEventType.KeyUp && st.ChordedKeys.Remove(keyEvent.PhysicalKey);
                 ForwardKeyToVirtualScreen(st,
-                    new KeyEventMessage(keyEvent.Type, keyEvent.Modifiers, keyEvent.Character, RemapKey(keyEvent.Key), IsRepeat: keyEvent.IsRepeat));
+                    new KeyEventMessage(keyEvent.Type, keyEvent.Modifiers, keyEvent.Character, RemapKey(keyEvent.Key), IsRepeat: keyEvent.IsRepeat,
+                        Chorded: chorded ? true : null));
             }
         });
     }
@@ -1694,11 +1702,12 @@ public class InputRouter(
     // Every entry from the local screen to a remote one; callers keep their own gates and log line. exitEdge is what
     // a return with no edge of its own comes back through (see LocalLandingPoint), null when the entry had no edge.
     // Refused (false) while a mouse button is held: it went down here, and its up would be swallowed during the visit.
-    // Refused too while a key is held, logged once per hold: the visit would take the typing mid-chord.
-    private async ValueTask<bool> EnterFromLocal(LocalMasterState st, ScreenRect dest, int x, int y, ScreenEdge? exitEdge)
+    // Refused too while a key is held, logged once per hold: the visit would take the typing mid-chord. The monitor
+    // switch's own keys are expected held (bySwitch), and the grab keeps their ups home; its arrival focuses a window.
+    private async ValueTask<bool> EnterFromLocal(LocalMasterState st, ScreenRect dest, int x, int y, ScreenEdge? exitEdge, bool bySwitch = false)
     {
         if (platform.AnyMouseButtonHeld()) return false;
-        if (platform.AnyKeyHeld())
+        if (!bySwitch && platform.AnyKeyHeld())
         {
             if (!st.KeyRefusalLogged && log.IsEnabled(LogLevel.Information))
                 log.LogInformation("Entry to '{Name}' refused: a key is held", dest.Name);
@@ -1717,7 +1726,8 @@ public class InputRouter(
         // without the keyboard the remote is not told yet, so no cursor shows there: a late grab announces the visit,
         // and a grab never won ends it unannounced
         st.EnterPending = !platform.KeyboardCaptured;
-        if (!st.EnterPending) SendEnterScreen(dest, x, y);
+        st.FocusOnArrival = bySwitch;
+        if (!st.EnterPending) SendEnterScreen(dest, x, y, focus: bySwitch);
         return true;
     }
 
@@ -1871,8 +1881,8 @@ public class InputRouter(
 
         if (hit.Destination.IsLocal)
         {
-            if (st.LockedToScreen || profile.RemoteOnly || ButtonHoldsHost(st, leavingScreen, hit)) return false;
-            ReturnAtEdge(st, hit);
+            if (st.LockedToScreen || profile.RemoteOnly || ButtonHoldsHost(st, leavingScreen, hit.Destination)) return false;
+            ReturnToLocal(st, hit.Destination, hit.Destination.ToGlobal(hit.Entry));
             return true;
         }
 
@@ -1883,20 +1893,20 @@ public class InputRouter(
             return false;
         }
 
-        if (!relay.IsConnected || ButtonHoldsHost(st, leavingScreen, hit)) return false;
-        await CrossToRemote(st, leavingScreen, hit);
+        if (!relay.IsConnected || ButtonHoldsHost(st, leavingScreen, hit.Destination)) return false;
+        await CrossToRemote(st, leavingScreen, hit.Destination, hit.Entry);
         return true;
     }
 
-    private static bool ChangesHost(ScreenRect leavingScreen, EdgeHit hit) =>
-        hit.Destination.IsLocal || hit.Destination.Host != leavingScreen.Host;
+    private static bool ChangesHost(ScreenRect leavingScreen, ScreenRect destination) =>
+        destination.IsLocal || destination.Host != leavingScreen.Host;
 
     // A button pressed on a remote keeps the cursor on that host until its up, so the up reaches the host with its
     // down. When the platform sees every held button despite its tap swallowing them it is asked too, so an up that
     // never arrived cannot hold the cursor there; it is asked only mid-drag, since on Xorg that is a server round-trip.
-    private bool ButtonHoldsHost(LocalMasterState st, ScreenRect leavingScreen, EdgeHit hit)
+    private bool ButtonHoldsHost(LocalMasterState st, ScreenRect leavingScreen, ScreenRect destination)
     {
-        if (!ChangesHost(leavingScreen, hit) || st.ForwardedButtons.Count == 0) return false;
+        if (!ChangesHost(leavingScreen, destination) || st.ForwardedButtons.Count == 0) return false;
         if (st.ForwardedButtons.All(platform.SeesSwallowed) && !platform.AnyMouseButtonHeld()) return false;
         if (!st.EdgeRefusalLogged && log.IsEnabled(LogLevel.Information))
             log.LogInformation("Edge refused: {Buttons} held on {Host}", string.Join(", ", st.ForwardedButtons), leavingScreen.Host);
@@ -1904,10 +1914,8 @@ public class InputRouter(
         return true;
     }
 
-    private void ReturnAtEdge(LocalMasterState st, EdgeHit hit)
+    private void ReturnToLocal(LocalMasterState st, ScreenRect targetScreen, ScreenPoint landing)
     {
-        var targetScreen = hit.Destination;
-        var landing = targetScreen.ToGlobal(hit.Entry);
         ReturnHome(st, landing, slaveReachable: true);
         st.ActiveLocalScreen = targetScreen;
         UpdateWarpPoint(st, targetScreen);
@@ -1915,14 +1923,64 @@ public class InputRouter(
             log.LogInformation("Returned to local screen ← ({X}, {Y})", landing.X, landing.Y);
     }
 
-    private async ValueTask CrossToRemote(LocalMasterState st, ScreenRect leavingScreen, EdgeHit hit)
+    private async ValueTask CrossToRemote(LocalMasterState st, ScreenRect leavingScreen, ScreenRect destination, ScreenPoint entry, bool focus = false)
     {
         FlushMouseDelta(st);
-        ApplyEnterScreen(st, hit.Destination, await RemoteInfoFor(st, hit.Destination), hit.Entry.X, hit.Entry.Y);
+        ApplyEnterScreen(st, destination, await RemoteInfoFor(st, destination), entry.X, entry.Y);
         if (log.IsEnabled(LogLevel.Information))
-            log.LogInformation("Switched to remote screen '{Name}' → ({X}, {Y})", hit.Destination.Name, hit.Entry.X, hit.Entry.Y);
-        if (ChangesHost(leavingScreen, hit)) LeaveHost(st, leavingScreen.Host, reachable: true);
-        SendEnterScreen(hit.Destination, hit.Entry.X, hit.Entry.Y);
+            log.LogInformation("Switched to remote screen '{Name}' → ({X}, {Y})", destination.Name, entry.X, entry.Y);
+        if (ChangesHost(leavingScreen, destination)) LeaveHost(st, leavingScreen.Host, reachable: true);
+        SendEnterScreen(destination, entry.X, entry.Y, focus);
+    }
+
+    // The monitor switch hotkey: the cursor to the centre of the screen across that edge (ScreenLayout.SwitchTarget),
+    // cursor lock or not, the cursor hidden there if it is hidden now, and the window last worked in there brought
+    // forward (here, or by the slave). Refused, as an edge is, while a button pressed on this host is held, and while a
+    // visit waits for the keyboard.
+    private async ValueTask SwitchMonitor(LocalMasterState st, SwitchRequest request)
+    {
+        var from = st.Mouse.IsOnVirtualScreen ? st.Mouse.CurrentScreen : st.ActiveLocalScreen;
+        if (from == null || st.Layout == null || st.ScreensaverActive || st.EnterPending) return;
+        if (st.Layout.SwitchTarget(from, request.Edge, request.Third, includeLocal: !profile.RemoteOnly) is not { } target)
+        {
+            if (log.IsEnabled(LogLevel.Debug))
+                log.LogDebug("Monitor switch {Edge} {Third}: no screen there", request.Edge, request.Third);
+            return;
+        }
+        if (st.Mouse.IsOnVirtualScreen && ButtonHoldsHost(st, from, target)) return;
+
+        var centre = new ScreenPoint(target.Width / 2, target.Height / 2);
+        if (target.IsLocal)
+        {
+            var landing = target.ToGlobal(centre);
+            if (st.Mouse.IsOnVirtualScreen) ReturnToLocal(st, target, landing);
+            else
+            {
+                cursorHider.WarpTo(landing.X, landing.Y);
+                st.ActiveLocalScreen = target;
+                UpdateWarpPoint(st, target);
+            }
+            _windowFocus.FocusFrontmostOn(target.Bounds);
+        }
+        else if (!relay.IsConnected)
+            return;
+        else if (!st.Mouse.IsOnVirtualScreen)
+        {
+            if (!await EnterFromLocal(st, target, centre.X, centre.Y, exitEdge: null, bySwitch: true)) return;
+            // a remote-only master's lock says input is on a remote, as its own entry sets it
+            if (profile.RemoteOnly) st.LockedToScreen = true;
+        }
+        else if (target.Host.EqualsIgnoreCase(from.Host))
+        {
+            FlushMouseDelta(st);
+            ApplyEnterScreen(st, target, await RemoteInfoFor(st, target), centre.X, centre.Y);
+            SendEnterMessage(target, centre.X, centre.Y, focus: true);
+        }
+        else
+            await CrossToRemote(st, from, target, centre, focus: true);
+
+        if (log.IsEnabled(LogLevel.Information))
+            log.LogInformation("Monitor switch: '{From}' → '{To}'", from.Name, target.Name);
     }
 
     // throttles mouse sends to the configured rate
@@ -2002,7 +2060,7 @@ public class InputRouter(
     }
 
     // sends EnterScreen relay message + pushes clipboard to destination host
-    private void SendEnterScreen(ScreenRect dest, int entryX, int entryY)
+    private void SendEnterScreen(ScreenRect dest, int entryX, int entryY, bool focus = false)
     {
         bool owed;
         lock (_hashLock)
@@ -2014,12 +2072,12 @@ public class InputRouter(
             _visits[dest.Host] = ++_visitIds;
             _cursorHost = dest.Host;
         }
-        SendEnterMessage(dest, entryX, entryY);
+        SendEnterMessage(dest, entryX, entryY, focus);
         OfferClipboardOnEntry(dest.Host, owed);
     }
 
-    private void SendEnterMessage(ScreenRect dest, int entryX, int entryY) =>
-        relay.Send(dest.Host, MessageKind.EnterScreen, new EnterScreenMessage(dest.Name, entryX, entryY, dest.Width, dest.Height));
+    private void SendEnterMessage(ScreenRect dest, int entryX, int entryY, bool focus = false) =>
+        relay.Send(dest.Host, MessageKind.EnterScreen, new EnterScreenMessage(dest.Name, entryX, entryY, dest.Width, dest.Height, focus));
 
     // sends LeaveScreen relay message + pulls clipboard from host (unconditional — callers guard the condition)
     private void LeaveRemoteScreen(string host)
@@ -2099,14 +2157,21 @@ public class InputRouter(
         public bool EdgeRefusalLogged;
         // whether the current local key hold has already logged a refused entry
         public bool KeyRefusalLogged;
+        public MonitorSwitchGesture MonitorSwitch = new();
         // on a remote whose visit is not announced yet: the keyboard grab is still being retried
         public bool EnterPending;
+        // whether that announcement, once made, asks the slave to focus a window: the monitor switch's does
+        public bool FocusOnArrival;
 
         public void ForgetForwarded()
         {
             ForwardedKeys.Clear();
             ForwardedButtons.Clear();
+            ChordedKeys.Clear();
         }
+
+        // forwarded keys held on the remote when a hotkey went down, whose release is sent as Chorded
+        public HashSet<int> ChordedKeys = [];
 
         // where the visit left the local screen, see LocalLandingPoint
         public ScreenEdge? ExitEdge;

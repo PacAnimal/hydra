@@ -1,3 +1,5 @@
+using Hydra.Screen;
+
 namespace Hydra.Platform.Windows;
 
 // topmost window, centred on the primary screen, shown while the cursor is on a virtual screen.
@@ -51,6 +53,14 @@ internal sealed class WindowsShieldWindow
 
         NativeMethods.SetActiveWindow(Hwnd);
         NativeMethods.SetForegroundWindow(Hwnd);
+    }
+
+    // Focuses the frontmost window on screen, and if it did, gives up the window the shield took the foreground from, so
+    // the shield's own teardown does not hand that one back over it. On the hook loop, as Show and Hide are, and in the
+    // foreground (the shield's) when there is a shield to take it from.
+    internal void FocusFrontmostOn(ScreenBounds screen)
+    {
+        if (WindowsWindowFocus.FocusFrontmostOn(screen)) _savedForeground = nint.Zero;
     }
 
     // called inline from HideCursor()/ShowCursor() — SetSystemCursor is system-wide, safe inside a hook callback

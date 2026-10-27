@@ -57,6 +57,29 @@ public class CursorHiderServiceTests
         }
     }
 
+    // with hideCursor at home, a warp of Hydra's own (the monitor switch between local screens) is no user's activity
+    [Test]
+    public async Task AtHome_AWarpOfHydrasOwn_LeavesTheCursorHidden_ButAUserMoveShowsIt()
+    {
+        var platform = new FakePlatform { TracksCursor = true };
+        using var hider = await Hidden(platform);
+        hider.PollOnce(); // the baseline
+
+        hider.WarpTo(2000, 300);
+        hider.PollOnce();
+        await hider.ExecuteOnce();
+        var shownByTheWarp = platform.ShowCursorCalled;
+        platform.WarpCursor(2100, 400);
+        hider.PollOnce();
+        await hider.ExecuteOnce();
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(shownByTheWarp, Is.False);
+            Assert.That(platform.ShowCursorCalled, Is.True, "pre-condition for the above to mean anything: a move of the user's shows it");
+        }
+    }
+
     [Test]
     public async Task AfterShow_NothingIsPinned()
     {

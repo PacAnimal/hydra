@@ -18,6 +18,9 @@ public interface ICursorHider
     void Hide();
     void Show();
     void UpdateWarpPoint(int x, int y) { }
+
+    // a warp of Hydra's own, which leaves the cursor as hidden or shown as it was: no user moved it
+    void WarpTo(int x, int y);
 }
 
 public sealed class CursorHiderService(ILogger<CursorHiderService> log, IPlatformInput platform)
@@ -76,6 +79,19 @@ public sealed class CursorHiderService(ILogger<CursorHiderService> log, IPlatfor
     {
         lock (_stateLock) _warpPoint = new ScreenPoint(x, y);
     }
+
+    // under the lock, so no poll sees the new position before it is the baseline
+    public void WarpTo(int x, int y)
+    {
+        lock (_stateLock)
+        {
+            platform.WarpCursor(x, y);
+            _lastPosition = platform.GetCursorPosition();
+        }
+    }
+
+    // test seam: one poll of the cursor's position, as the timer makes
+    internal void PollOnce() => OnPoll(null);
 
     internal Task ExecuteOnce() => Execute(CancellationToken.None);
 

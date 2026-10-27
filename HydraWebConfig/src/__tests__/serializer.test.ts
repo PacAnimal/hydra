@@ -332,6 +332,11 @@ describe('serialize', () => {
       })
     })
 
+    it('writes none as an empty list, which turns the action off, in any case', () => {
+      const json = JSON.parse(serialize(state({ mode: 'Master', hotkeys: { switchMonitorUp: ' None ', copyFiles: 'none\n' } })))
+      expect(json.profiles[0].hotkeys).toEqual({ switchMonitorUp: [], copyFiles: [] })
+    })
+
     it('leaves hotkeys out when every action is empty', () => {
       const json = JSON.parse(serialize(state({ mode: 'Master', hotkeys: { toggleCursorLock: '' } })))
       expect('hotkeys' in json.profiles[0]).toBe(false)

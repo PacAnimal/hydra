@@ -1,8 +1,16 @@
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+
 namespace Hydra.Platform.Linux;
 
 internal static class XlibRuntime
 {
-    private static readonly XlibInitializationGate ThreadInitialization = new(NativeMethods.XInitThreads);
+    private static readonly XlibInitializationGate ThreadInitialization = new(() =>
+    {
+        var initialized = NativeMethods.XInitThreads();
+        if (initialized != 0) XErrors.Install();
+        return initialized;
+    });
 
     internal static bool TryInitializeThreads() => ThreadInitialization.TryInitialize();
 
@@ -38,4 +46,30 @@ internal sealed class XlibInitializationGate(Func<int> initialize)
         LazyThreadSafetyMode.ExecutionAndPublication);
 
     internal bool TryInitialize() => _initialized.Value;
+}
+
+// Xlib's default error handler exits the process on any X error, such as a window that closed between being listed and
+// being asked about, or a key another client already grabs; Hydra's counts it on the thread that received the reply,
+// and carries on
+internal static class XErrors
+{
+    [ThreadStatic] private static int _errors;
+
+    internal static unsafe void Install() => _ = NativeMethods.XSetErrorHandler((nint)(delegate* unmanaged[Cdecl]<nint, nint, int>)&OnError);
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int OnError(nint display, nint errorEvent)
+    {
+        _errors++;
+        return 0;
+    }
+
+    // whether the requests made sends all succeeded, once XSync has had the server answer them
+    internal static bool Succeeds(nint display, Action requests)
+    {
+        var before = _errors;
+        requests();
+        _ = NativeMethods.XSync(display, false);
+        return _errors == before;
+    }
 }

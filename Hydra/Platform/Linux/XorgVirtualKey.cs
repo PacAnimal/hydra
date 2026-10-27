@@ -109,5 +109,6 @@ internal static class XorgVirtualKey
     internal const ulong Alt_L = 0xFFE9;
     internal const ulong Alt_R = 0xFFEA;
     internal const ulong Super_L = 0xFFEB;
+    internal const ulong VoidSymbol = 0xFFFFFF;
     internal const ulong Super_R = 0xFFEC;
 }

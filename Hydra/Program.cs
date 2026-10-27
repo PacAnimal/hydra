@@ -208,6 +208,9 @@ if (startupLog.IsEnabled(LogLevel.Information))
 
 foreach (var hotkeyError in profile.Hotkeys.Errors)
     startupLog.LogWarning("Hotkey config: {Error}", hotkeyError);
+if (startupLog.IsEnabled(LogLevel.Information))
+    foreach (var disabled in profile.Hotkeys.Disabled)
+        startupLog.LogInformation("Hotkey config: {Action} is disabled", disabled);
 
 if (config?.EmbeddedStyxServer != null && startupLog.IsEnabled(LogLevel.Information))
 {
@@ -271,9 +274,16 @@ if (config != null)
     if (profile.Mode == Mode.Master)
     {
         if (OperatingSystem.IsMacOS())
+        {
             services.AddSingleton<IPlatformInput, MacInputHandler>();
+            services.AddSingleton<IWindowFocus, MacWindowFocus>();
+        }
         else if (OperatingSystem.IsWindows())
+        {
             services.AddSingleton<IPlatformInput, WindowsInputHandler>();
+            // the input handler, so a window is focused behind the shield's teardown on its own thread
+            services.AddSingleton(sp => (IWindowFocus)sp.GetRequiredService<IPlatformInput>());
+        }
         else if (linuxConsoleMode)
         {
             if (!profile.RemoteOnly)
@@ -284,7 +294,10 @@ if (config != null)
             services.AddSingleton<IPlatformInput, EvdevInputHandler>();
         }
         else if (OperatingSystem.IsLinux())
+        {
             services.AddSingleton<IPlatformInput, XorgInputHandler>();
+            services.AddSingleton<IWindowFocus, XorgWindowFocus>();
+        }
         else
             throw new PlatformNotSupportedException($"Unsupported OS: {Environment.OSVersion}");
 
@@ -294,12 +307,22 @@ if (config != null)
     else if (profile.Mode == Mode.Slave)
     {
         if (OperatingSystem.IsMacOS())
+        {
             services.AddCoalescedOutput<MacOutputHandler>();
+            services.AddSingleton<IWindowFocus, MacWindowFocus>();
+        }
         else if (OperatingSystem.IsWindows())
+        {
             // guarded again: the platform analyzer does not follow the branch into a lambda
             services.AddCoalescedOutput<WindowsOutputHandler>(handler => { if (OperatingSystem.IsWindows()) handler.Initialize(); });
+            // the output handler, so a window is focused on the input desktop's thread
+            services.AddSingleton<IWindowFocus>(sp => OperatingSystem.IsWindows() ? sp.GetRequiredService<WindowsOutputHandler>() : new NullWindowFocus());
+        }
         else if (OperatingSystem.IsLinux())
+        {
             services.AddCoalescedOutput<XorgOutputHandler>();
+            services.AddSingleton<IWindowFocus, XorgWindowFocus>();
+        }
         else
             throw new PlatformNotSupportedException($"Unsupported OS: {Environment.OSVersion}");
 

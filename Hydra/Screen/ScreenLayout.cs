@@ -148,20 +148,84 @@ public class ScreenLayout(List<ScreenRect> screens, List<HostConfig> configs, in
         }
         if (match is null) return null;
 
-        // skip-through offline screens (Width/Height == 0 means slave not yet connected)
-        var dest = match.Destination;
-        const int maxHops = 10;
-        for (var hops = 0; (dest.Width == 0 || dest.Height == 0) && hops < maxHops; hops++)
-        {
-            if (!_graph.TryGetValue((dest.Name, dir.Value), out var nextLinks) || nextLinks.Count == 0)
-                return null;
-            dest = nextLinks[0].Destination;
-        }
-        if (dest.Width == 0 || dest.Height == 0) return null;
+        if (Online(match.Destination, dir.Value) is not { } dest) return null;
 
         var entry = MapEntry(dest, dir.Value, perpPos, edgeLen, match);
         return new EdgeHit(dest, dir.Value, entry, new ScreenEdge(current.Name, dir.Value, perpPos));
     }
+
+    // skips through offline screens (Width/Height == 0 means slave not yet connected) to the next one on in dir
+    private ScreenRect? Online(ScreenRect dest, Direction dir)
+    {
+        const int maxHops = 10;
+        for (var hops = 0; IsOffline(dest) && hops < maxHops; hops++)
+        {
+            if (!_graph.TryGetValue((dest.Name, dir), out var nextLinks) || nextLinks.Count == 0)
+                return null;
+            dest = nextLinks[0].Destination;
+        }
+        return IsOffline(dest) ? null : dest;
+    }
+
+    private static bool IsOffline(ScreenRect screen) => screen.Width == 0 || screen.Height == 0;
+
+    // The screen the monitor switch hotkey goes to from `from` through its `edge`: the one on that edge, or of several,
+    // the closest to the aimed point along it (its middle, or the middle of the end third a perpendicular `third`
+    // names), a tie going to the left or upper one. Same-host neighbours are found by touching `from`, other hosts' by
+    // the configured links. Null when nothing is there, or `third` is not perpendicular to `edge`.
+    public ScreenRect? SwitchTarget(ScreenRect from, Direction edge, Direction? third, bool includeLocal)
+    {
+        if (third is { } t && !t.IsPerpendicularTo(edge)) return null;
+        var aim = third switch
+        {
+            Direction.Left or Direction.Up => 1 / 6.0,
+            Direction.Right or Direction.Down => 5 / 6.0,
+            _ => 0.5,
+        };
+        var candidates = Neighbours(from, edge).Where(c => includeLocal || !c.Screen.IsLocal).ToList();
+        return candidates.Count switch
+        {
+            0 => null,
+            1 => candidates[0].Screen,
+            _ => candidates.OrderBy(c => Distance(aim, c.Start, c.End)).ThenBy(c => c.Start).First().Screen,
+        };
+    }
+
+    private static double Distance(double aim, double start, double end) => aim < start ? start - aim : aim > end ? aim - end : 0;
+
+    // every screen across `edge` of `from`, with the part of that edge (0 to 1) it lies along; one entry per screen
+    private List<EdgeNeighbour> Neighbours(ScreenRect from, Direction edge)
+    {
+        var found = new List<EdgeNeighbour>();
+        foreach (var s in screens)
+        {
+            if (s == from || IsOffline(s) || !s.Host.EqualsIgnoreCase(from.Host) || !Touches(from, s, edge)) continue;
+            var (start, end, length, origin) = edge.IsVertical()
+                ? (Math.Max(from.X, s.X), Math.Min(from.X + from.Width, s.X + s.Width), from.Width, from.X)
+                : (Math.Max(from.Y, s.Y), Math.Min(from.Y + from.Height, s.Y + s.Height), from.Height, from.Y);
+            if (end > start) found.Add(new EdgeNeighbour(s, (start - origin) / (double)length, (end - origin) / (double)length));
+        }
+        if (_graph.TryGetValue((from.Name, edge), out var links))
+        {
+            foreach (var link in links)
+            {
+                if (Online(link.Destination, edge) is not { } dest) continue;
+                var at = found.FindIndex(n => n.Screen == dest);
+                if (at < 0) found.Add(new EdgeNeighbour(dest, link.SourceStart, link.SourceEnd));
+                else found[at] = found[at] with { Start = Math.Min(found[at].Start, link.SourceStart), End = Math.Max(found[at].End, link.SourceEnd) };
+            }
+        }
+        return found;
+    }
+
+    private static bool Touches(ScreenRect from, ScreenRect s, Direction edge) => edge switch
+    {
+        Direction.Up => s.Y + s.Height == from.Y,
+        Direction.Down => s.Y == from.Y + from.Height,
+        Direction.Left => s.X + s.Width == from.X,
+        Direction.Right => s.X == from.X + from.Width,
+        _ => throw new ArgumentOutOfRangeException(nameof(edge), edge, null),
+    };
 
     // maps cursor position from source edge range to dest entry coords with nudge
     private static ScreenPoint MapEntry(
@@ -203,6 +267,8 @@ public class ScreenLayout(List<ScreenRect> screens, List<HostConfig> configs, in
 
     // length of the edge a cursor crosses moving in dir
     private static int EdgeLength(ScreenRect screen, Direction dir) => dir is Direction.Left or Direction.Right ? screen.Height : screen.Width;
+
+    private sealed record EdgeNeighbour(ScreenRect Screen, double Start, double End);
 
     // one entry per edge segment connection
     private record EdgeLink(

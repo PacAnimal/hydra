@@ -1,5 +1,6 @@
 using Hydra.Config;
 using Hydra.Keyboard;
+using Hydra.Screen;
 using Tests.Setup;
 
 namespace Tests.Config;
@@ -163,13 +164,88 @@ public class HotkeyTests
     }
 
     [Test]
-    public void EmptyList_KeepsTheDefault()
+    public void EmptyList_DisablesTheAction()
     {
         var hotkeys = HotkeyBindings.Build(new() { ["toggleCursorLock"] = [] });
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(hotkeys.Errors, Has.One.Contains("is empty"));
+            Assert.That(hotkeys.Errors, Is.Empty);
+            Assert.That(hotkeys.Disabled, Is.EqualTo([HotkeyAction.ToggleCursorLock]));
+            Assert.That(hotkeys.Match(Char('l', HotkeyChord.Modifiers)), Is.Null);
+        }
+    }
+
+    [TestCase(SpecialKey.Up, HotkeyAction.SwitchMonitorUp)]
+    [TestCase(SpecialKey.Down, HotkeyAction.SwitchMonitorDown)]
+    [TestCase(SpecialKey.Left, HotkeyAction.SwitchMonitorLeft)]
+    [TestCase(SpecialKey.Right, HotkeyAction.SwitchMonitorRight)]
+    public void SwitchMonitor_DefaultsToTheChordAndAnArrow(SpecialKey arrow, HotkeyAction expected)
+    {
+        var hotkeys = HotkeyBindings.Build(null);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(hotkeys.Match(Special(arrow, HotkeyChord.Modifiers)), Is.EqualTo(expected));
+            Assert.That(hotkeys.Match(Special(arrow)), Is.Null);
+        }
+    }
+
+    [Test]
+    public void AChordBoundTwice_StaysWithTheFirstAction_AndTheOtherKeepsItsDefault()
+    {
+        var hotkeys = HotkeyBindings.Build(new() { ["lockSlaves"] = ["Ctrl+Alt+Super+L"] });
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(hotkeys.Errors, Has.One.Contains("already bound to ToggleCursorLock"));
             Assert.That(hotkeys.Match(Char('l', HotkeyChord.Modifiers)), Is.EqualTo(HotkeyAction.ToggleCursorLock));
+            Assert.That(hotkeys.Match(Char('k', HotkeyChord.Modifiers)), Is.EqualTo(HotkeyAction.LockSlaves));
+        }
+    }
+
+    // an action not configured whose default another took is warned of once, and left with no chord
+    [Test]
+    public void ADefaultTakenByAnotherAction_IsWarnedOfOnce()
+    {
+        var hotkeys = HotkeyBindings.Build(new() { ["toggleCursorLock"] = ["Ctrl+Alt+Super+K"] });
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(hotkeys.Errors, Has.Exactly(1).Contains("LockSlaves").And.Contains("already bound to ToggleCursorLock"));
+            Assert.That(hotkeys.For(HotkeyAction.LockSlaves), Is.Empty);
+            Assert.That(hotkeys.Match(Char('k', HotkeyChord.Modifiers)), Is.EqualTo(HotkeyAction.ToggleCursorLock));
+        }
+    }
+
+    [Test]
+    public void ADirectionThatCanNeverCombine_IsWarnedAbout()
+    {
+        var hotkeys = HotkeyBindings.Build(new() { ["switchMonitorUp"] = ["F13"] });
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(hotkeys.Errors, Has.One.Contains("SwitchMonitorUp").And.Contains("perpendicular"));
+            Assert.That(hotkeys.Match(Special(SpecialKey.F13)), Is.EqualTo(HotkeyAction.SwitchMonitorUp));
+        }
+    }
+
+    [Test]
+    public void DirectionsSharingModifiers_CombineWithoutAWarning()
+    {
+        var hotkeys = HotkeyBindings.Build(new()
+        {
+            ["switchMonitorUp"] = ["Ctrl+Alt+Super+Up", "Ctrl+Alt+KP_8"],
+            ["switchMonitorRight"] = ["Ctrl+Alt+Super+Right", "Ctrl+Alt+KP_6"],
+        });
+        Assert.That(hotkeys.Errors, Is.Empty);
+    }
+
+    [Test]
+    public void SwitchDirection_NamesEachDirectionAndNothingElse()
+    {
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(HotkeyBindings.SwitchDirection(HotkeyAction.SwitchMonitorUp), Is.EqualTo(Direction.Up));
+            Assert.That(HotkeyBindings.SwitchDirection(HotkeyAction.SwitchMonitorDown), Is.EqualTo(Direction.Down));
+            Assert.That(HotkeyBindings.SwitchDirection(HotkeyAction.SwitchMonitorLeft), Is.EqualTo(Direction.Left));
+            Assert.That(HotkeyBindings.SwitchDirection(HotkeyAction.SwitchMonitorRight), Is.EqualTo(Direction.Right));
+            Assert.That(HotkeyBindings.SwitchDirection(HotkeyAction.ToggleCursorLock), Is.Null);
         }
     }
 }

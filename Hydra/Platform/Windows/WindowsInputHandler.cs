@@ -10,7 +10,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform.Windows;
 
-public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydraProfile profile) : IPlatformInput
+public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydraProfile profile) : IPlatformInput, IWindowFocus
 {
     // stored as fields to prevent GC collection while hooks are active
     private HookProc? _mouseHookProc;
@@ -92,6 +92,10 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
         SetWarpState(x, y);
         NativeMethods.SetCursorPos(x, y);
     }
+
+    // on the hook loop, where the shield lives, see WindowsShieldWindow.FocusFrontmostOn
+    [SupportedOSPlatform("windows")]
+    public void FocusFrontmostOn(ScreenBounds screen) => _hookLoop?.Post(() => _shield.FocusFrontmostOn(screen));
 
     public void ReturnTo(ScreenPoint? warpTo)
     {
