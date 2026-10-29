@@ -92,7 +92,7 @@ Use `Esc` to close the TUI. It does not change Hydra's running state.
 - `logHistory` — how many cut-off log files to keep beside the log. A full log becomes `hydra.log.1`, the older ones moving up to `.2`, `.3`… into the first free number, and the oldest is dropped once all are taken; any numbered past `logHistory`, from a larger one before, are deleted at the log's first write. `0` keeps no history and trims the log in place instead (default: `1`)
 - `logTrimPercent` — with `logHistory` at `0`, how much of a full log to cut from its start, 1 to 100, rounded up to a whole line; `100` empties it (default: `50`)
 - `autoUpdate` — `false` to disable automatic updates
-- `updateChannel` — `stable` (default) follows full releases; `edge` follows the newest release of any kind, including prereleases built from the `edge` branch, and moves back onto a stable release once one overtakes them. Testing ground only: switching back to `stable` does not downgrade, it waits for the next stable release
+- `updateChannel` — `stable` (default) follows full releases; `edge` follows only prereleases built from the `edge` branch, never a full release, even a higher-numbered one. Testing ground only: switching back to `stable` does not downgrade, it waits for the next stable release
 - `lockFile` — path to a lock file to prevent multiple instances (default: none)
 - `profile` — force the named `profileName` regardless of conditions; intended for diagnosis and controlled overrides
 - `debugShield` — enable verbose cursor-shield diagnostics (default: `false`)

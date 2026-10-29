@@ -64,11 +64,10 @@ internal sealed class SelfUpdater(IHydraProfile profile, ILogger<SelfUpdater> lo
         if (log.IsEnabled(LogLevel.Information))
             log.LogInformation("Checking for updates (current: {Version}, channel: {Channel})", current, channel);
 
-        // edge takes the highest version among recent releases, prereleases included, so it moves on to a
-        // stable release once one overtakes the edge builds
+        // edge takes the highest prerelease among recent releases, never a stable one
         var edge = channel == UpdateChannel.Edge;
         using var doc = JsonDocument.Parse(await Http.GetStringAsync($"https://api.github.com/repos/{Repo}/releases{(edge ? "?per_page=30" : "/latest")}", cancel));
-        if ((edge ? Newest(doc.RootElement) : doc.RootElement) is not { } root || TagVersion(root) is not { } latest)
+        if ((edge ? NewestEdge(doc.RootElement) : doc.RootElement) is not { } root || TagVersion(root) is not { } latest)
         {
             log.LogWarning("No release found on the {Channel} channel", channel);
             return;
@@ -221,14 +220,15 @@ internal sealed class SelfUpdater(IHydraProfile profile, ILogger<SelfUpdater> lo
         catch { /* best effort */ }
     }
 
-    // the highest-versioned release that is not a draft
-    internal static JsonElement? Newest(JsonElement releases)
+    // the highest-versioned prerelease that is not a draft
+    internal static JsonElement? NewestEdge(JsonElement releases)
     {
         JsonElement? newest = null;
         Version? best = null;
         foreach (var release in releases.EnumerateArray())
         {
             if (release.TryGetProperty("draft", out var draft) && draft.GetBoolean()) continue;
+            if (!release.TryGetProperty("prerelease", out var prerelease) || !prerelease.GetBoolean()) continue;
             if (TagVersion(release) is not { } version || version <= best) continue;
             newest = release;
             best = version;

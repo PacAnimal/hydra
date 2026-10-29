@@ -45,7 +45,7 @@ internal static class GuidedFields
         "Allow Hydra's built-in updater to check for and apply releases.")
     { Fallback = GuidedValues.On };
     internal static readonly GuidedField UpdateChannel = new(GuidedSection.Global, 8, 0, null, "updateChannel", GuidedFieldKind.Choice, "Update Channel",
-        "Stable takes full releases only; Edge also takes prereleases built from the edge branch.")
+        "Stable takes full releases only; Edge takes only prereleases built from the edge branch.")
     {
         DefaultHint = nameof(Config.UpdateChannel.Stable),
         ChoiceEnum = typeof(UpdateChannel)

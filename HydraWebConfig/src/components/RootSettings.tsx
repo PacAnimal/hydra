@@ -34,7 +34,7 @@ export function RootSettings({ state, onChange }: Props) {
           </select>
         </div>
         <div className="field">
-          <label htmlFor="gs-updatechannel" title="edge follows prereleases built from the edge branch, and moves back onto a stable release once one overtakes them">Update Channel</label>
+          <label htmlFor="gs-updatechannel" title="edge follows only prereleases built from the edge branch, never a full release">Update Channel</label>
           <select
             id="gs-updatechannel"
             value={state.updateChannel ?? 'stable'}
