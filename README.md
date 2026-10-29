@@ -148,7 +148,7 @@ Replace `192.168.1.10` with the master's IP address. Run `./hydra` on both machi
 
 ### Hotkeys
 
-All hotkeys use **Ctrl+Alt+Super** (Super = ⌘ on macOS, Win key on Windows):
+All hotkeys use **Ctrl+Alt+Super** (Super = ⌘ on macOS, Win key on Windows), and any of them can be [rebound or turned off](docs/CONFIGURATION.md#customising-hotkeys):
 
 | Hotkey | Action |
 |--------|--------|
@@ -156,6 +156,7 @@ All hotkeys use **Ctrl+Alt+Super** (Super = ⌘ on macOS, Win key on Windows):
 | `Ctrl+Alt+Super+M` | Toggle relative mouse mode on the current remote screen (useful for games) |
 | `Ctrl+Alt+Super+C` | Copy selected files/folders to Hydra's cross-machine clipboard (macOS, Windows) |
 | `Ctrl+Alt+Super+V` | Paste previously copied files to the current machine |
+| `Ctrl+Alt+Super+Arrow` | Jump to the next screen that way, on any machine |
 
 For cross-network setups (different LANs or over a VPN), see [Networking with Styx](docs/CONFIGURATION.md#networking-with-styx).
 
@@ -170,17 +171,19 @@ The easiest way to set up multi-machine layouts, Styx relay configs, and network
 ## Features
 
 - Seamless cursor transitions in any direction (left, right, up, down)
+- **Monitor switching from the keyboard** — jump to the next screen and its last window, no mouse needed
 - **Multi-monitor support** — multiple local and remote monitors, auto-detected at startup and on connect/disconnect
 - Flexible layout: L-shaped, grids, or any topology
 - **Range-based neighbours** — split edges to route to different hosts by cursor position
 - **Per-screen scale** — control cursor speed on each remote screen
 - Full keyboard forwarding including dead keys and special characters — resolved on the master using its keyboard layout
 - Mouse button and scroll forwarding
-- **Clipboard sync** — text, rich text and images synced automatically when switching machines (all platforms), plus Linux's middle-click selection
+- **Clipboard sync** — text, rich text and images synced automatically when switching machines (all platforms), plus Linux's middle-click selection. Can be turned off per machine
 - **File transfer** — cross-machine copy/paste of files and folders via hotkey (macOS and Windows)
 - **Media key forwarding** — volume, playback, brightness keys forwarded to the active machine
 - **Screensaver sync** — activating the screensaver on the master locks all connected slaves
 - **Windows login screen support** — installed as a system service, Hydra stays active on the lock and login screens
+- **Network-aware profiles** — a different layout per Wi-Fi network, router, address, or whether a cable is plugged in
 - End-to-end encrypted relay via **Styx** for machines on different networks
 - **Multiple masters per slave** — several machines can share a single slave display; whoever moves their cursor onto it takes control
 - **Remote-only mode** — use a headless Linux machine (e.g. Raspberry Pi) as a dedicated input forwarder with no local screen
