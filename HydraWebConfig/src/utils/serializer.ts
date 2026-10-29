@@ -41,6 +41,9 @@ function serializeConditions(c: ConfigConditions): Record<string, unknown> {
   if (c.ssid) out.ssid = c.ssid
   if (c.screenCount !== undefined) out.screenCount = c.screenCount
   if (c.isPluggedIn !== undefined) out.isPluggedIn = c.isPluggedIn
+  if (c.address) out.address = c.address
+  if (c.gatewayMac) out.gatewayMac = c.gatewayMac
+  if (c.wired !== undefined) out.wired = c.wired
   return out
 }
 

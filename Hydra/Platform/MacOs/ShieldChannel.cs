@@ -30,6 +30,7 @@ internal sealed record ShieldMessage(string Kind, IReadOnlyDictionary<string, ob
 //   c# → shield                                          shield → c#
 //   shield {seq:int, state:"hide"|"show"|"debug"}        ack {seq}         matched by seq, see SendAndAwaitAck
 //   wifi                                                 wifiAuth {status:int}, ssid {name:string|nil}
+//   neighbours {seq:int, gateways:[string]}              ack {seq, entries?:[{ip, mac:bin}]}   ARP table; no entries: unreadable
 //   osd {text}
 //   transferBegin {totalBytes:long, fileCount:int, isSender:bool, names:[string]}
 //   transferFile {name}, transferProgress {bytes:long, speed:double}
@@ -43,7 +44,7 @@ internal sealed class ShieldChannel(Stream input, Stream output, ILogger log)
     private const int MaxDepth = 64;
 
     private readonly SemaphoreSlim _writeLock = new(1, 1);
-    private readonly ConcurrentDictionary<long, TaskCompletionSource<bool>> _pendingAcks = new();
+    private readonly ConcurrentDictionary<long, TaskCompletionSource<ShieldMessage?>> _pendingAcks = new();
     private int _nextSeq;
     private volatile bool _ended;
     // a write given up mid-frame leaves the far end unable to find the next one, so it ends the channel
@@ -111,7 +112,7 @@ internal sealed class ShieldChannel(Stream input, Stream output, ILogger log)
     {
         _ended = true;
         foreach (var waiter in _pendingAcks.Values)
-            waiter.TrySetResult(false);
+            waiter.TrySetResult(null);
     }
 
     private async Task WriteFrame(byte[] frame, CancellationToken ct)
@@ -122,17 +123,21 @@ internal sealed class ShieldChannel(Stream input, Stream output, ILogger log)
 
     // sends kind with the next seq added to fields; true once the matching ack arrives, false when the send and ack together outlast
     // timeout, on a failed write or channel end
-    public async ValueTask<bool> SendAndAwaitAck(string kind, IReadOnlyDictionary<string, object?>? fields, TimeSpan timeout, CancellationToken ct)
+    public async ValueTask<bool> SendAndAwaitAck(string kind, IReadOnlyDictionary<string, object?>? fields, TimeSpan timeout, CancellationToken ct) =>
+        await SendAndAwaitReply(kind, fields, timeout, ct) != null;
+
+    // as SendAndAwaitAck, but the ack itself, carrying whatever the shield answered; null where that says false
+    public async ValueTask<ShieldMessage?> SendAndAwaitReply(string kind, IReadOnlyDictionary<string, object?>? fields, TimeSpan timeout, CancellationToken ct)
     {
         long seq = Interlocked.Increment(ref _nextSeq);
-        var waiter = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var waiter = new TaskCompletionSource<ShieldMessage?>(TaskCreationOptions.RunContinuationsAsynchronously);
         _pendingAcks[seq] = waiter;
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
         deadline.CancelAfter(timeout);
         try
         {
             // checked after registering, so an end racing us either sees the waiter or is seen here
-            if (_ended) return false;
+            if (_ended) return null;
             var withSeq = new Dictionary<string, object?>();
             if (fields != null)
                 foreach (var pair in fields)
@@ -143,11 +148,11 @@ internal sealed class ShieldChannel(Stream input, Stream output, ILogger log)
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            return false;
+            return null;
         }
         catch (Exception e) when (e is IOException or ObjectDisposedException)
         {
-            return false;
+            return null;
         }
         finally
         {
@@ -168,7 +173,7 @@ internal sealed class ShieldChannel(Stream input, Stream output, ILogger log)
                 if (message == null) continue;
                 if (message.Kind == "ack")
                 {
-                    if (message.GetLong("seq") is { } seq && _pendingAcks.TryGetValue(seq, out var waiter)) waiter.TrySetResult(true);
+                    if (message.GetLong("seq") is { } seq && _pendingAcks.TryGetValue(seq, out var waiter)) waiter.TrySetResult(message);
                     continue;
                 }
                 yield return message;

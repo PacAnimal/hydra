@@ -154,7 +154,7 @@ var services = builder.Services;
 services.AddEnvironmentConfiguration();
 
 // detect current network/screens and resolve which profile to use
-var detector = await CreateDetector(macNetworkState, services);
+var detector = await CreateDetector(macNetworkState, macShield, services);
 HydraConfig? config;
 if (configFile.Profile != null)
     config = HydraConfig.Resolve(profiles, new ConditionState([], 1), configFile.Profile);
@@ -165,7 +165,8 @@ else
     var activeSsids = (HydraConfig.HasSsidConditions(profiles) ? await detector.GetActiveSsids() : []) ?? [];
     var screenCount = HydraConfig.HasScreenCountConditions(profiles) ? GetScreenCount() : 1;
     var isPluggedIn = HydraConfig.HasPluggedInConditions(profiles) ? await detector.GetIsPluggedIn() : null;
-    config = HydraConfig.Resolve(profiles, new ConditionState(activeSsids, screenCount, isPluggedIn));
+    var links = HydraConfig.HasLinkConditions(profiles) ? await ReadNetworkLinks(detector, HydraConfig.HasGatewayMacConditions(profiles)) : null;
+    config = HydraConfig.Resolve(profiles, new ConditionState(activeSsids, screenCount, isPluggedIn, links));
 }
 
 // derive network config blob from embeddedStyx (explicit) or embeddedStyxServer (auto-localhost)
@@ -470,13 +471,27 @@ app.Run();
 processLock?.Dispose();
 
 // creates the platform-specific network detector for use before DI is set up
-static async Task<INetworkDetector> CreateDetector(MacNetworkState? macNetworkState, IServiceCollection logServices)
+static async Task<INetworkDetector> CreateDetector(MacNetworkState? macNetworkState, MacShieldProcess? macShield, IServiceCollection logServices)
 {
-    if (OperatingSystem.IsMacOS()) return new MacNetworkDetector(macNetworkState);
+    if (OperatingSystem.IsMacOS()) return new MacNetworkDetector(macNetworkState, macShield);
     var cmdRunner = new CmdRunner(await logServices.CreateLogger<CmdRunner>());
     if (OperatingSystem.IsWindows()) return new WindowsNetworkDetector();
     if (OperatingSystem.IsLinux()) return new LinuxNetworkDetector(cmdRunner, await logServices.CreateLogger<LinuxNetworkDetector>());
     throw new PlatformNotSupportedException($"Unsupported OS: {Environment.OSVersion}");
+}
+
+// unknown when the platform could not be asked: the link conditions then match nothing, and NetworkWatcher retries
+static async Task<NetworkLinks?> ReadNetworkLinks(INetworkDetector detector, bool gatewayMacs)
+{
+    try
+    {
+        return await detector.GetNetworkLinks(gatewayMacs);
+    }
+    catch (Exception e) when (e is not OperationCanceledException)
+    {
+        Console.Error.WriteLine($"Network link detection failed: {e.Message}");
+        return null;
+    }
 }
 
 // returns the current number of connected screens

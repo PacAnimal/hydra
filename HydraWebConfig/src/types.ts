@@ -55,6 +55,9 @@ export interface ConfigConditions {
   ssid?: string
   screenCount?: number
   isPluggedIn?: boolean
+  address?: string
+  gatewayMac?: string
+  wired?: boolean
 }
 
 export interface EmbeddedStyxConfig {

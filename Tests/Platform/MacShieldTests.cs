@@ -89,6 +89,26 @@ public class MacShieldTests
         }
     }
 
+    // a documentation address off the local network, so the datagram asks macOS for nothing
+    private static readonly string[] OffLinkGateway = ["192.0.2.1"];
+
+    // without Local Network access the table reads empty, so this pins the reply, not what is in it
+    [Test]
+    public async Task Shield_AnswersNeighbours_WithWholeEntries()
+    {
+        await using var shield = RunningShield.Start();
+
+        var reply = await shield.Reply("neighbours", new() { ["gateways"] = OffLinkGateway });
+
+        Assert.That(reply, Is.Not.Null, shield.StderrText);
+        var entries = reply!["entries"] as object?[];
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(entries, Is.Not.Null, "no entries array");
+            Assert.That(MacShieldProcess.ParseNeighbours(reply), Has.Count.EqualTo(entries?.Length ?? -1));
+        }
+    }
+
     [Test]
     public async Task Shield_IgnoresUnknownKind()
     {
@@ -285,6 +305,9 @@ public class MacShieldTests
         // acks are consumed inside ReadAll, which the pump keeps reading
         public Task<bool> Ack(string state) => Bounded(ct => _channel.SendAndAwaitAck(
             "shield", new Dictionary<string, object?> { ["state"] = state }, TestBound.Bound, ct).AsTask(), $"ack for {state}");
+
+        public Task<ShieldMessage?> Reply(string kind, Dictionary<string, object?> fields) =>
+            Bounded(ct => _channel.SendAndAwaitReply(kind, fields, TestBound.Bound, ct).AsTask(), $"reply to {kind}");
 
         public async Task Send(string kind, Dictionary<string, object?>? fields = null) => await Bounded(async ct =>
         {

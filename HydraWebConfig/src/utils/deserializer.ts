@@ -103,6 +103,9 @@ function parseConditions(obj: Record<string, unknown>): ConfigConditions {
     ssid: optStr(obj.ssid),
     screenCount: optNum(obj.screenCount),
     isPluggedIn: strictBool(obj.isPluggedIn),
+    address: optStr(obj.address),
+    gatewayMac: optStr(obj.gatewayMac),
+    wired: strictBool(obj.wired),
   }
 }
 

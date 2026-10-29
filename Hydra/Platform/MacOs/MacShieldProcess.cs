@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Net;
+using System.Net.NetworkInformation;
 using Cathedral.Utils;
 using Hydra.FileTransfer;
 using Microsoft.Extensions.Hosting;
@@ -135,6 +137,29 @@ internal sealed class MacShieldProcess : IHostedService, IDisposable, IFileTrans
         if (_lastState != StateHide) Log?.LogDebug("Shield → hide (pass-through)");
         _lastState = StateHide;
         return SendState(StateHide);
+    }
+
+    // the IPv4 ARP table as the shield reads it, under its own Local Network grant, after a datagram from it to each gateway,
+    // which is what has macOS ask for that grant; null when it did not answer or could not read the table
+    internal async Task<IReadOnlyList<Neighbour>?> Neighbours(IReadOnlyList<IPAddress> gateways, CancellationToken cancel)
+    {
+        if (_channel is not { } channel) return null;
+        var fields = new Dictionary<string, object?> { ["gateways"] = gateways.Select(g => g.ToString()).ToArray() };
+        return await channel.SendAndAwaitReply("neighbours", fields, SendReplyTimeout, cancel) is { } reply ? ParseNeighbours(reply) : null;
+    }
+
+    // null without entries: the shield leaves them out when the table could not be read
+    internal static List<Neighbour>? ParseNeighbours(ShieldMessage reply)
+    {
+        if (reply["entries"] is not object?[] entries) return null;
+        var neighbours = new List<Neighbour>();
+        foreach (var entry in entries)
+        {
+            if (entry is not IReadOnlyDictionary<string, object?> fields) continue;
+            if (fields.GetValueOrDefault("ip") is not string ip || !IPAddress.TryParse(ip, out var address)) continue;
+            if (fields.GetValueOrDefault("mac") is byte[] { Length: 6 } mac) neighbours.Add(new Neighbour(address, new PhysicalAddress(mac)));
+        }
+        return neighbours;
     }
 
     // -- IFileTransferDialog --

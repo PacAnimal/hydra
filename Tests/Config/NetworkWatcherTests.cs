@@ -1,6 +1,8 @@
 using Hydra.Config;
 using Hydra.Platform;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Tests.Setup;
 
 namespace Tests.Config;
 
@@ -29,6 +31,18 @@ public class NetworkWatcherTests
         public bool? PluggedIn = true;
         public Task<List<string>?> GetActiveSsids(CancellationToken cancel = default) => Task.FromResult(Ssids);
         public Task<bool?> GetIsPluggedIn(CancellationToken cancel = default) => Task.FromResult(PluggedIn);
+
+        public NetworkLinks Links = new([], [], Wired: true);
+        public bool LinksFail;
+        public int LinkReads;
+        public bool? AskedForGatewayMacs;
+
+        public Task<NetworkLinks> GetNetworkLinks(bool gatewayMacs, CancellationToken cancel = default)
+        {
+            LinkReads++;
+            AskedForGatewayMacs = gatewayMacs;
+            return LinksFail ? Task.FromException<NetworkLinks>(new IOException("no route table")) : Task.FromResult(Links);
+        }
     }
 
     private sealed class Harness
@@ -41,11 +55,20 @@ public class NetworkWatcherTests
         private readonly NetworkWatcher _watcher;
 
         // active is always the first profile — Resolve matches on reference, so it must be the same instance
-        public Harness(HydraConfig active, params HydraConfig[] others)
+        public Harness(HydraConfig active, params HydraConfig[] others) : this(NullLogger<NetworkWatcher>.Instance, active, others) { }
+
+        public Harness(ILogger<NetworkWatcher> log, HydraConfig active, params HydraConfig[] others)
         {
             Dormancy = new DormancyState(NullLogger<DormancyState>.Instance, () => _now);
             _watcher = new NetworkWatcher(Detector, () => ScreenCount, [active, .. others], active, null,
-                Dormancy, NullLogger<NetworkWatcher>.Instance, () => Restarts++, () => _now);
+                Dormancy, log, () => Restarts++, () => _now);
+        }
+
+        // a tick of the service's own loop
+        public Task Run()
+        {
+            Advance(TimeSpan.FromSeconds(30));
+            return _watcher.Poll(CancellationToken.None);
         }
 
         public void Advance(TimeSpan by) => _now += by;
@@ -377,5 +400,171 @@ public class NetworkWatcherTests
             Assert.That(h.Dormancy.IsDormant, Is.False);
             Assert.That(h.Restarts, Is.Zero);
         }
+    }
+
+    private static HydraConfig Docked => new()
+    {
+        Mode = Mode.Slave,
+        ProfileName = "Docked",
+        Conditions = new ConfigConditions { Wired = true, ScreenCount = 2 },
+    };
+
+    // pulling the cable means the machine was carried off, like a changed SSID, even with the screens gone too
+    [Test]
+    public async Task CableUnplugged_Restarts_AndStaysAwake()
+    {
+        var h = new Harness(Docked)
+        {
+            ScreenCount = 1
+        };
+        h.Detector.Links = NetworkLinks.None;
+        await h.Check();
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(h.Dormancy.IsDormant, Is.False);
+            Assert.That(h.Restarts, Is.EqualTo(1));
+        }
+    }
+
+    [Test]
+    public async Task DisplaysSleepWhileStillWired_GoesDormant()
+    {
+        var h = new Harness(Docked)
+        {
+            ScreenCount = 1
+        };
+        await h.Check();
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(h.Dormancy.IsDormant, Is.True);
+            Assert.That(h.Restarts, Is.Zero);
+        }
+    }
+
+    [Test]
+    public async Task LinkDetectionFailing_IsIgnoredEntirely()
+    {
+        var h = new Harness(Docked);
+        h.Detector.LinksFail = true;
+        await h.Check();
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(h.Detector.LinkReads, Is.EqualTo(1));
+            Assert.That(h.Dormancy.IsDormant, Is.False);
+            Assert.That(h.Restarts, Is.Zero);
+        }
+    }
+
+    [Test]
+    public async Task WithoutLinkConditions_LinksAreNeverRead()
+    {
+        var h = new Harness(Work);
+        await h.Check();
+        Assert.That(h.Detector.LinkReads, Is.Zero);
+    }
+
+    // logged once at startup whatever the conditions, so the values to copy into one are in the log
+    [Test]
+    public async Task Startup_LogsTheLinksOnce()
+    {
+        var log = new CapturingLog<NetworkWatcher>();
+        var h = new Harness(log, Work);
+        await h.Run();
+        await h.Run();
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(h.Detector.LinkReads, Is.EqualTo(1));
+            Assert.That(h.Detector.AskedForGatewayMacs, Is.False, "reading gateway MACs sends to the gateway");
+            Assert.That(log.Messages.Count(m => m.StartsWith("Network links: wired")), Is.EqualTo(1));
+        }
+    }
+
+    private static HydraConfig AtTheOffice => new()
+    {
+        Mode = Mode.Slave,
+        ProfileName = "Office",
+        Conditions = new ConfigConditions { GatewayMac = "a4:91:b1:0c:22:7e", ScreenCount = 2 },
+    };
+
+    // a gateway still resolving is no evidence the machine moved, even with the screens asleep
+    [Test]
+    public async Task GatewayNotResolved_IsIgnoredEntirely()
+    {
+        var h = new Harness(AtTheOffice)
+        {
+            ScreenCount = 1
+        };
+        h.Detector.Links = new NetworkLinks([], null, Wired: true);
+        await h.Check();
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(h.Detector.AskedForGatewayMacs, Is.True);
+            Assert.That(h.Dormancy.IsDormant, Is.False);
+            Assert.That(h.Restarts, Is.Zero);
+        }
+    }
+
+    // an unresolved gateway holds only the decisions it could change: here the SSID alone already rules the profile out
+    [Test]
+    public async Task GatewayNotResolved_StillActsOnWhatDoesNotDependOnIt()
+    {
+        var office = new HydraConfig
+        {
+            Mode = Mode.Slave,
+            ProfileName = "Office",
+            Conditions = new ConfigConditions { GatewayMac = "a4:91:b1:0c:22:7e", Ssid = WorkSsid },
+        };
+        var h = new Harness(office);
+        h.Detector.Links = new NetworkLinks([], null, Wired: true);
+        h.Detector.Ssids = ["SomeCafe"];
+        await h.Check();
+        Assert.That(h.Restarts, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task GatewayNotResolved_WarnsOncePerRun()
+    {
+        var log = new CapturingLog<NetworkWatcher>(LogLevel.Warning);
+        var h = new Harness(log, AtTheOffice)
+        {
+            ScreenCount = 1
+        };
+        h.Detector.Links = new NetworkLinks([], null, Wired: true);
+        await h.Check();
+        await h.Check();
+        Assert.That(log.Messages.Count(m => m.Contains("not resolved")), Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task AnotherRouter_Restarts()
+    {
+        var h = new Harness(AtTheOffice);
+        h.Detector.Links = new NetworkLinks([], [System.Net.NetworkInformation.PhysicalAddress.Parse("A4-91-B1-0C-22-7F")], Wired: true);
+        await h.Check();
+        Assert.That(h.Restarts, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task OnlyWiredConditions_LeaveTheNeighbourTableUnread()
+    {
+        var h = new Harness(Docked);
+        await h.Check();
+        Assert.That(h.Detector.AskedForGatewayMacs, Is.False);
+    }
+
+    // warned once per run of failures, then quiet until a read succeeds and a later one fails again
+    [Test]
+    public async Task FailingLinkReads_WarnOncePerRun()
+    {
+        var log = new CapturingLog<NetworkWatcher>(LogLevel.Warning);
+        var h = new Harness(log, Docked);
+        h.Detector.LinksFail = true;
+        await h.Check();
+        await h.Check();
+        h.Detector.LinksFail = false;
+        await h.Check();
+        h.Detector.LinksFail = true;
+        await h.Check();
+        Assert.That(log.Messages.Count(m => m == "network link detection failed"), Is.EqualTo(2));
     }
 }

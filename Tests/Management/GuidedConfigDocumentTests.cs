@@ -190,7 +190,7 @@ public class GuidedConfigDocumentTests
           "profiles": [{
             "profileName": "Home",
             "mode": "Slave",
-            "conditions": { "ssid": "Home WiFi", "screenCount": 2, "isPluggedIn": true },
+            "conditions": { "ssid": "Home WiFi", "screenCount": 2, "isPluggedIn": true, "address": "192.168.1.0/24", "gatewayMac": "a4:91:b1:0c:22:7e", "wired": true },
             "networkConfig": "secret",
             "embeddedStyx": { "server": "https://relay:5000", "password": "client-pw" },
             "embeddedStyxServer": { "port": 5001, "password": "server-pw" },
@@ -376,6 +376,9 @@ public class GuidedConfigDocumentTests
             Assert.That(profile.Conditions!.Ssid, Is.EqualTo("Home WiFi"));
             Assert.That(profile.Conditions.ScreenCount, Is.EqualTo(2));
             Assert.That(profile.Conditions.IsPluggedIn, Is.True);
+            Assert.That(profile.Conditions.Address, Is.EqualTo("192.168.1.0/24"));
+            Assert.That(profile.Conditions.GatewayMac, Is.EqualTo("a4:91:b1:0c:22:7e"));
+            Assert.That(profile.Conditions.Wired, Is.True);
             Assert.That(profile.NetworkConfig, Is.EqualTo("secret"));
             Assert.That(profile.EmbeddedStyx!.Server, Is.EqualTo("https://relay:5000"));
             Assert.That(profile.EmbeddedStyx.Password, Is.EqualTo("client-pw"));
@@ -426,6 +429,16 @@ public class GuidedConfigDocumentTests
         Assert.That(() => document.WriteProfile(0, profile), Throws.InvalidOperationException.With.Message.Contains("on, off, or empty"));
     }
 
+    [Test]
+    public void Wired_RefusesAnythingButAnyYesOrNo()
+    {
+        var document = GuidedConfigDocument.Parse("""{"profiles":[{"mode":"Master"}]}""");
+        var profile = document.ReadProfile(0);
+        profile[GuidedFields.Wired] = "cable";
+
+        Assert.That(() => document.WriteProfile(0, profile), Throws.InvalidOperationException.With.Message.EqualTo("Wired condition must be any, yes, or no."));
+    }
+
     // what a user would type into each field; a field missing here fails the test above
     private static readonly Dictionary<GuidedField, string> Samples = new()
     {
@@ -441,6 +454,9 @@ public class GuidedConfigDocumentTests
         [GuidedFields.Ssid] = "Home WiFi",
         [GuidedFields.ScreenCount] = "2",
         [GuidedFields.IsPluggedIn] = "yes",
+        [GuidedFields.Address] = "192.168.1.0/24",
+        [GuidedFields.GatewayMac] = "a4:91:b1:0c:22:7e",
+        [GuidedFields.Wired] = "yes",
         [GuidedFields.NetworkConfig] = "secret",
         [GuidedFields.EmbeddedServer] = "https://relay:5000",
         [GuidedFields.EmbeddedPassword] = "client-pw",

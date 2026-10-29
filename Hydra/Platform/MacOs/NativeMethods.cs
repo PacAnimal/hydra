@@ -581,6 +581,24 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial nint SCDynamicStoreCopyValue(nint store, nint key);
 
+    // -- SystemConfiguration: network interfaces --
+
+    // a CFArray of SCNetworkInterface the caller releases
+    [LibraryImport(SystemConfiguration)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint SCNetworkInterfaceCopyAll();
+
+    [LibraryImport(SystemConfiguration)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint SCNetworkInterfaceGetBSDName(nint networkInterface);
+
+    [LibraryImport(SystemConfiguration)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint SCNetworkInterfaceGetInterfaceType(nint networkInterface);
+
+    // kSCNetworkInterfaceTypeEthernet's value
+    internal const string kSCNetworkInterfaceTypeEthernet = "Ethernet";
+
     // -- CoreFoundation: array --
 
     [LibraryImport(CoreFoundation)]

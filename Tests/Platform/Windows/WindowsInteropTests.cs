@@ -1,7 +1,10 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Net;
+using System.Net.NetworkInformation;
 using System.Runtime.CompilerServices;
 using System.Runtime.Versioning;
+using Hydra.Platform;
 using Hydra.Platform.Windows;
 using Hydra.Relay;
 
@@ -59,16 +62,62 @@ public class WindowsInteropTests
     {
         const string script = "Get-NetIPInterface -ConnectionState Connected | "
             + "ForEach-Object { '{0}|{1}' -f $_.InterfaceIndex,$_.InterfaceMetric }";
+        var expected = (await PowerShell(script))
+            .Select(line => line.Split('|'))
+            .Select(parts => new InterfaceMetric(int.Parse(parts[0], CultureInfo.InvariantCulture), int.Parse(parts[1], CultureInfo.InvariantCulture)));
+
+        Assert.That(IpInterfaceTable.ConnectedMetrics(), Is.EquivalentTo(expected).And.Not.Empty);
+    }
+
+    // Get-NetAdapter reads the same table; an adapter is compared only if our two reads agree on it, since links come and go
+    [Test]
+    public async Task WiredLinks_MatchGetNetAdapter()
+    {
+        const string script = "Get-NetAdapter -IncludeHidden | "
+            + "Where-Object { $_.HardwareInterface -and $_.InterfaceType -eq 6 -and $_.NdisPhysicalMedium -in 0,14 -and $_.MediaConnectionState -eq 'Connected' -and $_.Status -eq 'Up' } | "
+            + "ForEach-Object { $_.InterfaceIndex }";
+        var before = WindowsNetworkLinks.WiredLinks();
+        var oracle = (await PowerShell(script)).Select(line => int.Parse(line, CultureInfo.InvariantCulture)).ToList();
+        var after = WindowsNetworkLinks.WiredLinks();
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(oracle, Is.SupersetOf(before.Intersect(after)));
+            Assert.That(before.Union(after), Is.SupersetOf(oracle));
+        }
+    }
+
+    // Get-NetNeighbor reads the same table, so it is the oracle for the row layout; an entry is compared only if it held
+    // across both of our reads, since the table moves on its own
+    [Test]
+    public async Task Neighbours_MatchGetNetNeighbor()
+    {
+        const string script = "Get-NetNeighbor -AddressFamily IPv4 | "
+            + "Where-Object { $_.State -notin 'Unreachable','Incomplete' -and $_.LinkLayerAddress -match '^([0-9A-F]{2}-){5}[0-9A-F]{2}$' } | "
+            + "ForEach-Object { '{0}|{1}' -f $_.IPAddress,$_.LinkLayerAddress }";
+        var before = WindowsNetworkLinks.ReadNeighbours();
+        var oracle = (await PowerShell(script))
+            .Select(line => line.Split('|'))
+            .Select(f => new Neighbour(IPAddress.Parse(f[0]), PhysicalAddress.Parse(f[1])))
+            .ToList();
+        var after = WindowsNetworkLinks.ReadNeighbours();
+
+        var held = oracle.Where(n => before.Any(b => b.Address.Equals(n.Address)) && after.Any(a => a.Address.Equals(n.Address))).ToList();
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(held, Is.Not.Empty, "the broadcast entry is permanent");
+            Assert.That(before.Where(b => held.Any(h => h.Address.Equals(b.Address))), Is.EquivalentTo(held));
+        }
+    }
+
+    private static async Task<string[]> PowerShell(string script)
+    {
         var startInfo = new ProcessStartInfo("powershell.exe") { RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true };
         foreach (var argument in (string[])["-NoProfile", "-NonInteractive", "-Command", script]) startInfo.ArgumentList.Add(argument);
         using var powershell = Process.Start(startInfo)!;
         var output = await powershell.StandardOutput.ReadToEndAsync();
         await powershell.WaitForExitAsync();
-        var expected = output.Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
-            .Select(line => line.Split('|'))
-            .Select(parts => new InterfaceMetric(int.Parse(parts[0], CultureInfo.InvariantCulture), int.Parse(parts[1], CultureInfo.InvariantCulture)));
-
-        Assert.That(IpInterfaceTable.ConnectedMetrics(), Is.EquivalentTo(expected).And.Not.Empty);
+        return output.Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
     }
 }
 

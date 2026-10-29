@@ -8,7 +8,7 @@ import CoreWLAN
 // automatically suppresses itself while a fullscreen app (e.g. a game) is running.
 // runs until killed by the parent process or until stdin closes.
 //
-// also reports the WiFi SSID and location auth on behalf of the parent, shows OSD notifications
+// also reports the WiFi SSID and location auth, and the ARP table, on behalf of the parent, shows OSD notifications
 // and a file transfer progress panel.
 //
 // protocol: framed messagepack, see the table in Hydra/Platform/MacOs/ShieldChannel.cs.
@@ -36,6 +36,73 @@ func writeMessage(_ kind: String, _ fields: [(String, MsgPackValue)] = []) {
 func writeError(_ message: String) {
   let data = Data((message + "\n").utf8)
   _ = data.withUnsafeBytes { Darwin.write(STDERR_FILENO, $0.baseAddress!, $0.count) }
+}
+
+struct Neighbour {
+  let ip: String
+  let mac: Data
+}
+
+// the IPv4 ARP table's resolved entries, from the routing sysctl as arp(8) reads it. Local Network privacy leaves
+// the table empty for a process without the grant, which this bundle holds as it holds Location.
+// each message: rt_msghdr, then RTA_DST's sockaddr_in and RTA_GATEWAY's sockaddr_dl, each padded to 4 bytes
+// nil when the sysctl failed
+func readNeighbours() -> [Neighbour]? {
+  var mib: [Int32] = [CTL_NET, PF_ROUTE, 0, AF_INET, NET_RT_FLAGS, RTF_LLINFO]
+  var buffer: [UInt8] = []
+  var length = 0
+  // the table may grow between asking its size and reading it, which fails with ENOMEM
+  for _ in 0..<3 {
+    length = 0
+    guard sysctl(&mib, 6, nil, &length, nil, 0) == 0 else { return nil }
+    if length == 0 { return [] }
+    buffer = [UInt8](repeating: 0, count: length + 4096)
+    length = buffer.count
+    if sysctl(&mib, 6, &buffer, &length, nil, 0) == 0 { break }
+    if errno != ENOMEM { return nil }
+    length = -1
+  }
+  if length < 0 { return nil }
+
+  let header = MemoryLayout<rt_msghdr>.size
+  let wanted = RTA_DST | RTA_GATEWAY
+  var neighbours: [Neighbour] = []
+  var offset = 0
+  while offset + header <= length {
+    let message = buffer.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: offset, as: rt_msghdr.self) }
+    let end = offset + Int(message.rtm_msglen)
+    if end <= offset + header || end > length { break }
+    defer { offset = end }
+    let dst = offset + header
+    guard message.rtm_addrs & wanted == wanted, dst + 8 <= end, buffer[dst + 1] == UInt8(AF_INET) else { continue }
+    let dstLength = Int(buffer[dst])
+    let link = dst + (dstLength > 0 ? 1 + ((dstLength - 1) | 3) : 4)
+    guard link + 8 <= end, buffer[link + 1] == UInt8(AF_LINK) else { continue }
+    // sockaddr_dl: len, family, index (2), type, nlen, alen, slen, then the name and the address
+    let mac = link + 8 + Int(buffer[link + 5])
+    // an entry still resolving has no address yet
+    guard buffer[link + 6] == 6, mac + 6 <= end else { continue }
+    let ip = buffer[(dst + 4)..<(dst + 8)].map { String($0) }.joined(separator: ".")
+    neighbours.append(Neighbour(ip: ip, mac: Data(buffer[mac..<(mac + 6)])))
+  }
+  return neighbours
+}
+
+// a datagram to the discard port has the OS resolve the address, and has macOS ask for Local Network access the first
+// time; whether it arrives does not matter
+func poke(_ address: String) {
+  var target = sockaddr_in()
+  target.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+  target.sin_family = sa_family_t(AF_INET)
+  target.sin_port = in_port_t(9).bigEndian
+  guard inet_pton(AF_INET, address, &target.sin_addr) == 1 else { return }
+  let fd = socket(AF_INET, SOCK_DGRAM, 0)
+  guard fd >= 0 else { return }
+  defer { close(fd) }
+  var byte: UInt8 = 0
+  _ = withUnsafePointer(to: &target) {
+    $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { sendto(fd, &byte, 1, 0, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+  }
 }
 
 // full-coverage view that participates in hit testing and swallows all mouse events
@@ -154,6 +221,22 @@ class ShieldDelegate: NSObject, NSApplicationDelegate, CLLocationManagerDelegate
       writeMessage("ack", [("seq", .int(seq))])
     case "wifi":
       startWifiMonitoring()
+    case "neighbours":
+      guard let seq = message["seq"]?.int64Value else {
+        writeError("neighbours message is malformed; ignored")
+        return
+      }
+      let gateways = message["gateways"]?.arrayValue?.compactMap { $0.stringValue } ?? []
+      DispatchQueue.global(qos: .utility).async {
+        gateways.forEach(poke)
+        // no entries says the table could not be read, which Hydra takes as unknown rather than empty
+        guard let neighbours = readNeighbours() else {
+          writeMessage("ack", [("seq", .int(seq))])
+          return
+        }
+        let entries = neighbours.map { MsgPackValue.map([("ip", .string($0.ip)), ("mac", .binary($0.mac))]) }
+        writeMessage("ack", [("seq", .int(seq)), ("entries", .array(entries))])
+      }
     case "osd":
       if let text = message["text"]?.stringValue { osdPanel.show(text) }
     case "transferBegin":

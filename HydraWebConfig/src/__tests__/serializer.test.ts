@@ -127,6 +127,11 @@ describe('serialize', () => {
     expect(json.profiles[0].conditions.isPluggedIn).toBe(false)
   })
 
+  it('serializes the link conditions', () => {
+    const json = JSON.parse(serialize(state({ conditions: { address: '10.0.0.0/8', gatewayMac: 'a4:91:b1:0c:22:7e', wired: false } })))
+    expect(json.profiles[0].conditions).toEqual({ address: '10.0.0.0/8', gatewayMac: 'a4:91:b1:0c:22:7e', wired: false })
+  })
+
   it('omits isPluggedIn when undefined', () => {
     const json = JSON.parse(serialize(state({ conditions: { ssid: 'home' } })))
     expect(json.profiles[0].conditions.isPluggedIn).toBeUndefined()

@@ -29,6 +29,9 @@ internal sealed class LinuxNetworkDetector(ICmdRunner cmd, ILogger<LinuxNetworkD
         }
     }
 
+    public Task<NetworkLinks> GetNetworkLinks(bool gatewayMacs, CancellationToken cancel = default) =>
+        NetworkLinkReader.Read(new LinuxNetworkLinks(), gatewayMacs, cancel);
+
     public Task<bool?> GetIsPluggedIn(CancellationToken cancel = default) =>
         Task.FromResult(ReadIsPluggedIn());
 

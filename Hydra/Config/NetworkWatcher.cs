@@ -16,17 +16,23 @@ internal sealed class NetworkWatcher : SimpleHostedService
     private readonly IDormancyState _dormancy;
     private readonly Action _restart;
     private readonly Func<DateTime> _now;
+    private readonly bool _readsLinks;
+    private readonly bool _readsGatewayMacs;
     private readonly ILogger<NetworkWatcher> _log;
 
     // tracks last known state for transition logging
     private List<string>? _lastSsids;
     private int? _lastScreenCount;
     private bool? _lastIsPluggedIn;
+    private string? _lastLinks;
 
     // debounce: ignore rapid re-triggers within this window
     private DateTime _lastCheck = DateTime.MinValue;
     private static readonly TimeSpan Debounce = TimeSpan.FromSeconds(2);
     private readonly Toggle _checking = new(); // set while a check is running — serializes concurrent callers
+    private readonly Toggle _linksLogged = new();
+    private readonly Toggle _linksFailing = new(); // warned once per run of failed link reads
+    private readonly Toggle _gatewayUnresolved = new(); // warned once per run of checks the unresolved gateway decided
 
     public NetworkWatcher(INetworkDetector detector, Func<int> screenCountProvider, List<HydraConfig> configs, HydraConfig? activeConfig, string? profileOverride, IDormancyState dormancy, ILogger<NetworkWatcher> log, Action? restart = null, Func<DateTime>? clock = null)
         : base(log, TimeSpan.FromSeconds(10))
@@ -39,6 +45,8 @@ internal sealed class NetworkWatcher : SimpleHostedService
         _dormancy = dormancy;
         _restart = restart ?? ProcessRestart.Restart;
         _now = clock ?? (() => DateTime.UtcNow);
+        _readsLinks = HydraConfig.HasLinkConditions(configs);
+        _readsGatewayMacs = HydraConfig.HasGatewayMacConditions(configs);
         _log = log;
 
         NetworkChange.NetworkAddressChanged += OnNetworkAddressChanged;
@@ -53,9 +61,28 @@ internal sealed class NetworkWatcher : SimpleHostedService
         };
     }
 
-    protected override async Task Execute(CancellationToken cancel)
+    protected override Task Execute(CancellationToken cancel) => Poll(cancel);
+
+    // one tick of the service's loop
+    internal async Task Poll(CancellationToken cancel)
     {
+        if (_linksLogged.TrySet() && (!_readsLinks || _profileOverride != null)) await LogLinks(cancel);
         await CheckNetwork(cancel);
+    }
+
+    // once at startup, so a user can copy an address into a condition; a check that reads the links logs them itself. The
+    // gateway MAC is left out: reading it sends to the gateway, and on macOS asks for Local Network access
+    private async Task LogLinks(CancellationToken cancel)
+    {
+        try
+        {
+            var links = await _detector.GetNetworkLinks(gatewayMacs: false, cancel);
+            LogLinksTransition(null, links.Describe());
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            _log.LogDebug(e, "network link detection failed");
+        }
     }
 
     protected override Task OnShutdown(CancellationToken cancel)
@@ -139,16 +166,37 @@ internal sealed class NetworkWatcher : SimpleHostedService
             return;
         }
 
+        NetworkLinks? links = null;
+        if (_readsLinks)
+        {
+            try
+            {
+                links = await _detector.GetNetworkLinks(_readsGatewayMacs, cancel);
+                _linksFailing.TryReset();
+            }
+            catch (Exception e) when (e is not OperationCanceledException)
+            {
+                // unknown, like an unavailable SSID: keep the current config until a real reading comes back
+                if (_linksFailing.TrySet()) _log.LogWarning(e, "network link detection failed");
+                else _log.LogDebug(e, "network link detection still failing");
+                return;
+            }
+        }
+
         // log transitions (null on first check = startup)
+        var describedLinks = links?.Describe();
         LogSsidTransition(_lastSsids, ssids);
         LogScreenCountTransition(_lastScreenCount, screenCount);
         LogIsPluggedInTransition(_lastIsPluggedIn, isPluggedIn);
+        LogLinksTransition(_lastLinks, describedLinks);
         _lastSsids = ssids;
         _lastScreenCount = screenCount;
         _lastIsPluggedIn = isPluggedIn;
+        _lastLinks = describedLinks;
 
-        var state = new ConditionState(ssids, screenCount, isPluggedIn);
-        var resolved = HydraConfig.Resolve(_configs, state);
+        var state = new ConditionState(ssids, screenCount, isPluggedIn, links);
+        if (Decide(state) is not { } decision) return;
+        var resolved = decision.Resolved;
         if (resolved == _activeConfig)
         {
             if (_dormancy.IsDormant)
@@ -160,7 +208,7 @@ internal sealed class NetworkWatcher : SimpleHostedService
             return;
         }
 
-        var onlyScreensLost = resolved == null && OnlyScreensLost(state);
+        var onlyScreensLost = decision.OnlyScreensLost;
         if (onlyScreensLost && !_activeConfig!.AllowSystemSleep)
         {
             if (!_dormancy.IsDormant && _log.IsEnabled(LogLevel.Information))
@@ -180,9 +228,36 @@ internal sealed class NetworkWatcher : SimpleHostedService
         _restart();
     }
 
+    // an unresolved gateway (GatewayMacs null) is decided both ways, as every gatewayMac matching and as none: what both
+    // agree on stands, and null keeps the current profile when the answer depends on that MAC
+    private Decision? Decide(ConditionState state)
+    {
+        if (!_readsGatewayMacs || state.Links is not { GatewayMacs: null } links) return DecideKnown(state);
+
+        var configured = _configs.Select(c => c.Conditions?.GatewayPhysicalAddress).OfType<PhysicalAddress>().ToList();
+        var matching = DecideKnown(state with { Links = links with { GatewayMacs = configured } });
+        var other = DecideKnown(state with { Links = links with { GatewayMacs = [] } });
+        if (matching == other)
+        {
+            _gatewayUnresolved.TryReset();
+            return matching;
+        }
+
+        if (_gatewayUnresolved.TrySet())
+            _log.LogWarning("The gateway's MAC address is not resolved, and the profile depends on it — keeping the current one. On macOS, check "
+                + "that Hydra Shield is allowed Local Network access (System Settings → Privacy & Security → Local Network)");
+        return null;
+    }
+
+    private Decision DecideKnown(ConditionState state)
+    {
+        var resolved = HydraConfig.Resolve(_configs, state);
+        return new Decision(resolved, resolved == null && OnlyScreensLost(state));
+    }
+
     // dormancy covers exactly one cause: displays going away. That is the only mismatch our own input can
     // undo, and the only one where the machine is still sitting on the desk with a master's cursor on it.
-    // A changed SSID or a dropped power source means the machine really moved or was unplugged, and MORE
+    // A changed SSID, address, gateway or wired link, or a dropped power source, means the machine really moved or was unplugged, and MORE
     // screens than the profile wants means someone opened the lid and is standing right there — restart
     // into idle for all of those and let it come up wherever it landed.
     private bool OnlyScreensLost(ConditionState state)
@@ -222,10 +297,19 @@ internal sealed class NetworkWatcher : SimpleHostedService
             _log.LogInformation("Power: {Previous} → {Current}", Format(previous), Format(current));
     }
 
+    private void LogLinksTransition(string? previous, string? current)
+    {
+        if (current == null || previous == current || !_log.IsEnabled(LogLevel.Information)) return;
+        if (previous == null) _log.LogInformation("Network links: {Current}", current);
+        else _log.LogInformation("Network links: {Previous} → {Current}", previous, current);
+    }
+
     private static string FormatSsids(List<string>? ssids)
     {
         if (ssids == null) return "null";
         if (ssids.Count == 0) return "none";
         return string.Join(", ", ssids.Select(s => $"WiFi ({s})"));
     }
+
+    private sealed record Decision(HydraConfig? Resolved, bool OnlyScreensLost);
 }

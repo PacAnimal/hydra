@@ -126,6 +126,9 @@ Use `Esc` to close the TUI. It does not change Hydra's running state.
   - `ssid` — activates when connected to this WiFi network name (case-insensitive)
   - `screenCount` — activates when exactly this many screens are connected (integer ≥ 1)
   - `isPluggedIn` — `true` activates when on AC power; `false` activates when on battery
+  - `address` — activates while this machine has this IP address (`"192.168.1.7"`) or one in this network (`"192.168.1.0/24"`, IPv4 or IPv6)
+  - `gatewayMac` — activates behind the router with this MAC address (`"a4:91:b1:0c:22:7e"`)
+  - `wired` — `true` activates while a network cable is connected; `false` while none is
 
 ## Screen layout
 
@@ -260,7 +263,10 @@ Each profile has a `profileName` — logged at startup so you always know which 
 - `conditions: { "ssid": "..." }` — activates when connected to the named WiFi network (case-insensitive)
 - `conditions: { "screenCount": 2 }` — activates when exactly 2 screens are connected
 - `conditions: { "isPluggedIn": true }` — activates when on AC power; `false` for battery-only
-- Conditions are **AND-ed** — `{ "ssid": "Office", "screenCount": 2 }` requires both to match simultaneously
+- `conditions: { "address": "10.20.0.0/16" }` — activates while any interface has an address in that network. A bare address (`"192.168.1.7"`) matches only itself, which suits a static IP. A network with bits set past its prefix (`"192.168.1.7/24"`) is refused, since it could mean either
+- `conditions: { "gatewayMac": "a4:91:b1:0c:22:7e" }` — activates behind the router with that hardware address. This is the way to tell networks apart over a cable, and also over Wi-Fi: two homes both on `192.168.1.x` behind a `192.168.1.1` have different routers. Find it with `arp -n 192.168.1.1` (macOS, Linux) or `Get-NetNeighbor 192.168.1.1` (Windows), with your gateway's address; once a profile uses `gatewayMac`, Hydra logs the current one (`Network links: …, gateway MAC …`). Dashes and dropped leading zeros (`a4:91:b1:c:22:7e`, as macOS's `arp` prints them) are accepted
+- `conditions: { "wired": true }` — activates while a physical wired interface has a link (a cable plugged in at both ends), whether or not the address is on it or on a bridge it belongs to; `false` while none has. Wi-Fi, bridges, VPNs and virtual machines' adapters (Docker, Hyper-V's vEthernet, the Thunderbolt Bridge) are never the wired interface themselves
+- Conditions are **AND-ed** — `{ "ssid": "Office", "screenCount": 2 }` requires both to match simultaneously, and `{ "wired": true, "gatewayMac": "a4:91:b1:0c:22:7e" }` means docked at that desk
 - No `conditions` (or `{}`) — fallback, activates when no other profile matches
 
 A fallback profile is optional. Without one, Hydra idles when no profile matches — e.g. at a coffee shop.
@@ -268,6 +274,8 @@ A fallback profile is optional. Without one, Hydra idles when no profile matches
 Rules: at most one fallback, no two profiles with identical condition tuples, no duplicate profile names — validated at startup.
 
 Hydra re-evaluates conditions automatically when the network changes, screens are connected/disconnected, or the power source changes, and restarts with the appropriate profile if needed.
+
+The address and gateway conditions read every interface, so a VPN or a second network adapter adds to what can match rather than hiding the first. Hydra logs the addresses and whether it is wired at startup (`Network links: wired, addresses …`). `gatewayMac` looks at IPv4 default gateways only, and while a gateway's MAC has not resolved, any switch that depends on it waits (a warning says so) while the rest still happen. On macOS the router's MAC is read by Hydra's shield helper, which macOS asks you to allow on the local network the first time a profile uses `gatewayMac`; until it is allowed, the MAC stays unresolved.
 
 **Example — laptop as slave at home, master at work:**
 

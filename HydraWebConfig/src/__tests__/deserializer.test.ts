@@ -127,6 +127,14 @@ describe('deserialize', () => {
     expect(state.profiles[0].conditions?.isPluggedIn).toBe(false)
   })
 
+  it('parses the link conditions', () => {
+    const json = asFile(JSON.stringify([{ mode: 'Master', conditions: { address: '10.0.0.0/8', gatewayMac: 'a4:91:b1:0c:22:7e', wired: true } }]))
+    const c = deserialize(json).profiles[0].conditions
+    expect(c?.address).toBe('10.0.0.0/8')
+    expect(c?.gatewayMac).toBe('a4:91:b1:0c:22:7e')
+    expect(c?.wired).toBe(true)
+  })
+
   it('leaves isPluggedIn undefined when absent', () => {
     const json = asFile(JSON.stringify([{ mode: 'Master', conditions: { ssid: 'home' } }]))
     const state = deserialize(json)

@@ -20,5 +20,7 @@
     <string>Hydra uses your location to identify the Wi-Fi network, enabling automatic configuration switching between home and office.</string>
     <key>NSLocationWhenInUseUsageDescription</key>
     <string>Hydra uses your location to identify the Wi-Fi network, enabling automatic configuration switching between home and office.</string>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Hydra reads your router's hardware address to recognise the network you are on, enabling automatic configuration switching.</string>
 </dict>
 </plist>
