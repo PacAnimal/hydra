@@ -19,6 +19,8 @@ public sealed class XorgOutputHandler : IPlatformOutput, ICursor
     private readonly Dictionary<ulong, uint> _naturalHeld = [];  // keysym → keycode injected via natural path (stable key-up even after layout switch)
     private readonly Lock _lock = new();                 // protects _tempBindings, _unusedKeycodes, _naturalHeld
     private readonly ILogger<XorgOutputHandler> _log;
+    private readonly ShiftedKeypad _shiftedKeypad = new();
+    private readonly NumLockRestore _numLockRestore = new();
     private int _keysymsPerKeycode = 4;  // actual server value; overridden in FindUnusedKeycodes
     private ulong[] _emptyCharSlots = [0UL, 0UL, 0UL, 0UL];  // pre-allocated; sized after FindUnusedKeycodes
 
@@ -73,21 +75,29 @@ public sealed class XorgOutputHandler : IPlatformOutput, ICursor
         _ = NativeMethods.XFlush(_display);
     }
 
-    // tracks expected lock-key state so rapid events don't see stale XkbGetState results
+    // the lock state our own lock taps left, so rapid events don't see stale XkbGetState results. Trusted only for
+    // LockTapSettleMs after the last tap: past that the server's state is the truth, and catches the slave's own
+    // keyboard changing a lock between visits, which a restore must not undo
     private byte? _pendingLockedMods;
+    private long _lastLockTapTick;
+    private const long LockTapSettleMs = 500;
+
+    internal Func<long> TickCount { get; init; } = static () => Environment.TickCount64;
 
     public void InjectKey(KeyEventMessage msg)
     {
         var isDown = msg.Type == KeyEventType.KeyDown;
+        if (msg.Key is { } keypadKey) msg = msg with { Key = _shiftedKeypad.Injected(keypadKey, msg.Type, msg.Modifiers) };
+        if (isDown && msg.Key == SpecialKey.NumLock) _numLockRestore.Toggled();
 
         // sync CapsLock/NumLock state before injecting (skip when injecting the lock keys themselves)
         if (isDown && msg.Key is not (SpecialKey.CapsLock or SpecialKey.NumLock))
-            SyncLockState(msg.Modifiers);
+            SyncLockState(msg.Modifiers, msg.Key is { } k ? XorgKeyResolver.KeypadNumLock(k, (msg.Modifiers & KeyModifiers.Shift) != 0) : null);
 
         if (msg.Character is { } ch)
         {
             // unicode char → keysym, injected on its natural keycode when the layout has it there, else temp-bound
-            var keysym = ch <= '\xFF' ? (ulong)ch : 0x01000000u | ch;
+            var keysym = XorgKeysym.Of(ch);
             InjectCharKeysym(keysym, isDown, msg.Modifiers);
         }
         else if (msg.Key is SpecialKey.MoveToBeginningOfLine or SpecialKey.MoveToEndOfLine)
@@ -107,7 +117,13 @@ public sealed class XorgOutputHandler : IPlatformOutput, ICursor
         }
         else if (msg.Key is { } key)
         {
-            var keysym = SpecialKeyToKeysym(key);
+            // a key between Super's press and release, so GNOME and KDE take it as used and open no overview for it
+            if (!isDown && msg.Chorded == true && key is SpecialKey.Super_L or SpecialKey.Super_R)
+            {
+                InjectKeysym(XorgVirtualKey.VoidSymbol, true);
+                InjectKeysym(XorgVirtualKey.VoidSymbol, false);
+            }
+            var keysym = XorgKeysym.Of(key);
             if (keysym != 0)
                 InjectKeysym(keysym, isDown);
             // invalidate tracked state so next sync re-queries from server
@@ -260,40 +276,42 @@ public sealed class XorgOutputHandler : IPlatformOutput, ICursor
         }
     }
 
-    private static ulong SpecialKeyToKeysym(SpecialKey key)
+    // numLock: what the key about to be injected needs, or null to leave NumLock alone
+    private void SyncLockState(KeyModifiers mods, bool? numLock)
     {
-        // every key Hydra can inject on X11 is in the map; 0 means "no keysym", which the caller treats as unsupported
-        return XorgSpecialKeyMap.Instance.Reverse.TryGetValue(key, out var keysym) ? keysym : 0;
-    }
-
-    private void SyncLockState(KeyModifiers mods)
-    {
-        byte lockedMods;
-        if (_pendingLockedMods.HasValue)
-        {
-            lockedMods = _pendingLockedMods.Value;
-        }
-        else
-        {
-            if (NativeMethods.XkbGetState(_display, NativeMethods.XkbUseCoreKbd, out var xkbState) != 0) return;
-            lockedMods = xkbState.LockedMods;
-        }
-
+        if (LockedMods() is not { } lockedMods) return;
         SyncLockKey(XorgVirtualKey.CapsLock, NativeMethods.LockMask, (mods & KeyModifiers.CapsLock) != 0, ref lockedMods);
-        SyncLockKey(XorgVirtualKey.NumLock, NativeMethods.Mod2Mask, (mods & KeyModifiers.NumLock) != 0, ref lockedMods);
+        if (numLock is { } wantNumLock && SyncLockKey(XorgVirtualKey.NumLock, NativeMethods.Mod2Mask, wantNumLock, ref lockedMods))
+            _numLockRestore.Synced(had: !wantNumLock);
         _pendingLockedMods = lockedMods;
     }
 
-    private void SyncLockKey(ulong keysym, uint lockMask, bool want, ref byte lockedMods)
+    public void RestoreLocks()
+    {
+        if (_numLockRestore.Take() is not { } before || LockedMods() is not { } lockedMods) return;
+        SyncLockKey(XorgVirtualKey.NumLock, NativeMethods.Mod2Mask, before, ref lockedMods);
+        _pendingLockedMods = lockedMods;
+    }
+
+    private byte? LockedMods()
+    {
+        if (_pendingLockedMods is { } pending && TickCount() - _lastLockTapTick < LockTapSettleMs) return pending;
+        return NativeMethods.XkbGetState(_display, NativeMethods.XkbUseCoreKbd, out var xkbState) == 0 ? xkbState.LockedMods : null;
+    }
+
+    // returns whether it flipped the lock
+    private bool SyncLockKey(ulong keysym, uint lockMask, bool want, ref byte lockedMods)
     {
         var have = (lockedMods & lockMask) != 0;
-        if (have == want) return;
+        if (have == want) return false;
         var keycode = NativeMethods.XKeysymToKeycode(_display, keysym);
-        if (keycode == 0) return;
+        if (keycode == 0) return false;
         _ = NativeMethods.XTestFakeKeyEvent(_display, keycode, true, 0);
         _ = NativeMethods.XTestFakeKeyEvent(_display, keycode, false, 0);
         _ = NativeMethods.XFlush(_display);
+        _lastLockTapTick = TickCount();
         lockedMods = want ? (byte)(lockedMods | lockMask) : (byte)(lockedMods & ~lockMask);
+        return true;
     }
 
     public ScreenPoint? GetCursorPosition() => XorgDisplayHelper.CursorPosition(_display, _rootWindow);

@@ -7,10 +7,15 @@ namespace Hydra.Platform.Linux;
 // the specific X11 functions and parameters used for each grab type.
 internal sealed class XGrabSession(
     string label, Lock @lock, ILogger log,
-    Action? preGrab, Func<int> grab, Action? preRetry, Action ungrab)
+    Action? preGrab, Func<int> grab, Action? preRetry, Action ungrab, Action? gaveUp = null, Action? wonLate = null)
 {
     private bool _grabbed;
     private CancellationTokenSource? _retryCts;
+
+    public bool IsGrabbed
+    {
+        get { lock (@lock) return _grabbed; }
+    }
 
     public void Grab()
     {
@@ -79,8 +84,12 @@ internal sealed class XGrabSession(
                 _grabbed = true;
             }
             if (log.IsEnabled(LogLevel.Information)) log.LogInformation("XGrab{Label} succeeded on retry {Attempt}", label, i + 1);
+            wonLate?.Invoke();
             return;
         }
+        // an Ungrab during the last attempt ended the visit already, so there is nothing left to give up on
+        lock (@lock) { if (ct.IsCancellationRequested) return; }
         log.LogWarning("XGrab{Label} failed after {Max} retries", label, maxAttempts);
+        gaveUp?.Invoke();
     }
 }

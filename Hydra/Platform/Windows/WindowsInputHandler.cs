@@ -10,7 +10,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform.Windows;
 
-public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydraProfile profile) : IPlatformInput
+public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydraProfile profile) : IPlatformInput, IWindowFocus
 {
     // stored as fields to prevent GC collection while hooks are active
     private HookProc? _mouseHookProc;
@@ -92,6 +92,10 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
         SetWarpState(x, y);
         NativeMethods.SetCursorPos(x, y);
     }
+
+    // on the hook loop, where the shield lives, see WindowsShieldWindow.FocusFrontmostOn
+    [SupportedOSPlatform("windows")]
+    public void FocusFrontmostOn(ScreenBounds screen) => _hookLoop?.Post(() => _shield.FocusFrontmostOn(screen));
 
     public void ReturnTo(ScreenPoint? warpTo)
     {
@@ -288,8 +292,13 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
 
     public bool RecentresItself => true;
 
+    // "Hide pointer while typing" hides for typing, not for a modifier or a hotkey
+    public bool CursorShownAtHome(bool typed, bool other) => !typed;
+
     // the async key state never sees a button our hook swallowed
     public bool SeesSwallowed(MouseButton button) => false;
+    public event Action? CaptureFailed { add { } remove { } }
+    public event Action? KeyboardCapturedLate { add { } remove { } }
 
     // the async state, since the router asks from a thread that reads no input of its own (GetKeyState would always say
     // up there)
@@ -478,17 +487,19 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
     internal bool HandleKey(int msg, KBDLLHOOKSTRUCT info)
     {
         _lastKeyboardCallbackTick = TickCount();
+        var key = _keyResolver.Tracking(info);
         // always resolve to track modifier state even on the real screen
         var keyEvents = _keyResolver.Resolve(msg, info);
         if (keyEvents is not null)
             foreach (var keyEvent in keyEvents)
                 HandOver(keyEvent);
-        return _keyFates.Swallow(WinKeyResolver.TrackingVk(info), WinKeyResolver.IsKeyUp(msg), repeat: null,
-            osHolds: OsHoldsKey(info.vkCode), IsOnVirtualScreen);
+        return _keyFates.Swallow(key, WinKeyResolver.IsKeyUp(msg), repeat: null, osHolds: OsHoldsKey(info.vkCode, key), IsOnVirtualScreen);
     }
 
-    // both Enter keys are VK_RETURN to the OS, so its state says nothing about either: each relies on its record
-    private bool OsHoldsKey(uint vk) => vk != WinVirtualKey.Return && IsKeyDown((int)vk);
+    // both Enter keys are VK_RETURN to the OS, and an arrow and its keypad twin both VK_LEFT: its state speaks for one
+    // only while the other has no record
+    private bool OsHoldsKey(uint vk, int key) =>
+        IsKeyDown((int)vk) && !(WinKeyResolver.IsSharedVk(vk) && _keyFates.Knows(key ^ WinKeyResolver.KeypadTrackingBit));
 
     // Every event goes to the router, whose AdmitKey decides, except the deferred left Ctrl of a key the OS holds:
     // flushed during a visit by whatever follows it, the router would take it for the visit's own press.

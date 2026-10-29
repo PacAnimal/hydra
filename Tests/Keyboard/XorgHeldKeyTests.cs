@@ -127,7 +127,7 @@ public class XorgHeldKeyTests
         var seen = new List<KeyEvent>();
         var heldKeySeen = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var sentinelUp = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        await using var handler = new XorgInputHandler(NullLogger<XorgInputHandler>.Instance);
+        await using var handler = new XorgInputHandler(NullLogger<XorgInputHandler>.Instance, TransitionTestHelper.TestConfig);
         await handler.StartEventTap((_, _) => { }, null, e =>
         {
             lock (seen) seen.Add(e);

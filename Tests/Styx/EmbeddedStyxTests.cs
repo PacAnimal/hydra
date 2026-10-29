@@ -330,9 +330,9 @@ public class EmbeddedStyxTests
     }
 
     [Test]
-    public void ProvingTheRelayWithTheWrongPasswordFails()
+    public async Task ProvingTheRelayWithTheWrongPasswordFails()
     {
-        var refused = Assert.ThrowsAsync<HttpRequestException>(() => Prove(_serverUrl, "wrong-password"));
+        var refused = await Assert.ThrowsAsync<HttpRequestException>(() => Prove(_serverUrl, "wrong-password"));
         Assert.That(refused!.Message, Does.Contain("refused"));
     }
 

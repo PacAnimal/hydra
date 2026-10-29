@@ -44,6 +44,27 @@ public interface IPlatformInput : IAsyncDisposable, ICursor, ILocalEventTap
 
     bool AnyMouseButtonHeld();
 
+    // Raised when a visit's grab could not be had through every retry (Xorg: an open dmenu or a window manager's menu
+    // keeps the keyboard), so the input would stay here while the cursor is away. The other platforms never raise it.
+    event Action? CaptureFailed;
+
+    // True while a key is down here: a visit starting now would take the typing mid-chord (Xorg: a held key also hands
+    // its window manager binding's grab the keyboard). The platforms that cannot ask cheaply say false.
+    bool AnyKeyHeld() => false;
+
+    // False while a visit's keyboard grab is still being retried (Xorg), so the typing is still here: the router tells
+    // the remote nothing until it is true (KeyboardCapturedLate), and CaptureFailed ends the visit if it never becomes so.
+    bool KeyboardCaptured => true;
+
+    // Whether the user sees the cursor at home now, for a monitor switch to carry where it lands. Where the OS cannot
+    // say, it is read from the input as hide-on-typing tools read it: typed is a key gone down since the mouse was last
+    // used, other a modifier's or a hotkey's. Default: X11's xbanish and unclutter hide on any key, the switch's own
+    // included, and X11 has no query for another client's hide.
+    bool CursorShownAtHome(bool typed, bool other) => !(typed || other);
+
+    // Raised when a retry wins the keyboard grab KeyboardCaptured said was missing at entry (Xorg): the visit can begin.
+    event Action? KeyboardCapturedLate;
+
     // True when AnyMouseButtonHeld sees this button though the event tap swallowed it (macOS; Xorg's Left/Middle/Right). A
     // Windows hook hides it from GetAsyncKeyState, and evdev cannot ask at all.
     bool SeesSwallowed(MouseButton button);

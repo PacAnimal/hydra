@@ -2,6 +2,6 @@ namespace Hydra.Platform;
 
 public class NullClipboardSync : IClipboardSync
 {
-    public string? GetText() => null;
-    public bool SetClipboard(ClipboardSnapshot contents) => false;
+    public ClipboardRead ReadAll() => ClipboardRead.Empty;
+    public ClipboardSnapshot? SetClipboard(ClipboardSnapshot contents) => null;
 }

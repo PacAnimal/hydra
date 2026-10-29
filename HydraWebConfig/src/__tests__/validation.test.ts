@@ -89,6 +89,52 @@ describe('validate', () => {
     expect(validate(profiles)).toHaveLength(0)
   })
 
+  it('errors on duplicate gateway MACs however they are spelled', () => {
+    const profiles: HydraProfile[] = [
+      p({ profileName: 'A', conditions: { gatewayMac: 'a4:91:b1:0c:22:7e' } }),
+      p({ profileName: 'B', mode: 'Slave', conditions: { gatewayMac: 'A4-91-B1-C-22-7E' } }),
+    ]
+    expect(validate(profiles).some(e => e.message.includes('duplicate condition'))).toBe(true)
+  })
+
+  it('errors on duplicate addresses however they are spelled', () => {
+    const profiles: HydraProfile[] = [
+      p({ profileName: 'A', conditions: { address: '10.0.0.7' } }),
+      p({ profileName: 'B', mode: 'Slave', conditions: { address: '10.0.0.7/32' } }),
+    ]
+    expect(validate(profiles).some(e => e.message.includes('duplicate condition'))).toBe(true)
+  })
+
+  it('passes wired and not wired as different conditions', () => {
+    const profiles: HydraProfile[] = [
+      p({ profileName: 'A', conditions: { wired: true } }),
+      p({ profileName: 'B', mode: 'Slave', conditions: { wired: false } }),
+    ]
+    expect(validate(profiles)).toHaveLength(0)
+  })
+
+  it('treats a link-only condition as conditional (not fallback)', () => {
+    const profiles: HydraProfile[] = [
+      p({ profileName: 'A', conditions: { address: '10.0.0.0/8' } }),
+      p({ profileName: 'B', mode: 'Slave' }),
+    ]
+    expect(validate(profiles)).toHaveLength(0)
+  })
+
+  it.each(['192.168.1.300', 'office', '10', '10.0.0.0/33', '10.0.0.0/8/8', '192.168.1.7/24'])('errors on address %s', address => {
+    const errors = validate([p({ profileName: 'A', conditions: { address } })])
+    expect(errors.some(e => e.path.endsWith('conditions.address'))).toBe(true)
+  })
+
+  it.each(['192.168.1.7', '192.168.1.0/24', '2001:db8::/32'])('passes address %s', address => {
+    expect(validate([p({ profileName: 'A', conditions: { address } })])).toHaveLength(0)
+  })
+
+  it.each(['a4:91:b1:0c:22', 'a4:91:b1:0c:22:7g', 'a4:91:b1:0c:22:7e7'])('errors on gateway MAC %s', gatewayMac => {
+    const errors = validate([p({ profileName: 'A', conditions: { gatewayMac } })])
+    expect(errors.some(e => e.path.endsWith('conditions.gatewayMac'))).toBe(true)
+  })
+
   it('treats isPluggedIn-only condition as conditional (not fallback)', () => {
     const profiles: HydraProfile[] = [
       p({ profileName: 'A', conditions: { isPluggedIn: true } }),
@@ -161,6 +207,20 @@ describe('validate', () => {
     expect(validate([p({ hosts })])).toHaveLength(0)
   })
 
+  describe('maxMouseHz', () => {
+    const master = (maxMouseHz: number) => ({ profileName: 'a', mode: 'Master' as const, maxMouseHz })
+
+    it('accepts 1 to 1000', () => {
+      expect(validate([master(1)]).filter(e => e.path.endsWith('maxMouseHz'))).toEqual([])
+      expect(validate([master(1000)]).filter(e => e.path.endsWith('maxMouseHz'))).toEqual([])
+    })
+
+    it('refuses 0, more than 1000, and fractions', () => {
+      for (const hz of [0, 1001, 12.5]) {
+        expect(validate([master(hz)]).some(e => e.path === 'profiles[0].maxMouseHz')).toBe(true)
+      }
+    })
+  })
   describe('log cap', () => {
     const logErrors = (log: Parameters<typeof validate>[2]) => validate([p({})], undefined, log).map(e => e.path)
 

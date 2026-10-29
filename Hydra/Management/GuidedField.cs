@@ -4,7 +4,9 @@ namespace Hydra.Management;
 
 internal enum GuidedSection { Global, Profile, Relay, Behaviour }
 
-internal enum GuidedFieldKind { Text, Secret, Choice, Integer, Decimal, Toggle, Power }
+// AnyYesNo: a condition's nullable bool typed as yes, no, or any (the key left out); OptionalToggle: a nullable bool typed as
+// on, off, or nothing
+internal enum GuidedFieldKind { Text, Secret, Choice, Integer, Decimal, Toggle, AnyYesNo, OptionalToggle }
 
 /// <summary>A JSON object holding some of the form's fields.</summary>
 /// <param name="AllOrNothing">Its fields are required members, so the form refuses to write only some of them.</param>
@@ -66,8 +68,17 @@ internal static class GuidedFields
     internal static readonly GuidedField ScreenCount = new(GuidedSection.Profile, 11, 0, Conditions, "screenCount", GuidedFieldKind.Integer, "Screen Count",
         "Activate only when exactly this many local screens are detected. Empty means any count.")
     { DefaultHint = "any count" };
-    internal static readonly GuidedField IsPluggedIn = new(GuidedSection.Profile, 5, 1, Conditions, "isPluggedIn", GuidedFieldKind.Power, "Power",
+    internal static readonly GuidedField IsPluggedIn = new(GuidedSection.Profile, 5, 1, Conditions, "isPluggedIn", GuidedFieldKind.AnyYesNo, "Power",
         "Activation condition: any, yes (AC power), or no (battery).")
+    { Fallback = "any" };
+    internal static readonly GuidedField Address = new(GuidedSection.Profile, 15, 0, Conditions, "address", GuidedFieldKind.Text, "Address",
+        "Activate only while this machine has this address (192.168.1.7) or one in this network (192.168.1.0/24). Empty means any.")
+    { DefaultHint = "any" };
+    internal static readonly GuidedField GatewayMac = new(GuidedSection.Profile, 17, 0, Conditions, "gatewayMac", GuidedFieldKind.Text, "Gateway MAC",
+        "Activate only behind the router with this MAC address (arp -n <gateway>, or Get-NetNeighbor on Windows). Empty means any router.")
+    { DefaultHint = "any" };
+    internal static readonly GuidedField Wired = new(GuidedSection.Profile, 15, 1, Conditions, "wired", GuidedFieldKind.AnyYesNo, "Wired",
+        "Activation condition: any, yes (a network cable has a link), or no (no cable has).")
     { Fallback = "any" };
     internal static readonly GuidedField MouseScale = new(GuidedSection.Profile, 7, 1, null, "mouseScale", GuidedFieldKind.Decimal, "Mouse Scale",
         "Slave fallback cursor-speed multiplier. Master profiles must leave this empty.")
@@ -117,12 +128,15 @@ internal static class GuidedFields
     internal static readonly GuidedField AllowSystemSleep = new(GuidedSection.Behaviour, 10, 0, null, "allowSystemSleep", GuidedFieldKind.Toggle,
         "Allow System Sleep", "Let the OS sleep this machine on its normal idle policy; Hydra leaves the relay before it suspends.")
     { Fallback = GuidedValues.Off };
+    internal static readonly GuidedField ModifierNumLock = new(GuidedSection.Behaviour, 12, 0, null, "modifierNumLock", GuidedFieldKind.OptionalToggle,
+        "Keypad NumLock", "Master: NumLock for a keypad key pressed with Super, Ctrl or Alt. on = digits, off = navigation, empty = as the master's NumLock says.")
+    { DefaultHint = "as pressed" };
     internal static readonly IReadOnlyList<GuidedField> All =
     [
         Name, LogLevel, ProfileOverride, AutoUpdate, UpdateChannel, DebugShield, DebugMouse,
-        ProfileName, Mode, Ssid, ScreenCount, ClipboardSync, IsPluggedIn, MouseScale, RelativeMouseScale, DeadCorners, MaxMouseHz,
+        ProfileName, Mode, Ssid, ScreenCount, ClipboardSync, IsPluggedIn, Address, GatewayMac, Wired, MouseScale, RelativeMouseScale, DeadCorners, MaxMouseHz,
         NetworkConfig, EmbeddedServer, EmbeddedPassword, EmbeddedPort, EmbeddedServerPassword,
-        HideCursor, RemoteOnly, SyncScreensaver, ScreenLockPropagation, AccelerateMouseWheel, AllowSystemSleep
+        HideCursor, RemoteOnly, SyncScreensaver, ScreenLockPropagation, AccelerateMouseWheel, AllowSystemSleep, ModifierNumLock
     ];
 
     internal static readonly IReadOnlyList<GuidedField> Root = [.. All.Where(f => f.IsRoot)];

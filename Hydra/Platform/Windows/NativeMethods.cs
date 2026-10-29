@@ -1,4 +1,4 @@
-// mirrors the Win32 SDK headers (winuser.h, winbase.h, wingdi.h, shellscalingapi.h, wtsapi32.h, ole2.h, shellapi.h, sas.h)
+// mirrors the Win32 SDK headers (winuser.h, winbase.h, wingdi.h, shellscalingapi.h, wtsapi32.h, ole2.h, shellapi.h, sas.h, dwmapi.h)
 // ReSharper disable InconsistentNaming
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -9,6 +9,7 @@ internal static partial class NativeMethods
 {
     private const string User32 = "user32.dll";
     private const string Kernel32 = "kernel32.dll";
+    private const string DwmApi = "dwmapi.dll";
 
     // -- hook types --
 
@@ -439,7 +440,8 @@ internal static partial class NativeMethods
     [LibraryImport(User32)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     [return: MarshalAs(UnmanagedType.Bool)]
-    internal static partial bool UpdateLayeredWindow(nint hwnd, nint hdcDst, ref WINPOINT pptDst, ref WINSIZE psize, nint hdcSrc, ref WINPOINT pptSrc, uint crKey, ref BLENDFUNCTION pblend, uint dwFlags);
+    internal static partial bool UpdateLayeredWindow(nint hwnd, nint hdcDst, ref WINPOINT pptDst, ref WINSIZE psize, nint hdcSrc, ref WINPOINT pptSrc,
+        uint crKey, ref BLENDFUNCTION pblend, uint dwFlags);
 
     [LibraryImport(User32)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
@@ -455,6 +457,51 @@ internal static partial class NativeMethods
     [LibraryImport(User32)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
     internal static partial nint GetForegroundWindow();
+
+    // -- top-level windows in z-order, and activating one --
+
+    internal const int GWL_EXSTYLE = -20;
+    internal const uint GW_OWNER = 4;
+    internal const uint DWMWA_CLOAKED = 14;
+
+    // top to bottom; the callback returns nonzero to go on
+    [LibraryImport(User32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static unsafe partial bool EnumWindows(delegate* unmanaged[Stdcall]<nint, nint, int> lpEnumFunc, nint lParam);
+
+    [LibraryImport(User32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool IsWindowVisible(nint hWnd);
+
+    [LibraryImport(User32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool IsIconic(nint hWnd);
+
+    [LibraryImport(User32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial nint GetWindowLongPtrW(nint hWnd, int nIndex);
+
+    [LibraryImport(User32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial nint GetWindow(nint hWnd, uint uCmd);
+
+    [LibraryImport(User32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool AttachThreadInput(uint idAttach, uint idAttachTo, [MarshalAs(UnmanagedType.Bool)] bool fAttach);
+
+    [LibraryImport(User32)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool BringWindowToTop(nint hWnd);
+
+    // a window another virtual desktop or a suspended store app holds is cloaked: listed and visible, yet never shown
+    [LibraryImport(DwmApi)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]
+    internal static partial int DwmGetWindowAttribute(nint hwnd, uint dwAttribute, out int pvAttribute, int cbAttribute);
 
     [LibraryImport(User32, EntryPoint = "GetClassNameW")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvStdcall)])]

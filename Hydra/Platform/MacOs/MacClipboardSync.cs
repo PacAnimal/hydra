@@ -16,7 +16,8 @@ public sealed class MacClipboardSync : IClipboardSync
 
     // the formats sent as files, never as their names, and those whose text is no text copy of the user's
     private static readonly string[] FileTypes = [PasteboardTypeFileUrl, PasteboardTypeLegacyFileNames];
-    private static readonly string[] NotTextCopyTypes = [PasteboardTypePng, .. FileTypes, PasteboardTypeConcealed, PasteboardTypeTransient];
+    private static readonly string[] ConcealedTypes = [PasteboardTypeConcealed, PasteboardTypeTransient];
+    private static readonly string[] NotTextCopyTypes = [PasteboardTypePng, .. FileTypes, .. ConcealedTypes];
 
     private readonly ILogger<MacClipboardSync> _log;
     private readonly ClipboardEchoFilter _echo;
@@ -37,30 +38,47 @@ public sealed class MacClipboardSync : IClipboardSync
         NativeHelpers.EnsureAppKitLoaded();
     }
 
-    public string? GetText() => Guarded("text", pasteboard => _echo.FilterText(ReadString(pasteboard, PasteboardTypeString)));
+    // tests only: runs between the read's first change count and its last, so a test can copy in the middle of a read,
+    // which no pasteboard of its own can time
+    internal Action? DuringRead { get; set; }
 
-    public byte[]? GetImagePng() => Guarded("image", pasteboard => _echo.FilterImage(ReadData(pasteboard, PasteboardTypePng)));
+    // every type in one pool, against one change count: a copy made during the read is read again, once
+    public ClipboardRead ReadAll()
+    {
+        if (Guarded("clipboard", ReadAllOnce) is { } first) return first;
+        if (_log.IsEnabled(LogLevel.Debug)) _log.LogDebug("The pasteboard changed while it was read; reading it again");
+        return Guarded("clipboard", ReadAllOnce) ?? throw new ClipboardUnreadableException("the pasteboard changed while it was read, twice");
+    }
 
-    public string? GetHtml() => Guarded("html", pasteboard => _echo.FilterHtml(ReadString(pasteboard, PasteboardTypeHtml)));
+    // null when the pasteboard changed during the read
+    private ClipboardRead? ReadAllOnce(nint pasteboard)
+    {
+        var before = ChangeCount(pasteboard);
+        var types = PasteboardTypes(pasteboard).ToList();
+        var read = types.Any(t => FileTypes.Contains(t)) ? ClipboardRead.Files : ReadFormats(pasteboard, types);
+        DuringRead?.Invoke();
+        return ChangeCount(pasteboard) == before ? read : null;
+    }
 
-    public byte[]? GetRtf() => Guarded("rtf", pasteboard => _echo.FilterRtf(ReadData(pasteboard, PasteboardTypeRtf)));
+    private ClipboardRead ReadFormats(nint pasteboard, List<string?> types) =>
+        new(_echo.FilterText(ReadString(pasteboard, PasteboardTypeString)), _echo.FilterImage(ReadData(pasteboard, PasteboardTypePng)),
+            _echo.FilterHtml(ReadString(pasteboard, PasteboardTypeHtml)), _echo.FilterRtf(ReadData(pasteboard, PasteboardTypeRtf)),
+            types.Any(t => ConcealedTypes.Contains(t)));
 
-    private T? Guarded<T>(string what, Func<nint, T?> read) where T : class => Guarded(what, read, null);
-
-    // one read of the general pasteboard in its own pool, failed when there is none or the read fails
-    private T Guarded<T>(string what, Func<nint, T> read, T failed)
+    // one read of the general pasteboard in its own pool; unreadable when there is none or the read fails
+    private T Guarded<T>(string what, Func<nint, T> read)
     {
         using var pool = new ObjcAutoreleasePool();
         try
         {
             var pasteboard = GetGeneralPasteboard();
-            return pasteboard == nint.Zero ? failed : read(pasteboard);
+            if (pasteboard != nint.Zero) return read(pasteboard);
         }
         catch (Exception ex)
         {
-            _log.LogWarning(ex, "Failed to read clipboard {What}", what);
-            return failed;
+            throw new ClipboardUnreadableException($"the pasteboard's {what} could not be read", ex);
         }
+        throw new ClipboardUnreadableException($"no pasteboard to read the {what} from");
     }
 
     private static string? ReadString(nint pasteboard, string type)
@@ -91,6 +109,17 @@ public sealed class MacClipboardSync : IClipboardSync
 
     private static long ChangeCount(nint pasteboard) => NativeMethods.objc_msgSend_long(pasteboard, NativeMethods.sel_registerName("changeCount"));
 
+    // the same counter CopiedPrimary versions by; null when there is no pasteboard
+    public long? ChangeCount()
+    {
+        using var pool = new ObjcAutoreleasePool();
+        var pasteboard = GetGeneralPasteboard();
+        return pasteboard == nint.Zero ? null : ChangeCount(pasteboard);
+    }
+
+    // the count Hydra's last write left, as the write saw it
+    public long? WroteAt() => _primary.WrittenAt();
+
     public string? GetPrimaryText()
     {
         using var pool = new ObjcAutoreleasePool();
@@ -103,10 +132,11 @@ public sealed class MacClipboardSync : IClipboardSync
         return _primary.Relay(text);
     }
 
-    public bool SetClipboard(ClipboardSnapshot contents)
+    public ClipboardSnapshot? SetClipboard(ClipboardSnapshot contents)
     {
         using var pool = new ObjcAutoreleasePool();
-        return _primary.Write(contents.PrimaryText, leftAt =>
+        ClipboardSnapshot? written = null;
+        var replaced = _primary.Write(contents.PrimaryText, leftAt =>
         {
             var pasteboard = GetGeneralPasteboard();
             if (pasteboard == nint.Zero) return false;
@@ -114,17 +144,40 @@ public sealed class MacClipboardSync : IClipboardSync
             // another app makes after it is still the user's
             var cleared = NativeMethods.objc_msgSend_long(pasteboard, NativeMethods.sel_registerName("clearContents"));
             leftAt(cleared);
-            _echo.Track(contents);
-            ClipboardUtils.WriteAll(_log,
-                contents.Text is { } text ? () => WriteString(pasteboard, text, PasteboardTypeString) : null,
-                contents.Html is { } html ? () => WriteString(pasteboard, html, PasteboardTypeHtml) : null,
-                contents.Rtf is { } rtf ? () => WriteData(pasteboard, rtf, PasteboardTypeRtf) : null,
-                contents.ImagePng is { } png ? () => WriteData(pasteboard, png, PasteboardTypePng) : null);
+            var marked = ClipboardUtils.WriteMarkers(_log, contents, () => WriteConcealedMarkers(pasteboard),
+                () => WriteData(pasteboard, [], PasteboardTypeTransient));
+            _echo.Track(marked);
+            written = ClipboardUtils.WriteAll(_log, marked,
+                marked.Text is { } text ? new FormatWrite(ClipboardFormat.Text, () => WriteString(pasteboard, text, PasteboardTypeString)) : null,
+                marked.Html is { } html ? new FormatWrite(ClipboardFormat.Html, () => WriteString(pasteboard, html, PasteboardTypeHtml)) : null,
+                marked.Rtf is { } rtf ? new FormatWrite(ClipboardFormat.Rtf, () => WriteData(pasteboard, rtf, PasteboardTypeRtf)) : null,
+                marked.ImagePng is { } png ? new FormatWrite(ClipboardFormat.Image, () => WriteData(pasteboard, png, PasteboardTypePng)) : null);
             return true; // the clear replaced it
         });
+        return replaced ? written : null;
     }
 
-    public bool HasFileClipboard() => Guarded("types", pasteboard => PasteboardTypes(pasteboard).Any(t => FileTypes.Contains(t)), false);
+    // every marker, even after one is refused
+    private static bool WriteConcealedMarkers(nint pasteboard)
+    {
+        var all = true;
+        foreach (var type in ConcealedTypes)
+            all &= WriteData(pasteboard, [], type);
+        return all;
+    }
+
+    // no files when the pasteboard cannot be read: ReadAll says it is unreadable
+    public bool HasFileClipboard()
+    {
+        try
+        {
+            return Guarded("types", pasteboard => PasteboardTypes(pasteboard).Any(t => FileTypes.Contains(t)));
+        }
+        catch (ClipboardUnreadableException)
+        {
+            return false;
+        }
+    }
 
     private static IEnumerable<string?> PasteboardTypes(nint pasteboard)
     {

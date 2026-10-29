@@ -9,13 +9,14 @@ import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pty from 'node-pty';
 import { test as base, chromium } from '@playwright/test';
-import { hydraBinary, serveStatic, spawnHydraTui, terminalFiles } from '../tui-screenshot/pty-helpers.mjs';
+import { hydraBinary, LAUNCH_TIMEOUT_MS, serveStatic, spawnHydraTui, terminalFiles } from '../tui-screenshot/pty-helpers.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // how long a pty that has not yet drawn a frame must be quiet before its output is shown anyway
 const IDLE_FLUSH_MS = 150;
-// a warm launch, see warm-up.setup.mjs for the cold one
-const LAUNCH_TIMEOUT_MS = 10_000;
+// A hang guard for every wait: each returns the moment what it waits for shows, so only a hang pays it, and a
+// loaded machine never fails a test that would pass on an idle one.
+export const WAIT_TIMEOUT_MS = 30_000;
 // frame markers, see flush()
 const HIDE_CURSOR = '\x1b[?25l';
 const SHOW_CURSOR = '\x1b[?25h';
@@ -104,9 +105,13 @@ export class HydraTui {
     this.pty.write(bytes);
   }
 
-  /** Alt+<letter> — the mnemonic convention this TUI uses for tab/section navigation. */
+  /**
+   * Alt+<letter> — the mnemonic convention this TUI uses for tab/section navigation. Sent in the kitty keyboard
+   * protocol, which the TUI turns on once replyTo answers its query: as the legacy ESC+letter, a loaded machine could
+   * read the ESC alone as Esc, so the letter still opened a dialog while a Quit waited for it to close.
+   */
   alt(letter) {
-    this.send(`\x1b${letter}`);
+    this.send(`\x1b[${letter.charCodeAt(0)};3u`);
   }
 
   /**
@@ -169,7 +174,7 @@ export class HydraTui {
   }
 
   /** Polls the rendered screen until it contains `needle`, or throws with the last screen shown. */
-  async waitForText(needle, timeout = 3000) {
+  async waitForText(needle, timeout = WAIT_TIMEOUT_MS) {
     const deadline = Date.now() + timeout;
     let last = '';
     while (Date.now() < deadline) {
@@ -179,11 +184,17 @@ export class HydraTui {
       if (!this._alive) throw new Error(`hydra tui exited before showing ${JSON.stringify(needle)}. Last screen:\n${last}`);
       await new Promise((r) => setTimeout(r, 50));
     }
-    throw new Error(`Timed out waiting for ${JSON.stringify(needle)} on screen. Last screen:\n${last}`);
+    throw new Error(`Timed out waiting for ${JSON.stringify(needle)} on screen (${this._ptyState()}). Last screen:\n${last}`);
+  }
+
+  // what the pty has done so far, so a wait that times out says whether the tui drew nothing or the harness showed nothing
+  _ptyState() {
+    return `pty ${this._alive ? 'alive' : 'exited'}, ${this._raw.length} bytes received, ${this._pending.length} not yet shown, ` +
+      `${this._sawFrame ? 'a frame marker seen' : 'no frame marker yet'}`;
   }
 
   /** Polls until `needle` disappears from the rendered screen. */
-  async waitForTextGone(needle, timeout = 3000) {
+  async waitForTextGone(needle, timeout = WAIT_TIMEOUT_MS) {
     const deadline = Date.now() + timeout;
     while (Date.now() < deadline) {
       await this.flush();
@@ -196,7 +207,7 @@ export class HydraTui {
     throw new Error(`Timed out waiting for ${JSON.stringify(needle)} to disappear from the screen`);
   }
 
-  async waitForExit(timeout = 3000) {
+  async waitForExit(timeout = WAIT_TIMEOUT_MS) {
     await this._waitFor(() => !this._alive, 'the hydra process to exit', timeout);
   }
 
@@ -220,17 +231,21 @@ export class HydraTui {
   }
 }
 
-/** A demo TUI that has drawn its connected Overview, closed after the test whatever happens. */
+/** A demo TUI that has drawn its connected Overview, closed after the test whatever happens. Its launch has a
+ * budget of its own, so a slow one never eats into the test's. */
 export const test = base.extend({
-  tui: async ({}, use) => {
-    const tui = await HydraTui.launch();
-    try {
-      await tui.waitForText('Connected');
-      await use(tui);
-    } finally {
-      await tui.close();
-    }
-  },
+  tui: [
+    async ({}, use) => {
+      const tui = await HydraTui.launch();
+      try {
+        await tui.waitForText('Connected');
+        await use(tui);
+      } finally {
+        await tui.close();
+      }
+    },
+    { timeout: LAUNCH_TIMEOUT_MS + 2 * WAIT_TIMEOUT_MS },
+  ],
 });
 
 export { expect } from '@playwright/test';

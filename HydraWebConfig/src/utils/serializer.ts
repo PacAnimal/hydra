@@ -1,4 +1,5 @@
 import type { FormState, HydraProfile, NeighbourConfig, HostConfig, ScreenDefinition, ConfigConditions } from '../types'
+import { HOTKEY_DISABLED } from '../types'
 import { deriveHostsFromLayout } from './layout'
 
 const RANGE_START_DEFAULT = 0
@@ -40,7 +41,26 @@ function serializeConditions(c: ConfigConditions): Record<string, unknown> {
   if (c.ssid) out.ssid = c.ssid
   if (c.screenCount !== undefined) out.screenCount = c.screenCount
   if (c.isPluggedIn !== undefined) out.isPluggedIn = c.isPluggedIn
+  if (c.address) out.address = c.address
+  if (c.gatewayMac) out.gatewayMac = c.gatewayMac
+  if (c.wired !== undefined) out.wired = c.wired
   return out
+}
+
+// the chords typed for an action, one per line: a line break is the one thing no chord can contain, since a chord's
+// key may be ',' or '+'. An action with none keeps its default and is left out
+export function splitChords(text: string): string[] {
+  return text.split(/\r?\n/).map(c => c.trim()).filter(Boolean)
+}
+
+function serializeHotkeys(hotkeys: Record<string, string> | undefined): Record<string, string[]> | undefined {
+  const out: Record<string, string[]> = {}
+  for (const [action, text] of Object.entries(hotkeys ?? {})) {
+    const chords = splitChords(text)
+    if (chords.length === 1 && chords[0].toLowerCase() === HOTKEY_DISABLED) out[action] = []
+    else if (chords.length > 0) out[action] = chords
+  }
+  return Object.keys(out).length > 0 ? out : undefined
 }
 
 function serializeProfile(p: HydraProfile): Record<string, unknown> {
@@ -63,9 +83,16 @@ function serializeProfile(p: HydraProfile): Record<string, unknown> {
   if (p.screenLockPropagation === true) out.screenLockPropagation = true
   if (p.debugShield === true) out.debugShield = true
   if (p.accelerateMouseWheel === false) out.accelerateMouseWheel = false
+  if (p.allowSystemSleep === true) out.allowSystemSleep = true
   if (p.clipboardSync === 'System' || p.clipboardSync === 'Off') out.clipboardSync = p.clipboardSync
 
   if (p.mode === 'Master') {
+    if (p.hideCursor === true) out.hideCursor = true
+    if (p.maxMouseHz !== undefined) out.maxMouseHz = p.maxMouseHz
+    if (p.modifierNumLock !== undefined) out.modifierNumLock = p.modifierNumLock
+    const hotkeys = serializeHotkeys(p.hotkeys)
+    if (hotkeys) out.hotkeys = hotkeys
+
     // prefer layoutItems when present and non-empty; fall back to explicit hosts
     const layoutHosts = (p.layoutItems && p.layoutItems.length > 0)
       ? deriveHostsFromLayout(p.layoutItems)

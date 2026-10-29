@@ -1,4 +1,4 @@
-import type { HydraProfile } from '../types'
+import { HOTKEY_ACTIONS, type HydraProfile } from '../types'
 import { NetworkConfig } from './NetworkConfig'
 
 interface Props {
@@ -31,6 +31,36 @@ export function GlobalSettings({ config, serverError, onChange }: Props) {
               onChange={e => onChange({ deadCorners: e.target.value ? Number(e.target.value) : undefined })}
             />
           </div>
+          {isMaster && (
+            <>
+              <div className="field">
+                <label htmlFor="gs-maxmousehz" title="How many mouse updates a second the master sends to a slave (1–1000). Higher costs master CPU">Max Mouse Hz</label>
+                <input
+                  id="gs-maxmousehz"
+                  type="number"
+                  min="1"
+                  max="1000"
+                  value={config.maxMouseHz ?? ''}
+                  placeholder="125"
+                  onChange={e => onChange({ maxMouseHz: e.target.value ? Number(e.target.value) : undefined })}
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="gs-modifiernumlock" title="NumLock for a keypad key pressed with Super, Ctrl or Alt, whatever the keyboard's own NumLock says — for keypad shortcuts on a slave">Keypad NumLock</label>
+                <select
+                  id="gs-modifiernumlock"
+                  value={config.modifierNumLock === true ? 'true' : config.modifierNumLock === false ? 'false' : ''}
+                  onChange={e => onChange({
+                    modifierNumLock: e.target.value === 'true' ? true : e.target.value === 'false' ? false : undefined,
+                  })}
+                >
+                  <option value="">as pressed</option>
+                  <option value="true">digits with Super/Ctrl/Alt</option>
+                  <option value="false">navigation with Super/Ctrl/Alt</option>
+                </select>
+              </div>
+            </>
+          )}
           <div className="field">
             <label htmlFor="gs-clipboardsync" title="Hydra syncs clipboards itself. System lets a macOS master leave Mac peers to Universal Clipboard. Off shares no clipboard or files with any peer">Clipboard</label>
             <select
@@ -74,8 +104,24 @@ export function GlobalSettings({ config, serverError, onChange }: Props) {
         </div>
 
         <div className="checkbox-group">
+          <label className="checkbox-label" title="Let the operating system's idle policy sleep this machine; Hydra leaves the relay before it suspends">
+            <input
+              type="checkbox"
+              checked={config.allowSystemSleep === true}
+              onChange={e => onChange({ allowSystemSleep: e.target.checked ? true : undefined })}
+            />
+            Allow System Sleep
+          </label>
           {isMaster && (
             <>
+              <label className="checkbox-label" title="Hide the master's local cursor while it is inactive or routed remotely">
+                <input
+                  type="checkbox"
+                  checked={config.hideCursor === true}
+                  onChange={e => onChange({ hideCursor: e.target.checked ? true : undefined })}
+                />
+                Hide Cursor
+              </label>
               <label className="checkbox-label" title="Send activity pings to slaves to prevent their screensavers from activating, and re-broadcast pings from slaves to other slaves">
                 <input
                   type="checkbox"
@@ -112,6 +158,26 @@ export function GlobalSettings({ config, serverError, onChange }: Props) {
           )}
         </div>
       </div>
+
+      {isMaster && (
+        <div className="section">
+          <h2>Hotkeys</h2>
+          <div className="field-row">
+            {HOTKEY_ACTIONS.map(({ action, label, defaultChord }) => (
+              <div className="field" key={action}>
+                <label htmlFor={`gs-hotkey-${action}`} title="Chords joined with + (Ctrl+Alt+Super+L), one per line. Listing any replaces the default; empty keeps it; none turns it off">{label}</label>
+                <textarea
+                  id={`gs-hotkey-${action}`}
+                  rows={2}
+                  value={config.hotkeys?.[action] ?? ''}
+                  placeholder={defaultChord}
+                  onChange={e => onChange({ hotkeys: { ...config.hotkeys, [action]: e.target.value } })}
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </>
   )
 }

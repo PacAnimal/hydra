@@ -39,13 +39,58 @@ public abstract class CopiedPrimaryContract
     protected void OtherAppCopies(string? text, byte[]? png = null) => _otherApp.SetClipboard(new ClipboardSnapshot(text, null, png));
 
     [Test]
+    public void ChangeCount_MovesOnAWriteAndOnAnotherAppsCopy_NotOnAPaste()
+    {
+        var start = Hydra.ChangeCount();
+        Hydra.SetClipboard(new ClipboardSnapshot("written", null, null));
+        var afterWrite = Hydra.ChangeCount();
+        _otherApp.ReadAll();
+        var afterPaste = Hydra.ChangeCount();
+        OtherAppCopies("written");
+        var afterCopy = Hydra.ChangeCount();
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(start, Is.Not.Null);
+            Assert.That(afterWrite, Is.Not.EqualTo(start));
+            Assert.That(afterPaste, Is.EqualTo(afterWrite));
+            Assert.That(afterCopy, Is.Not.EqualTo(afterWrite), "an identical copy moves it too");
+        }
+    }
+
+    [Test]
+    public void WroteAt_IsTheCountRightAfterTheWrite_AndAForeignCopyMovesPastIt()
+    {
+        Hydra.SetClipboard(new ClipboardSnapshot("written", null, null));
+        var afterWrite = Hydra.ChangeCount();
+        var wroteAt = Hydra.WroteAt();
+        OtherAppCopies("written");
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(wroteAt, Is.Not.Null.And.EqualTo(afterWrite));
+            Assert.That(Hydra.WroteAt(), Is.EqualTo(wroteAt), "another app's copy is no write of Hydra's");
+            Assert.That(Hydra.ChangeCount(), Is.GreaterThan(wroteAt ?? long.MaxValue));
+        }
+    }
+
+    [Test]
+    public void WroteAt_FollowsAClear()
+    {
+        Hydra.SetClipboard(new ClipboardSnapshot("written", null, null));
+        Hydra.ClearClipboard();
+
+        Assert.That(Hydra.WroteAt(), Is.EqualTo(Hydra.ChangeCount()));
+    }
+
+    [Test]
     public void OwnWrite_ReadsBackAsAnEcho()
     {
         HydraWritesThen(() => { });
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(Hydra.GetText(), Is.Null);
+            Assert.That(Hydra.ReadAll().Text, Is.Null);
             Assert.That(Hydra.CanUseEchoFallback(), Is.True);
         }
     }
@@ -57,7 +102,7 @@ public abstract class CopiedPrimaryContract
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(Hydra.GetText(), Is.EqualTo("written"));
+            Assert.That(Hydra.ReadAll().Text, Is.EqualTo("written"));
             Assert.That(Hydra.CanUseEchoFallback(), Is.False);
         }
     }
@@ -65,7 +110,7 @@ public abstract class CopiedPrimaryContract
     [Test]
     public void OwnWrite_LeavesTheRelayedSelection()
     {
-        HydraWritesThen(() => _otherApp.GetText()); // another app pasting it is no copy
+        HydraWritesThen(() => _otherApp.ReadAll()); // another app pasting it is no copy
 
         Assert.That(Hydra.GetPrimaryText(), Is.EqualTo("relayed selection"));
     }
@@ -95,6 +140,47 @@ public abstract class CopiedPrimaryContract
     }
 
     [Test]
+    public void Clear_LeavesThePlaceholderForOtherAppsAndNothingForHydra()
+    {
+        Hydra.SetClipboard(new ClipboardSnapshot("written", "relayed selection", Png));
+
+        Hydra.ClearClipboard();
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(_otherApp.ReadAll().Text, Is.EqualTo(ClipboardSnapshot.PlaceholderText));
+            Assert.That(_otherApp.ReadAll().ImagePng, Is.Null);
+            Assert.That(Hydra.CanUseEchoFallback(), Is.True);
+            Assert.That(ClipboardUtils.ReadWithFallback(Hydra, null, NullLogger.Instance, "test")!.HasClipboard, Is.False);
+            Assert.That(_otherApp.GetPrimaryText(), Is.Not.EqualTo(ClipboardSnapshot.PlaceholderText), "the placeholder is never a text copy");
+            Assert.That(Hydra.GetPrimaryText(), Is.EqualTo("relayed selection"));
+        }
+    }
+
+    // its no-history markers read like a password manager's, which it is not: Hydra's read finds no copy there
+    [Test]
+    public void Clear_IsNeverConcealed()
+    {
+        Hydra.SetClipboard(new ClipboardSnapshot("hunter2", null, null, Concealed: true));
+
+        Hydra.ClearClipboard();
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(ClipboardUtils.ReadWithFallback(_otherApp, null, NullLogger.Instance, "test"), Is.EqualTo(ClipboardSnapshot.Empty));
+            Assert.That(ClipboardUtils.ReadWithFallback(Hydra, null, NullLogger.Instance, "test")!.Concealed, Is.False);
+        }
+    }
+
+    [Test]
+    public void Write_ReportsEveryFormatItTook()
+    {
+        var contents = new ClipboardSnapshot("written", "relayed selection", null, Html: "<b>written</b>");
+
+        Assert.That(Hydra.SetClipboard(contents), Is.EqualTo(contents));
+    }
+
+    [Test]
     public void SelectionOnly_LeavesTheClipboardAndOutranksAnEarlierCopy()
     {
         OtherAppCopies("copied first");
@@ -102,8 +188,34 @@ public abstract class CopiedPrimaryContract
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(Hydra.GetText(), Is.EqualTo("copied first"));
+            Assert.That(Hydra.ReadAll().Text, Is.EqualTo("copied first"));
             Assert.That(Hydra.GetPrimaryText(), Is.EqualTo("selected later"));
+        }
+    }
+
+    [Test]
+    public void ConcealedWrite_ReadsAsConcealedInAnotherApp()
+    {
+        Hydra.SetClipboard(new ClipboardSnapshot("hunter2", null, null, Concealed: true));
+        var read = ClipboardUtils.ReadWithFallback(_otherApp, null, NullLogger.Instance, "test");
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(_otherApp.ReadAll().Concealed, Is.True);
+            Assert.That(read?.Text, Is.EqualTo("hunter2"));
+            Assert.That(read?.Concealed, Is.True);
+        }
+    }
+
+    [Test]
+    public void PlainWrite_ReadsAsNotConcealedInAnotherApp()
+    {
+        Hydra.SetClipboard(new ClipboardSnapshot("plain", null, null));
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(_otherApp.ReadAll().Concealed, Is.False);
+            Assert.That(ClipboardUtils.ReadWithFallback(_otherApp, null, NullLogger.Instance, "test")!.Concealed, Is.False);
         }
     }
 }

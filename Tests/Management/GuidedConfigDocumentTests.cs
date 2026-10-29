@@ -190,7 +190,7 @@ public class GuidedConfigDocumentTests
           "profiles": [{
             "profileName": "Home",
             "mode": "Slave",
-            "conditions": { "ssid": "Home WiFi", "screenCount": 2, "isPluggedIn": true },
+            "conditions": { "ssid": "Home WiFi", "screenCount": 2, "isPluggedIn": true, "address": "192.168.1.0/24", "gatewayMac": "a4:91:b1:0c:22:7e", "wired": true },
             "networkConfig": "secret",
             "embeddedStyx": { "server": "https://relay:5000", "password": "client-pw" },
             "embeddedStyxServer": { "port": 5001, "password": "server-pw" },
@@ -204,7 +204,8 @@ public class GuidedConfigDocumentTests
             "mouseScale": 1.5,
             "relativeMouseScale": 0.75,
             "deadCorners": 12,
-            "maxMouseHz": 250
+            "maxMouseHz": 250,
+            "modifierNumLock": false
           }]
         }
         """;
@@ -375,6 +376,9 @@ public class GuidedConfigDocumentTests
             Assert.That(profile.Conditions!.Ssid, Is.EqualTo("Home WiFi"));
             Assert.That(profile.Conditions.ScreenCount, Is.EqualTo(2));
             Assert.That(profile.Conditions.IsPluggedIn, Is.True);
+            Assert.That(profile.Conditions.Address, Is.EqualTo("192.168.1.0/24"));
+            Assert.That(profile.Conditions.GatewayMac, Is.EqualTo("a4:91:b1:0c:22:7e"));
+            Assert.That(profile.Conditions.Wired, Is.True);
             Assert.That(profile.NetworkConfig, Is.EqualTo("secret"));
             Assert.That(profile.EmbeddedStyx!.Server, Is.EqualTo("https://relay:5000"));
             Assert.That(profile.EmbeddedStyx.Password, Is.EqualTo("client-pw"));
@@ -391,7 +395,48 @@ public class GuidedConfigDocumentTests
             Assert.That(profile.RelativeMouseScale, Is.EqualTo(0.75m));
             Assert.That(profile.DeadCorners, Is.EqualTo(12));
             Assert.That(profile.MaxMouseHz, Is.EqualTo(250));
+            Assert.That(profile.ModifierNumLock, Is.False);
         }
+    }
+
+    [TestCase("""{"profiles":[{"mode":"Master"}]}""", "")]
+    [TestCase("""{"profiles":[{"mode":"Master","modifierNumLock":true}]}""", "on")]
+    [TestCase("""{"profiles":[{"mode":"Master","modifierNumLock":false}]}""", "off")]
+    public void ModifierNumLock_ReadsAsOnOffOrEmpty(string json, string expected) =>
+        Assert.That(GuidedConfigDocument.Parse(json).ReadProfile(0)[GuidedFields.ModifierNumLock], Is.EqualTo(expected));
+
+    [TestCase("on", true)]
+    [TestCase("OFF", false)]
+    [TestCase(" ", null)]
+    public void ModifierNumLock_WritesTrueFalseOrNothing(string typed, bool? expected)
+    {
+        var document = GuidedConfigDocument.Parse("""{"profiles":[{"mode":"Master","modifierNumLock":true}]}""");
+        var profile = document.ReadProfile(0);
+        profile[GuidedFields.ModifierNumLock] = typed;
+
+        document.WriteProfile(0, profile);
+
+        Assert.That(document.ToJson().FromSaneJson<HydraConfigFile>()!.Profiles[0].ModifierNumLock, Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void ModifierNumLock_RefusesAnythingElse()
+    {
+        var document = GuidedConfigDocument.Parse("""{"profiles":[{"mode":"Master"}]}""");
+        var profile = document.ReadProfile(0);
+        profile[GuidedFields.ModifierNumLock] = "digits";
+
+        Assert.That(() => document.WriteProfile(0, profile), Throws.InvalidOperationException.With.Message.Contains("on, off, or empty"));
+    }
+
+    [Test]
+    public void Wired_RefusesAnythingButAnyYesOrNo()
+    {
+        var document = GuidedConfigDocument.Parse("""{"profiles":[{"mode":"Master"}]}""");
+        var profile = document.ReadProfile(0);
+        profile[GuidedFields.Wired] = "cable";
+
+        Assert.That(() => document.WriteProfile(0, profile), Throws.InvalidOperationException.With.Message.EqualTo("Wired condition must be any, yes, or no."));
     }
 
     // what a user would type into each field; a field missing here fails the test above
@@ -409,6 +454,9 @@ public class GuidedConfigDocumentTests
         [GuidedFields.Ssid] = "Home WiFi",
         [GuidedFields.ScreenCount] = "2",
         [GuidedFields.IsPluggedIn] = "yes",
+        [GuidedFields.Address] = "192.168.1.0/24",
+        [GuidedFields.GatewayMac] = "a4:91:b1:0c:22:7e",
+        [GuidedFields.Wired] = "yes",
         [GuidedFields.NetworkConfig] = "secret",
         [GuidedFields.EmbeddedServer] = "https://relay:5000",
         [GuidedFields.EmbeddedPassword] = "client-pw",
@@ -424,7 +472,8 @@ public class GuidedConfigDocumentTests
         [GuidedFields.MouseScale] = "1.5",
         [GuidedFields.RelativeMouseScale] = "0.75",
         [GuidedFields.DeadCorners] = "12",
-        [GuidedFields.MaxMouseHz] = "250"
+        [GuidedFields.MaxMouseHz] = "250",
+        [GuidedFields.ModifierNumLock] = "off"
     };
 
     private static IEnumerable<string> KeysOf(JsonNode node) => node.AsObject().Select(p => p.Key);

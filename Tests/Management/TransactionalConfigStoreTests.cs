@@ -233,7 +233,7 @@ public class TransactionalConfigStoreTests
         await using var held = await ConfigFileLock.Acquire(lockPath, CancellationToken.None);
 
         // A short budget, because the point is WHICH error it ends with, not how long it waits for it.
-        var again = Assert.ThrowsAsync<TimeoutException>(async () =>
+        var again = await Assert.ThrowsAsync<TimeoutException>(async () =>
             await ConfigFileLock.Acquire(lockPath, TimeSpan.FromMilliseconds(200), CancellationToken.None));
 
         using (Assert.EnterMultipleScope())

@@ -580,7 +580,7 @@ public class FileTransferServiceTests
         _dialog.OnSetCurrentFile = () =>
         {
             stalled.TrySetResult();
-            extracting.Task.Wait(Bound);
+            Assert.That(extracting.Task.Wait(Bound), Is.True, "the extractor was let go");
         };
         await Simulate(MessageKind.FileTransferRequest, new FileTransferRequestMessage());
         await Simulate(MessageKind.FileTransferStart, new FileTransferStartMessage(["random.bin"], totalSent));
@@ -848,7 +848,8 @@ public class FileTransferServiceTests
     {
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(FileSelectionResult.Failure.ToResponse("Finder"), Is.EqualTo(new FileSelectionResponseMessage(null, FileSelectionResult.FailedMessage)));
+            Assert.That(FileSelectionResult.Failure.ToResponse("Finder"),
+                Is.EqualTo(new FileSelectionResponseMessage(null, FileSelectionResult.FailedMessage)));
             Assert.That(new FileSelectionResult(false, null).ToResponse("Finder").Message, Is.EqualTo("Finder is not focused"));
             Assert.That(new FileSelectionResult(true, null).ToResponse("Finder"), Is.EqualTo(new FileSelectionResponseMessage(null)));
             Assert.That(new FileSelectionResult(true, ["a.txt"]).ToResponse("Finder").Paths, Is.EqualTo(["a.txt"]));

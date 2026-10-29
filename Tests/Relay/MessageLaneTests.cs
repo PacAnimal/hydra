@@ -15,17 +15,19 @@ namespace Tests.Relay;
 public class MessageLaneTests
 {
     /// <summary>
-    /// The three kinds that carry the file-transfer STREAM, and nothing else.
+    /// The kinds that carry the two STREAMS, file transfer and clipboard, and nothing else.
     ///
-    /// <para>They are together because they are strictly ordered with respect to one another:
+    /// <para>The file-transfer kinds are together because they are strictly ordered with respect to one another:
     /// <c>FileTransferStart</c> creates the receiver's extractor, the chunks feed it, and
-    /// <c>FileTransferDone</c> finalises and verifies the hash.</para>
+    /// <c>FileTransferDone</c> finalises and verifies the hash. A clipboard stream puts only its chunks here;
+    /// each carries its stream's Id, so it cannot join the wrong stream.</para>
     /// </summary>
     private static readonly MessageKind[] Bulk =
     [
         MessageKind.FileTransferStart,
         MessageKind.FileTransferChunk,
-        MessageKind.FileTransferDone
+        MessageKind.FileTransferDone,
+        MessageKind.ClipboardStreamChunk
     ];
 
     /// <summary>
@@ -73,6 +75,7 @@ public class MessageLaneTests
     [TestCase(MessageKind.LeaveScreen)]
     [TestCase(MessageKind.LockScreen)]
     [TestCase(MessageKind.ClipboardPush)]
+    [TestCase(MessageKind.ClipboardPushNone)]
     public void InputAndControlStayOnTheInputLane(MessageKind kind) =>
         Assert.That(MessageLane.Of(kind), Is.EqualTo(RelayLane.Input));
 
@@ -85,6 +88,15 @@ public class MessageLaneTests
     [Test]
     public void AnAbortIsControlSoItCanOvertakeTheChunksItCancels() =>
         Assert.That(MessageLane.Of(MessageKind.FileTransferAbort), Is.EqualTo(RelayLane.Input));
+
+    /// <summary>
+    /// A clipboard stream's Begin and Abort are input: Begin empties the receiver's clipboard, and that clear
+    /// must overtake keystrokes sent after it; Abort overtakes the chunks it cancels.
+    /// </summary>
+    [TestCase(MessageKind.ClipboardStreamBegin)]
+    [TestCase(MessageKind.ClipboardStreamAbort)]
+    public void AClipboardStreamsBeginAndAbortAreInput(MessageKind kind) =>
+        Assert.That(MessageLane.Of(kind), Is.EqualTo(RelayLane.Input));
 
     /// <summary>
     /// The negotiation around a transfer is control too. Each is one half of a round trip that completes

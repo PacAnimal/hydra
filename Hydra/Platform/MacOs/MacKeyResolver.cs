@@ -24,7 +24,7 @@ internal sealed class MacKeyResolver
             events = ResolveKeyEvent(eventType, vkCode, eventRef);
         else
             events = ResolveModifierChange(vkCode, eventRef) is { } ev ? [ev] : null;
-        KeyResolver.StampPhysicalKey(events, vkCode);
+        KeyResolver.StampPhysicalKey(events, vkCode, KeypadDecimalKey.MacOs(vkCode));
         return events;
     }
 
@@ -274,9 +274,8 @@ internal sealed class MacKeyResolver
         if ((cgFlags & NativeMethods.KCGEventFlagMaskAlternate) != 0) mods |= KeyModifiers.Alt;
         if ((cgFlags & NativeMethods.KCGEventFlagMaskCommand) != 0) mods |= KeyModifiers.Super;
         if ((cgFlags & NativeMethods.KCGEventFlagMaskAlphaShift) != 0) mods |= KeyModifiers.CapsLock;
-        // KCGEventFlagMaskNumericPad is a source flag ("event came from numpad"), not a NumLock state indicator.
-        // macOS has no traditional NumLock; mapping this flag to KeyModifiers.NumLock causes spurious NumLock
-        // bits on every numpad keystroke regardless of lock state.
+        // a macOS keypad always types digits, so "from the numeric pad" travels as NumLock, as in Synergy
+        if ((cgFlags & NativeMethods.KCGEventFlagMaskNumericPad) != 0) mods |= KeyModifiers.NumLock;
         return mods;
     }
 

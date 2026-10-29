@@ -53,6 +53,16 @@ internal static class CfHtml
         return Encoding.UTF8.GetString(cfHtml, start, end - start);
     }
 
+    // what the clipboard holds as portable html: the bare html when the context is just Wrap's own, so Hydra's
+    // write reads back as written (and its echo is recognised), else what Unwrap gives
+    public static string? Read(byte[] cfHtml)
+    {
+        var html = Unwrap(cfHtml);
+        var wrapped = html != null && html.Length >= Prefix.Length + Suffix.Length
+                                   && html.StartsWith(Prefix, StringComparison.Ordinal) && html.EndsWith(Suffix, StringComparison.Ordinal);
+        return wrapped ? html![Prefix.Length..^Suffix.Length] : html;
+    }
+
     // reads "<keyword><optional sign><digits>" from the header, returns -1 if absent/unparsable
     private static int ReadOffset(string header, string keyword)
     {

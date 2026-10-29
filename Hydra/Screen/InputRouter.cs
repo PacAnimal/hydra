@@ -31,13 +31,18 @@ public class InputRouter(
     IWorldState? peerState = null,
     Func<long>? getTickCount = null,
     PeerPlatform? localPlatform = null,
-    TimeProvider? timeProvider = null)
+    TimeProvider? timeProvider = null,
+    IWindowFocus? windowFocus = null)
     : IHostedService
 {
+    private readonly IWindowFocus _windowFocus = windowFocus ?? new NullWindowFocus();
+
     // How often a mouse position is sent to a slave, and therefore how long a batch of raw samples is
     // held before it is processed. Both come off the one number, so raising it moves them together.
     // Integer division truncates, so a rate that does not divide 1000 lands on the next rate up.
     private readonly int _minMouseIntervalMs = Math.Max(1, 1000 / profile.MaxMouseHz);
+    // the keypad's NumLock under a modifier (modifierNumLock); only the actor touches it
+    private readonly ModifierNumLock _modifierNumLock = new(profile.ModifierNumLock);
 
     // How far the physical cursor may drift from the warp point, as a fraction of the half-screen,
     // before it is parked back. It only has to stay clear of the local screen edges while the pointer
@@ -60,6 +65,8 @@ public class InputRouter(
     private CoalescingBatch<MouseInputKind, double>? _openMouseBatch;
     private int _postedMouseBatchCount;
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+    // how long stopping waits for the clipboard hash reads under way
+    private static readonly TimeSpan HashReadsTimeout = TimeSpan.FromSeconds(2);
     private ITimer? _mouseFlushTimer;
     private long _lastMouseBatchPostTick;
     private bool _mouseFlushArmed;
@@ -71,15 +78,43 @@ public class InputRouter(
     private readonly FileTransferService _fileTransfer = fileTransfer;
     private readonly IFileSelectionDetector _selectionDetector = selectionDetector;
     private readonly ClipboardMaster _clipboard = new(clipboardSync, log);
+    // all three made first thing in StartAsync, before any handler that uses them is subscribed, since they call back into this router
+    private ClipboardStreamSender _streams = null!;
+    private ClipboardStreamReceiver _receiver = null!;
+    private DeferredClipboardOffer _offer = null!;
+    // the remote host the cursor is on, null on the local screen; read off the actor by the stream sender
+    private volatile string? _cursorHost;
+    // per host, the latest visit or hash request; a hash read off the actor is sent only while its token is still current
+    private readonly Dictionary<string, int> _hashTokens = new(StringComparer.OrdinalIgnoreCase);
+    // per host told Pending whose wait ended, the token of the hash read it is owed, which goes wherever the cursor is
+    private readonly Dictionary<string, int> _owedHashes = new(StringComparer.OrdinalIgnoreCase);
+    // guards _hashTokens, _owedHashes, _hashReads, _visits and _visitIds, and every write of _cursorHost; held to check a
+    // hash and send it and to move the cursor's host, so no outdated hash follows an enter or leave; never held across a
+    // clipboard read
+    private readonly Lock _hashLock = new();
+    private readonly List<Task> _hashReads = [];
+    // per host, its latest visit, which its hashes carry and its pull requests echo; guarded by _hashLock
+    private readonly Dictionary<string, int> _visits = new(StringComparer.OrdinalIgnoreCase);
+    private int _visitIds;
     // cancelled when stopping begins: abandons a selection query and refuses new ones
     private readonly CancellationTokenSource _stopping = new();
 
-
     public async Task StartAsync(CancellationToken cancellationToken)
     {
+        _streams = new ClipboardStreamSender(relay, () => _cursorHost, log);
+        _receiver = new ClipboardStreamReceiver(clipboardSync, (host, _) => _clipboard.Begun(host), _clipboard.Rejected, _time, log,
+            MessageKind.ClipboardPullResponse);
+        _receiver.Abandoned += (host, id) => OnStreamGivenUp(host, null, id, abort: true, failed: false);
+        // on the timer thread too, so a newer stream from host may already be streaming: only the failed one's pull ends
+        _receiver.Failed += failed => OnStreamGivenUp(failed.Host, failed.PullId, failed.Id, abort: !failed.SenderGaveUp, failed: true);
+        _offer = new DeferredClipboardOffer(_time, log);
+        _offer.TimedOut += host => _ = OfferDeferred(host);
+        _offer.HeldWaitedOut += LandHeldInBackground;
+
         if (!platform.IsAccessibilityTrusted())
         {
-            log.LogWarning("Accessibility permission not granted — open System Settings › Privacy & Security › Accessibility and enable Hydra, then Hydra will continue automatically.");
+            log.LogWarning("Accessibility permission not granted — open System Settings › Privacy & Security › Accessibility and enable Hydra, "
+                + "then Hydra will continue automatically.");
             await platform.WaitForAccessibilityTrusted(cancellationToken);
             if (cancellationToken.IsCancellationRequested) return;
             log.LogInformation("Accessibility permission granted");
@@ -141,6 +176,8 @@ public class InputRouter(
         _screenSaverSync.ScreensaverDeactivated += OnScreensaverDeactivated;
         _screenSaverSync.ScreenLocked += OnLockDetected;
         _screenSaverSync.ScreenUnlocked += OnScreenUnlocked;
+        platform.CaptureFailed += OnCaptureFailed;
+        platform.KeyboardCapturedLate += OnKeyboardCapturedLate;
         if (profile.HideCursor)
             cursorHider.Hide();
     }
@@ -159,6 +196,8 @@ public class InputRouter(
         _screenSaverSync.ScreensaverDeactivated -= OnScreensaverDeactivated;
         _screenSaverSync.ScreenLocked -= OnLockDetected;
         _screenSaverSync.ScreenUnlocked -= OnScreenUnlocked;
+        platform.CaptureFailed -= OnCaptureFailed;
+        platform.KeyboardCapturedLate -= OnKeyboardCapturedLate;
         platform.StopEventTap();
 
         // no more samples can arrive, so nothing may post a batch after the writer completes
@@ -169,6 +208,7 @@ public class InputRouter(
         _commands.Writer.TryComplete();
         if (_consumerTask != null)
             await _consumerTask;
+        await AwaitHashReads(cancellationToken);
 
         // consumer is done; safe to access _state directly
         if (_state.Mouse.IsOnVirtualScreen)
@@ -176,6 +216,10 @@ public class InputRouter(
             platform.IsOnVirtualScreen = false;
             cursorHider.Show();
         }
+
+        _receiver.Dispose();
+        _offer.Dispose();
+        await _streams.DisposeAsync();
     }
 
     private async Task ProcessCommands()
@@ -310,6 +354,15 @@ public class InputRouter(
 
         // abort a transfer only if its own peer left, not the cursor's
         _fileTransfer.AbortIfPeerGone(current, relay);
+        _streams.Retain(current);
+        var dropped = _receiver.Retain(current);
+        // a host that left answers no pull, and one back under the same name must not have its answer taken
+        var landed = new List<HeldLanding>();
+        foreach (var pull in _clipboard.Outstanding.Where(p => !current.Contains(p.Host)))
+            landed.AddRange(_clipboard.ForgetPull(pull.Host));
+        await OfferDeferred(_offer.Retain(current));
+        await TellDropped(dropped, "it left the relay");
+        await Landed(landed);
 
         // send MasterConfig only to newly appeared peers that are configured as slaves
         foreach (var host in delta.NewPeers)
@@ -333,12 +386,68 @@ public class InputRouter(
 
         // reset known peers so all slaves get a fresh MasterConfig on reconnect
         await _peerState.ClearPeers();
+        _streams.DropAll();
+        var dropped = _receiver.DropAll();
+        var landed = _clipboard.ForgetPull();
+        _offer.Clear();
 
         if (disconnectedHost != null)
         {
             _fileTransfer.Abort(relay, "relay disconnected");
             log.LogWarning("Relay disconnected — returned to local screen from '{Host}'", disconnectedHost);
         }
+        await TellDropped(dropped, "the relay disconnected");
+        await Landed(landed);
+    }
+
+    // an answer a host was waiting for that will never land: an honest empty, told where the cursor is
+    private async ValueTask TellDropped(IReadOnlyList<DroppedClipboardStream> dropped, string why)
+    {
+        if (ClipboardStreamReceiver.LogDropped(dropped, why, log)) await ShowFailedWhereTheCursorIs();
+    }
+
+    // on the actor, which knows where the cursor is; once stopping, nothing is shown
+    private Task ShowFailedWhereTheCursorIs() => RunFence(st =>
+    {
+        ShowOsd(st, ClipboardStreamReceiver.FailedOsd);
+        return ValueTask.CompletedTask;
+    });
+
+    // a stream the receiver gave up on: its pull ends (failed: its answer not taken, so the next pull asks a resend), its
+    // sender stops if abort (told it failed if failed), and its deferred offer goes
+    private void OnStreamGivenUp(string host, int? pullId, long id, bool abort, bool failed)
+    {
+        _clipboard.StreamEnded(host, pullId, failed);
+        if (abort) relay.SendClipboardAbort(host, id, failed);
+        if (failed) _ = ShowFailedWhereTheCursorIs();
+        _ = OfferDeferred(_offer.Abandoned(host, streamOnly: true, pullId));
+    }
+
+    // A visit whose grab failed would take the mouse and leave the typing here, so it ends. A grab that lets go once the
+    // cursor leaves its window (xfreerdp, as the input sink covers it) is won by a retry and never gets here.
+    private void OnCaptureFailed()
+    {
+        _ = _commands.Writer.TryWrite(st =>
+        {
+            // a visit still waiting for the keyboard was never announced, so the host has nothing to leave
+            var announced = !st.EnterPending;
+            if (ReturnHome(st, LocalLandingPoint(st), slaveReachable: announced) is { } host && log.IsEnabled(LogLevel.Warning))
+                log.LogWarning("Returned to local screen from '{Host}': another client holds the keyboard or pointer", host);
+            return ValueTask.CompletedTask;
+        });
+    }
+
+    // The keyboard grab missing at entry was won by a retry: the visit is announced now, where the cursor entered, since
+    // no motion moved it meanwhile.
+    private void OnKeyboardCapturedLate()
+    {
+        _ = _commands.Writer.TryWrite(st =>
+        {
+            if (!st.EnterPending || !st.Mouse.IsOnVirtualScreen) return ValueTask.CompletedTask;
+            st.EnterPending = false;
+            SendEnterScreen(st.Mouse.CurrentScreen, (int)st.Mouse.X, (int)st.Mouse.Y, focus: st.FocusOnArrival, cursorHidden: st.HiddenOnArrival);
+            return ValueTask.CompletedTask;
+        });
     }
 
     private void OnScreensaverActivated()
@@ -429,37 +538,224 @@ public class InputRouter(
     private ValueTask BroadcastLockScreen(LocalMasterState st) =>
         BroadcastToPeers(MessageKind.LockScreen, new LockScreenMessage(_getTickCount() - st.LastInputTick));
 
-    // sends master's clipboard hash to slave; slave decides whether to request the full push
-    private void PushClipboardToHost(string host)
+    // sends master's clipboard hash to slave; slave decides whether to request the full push. The read runs off the
+    // actor, after EnterScreen went out; its hash goes only if no newer entry or request for host came since and the
+    // cursor is still there, or, owed: host was told Pending and its wait ended, so it goes wherever the cursor is. A
+    // read replacing an owed one still under way is owed in its place
+    private void PushClipboardToHost(string host, bool owed = false)
     {
         if (!UseHydraClipboard(host)) return;
+        lock (_hashLock)
+        {
+            if (_stopping.IsCancellationRequested) return;
+            owed |= _owedHashes.ContainsKey(host);
+            if (owed) _owedHashes[host] = NextHashToken(host);
+            var token = owed ? _owedHashes[host] : NextHashToken(host);
+            TrackBackground(() => Task.Run(() => SendHashIfCurrent(host, token)));
+        }
+    }
+
+    // starts work off the caller's thread, among the reads StopAsync awaits, unless stopping, when none may start after it
+    private void TrackBackground(Func<Task> work)
+    {
+        lock (_hashLock)
+        {
+            if (_stopping.IsCancellationRequested) return;
+            _hashReads.RemoveAll(t => t.IsCompleted);
+            _hashReads.Add(work());
+        }
+    }
+
+    // the hosts told Pending whose wait ended, sent their hash wherever the cursor is, stamped with their latest visit;
+    // which they were
+    private IReadOnlyList<string> SendOwedHashes()
+    {
+        var due = _offer.TakeDue();
+        foreach (var host in due)
+        {
+            if (log.IsEnabled(LogLevel.Debug))
+                log.LogDebug("Clipboard hash to {Host}: told pending, its wait ended", host);
+            PushClipboardToHost(host, owed: true);
+        }
+        return due;
+    }
+
+    // for tests: runs as an owed read that found nothing is about to be owed on the clipboard still on its way
+    internal Action? OwingOnArriving { get; set; }
+
+    // completes once every hash read started so far has sent or dropped its hash
+    internal Task HashReads()
+    {
+        lock (_hashLock)
+            return Task.WhenAll([.. _hashReads]);
+    }
+
+    // after the actor drained: the hash reads under way, bounded, so none sends after the router stopped
+    private async ValueTask AwaitHashReads(CancellationToken cancellationToken)
+    {
+        var reads = HashReads();
+        if (reads.IsCompleted) return;
+        var waited = reads.WaitAsync(HashReadsTimeout, _time, cancellationToken);
+        if (log.IsEnabled(LogLevel.Debug))
+            log.LogDebug("Waiting for the clipboard hash reads under way");
         try
         {
-            if (_clipboard.Hash() is not { } hash)
-                return; // nothing to push
-            if (log.IsEnabled(LogLevel.Debug))
-                log.LogDebug("Sending clipboard hash to {Host}", host);
-            relay.Send(host, MessageKind.ClipboardHash, hash);
+            await waited;
+        }
+        catch (Exception ex) when (ex is TimeoutException or OperationCanceledException)
+        {
+            log.LogWarning("Clipboard hash reads still under way after {Timeout}; stopping without them", HashReadsTimeout);
+        }
+    }
+
+    // a new visit to host, or a new hash request for it, outdating every read still under way for it; under _hashLock
+    private int NextHashToken(string host) => _hashTokens[host] = _hashTokens.GetValueOrDefault(host) + 1;
+
+    private void SendHashIfCurrent(string host, int token)
+    {
+        try
+        {
+            // a host whose copy the master never took (or has yet to) keeps it rather than empty it for an older push
+            var read = _clipboard.Hash(host);
+            IReadOnlyList<OutstandingPull> landNow = [];
+            List<OutstandingPull> gone = [];
+            lock (_hashLock)
+            {
+                // a host owed its hash gets it wherever the cursor is
+                var owed = _owedHashes.TryGetValue(host, out var owedToken) && owedToken == token;
+                if (owed) _owedHashes.Remove(host);
+                var current = !_stopping.IsCancellationRequested && _hashTokens.TryGetValue(host, out var now) && now == token;
+                if (read is not { } hash)
+                {
+                    if (!owed || !current) return;
+                    // the master emptied for a clipboard still on its way (streaming, or held for a newer pull, within its
+                    // deadline): owed again once that lands, rather than told none follows
+                    if (_clipboard.StreamingIn is var streams && _clipboard.HeldFor is var held && streams.Count + held.Count > 0)
+                    {
+                        OwingOnArriving?.Invoke();
+                        if (log.IsEnabled(LogLevel.Debug))
+                            log.LogDebug("Clipboard hash to {Host}: nothing yet, owed once the clipboard on its way lands", host);
+                        landNow = _offer.OweOn(host, streams, held);
+                        // a stream that ended between the snapshot and the owing found no wait to end: it ends here
+                        foreach (var ended in streams.Where(p => !_clipboard.IsStreaming(p)))
+                            gone.Add(ended);
+                    }
+                    // nothing to push: a host owed its hash may await a push that was aborted, so it is told none follows
+                    else SendNoPush(host, _visits.GetValueOrDefault(host));
+                }
+                else if (!current || (!owed && !host.EqualsIgnoreCase(_cursorHost)))
+                {
+                    if (log.IsEnabled(LogLevel.Debug))
+                        log.LogDebug("Clipboard hash to {Host} dropped: outdated", host);
+                }
+                else
+                {
+                    if (log.IsEnabled(LogLevel.Debug))
+                        log.LogDebug("Sending clipboard hash to {Host}", host);
+                    relay.Send(host, MessageKind.ClipboardHash, hash with { Visit = _visits.GetValueOrDefault(host) });
+                }
+            }
+            // held for a pull waited out already: it lands now, which offers it to the hosts owed on it
+            foreach (var pull in landNow) LandHeldInBackground(pull);
+            foreach (var ended in gone) _ = OfferDeferred(_offer.Abandoned(ended.Host, streamOnly: true, ended.Id));
         }
         catch (Exception ex)
         {
+            // an owed read that failed is no longer under way, so the host's next ordinary read is not owed
+            lock (_hashLock)
+                if (_owedHashes.TryGetValue(host, out var owedToken) && owedToken == token) _owedHashes.Remove(host);
             log.LogWarning(ex, "Failed to send clipboard hash to {Host}", host);
         }
     }
 
-    // slave has compared hashes and determined it needs our clipboard; send the full push
-    private void OnClipboardPullRequest(string host)
+    // the clipboard hash on entering host, on the actor; while pulls to other hosts are outstanding it waits for their
+    // answers, which may change what the master offers, unless those pulls have already been waited out. owed: host is
+    // owed its hash (an owed read was under way), which its entry's read or wait stays
+    private void OfferClipboardOnEntry(string host, bool owed)
+    {
+        if (!UseHydraClipboard(host)) return;
+        var outstanding = _clipboard.Outstanding;
+        if (outstanding.Count > 0)
+        {
+            var offer = _offer.Defer(host, outstanding, _clipboard.IsStreaming, owed);
+            // answered meanwhile, before the wait was there to be ended: it ends here
+            if (offer != DeferredOffer.SendNow && _offer.Resolve(_clipboard.Outstanding) == null)
+            {
+                if (offer == DeferredOffer.WaitPending) SendPending(host);
+                SendOwedHashes();
+                return;
+            }
+        }
+        owed |= _offer.SendingNow(host, _clipboard.Outstanding);
+        SendOwedHashes();
+        PushClipboardToHost(host, owed);
+    }
+
+    // a deferred entry hash, once its wait has ended: to host, if the cursor is still there; any host told Pending whose
+    // wait ended is sent its own wherever the cursor is
+    private Task OfferDeferred(string? host)
+    {
+        var due = SendOwedHashes();
+        if (host == null || due.Contains(host, StringComparer.OrdinalIgnoreCase)) return Task.CompletedTask;
+        return RunFence(st =>
+        {
+            if (IsCursorOn(st, host)) PushClipboardToHost(host);
+            return ValueTask.CompletedTask;
+        });
+    }
+
+    // the pull's answer is streaming in, emptying the master's clipboard: host, waiting on it, empties its own meanwhile
+    private async ValueTask OfferPending(string? host)
+    {
+        if (host == null) return;
+        await RunFence(st =>
+        {
+            if (IsCursorOn(st, host)) SendPending(host);
+            return ValueTask.CompletedTask;
+        });
+    }
+
+    private void SendPending(string host)
+    {
+        if (log.IsEnabled(LogLevel.Debug))
+            log.LogDebug("Sending clipboard pending to {Host}", host);
+        // a host whose copy the master never took keeps it rather than empty it for the clipboard on its way
+        relay.Send(host, MessageKind.ClipboardHash, new ClipboardHashMessage(null, Pending: true, ResendFrom: _clipboard.ResendFrom(host)));
+    }
+
+    private static bool IsCursorOn(LocalMasterState st, string host) => st.Mouse.IsOnVirtualScreen && st.Mouse.CurrentScreen.Host.EqualsIgnoreCase(host);
+
+    // slave has compared hashes and determined it needs our clipboard; send the full push, or tell it none follows so it
+    // is not left waiting. On the relay receive path, never the actor
+    private void OnClipboardPullRequest(string host, int? visit)
     {
         if (!UseHydraClipboard(host)) return;
         try
         {
             if (_clipboard.Push() is { } push)
-                relay.Send(host, MessageKind.ClipboardPush, push);
+            {
+                // one that cannot be encoded never goes, so the slave is told none follows rather than wait on it
+                _streams.Send(host, MessageKind.ClipboardPush, push, () => SendNoPush(host, visit));
+                return;
+            }
+            if (log.IsEnabled(LogLevel.Debug))
+                log.LogDebug("Clipboard pull request from {Host}: nothing to push", host);
         }
         catch (Exception ex)
         {
             log.LogWarning(ex, "Failed to push clipboard to {Host}", host);
         }
+        SendNoPush(host, visit);
+    }
+
+    private void SendNoPush(string host, int? visit) => relay.Send(host, MessageKind.ClipboardPushNone, new ClipboardPushNoneMessage(visit));
+
+    // whether a pull request from host for visit is its latest visit's, which the cursor may have left since: that
+    // visit's hash emptied the slave's clipboard for the push, so it is still honoured
+    private bool IsLatestVisit(string host, int? visit)
+    {
+        lock (_hashLock)
+            return _visits.TryGetValue(host, out var latest) && latest == visit;
     }
 
     private void PullClipboardFromHost(string host)
@@ -467,7 +763,103 @@ public class InputRouter(
         if (!UseHydraClipboard(host)) return;
         if (log.IsEnabled(LogLevel.Debug))
             log.LogDebug("Pulling clipboard from {Host}", host);
-        relay.Send(host, MessageKind.ClipboardPull, _clipboard.Pull(host));
+        // a hash read under way for host is older than this pull, and would reach it after the pull's answer, emptying
+        // the copy it answered with: outdated; one owed is read afresh once the pull is out, unless the deferred offer
+        // owes it too, whose wait's end sends it
+        bool owed;
+        lock (_hashLock)
+        {
+            owed = _owedHashes.Remove(host);
+            NextHashToken(host);
+        }
+        relay.Send(host, MessageKind.ClipboardPull, _clipboard.Pull(host, _receiver.PendingFrom));
+        if (owed && !_offer.Owes(host)) PushClipboardToHost(host, owed: true);
+    }
+
+    // takes a slave's answer to a pull, whole or streamed, offering the cursor's remote the result; whether it was taken
+    private async ValueTask<bool> OnClipboardPullAnswer(string host, ClipboardPullResponseMessage answer)
+    {
+        var taken = _clipboard.TakePullAnswer(host, answer);
+        if (!taken.Taken) return false;
+        await Offer(new OutstandingPull(host, answer.PullId), taken);
+        return true;
+    }
+
+    // what an answer to pull did: the pushes of an older clipboard stop, each host whose push stopped, bar the cursor's,
+    // owed the new clipboard's hash wherever the cursor is; superseded streams go, and the cursor's remote is offered the result
+    private async ValueTask Offer(OutstandingPull pull, PullAnswer taken)
+    {
+        // held for a newer pull to its host, it lands with that pull's answer, or once that pull is waited out: what
+        // waited on it waits on that pull; one waited out already lands it now
+        if (taken.HeldFor is { } heldFor)
+        {
+            if (_offer.Held(heldFor)) await LandHeld(heldFor);
+            return;
+        }
+        if (taken.Failed) await ShowFailedWhereTheCursorIs();
+        IReadOnlyList<string> aborted = taken.Applied is { HasClipboard: true } ? _streams.AbortPushes() : [];
+        AbortSuperseded(taken.Superseded);
+        var waiting = _offer.Answered(pull, taken.Superseded);
+        var due = SendOwedHashes();
+        if (taken.Applied == null && waiting == null) return;
+        var activeHost = await RunFence(st => st.Mouse.CurrentScreen?.Host, null);
+        foreach (var host in aborted.Where(h => !h.EqualsIgnoreCase(activeHost) && !due.Contains(h, StringComparer.OrdinalIgnoreCase)))
+        {
+            if (log.IsEnabled(LogLevel.Debug))
+                log.LogDebug("Clipboard hash to {Host}: its push of the older clipboard was aborted", host);
+            PushClipboardToHost(host, owed: true);
+        }
+        // a host still waiting on another pull is offered the result once that one resolves too; the cursor's host, its
+        // push aborted, is owed it then, or now, wherever the cursor is
+        if (activeHost == null) return;
+        var activeAborted = aborted.Contains(activeHost, StringComparer.OrdinalIgnoreCase);
+        if (activeAborted) _offer.Owe(activeHost);
+        if (!_offer.IsWaiting(activeHost) && !due.Contains(activeHost, StringComparer.OrdinalIgnoreCase))
+            PushClipboardToHost(activeHost, owed: activeAborted);
+    }
+
+    // the newer pull an answer is held for was waited out: the held answer lands, offered as any answer, and what waited
+    // on that pull waits no more (the waits on the stream moved there); never once stopping
+    private async Task LandHeld(OutstandingPull pull)
+    {
+        if (_stopping.IsCancellationRequested) return;
+        if (_clipboard.LandHeld(pull) is { } landed) await Landed([landed]);
+        await OfferDeferred(_offer.Answered(pull, []));
+    }
+
+    // LandHeld off the caller's thread (a timer's, a hash read's), tracked as hash reads are, so stopping awaits it
+    private void LandHeldInBackground(OutstandingPull pull) => TrackBackground(() => Task.Run(() => LandHeld(pull)));
+
+    // a held answer landed as its host's pulls were forgotten, offered as any answer; one that could not be written is a
+    // failure, shown where the cursor is
+    private async ValueTask Landed(IReadOnlyList<HeldLanding> landed)
+    {
+        foreach (var held in landed)
+        {
+            if (held.Answer is { } answer) await Offer(held.Pull, answer);
+            else await ShowFailedWhereTheCursorIs();
+        }
+    }
+
+    // the answer streaming in for pull is a changed clipboard, so it supersedes the older pulls from its Begin: their
+    // streams are dropped and aborted, and a host whose entry hash waited only on them is offered the clipboard; replacing:
+    // the Begin replaced host's older stream, whose pull its accept forgot; resends: the Begin's Resends, which ranks it
+    private async ValueTask SupersedeFromBegin(OutstandingPull pull, bool replacing, int? resends)
+    {
+        var superseded = _clipboard.Streaming(pull, resends);
+        if (superseded.Count == 0 && !replacing) return;
+        // host's own older answer is the stream this one replaced, so nothing of it is left to abort
+        AbortSuperseded([.. superseded.Where(p => !p.Host.EqualsIgnoreCase(pull.Host))]);
+        await OfferDeferred(_offer.Resolve(_clipboard.Outstanding));
+    }
+
+    // the answers to superseded pulls are no longer wanted: their streams still arriving are dropped and aborted
+    private void AbortSuperseded(IReadOnlyList<OutstandingPull> superseded)
+    {
+        foreach (var older in superseded)
+        {
+            if (_receiver.Drop(older.Host) is { } dropped) relay.SendClipboardAbort(older.Host, dropped.Id);
+        }
     }
 
     private async Task OnMessageReceived(string sourceHost, MessageKind kind, ReadOnlyMemory<byte> body)
@@ -497,7 +889,8 @@ public class InputRouter(
                         await TryEnterRemoteOnly(st);
                     });
                     if (log.IsEnabled(LogLevel.Information))
-                        log.LogInformation("Screen info from {Host}: {Count} {Screens}", sourceHost, owned.Kept.Count, Pluralize.Of(owned.Kept.Count, "screen"));
+                        log.LogInformation("Screen info from {Host}: {Count} {Screens}",
+                            sourceHost, owned.Kept.Count, Pluralize.Of(owned.Kept.Count, "screen"));
                 }
                 break;
             case MessageKind.SlaveLog:
@@ -515,29 +908,109 @@ public class InputRouter(
             case MessageKind.ClipboardPullRequest:
                 {
                     if (!UseHydraClipboard(sourceHost)) break;
-                    // only honour if cursor is currently on that slave's screen
-                    var onThatScreen = await RunFence(
-                        st => st.Mouse.IsOnVirtualScreen && st.Mouse.CurrentScreen.Host.EqualsIgnoreCase(sourceHost),
-                        false);
-                    if (onThatScreen)
-                        OnClipboardPullRequest(sourceHost);
-                    else if (log.IsEnabled(LogLevel.Debug))
-                        log.LogDebug("Clipboard pull request from {Host} ignored (cursor not on that screen)", sourceHost);
+                    var visit = body.ParseMessage<ClipboardPullRequestMessage>(log, sourceHost)?.Visit;
+                    var onThatScreen = await RunFence(st => IsCursorOn(st, sourceHost), false);
+                    if (onThatScreen || IsLatestVisit(sourceHost, visit))
+                        OnClipboardPullRequest(sourceHost, visit);
+                    else
+                    {
+                        if (log.IsEnabled(LogLevel.Debug))
+                            log.LogDebug("Clipboard pull request from {Host} ignored (cursor not on that screen, and not its latest visit)", sourceHost);
+                        SendNoPush(sourceHost, visit);
+                    }
                     break;
                 }
             case MessageKind.ClipboardPullResponse:
-                if (!UseHydraClipboard(sourceHost)) break;
-                var clip = body.ParseMessage<ClipboardPullResponseMessage>(log, sourceHost);
-                if (clip != null)
                 {
-                    if (_clipboard.OnPullAnswer(sourceHost, clip) == null)
-                        break;
-                    // if cursor is currently on a remote screen, forward the clipboard to it
-                    var activeHost = await RunFence(st => st.Mouse.CurrentScreen?.Host, null);
-                    if (activeHost != null)
-                        PushClipboardToHost(activeHost);
+                    if (!UseHydraClipboard(sourceHost)) break;
+                    var clip = body.ParseMessage<ClipboardPullResponseMessage>(log, sourceHost);
+                    if (clip == null) break;
+                    // a changed whole answer is newer than any stream still pending from that host; an unchanged one
+                    // answers a newer pull beside it, the stream still landing as the answer to its own
+                    var changed = clip.Unchanged != true;
+                    if (changed) _receiver.Drop(sourceHost);
+                    await OnClipboardPullAnswer(sourceHost, clip);
+                    if (changed) _clipboard.StreamEnded(sourceHost);
+                    break;
                 }
-                break;
+            case MessageKind.ClipboardStreamBegin:
+                {
+                    if (!UseHydraClipboard(sourceHost)) break;
+                    if (body.ParseMessage<ClipboardStreamBeginMessage>(log, sourceHost) is not { } begin) break;
+                    // accepting the Begin notes its pull streaming in before the receiver takes it, so a pull made meanwhile
+                    // keeps it outstanding; it carries the stream's hash once the receiver has taken the Begin. Every end
+                    // below and in the receiver's events ends it
+                    var answering = begin is { Inner: MessageKind.ClipboardPullResponse, PullId: { } pullId } ? _clipboard.StreamFor(sourceHost, pullId) : null;
+                    // the Begin answers the pull an older answer was held for, which its accept dropped: so goes its deadline
+                    if (answering != null) _offer.HeldReplaced(answering);
+                    // a stream still pending from that host is replaced by this Begin, its pull no longer outstanding
+                    var replacing = answering != null && _receiver.PendingFrom(sourceHost) != null;
+                    // an answer to no outstanding pull (superseded by a newer copy, or forgotten) would only empty the clipboard
+                    if (begin.Inner == MessageKind.ClipboardPullResponse && answering == null)
+                    {
+                        if (log.IsEnabled(LogLevel.Debug))
+                            log.LogDebug("Clipboard stream {Id} from {Host} answers no outstanding pull; aborted", begin.Id, sourceHost);
+                        relay.SendClipboardAbort(sourceHost, begin.Id);
+                        break;
+                    }
+                    // a copy on the master since the pull is newer: the stream is refused before it empties that copy, and
+                    // replaces any older one from that host as a Begin taken would, whose pull its accept forgot
+                    if (answering != null && _clipboard.RefuseStream(answering))
+                    {
+                        if (replacing) _receiver.Drop(sourceHost);
+                        relay.SendClipboardAbort(sourceHost, begin.Id);
+                        await OfferDeferred(_offer.Answered(answering, []));
+                        if (replacing) await OfferDeferred(_offer.Resolve(_clipboard.Outstanding));
+                        break;
+                    }
+                    // a rejected Begin is no answer begun, so the wait runs on; one the receiver did not take answers nothing
+                    if (!_receiver.OnBegin(sourceHost, begin))
+                    {
+                        if (answering != null) _clipboard.StreamEnded(sourceHost, answering.Id);
+                        if (replacing) await OfferDeferred(_offer.Resolve(_clipboard.Outstanding));
+                        break;
+                    }
+                    if (answering != null)
+                    {
+                        await OfferPending(_offer.Streaming(sourceHost, answering.Id));
+                        await SupersedeFromBegin(answering, replacing, begin.Resends);
+                    }
+                    break;
+                }
+            case MessageKind.ClipboardStreamChunk:
+                {
+                    if (!UseHydraClipboard(sourceHost)) break;
+                    if (body.ParseMessage<ClipboardStreamChunkMessage>(log, sourceHost) is not { } chunk) break;
+                    // the receiver takes only pull answers, so a completed stream is one
+                    if (_receiver.OnChunk(sourceHost, chunk) is not { } completed) break;
+                    if (completed.Bytes.TryDecodeBody<ClipboardPullResponseMessage>() is not { } streamed)
+                    {
+                        _receiver.OnUnreadable(sourceHost, chunk.Id);
+                        break;
+                    }
+                    if (!await OnClipboardPullAnswer(sourceHost, streamed))
+                        await OfferDeferred(_offer.Abandoned(sourceHost, streamOnly: true));
+                    break;
+                }
+            case MessageKind.ClipboardStreamAbort:
+                {
+                    if (!UseHydraClipboard(sourceHost)) break;
+                    if (body.ParseMessage<ClipboardStreamAbortMessage>(log, sourceHost) is not { } abort) break;
+                    // each side's ids are its own, so each ignores one it doesn't hold
+                    var receiving = _receiver.PendingFrom(sourceHost) != null;
+                    _receiver.OnAbort(sourceHost, abort);
+                    _streams.OnAbort(sourceHost, abort);
+                    // the stream a waiting host was told is pending won't land; a newer one is applied and offered as usual; one
+                    // the sender gave up on ended as a failure
+                    if (receiving && abort.Failed != true && _receiver.PendingFrom(sourceHost) == null)
+                    {
+                        _clipboard.StreamEnded(sourceHost);
+                        // a newer pull to that host still out: its answer superseded the stream, so what waited on the stream waits on it
+                        if (_clipboard.Outstanding.LastOrDefault(p => p.Host.EqualsIgnoreCase(sourceHost)) is { } newer) _offer.Superseded(newer);
+                        else await OfferDeferred(_offer.Abandoned(sourceHost, streamOnly: true));
+                    }
+                    break;
+                }
             case MessageKind.FileSelectionResponse:
                 {
                     var response = body.ParseMessage<FileSelectionResponseMessage>(log, sourceHost);
@@ -709,7 +1182,8 @@ public class InputRouter(
         st.Screens = newScreens;
         st.Layout = newLayout;
         st.ActiveLocalScreen = st.ActiveLocalScreen == null ? null
-            : st.LocalScreens.FirstOrDefault(s => s.Name.EqualsIgnoreCase(st.ActiveLocalScreen.Name)) ?? st.LocalScreens.FirstOrDefault() ?? st.ActiveLocalScreen;
+            : st.LocalScreens.FirstOrDefault(s => s.Name.EqualsIgnoreCase(st.ActiveLocalScreen.Name))
+                ?? st.LocalScreens.FirstOrDefault() ?? st.ActiveLocalScreen;
 
         // prune stale relative-mode entries for screens that no longer exist
         var validNames = new HashSet<string>(st.Screens.Select(s => s.Name), StringComparer.OrdinalIgnoreCase);
@@ -777,11 +1251,14 @@ public class InputRouter(
         return new RemoteScreenInfo(screens, scaleMap, relativeScaleMap);
     }
 
-    private void OnKeyEvent(KeyEvent keyEvent)
+    private void OnKeyEvent(KeyEvent pressed)
     {
         SealMouseBatch();
         _ = _commands.Writer.TryWrite(async st =>
         {
+            // the key as modifierNumLock makes it, for the hotkeys as well as the slave: every key passes through, home or
+            // away, so a key's repeats and up always find what its down was made
+            var keyEvent = _modifierNumLock.Apply(pressed);
             st.LastInputTick = _getTickCount();
             await activityTracker.LocalActivity();
             if (st.Mouse.IsOnVirtualScreen && log.IsEnabled(LogLevel.Debug))
@@ -792,6 +1269,15 @@ public class InputRouter(
             // held before the chord formed is still released on the slave
             var hotkeyAction = profile.Hotkeys.Match(keyEvent);
             var hotkeyConsumed = hotkeyAction.HasValue;
+            if (keyEvent.Type == KeyEventType.KeyDown && !keyEvent.IsRepeat)
+            {
+                if (hotkeyConsumed) st.ChordSincePointer = true;
+                else if (keyEvent.Key is { } key && key.IsModifier()) st.ModifierSincePointer = true;
+                else st.TypedSincePointer = true;
+            }
+            // the keys held on the remote as a hotkey goes down there were used, not tapped
+            if (hotkeyConsumed && keyEvent.Type == KeyEventType.KeyDown && st.Mouse.IsOnVirtualScreen) st.ChordedKeys.UnionWith(st.ForwardedKeys);
+            if (st.MonitorSwitch.OnKey(keyEvent, hotkeyAction) is { } monitorSwitch) await SwitchMonitor(st, monitorSwitch);
             // !IsRepeat: an auto-repeat of a held hotkey must not re-fire the toggle every tick
             if (hotkeyConsumed && keyEvent.Type == KeyEventType.KeyDown && !keyEvent.IsRepeat)
             {
@@ -958,7 +1444,10 @@ public class InputRouter(
             {
                 // repeats are master-driven: each OS auto-repeat is re-resolved (live modifier/dead-key state)
                 // and forwarded with IsRepeat set, so the slave injects the correct character every tick.
-                ForwardKeyToVirtualScreen(st, new KeyEventMessage(keyEvent.Type, keyEvent.Modifiers, keyEvent.Character, RemapKey(keyEvent.Key), IsRepeat: keyEvent.IsRepeat));
+                var chorded = keyEvent.Type == KeyEventType.KeyUp && st.ChordedKeys.Remove(keyEvent.PhysicalKey);
+                ForwardKeyToVirtualScreen(st,
+                    new KeyEventMessage(keyEvent.Type, keyEvent.Modifiers, keyEvent.Character, RemapKey(keyEvent.Key), IsRepeat: keyEvent.IsRepeat,
+                        Chorded: chorded ? true : null));
             }
         });
     }
@@ -979,8 +1468,11 @@ public class InputRouter(
         _ = _commands.Writer.TryWrite(async st =>
         {
             st.LastInputTick = _getTickCount();
+            PointerUsed(st);
             st.EdgeRefusalLogged = false;
             await activityTracker.LocalActivity();
+            // nothing reaches a remote not yet told of the visit
+            if (st.EnterPending) return;
             if (st.Mouse.IsOnVirtualScreen && relay.IsConnected)
             {
                 if (log.IsEnabled(LogLevel.Debug))
@@ -1005,7 +1497,10 @@ public class InputRouter(
         _ = _commands.Writer.TryWrite(async st =>
         {
             st.LastInputTick = _getTickCount();
+            PointerUsed(st);
             await activityTracker.LocalActivity();
+            // nothing reaches a remote not yet told of the visit
+            if (st.EnterPending) return;
             if (st.Mouse.IsOnVirtualScreen && relay.IsConnected)
             {
                 if (log.IsEnabled(LogLevel.Debug))
@@ -1125,6 +1620,13 @@ public class InputRouter(
         // bogus filter: drop delta that looks like a warp-displacement artifact
         if (Math.Abs(dx) > st.HalfW - 10 || Math.Abs(dy) > st.HalfH - 10) return;
 
+        // the keyboard is not ours yet, so nothing moves over there; the cursor stays parked here meanwhile
+        if (!platform.KeyboardCaptured)
+        {
+            if (!platform.RecentresItself) Recenter(st);
+            return;
+        }
+
         var prevScreen = st.Mouse.ApplyDelta(dx, dy);
         if (prevScreen != null)
             HandleIntraHostTransition(st);
@@ -1164,8 +1666,11 @@ public class InputRouter(
     {
         if (!st.Mouse.IsOnVirtualScreen) return null;
         var host = st.Mouse.CurrentScreen.Host;
+        st.EnterPending = false;
         if (slaveReachable) FlushMouseDelta(st);
         st.Mouse.LeaveScreen();
+        lock (_hashLock)
+            _cursorHost = null;
         st.PendingDx = 0;
         st.PendingDy = 0;
         ShowCursorOnReturn();
@@ -1178,6 +1683,13 @@ public class InputRouter(
     // go to that host by name, since the cursor has already moved off it.
     private void LeaveHost(LocalMasterState st, string host, bool reachable)
     {
+        lock (_hashLock)
+        {
+            // before LeaveScreen goes: a hash read for this visit finishing from here on is dropped
+            if (host.EqualsIgnoreCase(_cursorHost)) _cursorHost = null;
+            // an owed read goes wherever the cursor is, so leaving does not outdate it
+            if (!_owedHashes.TryGetValue(host, out var owed) || owed != _hashTokens.GetValueOrDefault(host)) NextHashToken(host);
+        }
         if (reachable && relay.IsConnected)
         {
             foreach (var button in st.ForwardedButtons)
@@ -1198,9 +1710,20 @@ public class InputRouter(
     // Every entry from the local screen to a remote one; callers keep their own gates and log line. exitEdge is what
     // a return with no edge of its own comes back through (see LocalLandingPoint), null when the entry had no edge.
     // Refused (false) while a mouse button is held: it went down here, and its up would be swallowed during the visit.
-    private async ValueTask<bool> EnterFromLocal(LocalMasterState st, ScreenRect dest, int x, int y, ScreenEdge? exitEdge)
+    // Refused too while a key is held, logged once per hold: the visit would take the typing mid-chord. The monitor
+    // switch's own keys are expected held (bySwitch), and the grab keeps their ups home; its arrival focuses a window.
+    private async ValueTask<bool> EnterFromLocal(LocalMasterState st, ScreenRect dest, int x, int y, ScreenEdge? exitEdge, bool bySwitch = false,
+        bool cursorHidden = false)
     {
         if (platform.AnyMouseButtonHeld()) return false;
+        if (!bySwitch && platform.AnyKeyHeld())
+        {
+            if (!st.KeyRefusalLogged && log.IsEnabled(LogLevel.Information))
+                log.LogInformation("Entry to '{Name}' refused: a key is held", dest.Name);
+            st.KeyRefusalLogged = true;
+            return false;
+        }
+        st.KeyRefusalLogged = false;
         st.SavedScreenName = null;
         st.ExitEdge = exitEdge;
         var remoteInfo = await RemoteInfoFor(st, dest);
@@ -1209,7 +1732,13 @@ public class InputRouter(
         st.ForgetForwarded();
         ApplyEnterScreen(st, dest, remoteInfo, x, y);
         await ParkOnEntry(st);
-        SendEnterScreen(dest, x, y);
+        // without the keyboard the remote is not told yet, so no cursor shows there: a late grab announces the visit,
+        // and a grab never won ends it unannounced
+        st.EnterPending = !platform.KeyboardCaptured;
+        st.FocusOnArrival = bySwitch;
+        st.HiddenOnArrival = cursorHidden;
+        st.HiddenUntilPointer = false;
+        if (!st.EnterPending) SendEnterScreen(dest, x, y, focus: bySwitch, cursorHidden);
         return true;
     }
 
@@ -1224,7 +1753,7 @@ public class InputRouter(
     // enters remote-only mode targeting the first remote screen with known dimensions; must be called from consumer.
     // returns whether it entered. It does nothing when not remote-only, already virtual or unlocked, during the
     // screensaver (its end restores the visit, or enters here), or with no screen or relay ready; while a mouse button
-    // is held it is refused, and retried on the button's release and on local moves.
+    // is held it is refused, and retried on the button's release and on local moves (a held key: on local moves).
     private async ValueTask<bool> TryEnterRemoteOnly(LocalMasterState st)
     {
         if (!profile.RemoteOnly || st.Mouse.IsOnVirtualScreen || st.ScreensaverActive) return false;
@@ -1315,6 +1844,7 @@ public class InputRouter(
             (x, y) = batch.Snapshot();
 
         st.LastInputTick = _getTickCount();
+        PointerUsed(st);
         await activityTracker.LocalActivity();
 
         if (kind == MouseInputKind.Absolute)
@@ -1333,6 +1863,8 @@ public class InputRouter(
     private async ValueTask HandleMouseDelta(LocalMasterState st, double dx, double dy)
     {
         if (!st.Mouse.IsOnVirtualScreen) return;
+        // the keyboard is not ours yet, so nothing moves over there
+        if (!platform.KeyboardCaptured) return;
 
         var leavingScreen = st.Mouse.CurrentScreen!;
         var prevScreen = st.Mouse.ApplyDelta(dx, dy);
@@ -1361,8 +1893,8 @@ public class InputRouter(
 
         if (hit.Destination.IsLocal)
         {
-            if (st.LockedToScreen || profile.RemoteOnly || ButtonHoldsHost(st, leavingScreen, hit)) return false;
-            ReturnAtEdge(st, hit);
+            if (st.LockedToScreen || profile.RemoteOnly || ButtonHoldsHost(st, leavingScreen, hit.Destination)) return false;
+            ReturnToLocal(st, hit.Destination, hit.Destination.ToGlobal(hit.Entry));
             return true;
         }
 
@@ -1373,20 +1905,20 @@ public class InputRouter(
             return false;
         }
 
-        if (!relay.IsConnected || ButtonHoldsHost(st, leavingScreen, hit)) return false;
-        await CrossToRemote(st, leavingScreen, hit);
+        if (!relay.IsConnected || ButtonHoldsHost(st, leavingScreen, hit.Destination)) return false;
+        await CrossToRemote(st, leavingScreen, hit.Destination, hit.Entry);
         return true;
     }
 
-    private static bool ChangesHost(ScreenRect leavingScreen, EdgeHit hit) =>
-        hit.Destination.IsLocal || hit.Destination.Host != leavingScreen.Host;
+    private static bool ChangesHost(ScreenRect leavingScreen, ScreenRect destination) =>
+        destination.IsLocal || destination.Host != leavingScreen.Host;
 
     // A button pressed on a remote keeps the cursor on that host until its up, so the up reaches the host with its
     // down. When the platform sees every held button despite its tap swallowing them it is asked too, so an up that
     // never arrived cannot hold the cursor there; it is asked only mid-drag, since on Xorg that is a server round-trip.
-    private bool ButtonHoldsHost(LocalMasterState st, ScreenRect leavingScreen, EdgeHit hit)
+    private bool ButtonHoldsHost(LocalMasterState st, ScreenRect leavingScreen, ScreenRect destination)
     {
-        if (!ChangesHost(leavingScreen, hit) || st.ForwardedButtons.Count == 0) return false;
+        if (!ChangesHost(leavingScreen, destination) || st.ForwardedButtons.Count == 0) return false;
         if (st.ForwardedButtons.All(platform.SeesSwallowed) && !platform.AnyMouseButtonHeld()) return false;
         if (!st.EdgeRefusalLogged && log.IsEnabled(LogLevel.Information))
             log.LogInformation("Edge refused: {Buttons} held on {Host}", string.Join(", ", st.ForwardedButtons), leavingScreen.Host);
@@ -1394,10 +1926,8 @@ public class InputRouter(
         return true;
     }
 
-    private void ReturnAtEdge(LocalMasterState st, EdgeHit hit)
+    private void ReturnToLocal(LocalMasterState st, ScreenRect targetScreen, ScreenPoint landing)
     {
-        var targetScreen = hit.Destination;
-        var landing = targetScreen.ToGlobal(hit.Entry);
         ReturnHome(st, landing, slaveReachable: true);
         st.ActiveLocalScreen = targetScreen;
         UpdateWarpPoint(st, targetScreen);
@@ -1405,14 +1935,95 @@ public class InputRouter(
             log.LogInformation("Returned to local screen ← ({X}, {Y})", landing.X, landing.Y);
     }
 
-    private async ValueTask CrossToRemote(LocalMasterState st, ScreenRect leavingScreen, EdgeHit hit)
+    private async ValueTask CrossToRemote(LocalMasterState st, ScreenRect leavingScreen, ScreenRect destination, ScreenPoint entry, bool focus = false,
+        bool cursorHidden = false)
     {
         FlushMouseDelta(st);
-        ApplyEnterScreen(st, hit.Destination, await RemoteInfoFor(st, hit.Destination), hit.Entry.X, hit.Entry.Y);
+        ApplyEnterScreen(st, destination, await RemoteInfoFor(st, destination), entry.X, entry.Y);
         if (log.IsEnabled(LogLevel.Information))
-            log.LogInformation("Switched to remote screen '{Name}' → ({X}, {Y})", hit.Destination.Name, hit.Entry.X, hit.Entry.Y);
-        if (ChangesHost(leavingScreen, hit)) LeaveHost(st, leavingScreen.Host, reachable: true);
-        SendEnterScreen(hit.Destination, hit.Entry.X, hit.Entry.Y);
+            log.LogInformation("Switched to remote screen '{Name}' → ({X}, {Y})", destination.Name, entry.X, entry.Y);
+        if (ChangesHost(leavingScreen, destination)) LeaveHost(st, leavingScreen.Host, reachable: true);
+        SendEnterScreen(destination, entry.X, entry.Y, focus, cursorHidden);
+    }
+
+    // The monitor switch hotkey: the cursor to the centre of the screen across that edge (ScreenLayout.SwitchTarget),
+    // cursor lock or not, the cursor hidden there if it is hidden where it starts (CursorHiddenAt) and shown if not, and
+    // the window last worked in there brought forward (here, or by the slave). Refused, as an edge is, while a button pressed on this host is held, and while a
+    // visit waits for the keyboard.
+    private async ValueTask SwitchMonitor(LocalMasterState st, SwitchRequest request)
+    {
+        var from = st.Mouse.IsOnVirtualScreen ? st.Mouse.CurrentScreen : st.ActiveLocalScreen;
+        if (from == null || st.Layout == null || st.ScreensaverActive || st.EnterPending) return;
+        if (st.Layout.SwitchTarget(from, request.Edge, request.Third, includeLocal: !profile.RemoteOnly) is not { } target)
+        {
+            // at info: a switch that does nothing leaves the user wondering, and a peer away (locked, restarting) is why
+            if (log.IsEnabled(LogLevel.Information))
+                log.LogInformation("Monitor switch {Direction} from '{From}': no screen there, or its host is offline",
+                    request.Third is { } third ? $"{request.Edge}+{third}" : request.Edge.ToString(), from.Name);
+            return;
+        }
+        if (st.Mouse.IsOnVirtualScreen && ButtonHoldsHost(st, from, target)) return;
+
+        var hidden = CursorHiddenAt(st, from);
+        var centre = new ScreenPoint(target.Width / 2, target.Height / 2);
+        if (target.IsLocal)
+        {
+            var landing = target.ToGlobal(centre);
+            if (st.Mouse.IsOnVirtualScreen)
+            {
+                ReturnToLocal(st, target, landing);
+                // until the mouse is used here (PointerUsed); a local-to-local warp leaves it as it is by itself
+                if (hidden)
+                {
+                    cursorHider.Hide();
+                    st.HiddenUntilPointer = true;
+                }
+            }
+            else
+            {
+                cursorHider.WarpTo(landing.X, landing.Y);
+                st.ActiveLocalScreen = target;
+                UpdateWarpPoint(st, target);
+            }
+            _windowFocus.FocusFrontmostOn(target.Bounds);
+        }
+        else if (!relay.IsConnected)
+            return;
+        else if (!st.Mouse.IsOnVirtualScreen)
+        {
+            if (!await EnterFromLocal(st, target, centre.X, centre.Y, exitEdge: null, bySwitch: true, cursorHidden: hidden)) return;
+            // a remote-only master's lock says input is on a remote, as its own entry sets it
+            if (profile.RemoteOnly) st.LockedToScreen = true;
+        }
+        else if (target.Host.EqualsIgnoreCase(from.Host))
+        {
+            FlushMouseDelta(st);
+            ApplyEnterScreen(st, target, await RemoteInfoFor(st, target), centre.X, centre.Y);
+            SendEnterMessage(target, centre.X, centre.Y, focus: true, cursorHidden: hidden);
+        }
+        else
+            await CrossToRemote(st, from, target, centre, focus: true, cursorHidden: hidden);
+
+        if (log.IsEnabled(LogLevel.Information))
+            log.LogInformation("Monitor switch: '{From}' → '{To}', cursor {Visibility}", from.Name, target.Name, hidden ? "hidden" : "shown");
+    }
+
+    // Whether the user saw no cursor where a monitor switch starts. At home the platform says (CursorShownAtHome). On a
+    // remote it is read from the input forwarded there, as its hide-on-typing tool reads it: hidden once a key went down
+    // after the mouse was last used. A Linux slave's (xbanish, unclutter) counts modifiers too; the switch's own arrow
+    // never reaches a slave, so it is not counted there.
+    private bool CursorHiddenAt(LocalMasterState st, ScreenRect from) =>
+        from.IsLocal
+            ? !platform.CursorShownAtHome(st.TypedSincePointer, st.ModifierSincePointer || st.ChordSincePointer)
+            : st.TypedSincePointer || (st.ModifierSincePointer && _peerState.PeerPlatformOf(from.Host) == PeerPlatform.Linux);
+
+    // the mouse used, wherever the cursor is: hide-on-typing tools show it again, and so does a switch home that hid it
+    private void PointerUsed(LocalMasterState st)
+    {
+        st.TypedSincePointer = st.ModifierSincePointer = st.ChordSincePointer = false;
+        if (!st.HiddenUntilPointer) return;
+        st.HiddenUntilPointer = false;
+        if (!st.Mouse.IsOnVirtualScreen) ShowCursorOnReturn();
     }
 
     // throttles mouse sends to the configured rate
@@ -1492,14 +2103,24 @@ public class InputRouter(
     }
 
     // sends EnterScreen relay message + pushes clipboard to destination host
-    private void SendEnterScreen(ScreenRect dest, int entryX, int entryY)
+    private void SendEnterScreen(ScreenRect dest, int entryX, int entryY, bool focus = false, bool cursorHidden = false)
     {
-        SendEnterMessage(dest, entryX, entryY);
-        PushClipboardToHost(dest.Host);
+        bool owed;
+        lock (_hashLock)
+        {
+            // a new visit: a hash read for an earlier one, even one this entry defers, is outdated; an owed one's hash is
+            // owed by the entry's instead
+            owed = _owedHashes.ContainsKey(dest.Host);
+            NextHashToken(dest.Host);
+            _visits[dest.Host] = ++_visitIds;
+            _cursorHost = dest.Host;
+        }
+        SendEnterMessage(dest, entryX, entryY, focus, cursorHidden);
+        OfferClipboardOnEntry(dest.Host, owed);
     }
 
-    private void SendEnterMessage(ScreenRect dest, int entryX, int entryY) =>
-        relay.Send(dest.Host, MessageKind.EnterScreen, new EnterScreenMessage(dest.Name, entryX, entryY, dest.Width, dest.Height));
+    private void SendEnterMessage(ScreenRect dest, int entryX, int entryY, bool focus = false, bool cursorHidden = false) =>
+        relay.Send(dest.Host, MessageKind.EnterScreen, new EnterScreenMessage(dest.Name, entryX, entryY, dest.Width, dest.Height, focus, cursorHidden));
 
     // sends LeaveScreen relay message + pulls clipboard from host (unconditional — callers guard the condition)
     private void LeaveRemoteScreen(string host)
@@ -1577,12 +2198,31 @@ public class InputRouter(
 
         // whether the current button state has already logged a refused edge; any button event resets it
         public bool EdgeRefusalLogged;
+        // whether the current local key hold has already logged a refused entry
+        public bool KeyRefusalLogged;
+        public MonitorSwitchGesture MonitorSwitch = new();
+        // on a remote whose visit is not announced yet: the keyboard grab is still being retried
+        public bool EnterPending;
+        // whether that announcement, once made, asks the slave to focus a window: the monitor switch's does
+        public bool FocusOnArrival;
+        // and whether it says the cursor arrives hidden (CursorHiddenAt)
+        public bool HiddenOnArrival;
+        // keys gone down since the mouse was last used, for CursorHiddenAt: typed, modifiers, a hotkey's (PointerUsed resets)
+        public bool TypedSincePointer;
+        public bool ModifierSincePointer;
+        public bool ChordSincePointer;
+        // home from a switch that started with the cursor hidden: it stays hidden until the mouse is used (PointerUsed)
+        public bool HiddenUntilPointer;
 
         public void ForgetForwarded()
         {
             ForwardedKeys.Clear();
             ForwardedButtons.Clear();
+            ChordedKeys.Clear();
         }
+
+        // forwarded keys held on the remote when a hotkey went down, whose release is sent as Chorded
+        public HashSet<int> ChordedKeys = [];
 
         // where the visit left the local screen, see LocalLandingPoint
         public ScreenEdge? ExitEdge;

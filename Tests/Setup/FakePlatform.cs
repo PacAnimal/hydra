@@ -46,9 +46,17 @@ public sealed class FakePlatform : IPlatformInput, ICursorHider
     public void FireKeyEvent(KeyEvent e) { _onKeyEvent?.Invoke(e); Flush(); }
     public void FireMouseButton(MouseButtonEvent e) { _onMouseButton?.Invoke(e); Flush(); }
     public void FireMouseScroll(MouseScrollEvent e) { _onMouseScroll?.Invoke(e); Flush(); }
+    public void FireCaptureFailed() { CaptureFailed?.Invoke(); Flush(); }
+    public event Action? CaptureFailed;
+    public void FireKeyboardCapturedLate() { KeyboardCapturedLate?.Invoke(); Flush(); }
+    public event Action? KeyboardCapturedLate;
 
     // the hotkey chord with this letter, pressed (or, with up, released)
     public void PressHotkey(char ch, bool up = false) => FireKeyEvent(KeyEvent.Char(up ? KeyEventType.KeyUp : KeyEventType.KeyDown, ch, HotkeyChord.Modifiers));
+
+    // the hotkey chord with this named key, pressed (or released), stamped as its resolver would
+    public void PressHotkey(SpecialKey key, bool up = false) =>
+        FireKeyEvent(KeyEvent.Special(up ? KeyEventType.KeyUp : KeyEventType.KeyDown, key, HotkeyChord.Modifiers) with { PhysicalKey = (int)key });
 
     public Task StartEventTap(
         Action<double, double> onMouseMove,
@@ -69,7 +77,13 @@ public sealed class FakePlatform : IPlatformInput, ICursorHider
     }
 
     public bool AnyMouseButtonHeld { get; set; }
+    public bool AnyKeyHeld { get; set; }
+    public bool KeyboardCaptured { get; set; } = true;
+    bool IPlatformInput.AnyKeyHeld() => AnyKeyHeld;
     public bool CursorIsVisible { get; set; }
+    // what CursorShownAtHome answers; null reads the input as X11's tools do, the interface's default
+    public bool? ShownAtHome { get; set; }
+    public bool CursorShownAtHome(bool typed, bool other) => ShownAtHome ?? !(typed || other);
     public bool RecentresItself { get; set; }
     // the default for SeesSwallowed, less UnseenButtons
     public bool SeesSwallowedButtons { get; set; }
@@ -100,10 +114,13 @@ public sealed class FakePlatform : IPlatformInput, ICursorHider
         IsOnVirtualScreen = false;
         if (warpTo is { } to) WarpCursor(to.X, to.Y);
     }
-    public ScreenPoint? GetCursorPosition() => null;
+    // where the last warp put the cursor, for a test of the cursor hider's poll; else unknown, as on Windows
+    public bool TracksCursor { get; set; }
+    public ScreenPoint? GetCursorPosition() => TracksCursor ? new ScreenPoint(WarpX, WarpY) : null;
     // ICursorHider — what InputRouter calls
     void ICursorHider.Hide() { HideCursorCalled = true; Calls.Add("hide"); }
     void ICursorHider.Show() { ShowCursorCalled = true; Calls.Add("show"); }
+    void ICursorHider.WarpTo(int x, int y) => WarpCursor(x, y);
 
     public ValueTask HideCursor() { HideCursorCalled = true; return ValueTask.CompletedTask; }
     public ValueTask ShowCursor() { ShowCursorCalled = true; return ValueTask.CompletedTask; }

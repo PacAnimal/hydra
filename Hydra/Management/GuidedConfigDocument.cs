@@ -80,7 +80,8 @@ internal sealed class GuidedConfigDocument
         : field.Kind switch
         {
             GuidedFieldKind.Toggle => node.GetValue<bool>() ? GuidedValues.On : GuidedValues.Off,
-            GuidedFieldKind.Power => node.GetValue<bool>() ? "yes" : "no",
+            GuidedFieldKind.AnyYesNo => node.GetValue<bool>() ? "yes" : "no",
+            GuidedFieldKind.OptionalToggle => node.GetValue<bool>() ? "on" : "off",
             _ when node.GetValueKind() == JsonValueKind.String => node.GetValue<string>(),
             GuidedFieldKind.Choice => ChoiceName(field, node) ?? node.ToJsonString(),
             _ => node.ToJsonString()
@@ -132,7 +133,8 @@ internal sealed class GuidedConfigDocument
         return field.Kind switch
         {
             GuidedFieldKind.Toggle => text == GuidedValues.On,
-            GuidedFieldKind.Power => ParsePower(text),
+            GuidedFieldKind.AnyYesNo => ParseAnyYesNo(text, field.Label),
+            GuidedFieldKind.OptionalToggle => ParseOptionalToggle(text, field.Label),
             GuidedFieldKind.Integer => ParseInt(text, field.Label) is { } number ? JsonValue.Create(number) : null,
             GuidedFieldKind.Decimal => ParseDecimal(text, field.Label) is { } number ? JsonValue.Create(number) : null,
             _ when text.Length == 0 => null,
@@ -142,12 +144,20 @@ internal sealed class GuidedConfigDocument
         };
     }
 
-    private static JsonNode? ParsePower(string value) => value.ToLowerInvariant() switch
+    private static JsonNode? ParseOptionalToggle(string value, string label) => value.ToLowerInvariant() switch
+    {
+        "" => null,
+        "on" or "true" or "yes" => true,
+        "off" or "false" or "no" => false,
+        _ => throw new InvalidOperationException($"{label} must be on, off, or empty.")
+    };
+
+    private static JsonNode? ParseAnyYesNo(string value, string label) => value.ToLowerInvariant() switch
     {
         "" or "any" => null,
         "yes" or "true" or "on" => true,
         "no" or "false" or "off" => false,
-        _ => throw new InvalidOperationException("Power condition must be any, yes, or no.")
+        _ => throw new InvalidOperationException($"{label} condition must be any, yes, or no.")
     };
 }
 

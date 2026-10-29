@@ -20,8 +20,9 @@ public sealed class SentSignals
         lock (_awaited)
         {
             _sent.Add(new SentMessage(targetHosts, decoded.Kind, decoded.Json));
-            reached = [.. _awaited.Where(a => a.Kind == decoded.Kind).Select(a => a.Signal)];
-            _awaited.RemoveAll(a => a.Kind == decoded.Kind);
+            var met = _awaited.Where(a => a.Kind == decoded.Kind && CountLocked(a.Kind, a.Host) >= a.Count).ToList();
+            reached = [.. met.Select(a => a.Signal)];
+            _awaited.RemoveAll(met.Contains);
         }
         foreach (var signal in reached) signal.TrySetResult();
     }
@@ -59,18 +60,23 @@ public sealed class SentSignals
     }
 
     // completes once a message of this kind has been sent
-    public Task WaitFor(MessageKind kind)
+    public Task WaitFor(MessageKind kind) => WaitFor(kind, 1);
+
+    // completes once count messages of this kind have been sent, optionally counting only those to a host
+    public Task WaitFor(MessageKind kind, int count, string? host = null)
     {
         lock (_awaited)
         {
-            if (_sent.Any(s => s.Kind == kind)) return Task.CompletedTask;
+            if (CountLocked(kind, host) >= count) return Task.CompletedTask;
             var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            _awaited.Add(new AwaitedSend(kind, signal));
+            _awaited.Add(new AwaitedSend(kind, count, host, signal));
             return signal.Task.WaitAsync(TestBound.Bound);
         }
     }
 
-    private sealed record AwaitedSend(MessageKind Kind, TaskCompletionSource Signal);
+    private int CountLocked(MessageKind kind, string? host) => _sent.Count(s => s.Kind == kind && (host is null || s.Targets.Contains(host)));
+
+    private sealed record AwaitedSend(MessageKind Kind, int Count, string? Host, TaskCompletionSource Signal);
 }
 
 public sealed record SentMessage(string[] Targets, MessageKind Kind, string Json);

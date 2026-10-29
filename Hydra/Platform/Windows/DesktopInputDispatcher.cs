@@ -5,6 +5,7 @@ using Cathedral.Utils;
 using Hydra.Keyboard;
 using Hydra.Mouse;
 using Hydra.Relay;
+using Hydra.Screen;
 using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform.Windows;
@@ -36,8 +37,12 @@ internal sealed class DesktopInputDispatcher : IDisposable
         WinVirtualKey.Numlock,  // MSDN: VK_NUMLOCK requires extended flag for correct toggle behavior
     ];
 
+    // VK 0xE8 is unassigned: injecting it reaches no app as a key
+    private const int UnassignedVk = 0xE8;
+
     private readonly ILogger _log;
     private readonly BlockingCollection<InputCommand> _queue = [];
+    private readonly NumLockRestore _numLockRestore = new();
     private readonly Timer _pollTimer;
     private readonly Timer _relativeRestoreTimer;
     private readonly Lock _desktopLock = new();
@@ -237,6 +242,18 @@ internal sealed class DesktopInputDispatcher : IDisposable
                     ExecuteInjectMouseScroll(s.Msg);
                     break;
                 }
+            case RestoreLocksCommand:
+                {
+                    if (_numLockRestore.Take() is { } before)
+                        SyncLockKey(WinVirtualKey.Numlock, before, extendedKey: true);
+                    break;
+                }
+            case FocusWindowCommand f:
+                {
+                    // on the input desktop, from the thread whose injected input makes this process the foreground's
+                    WindowsWindowFocus.FocusFrontmostOn(f.Screen);
+                    break;
+                }
         }
     }
 
@@ -317,10 +334,11 @@ internal sealed class DesktopInputDispatcher : IDisposable
     private uint ExecuteInjectKey(KeyEventMessage msg)
     {
         var isUp = msg.Type == KeyEventType.KeyUp;
+        if (!isUp && msg.Key == SpecialKey.NumLock) _numLockRestore.Toggled();
 
         // sync CapsLock/NumLock state before injecting (skip when injecting the lock keys themselves)
         if (!isUp && msg.Key is not (SpecialKey.CapsLock or SpecialKey.NumLock))
-            SyncLockState(msg.Modifiers);
+            SyncLockState(msg.Modifiers, msg.Key?.IsNumLockSensitive() == true);
 
         if (msg.Character is { } ch)
         {
@@ -430,7 +448,7 @@ internal sealed class DesktopInputDispatcher : IDisposable
             if (isUp) return 1;
             return InputSender.UnicodeTap('=');
         }
-        else if (msg.Key is { } key && WinSpecialKeyMap.Instance.Reverse.TryGetValue(key, out var vk))
+        else if (msg.Key is { } key && WinSpecialKeyMap.Instance.Reverse.TryGetValue(key.WithoutKeypad(), out var vk))
         {
             var isWin = vk == WinVirtualKey.LWin || vk == WinVirtualKey.RWin;
             if (isWin)
@@ -449,6 +467,7 @@ internal sealed class DesktopInputDispatcher : IDisposable
                 else
                 {
                     _winKeyDown = false;
+                    if (msg.Chorded == true) _winUsedAsModifier = true;
                     if (!_winUsedAsModifier)
                     {
                         // bare win tap — win was never injected, so inject down+up now to open start menu
@@ -465,8 +484,13 @@ internal sealed class DesktopInputDispatcher : IDisposable
             // flush buffered Win key before injecting a non-Win special key
             if (_winKeyDown && !isWin) FlushWin(isUp);
 
+            // an unassigned key between Alt's press and release, so apps take it as used and open no menu bar for it
+            if (isUp && msg.Chorded == true && vk is WinVirtualKey.LMenu or WinVirtualKey.RMenu)
+                _ = InputSender.VkTap(UnassignedVk);
+
             var flags = UpFlag(isUp);
-            if (ExtendedKeys.Contains(vk))
+            // a keypad navigation key is its dedicated twin's VK without the extended flag
+            if (ExtendedKeys.Contains(vk) && key.WithoutKeypad() == key)
                 flags |= NativeMethods.KEYEVENTF_EXTENDEDKEY;
             return InputSender.Key((int)vk, flags);
         }
@@ -476,17 +500,21 @@ internal sealed class DesktopInputDispatcher : IDisposable
 
     private static uint UpFlag(bool isUp) => isUp ? NativeMethods.KEYEVENTF_KEYUP : 0u;
 
-    private void SyncLockState(KeyModifiers mods)
+    private void SyncLockState(KeyModifiers mods, bool numLock)
     {
         SyncLockKey(WinVirtualKey.Capital, want: (mods & KeyModifiers.CapsLock) != 0, extendedKey: false);
-        SyncLockKey(WinVirtualKey.Numlock, want: (mods & KeyModifiers.NumLock) != 0, extendedKey: true);
+        var wantNumLock = (mods & KeyModifiers.NumLock) != 0;
+        if (numLock && SyncLockKey(WinVirtualKey.Numlock, wantNumLock, extendedKey: true))
+            _numLockRestore.Synced(had: !wantNumLock);
     }
 
-    private void SyncLockKey(int vk, bool want, bool extendedKey)
+    // returns whether it flipped the lock
+    private bool SyncLockKey(int vk, bool want, bool extendedKey)
     {
         var have = (NativeMethods.GetKeyState(vk) & 0x01) != 0;
-        if (have == want) return;
+        if (have == want) return false;
         InputSender.VkTap(vk, extendedKey ? NativeMethods.KEYEVENTF_EXTENDEDKEY : 0u).WarnIfFailed(_log, "lock key");
+        return true;
     }
 
     // injects the buffered Win down (unless a shortcut already did) and marks Win as used as a modifier.
@@ -562,5 +590,7 @@ record MoveMouseRelativeCommand(int Dx, int Dy) : InputCommand;
 record InjectKeyCommand(KeyEventMessage Msg) : InputCommand;
 record InjectMouseButtonCommand(MouseButtonMessage Msg) : InputCommand;
 record InjectMouseScrollCommand(MouseScrollMessage Msg) : InputCommand;
+record RestoreLocksCommand : InputCommand;
 record RestoreMouseSettingsCommand(bool Force = false) : InputCommand;
 record SwitchDesktopCommand(nint NewDesktop, nint OldDesktop, string Name) : InputCommand;
+record FocusWindowCommand(ScreenBounds Screen) : InputCommand;

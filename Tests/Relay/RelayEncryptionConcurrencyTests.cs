@@ -7,8 +7,8 @@ namespace Tests.Relay;
 /// Two lanes encrypt on one <see cref="RelayEncryption"/> at the same time, and no two messages may ever
 /// share a nonce.
 ///
-/// <para><b>This is the safety argument for the whole two-lane design.</b> <c>RelayEncryption</c> draws ONE salt per connection and reuses it, so the AES-GCM key is
-/// fixed for that connection's lifetime — which makes nonce uniqueness the only thing standing between us
+/// <para><b>This is the safety argument for the whole two-lane design.</b> <c>RelayEncryption</c> draws ONE salt per connection
+/// and reuses it, so the AES-GCM key is fixed for that connection's lifetime — which makes nonce uniqueness the only thing standing between us
 /// and disaster. Reusing a nonce under one GCM key leaks the XOR of the two plaintexts and lets an attacker
 /// forge messages; it is not a degraded mode, it is a broken one.</para>
 ///

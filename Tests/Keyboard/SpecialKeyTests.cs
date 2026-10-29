@@ -76,6 +76,65 @@ public class SpecialKeyTests
         }
     }
 
+    [TestCase(SpecialKey.KP_Home, SpecialKey.Home)]
+    [TestCase(SpecialKey.KP_Left, SpecialKey.Left)]
+    [TestCase(SpecialKey.KP_Up, SpecialKey.Up)]
+    [TestCase(SpecialKey.KP_Right, SpecialKey.Right)]
+    [TestCase(SpecialKey.KP_Down, SpecialKey.Down)]
+    [TestCase(SpecialKey.KP_PageUp, SpecialKey.PageUp)]
+    [TestCase(SpecialKey.KP_PageDown, SpecialKey.PageDown)]
+    [TestCase(SpecialKey.KP_End, SpecialKey.End)]
+    [TestCase(SpecialKey.KP_Insert, SpecialKey.Insert)]
+    [TestCase(SpecialKey.KP_Delete, SpecialKey.Delete)]
+    public void KeypadNavigation_PairsWithItsDedicatedKey(SpecialKey keypad, SpecialKey dedicated)
+    {
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(keypad.WithoutKeypad(), Is.EqualTo(dedicated));
+            Assert.That(dedicated.KeypadTwin(), Is.EqualTo(keypad));
+            Assert.That(XorgSpecialKeyMap.Instance.Reverse[keypad], Is.EqualTo((ulong)keypad & 0xFFFF), "the X11 slave injects its own keysym");
+        }
+    }
+
+    [Test]
+    public void KeypadBegin_HasNoTwin_AndRoundTripsThroughWindowsAndX11Maps()
+    {
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(SpecialKey.KP_Begin.WithoutKeypad(), Is.EqualTo(SpecialKey.KP_Begin));
+            Assert.That(WinSpecialKeyMap.Instance.Reverse[SpecialKey.KP_Begin], Is.EqualTo((ulong)WinVirtualKey.Clear));
+            Assert.That(XorgSpecialKeyMap.Instance.Reverse[SpecialKey.KP_Begin], Is.EqualTo(0xFF9DUL));
+        }
+    }
+
+    [TestCase(SpecialKey.F1)]
+    [TestCase(SpecialKey.KP_4)]
+    [TestCase(SpecialKey.Return)]
+    public void NotNavigation_HasNoTwin(SpecialKey key)
+    {
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(key.WithoutKeypad(), Is.EqualTo(key));
+            Assert.That(key.KeypadTwin(), Is.Null);
+        }
+    }
+
+    [TestCase(SpecialKey.KP_0)]
+    [TestCase(SpecialKey.KP_9)]
+    [TestCase(SpecialKey.KP_Decimal)]
+    [TestCase(SpecialKey.KP_Left)]
+    [TestCase(SpecialKey.KP_Begin)]
+    [TestCase(SpecialKey.KP_Delete)]
+    public void KeypadKeysNumLockChanges_AreNumLockSensitive(SpecialKey key) =>
+        Assert.That(key.IsNumLockSensitive(), Is.True);
+
+    [TestCase(SpecialKey.Left)]
+    [TestCase(SpecialKey.KP_Enter)]
+    [TestCase(SpecialKey.KP_Add)]
+    [TestCase(SpecialKey.F1)]
+    public void KeysNumLockLeavesAlone_AreNotNumLockSensitive(SpecialKey key) =>
+        Assert.That(key.IsNumLockSensitive(), Is.False);
+
     [Test]
     public void FunctionKeys_AreConsecutive()
     {

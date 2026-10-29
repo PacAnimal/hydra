@@ -9,11 +9,11 @@ namespace Hydra.Platform.Windows;
 [SupportedOSPlatform("windows")]
 internal static partial class IpInterfaceTable
 {
-    private const string Iphlpapi = "iphlpapi.dll";
+    internal const string Iphlpapi = "iphlpapi.dll";
     private const ushort AfUnspec = 0;
 
-    // MIB_IPINTERFACE_TABLE (netioapi.h): a ULONG count, then rows aligned to their 8-byte LUID
-    private const int RowsOffset = 8;
+    // every MIB_*_TABLE (netioapi.h): a ULONG count, then rows aligned to their 8-byte LUID
+    internal const int RowsOffset = 8;
 
     // MIB_IPINTERFACE_ROW, only the fields read here
     private const int RowSize = 168;
@@ -49,5 +49,5 @@ internal static partial class IpInterfaceTable
     private static partial uint GetIpInterfaceTable(ushort family, out nint table);
 
     [LibraryImport(Iphlpapi)]
-    private static partial void FreeMibTable(nint memory);
+    internal static partial void FreeMibTable(nint memory);
 }

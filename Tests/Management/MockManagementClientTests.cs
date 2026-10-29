@@ -68,10 +68,10 @@ public class MockManagementClientTests
         }
     }
 
-    private static bool IsPrivateOrLoopback(string address) =>
-        address.StartsWith("192.168.") || address.StartsWith("10.") || address is "127.0.0.1"
-        || address.StartsWith("fd") || address.StartsWith("fc")
-        || Enumerable.Range(16, 16).Any(n => address.StartsWith($"172.{n}."));
+    private static bool IsPrivateOrLoopback(string? address) =>
+        address is not null && (address.StartsWith("192.168.") || address.StartsWith("10.") || address is "127.0.0.1"
+            || address.StartsWith("fd") || address.StartsWith("fc")
+            || Enumerable.Range(16, 16).Any(n => address.StartsWith($"172.{n}.")));
 
     [Test]
     public async Task ConnectedForGrowsWithUptimeInsteadOfLookingLikeAFreshProcess()

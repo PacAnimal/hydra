@@ -6,7 +6,7 @@ using Microsoft.Extensions.Logging;
 namespace Hydra.Platform.Windows;
 
 [SupportedOSPlatform("windows")]
-public sealed class WindowsOutputHandler(ILogger<WindowsOutputHandler> log, IScreenDetector screens) : IPlatformOutput, ICursor
+public sealed class WindowsOutputHandler(ILogger<WindowsOutputHandler> log, IScreenDetector screens) : IPlatformOutput, ICursor, IWindowFocus
 {
     private readonly WindowsCursorSnapshot _cursor = new();
     private readonly DesktopInputDispatcher _dispatcher = new(log);
@@ -28,6 +28,8 @@ public sealed class WindowsOutputHandler(ILogger<WindowsOutputHandler> log, IScr
         if (_vWidth == 0) _vWidth = 1;
         if (_vHeight == 0) _vHeight = 1;
     }
+
+    public void FocusFrontmostOn(ScreenBounds screen) => _dispatcher.Dispatch(new FocusWindowCommand(screen));
 
     public void MoveMouse(int x, int y)
     {
@@ -60,6 +62,11 @@ public sealed class WindowsOutputHandler(ILogger<WindowsOutputHandler> log, IScr
     public void InjectMouseScroll(MouseScrollMessage msg)
     {
         _dispatcher.Dispatch(new InjectMouseScrollCommand(msg));
+    }
+
+    public void RestoreLocks()
+    {
+        _dispatcher.Dispatch(new RestoreLocksCommand());
     }
 
     public ScreenPoint? GetCursorPosition() => WindowsDisplayHelper.CursorPosition();

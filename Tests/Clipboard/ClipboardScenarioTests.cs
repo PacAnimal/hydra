@@ -1,3 +1,4 @@
+using Hydra.Relay;
 using Tests.Setup;
 
 namespace Tests.Clipboard;
@@ -8,6 +9,14 @@ namespace Tests.Clipboard;
 public class ClipboardScenarioTests
 {
     private static readonly byte[] Png = TestImages.Png;
+
+    // an image whose push is over the stream threshold, so it crosses in several chunks
+    private static byte[] LargeImage()
+    {
+        var image = new byte[ClipboardStreamSender.Threshold + ClipboardStreamSender.ChunkBytes];
+        new Random(7).NextBytes(image);
+        return image;
+    }
 
     private static SimulatedClipboard Linux() => new(ClipboardOs.Linux);
 
@@ -282,5 +291,210 @@ public class ClipboardScenarioTests
             Assert.That(next.Text, Is.EqualTo("copied elsewhere"));
             Assert.That(next.Primary, Is.EqualTo("selection only"));
         }
+    }
+
+    [Test]
+    public void LargeImageCarriedToASlave_PastesNothingMidway_ThenTheImage([Values] ClipboardOs masterOs, [Values] ClipboardOs slaveOs)
+    {
+        var master = new SimulatedClipboard(masterOs);
+        var slave = new SimulatedClipboard(slaveOs);
+        var image = LargeImage();
+        slave.Copy("old on the slave");
+
+        master.CopyImage(image);
+        string? pastedMidway = "not run";
+        byte[]? imageMidway = [];
+        master.CarryTo(slave, midway: () =>
+        {
+            pastedMidway = slave.Paste();
+            imageMidway = slave.ImagePng;
+        });
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(pastedMidway, Is.Null);
+            Assert.That(imageMidway, Is.Null);
+            Assert.That(slave.ImagePng, Is.EqualTo(image));
+        }
+    }
+
+    [Test]
+    public void LargeImageReturnedToTheMaster_PastesNothingMidway_ThenTheImage([Values] ClipboardOs masterOs, [Values] ClipboardOs slaveOs)
+    {
+        var master = new SimulatedClipboard(masterOs);
+        var slave = new SimulatedClipboard(slaveOs);
+        var image = LargeImage();
+        master.Copy("old on the master");
+        master.CarryTo(slave);
+
+        slave.CopyImage(image);
+        string? pastedMidway = "not run";
+        byte[]? imageMidway = [];
+        slave.ReturnTo(master, midway: () =>
+        {
+            pastedMidway = master.Paste();
+            imageMidway = master.ImagePng;
+        });
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(pastedMidway, Is.Null);
+            Assert.That(imageMidway, Is.Null);
+            Assert.That(master.ImagePng, Is.EqualTo(image));
+        }
+    }
+
+    [Test]
+    public void CopyOnASlaveMidwayThroughAStream_WinsAndReturnsToTheMaster([Values] ClipboardOs masterOs, [Values] ClipboardOs slaveOs)
+    {
+        var master = new SimulatedClipboard(masterOs);
+        var slave = new SimulatedClipboard(slaveOs);
+
+        master.CopyImage(LargeImage());
+        master.CarryTo(slave, midway: () => slave.Copy("copied on the slave"));
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(slave.Paste(), Is.EqualTo("copied on the slave"));
+            Assert.That(slave.ImagePng, Is.Null);
+            Assert.That(slave.AbandonedStreams, Is.EqualTo(1));
+        }
+
+        slave.ReturnTo(master);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(master.Paste(), Is.EqualTo("copied on the slave"));
+            Assert.That(master.ImagePng, Is.Null);
+        }
+    }
+
+    [Test]
+    public void PullMidwayThroughAStream_IsAnsweredUnchanged_AndLeavesTheMastersClipboard([Values] ClipboardOs masterOs, [Values] ClipboardOs slaveOs)
+    {
+        var master = new SimulatedClipboard(masterOs);
+        var slave = new SimulatedClipboard(slaveOs);
+        var image = LargeImage();
+
+        master.CopyImage(image);
+        var writes = master.ClipboardWrites;
+        ClipboardPullResponseMessage? answer = null;
+        master.CarryTo(slave, midway: () => answer = slave.ReturnTo(master));
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(answer?.Unchanged, Is.True);
+            Assert.That(master.ImagePng, Is.EqualTo(image));
+            Assert.That(master.ClipboardWrites, Is.EqualTo(writes));
+            Assert.That(slave.ImagePng, Is.EqualTo(image));
+        }
+    }
+
+    // -- a password manager's copy: relayed concealed, and its auto-clear relayed too --
+
+    [Test]
+    public void ConcealedCopyOnTheMaster_StaysConcealedOnTheSlave([Values] ClipboardOs masterOs, [Values] ClipboardOs slaveOs)
+    {
+        var master = new SimulatedClipboard(masterOs);
+        var slave = new SimulatedClipboard(slaveOs);
+
+        master.CopyConcealed("hunter2");
+        master.CarryTo(slave);
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(slave.Paste(), Is.EqualTo("hunter2"));
+            Assert.That(slave.Concealed, Is.True);
+        }
+    }
+
+    [Test]
+    public void MastersPasswordManagerClears_TheSlaveIsClearedOnTheNextEntry([Values] ClipboardOs masterOs, [Values] ClipboardOs slaveOs)
+    {
+        var master = new SimulatedClipboard(masterOs);
+        var slave = new SimulatedClipboard(slaveOs);
+
+        master.CopyConcealed("hunter2");
+        master.CarryTo(slave);
+        master.AutoClear();
+        master.CarryTo(slave);
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(slave.Paste(), Is.Null);
+            Assert.That(slave.Concealed, Is.False);
+        }
+    }
+
+    [Test]
+    public void SlavesPasswordManagerClears_TheMasterIsClearedOnTheNextPull_AndTheOtherSlaveOnItsEntry([Values] ClipboardOs masterOs,
+        [Values] ClipboardOs slaveOs)
+    {
+        var master = new SimulatedClipboard(masterOs);
+        var slave = new SimulatedClipboard(slaveOs);
+        var other = Linux();
+
+        master.Copy("on the master");
+        slave.CopyConcealed("hunter2");
+        slave.ReturnTo(master);
+        master.CarryTo(other);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(master.Paste(), Is.EqualTo("hunter2"));
+            Assert.That(master.Concealed, Is.True);
+            Assert.That(other.Concealed, Is.True);
+        }
+
+        slave.AutoClear();
+        var answer = slave.ReturnTo(master);
+        master.CarryTo(other);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(answer.Cleared, Is.True);
+            Assert.That(master.Paste(), Is.Null);
+            Assert.That(other.Paste(), Is.Null);
+        }
+    }
+
+    [Test]
+    public void SlavesLaterCopy_IsNeverClearedByTheMastersAutoClear([Values] ClipboardOs masterOs, [Values] ClipboardOs slaveOs)
+    {
+        var master = new SimulatedClipboard(masterOs);
+        var slave = new SimulatedClipboard(slaveOs);
+
+        master.CopyConcealed("hunter2");
+        master.CarryTo(slave);
+        slave.Copy("copied on the slave");
+        master.AutoClear();
+        master.CarryTo(slave);
+
+        Assert.That(slave.Paste(), Is.EqualTo("copied on the slave"));
+    }
+
+    [Test]
+    public void MastersLaterCopy_IsNeverClearedByTheSlavesAutoClear([Values] ClipboardOs masterOs, [Values] ClipboardOs slaveOs)
+    {
+        var master = new SimulatedClipboard(masterOs);
+        var slave = new SimulatedClipboard(slaveOs);
+
+        slave.CopyConcealed("hunter2");
+        slave.ReturnTo(master);
+        master.Copy("copied on the master");
+        slave.AutoClear();
+        slave.ReturnTo(master);
+
+        Assert.That(master.Paste(), Is.EqualTo("copied on the master"));
+    }
+
+    [Test]
+    public void PlainCopy_EmptiedAtItsSource_IsNotCleared([Values] ClipboardOs masterOs, [Values] ClipboardOs slaveOs)
+    {
+        var master = new SimulatedClipboard(masterOs);
+        var slave = new SimulatedClipboard(slaveOs);
+
+        slave.Copy("plain");
+        slave.ReturnTo(master);
+        slave.AutoClear();
+        slave.ReturnTo(master);
+
+        Assert.That(master.Paste(), Is.EqualTo("plain"));
     }
 }

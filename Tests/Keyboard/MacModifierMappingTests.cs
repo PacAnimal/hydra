@@ -75,9 +75,9 @@ public class MacModifierMappingTests
         Assert.That(MacKeyResolver.MapModifiers(AlphaShift), Is.EqualTo(KeyModifiers.CapsLock));
 
     [Test]
-    public void NumericPadFlag_DoesNotMapToNumLock() =>
-        // NumericPad is a source flag ("key came from numpad"), not a NumLock state indicator
-        Assert.That(MacKeyResolver.MapModifiers(NumericPad), Is.EqualTo(KeyModifiers.None));
+    public void NumericPadFlag_MapsToNumLock() =>
+        // a Mac keypad always types digits; slaves take NumLock only for the keys it changes (IsNumLockSensitive)
+        Assert.That(MacKeyResolver.MapModifiers(NumericPad), Is.EqualTo(KeyModifiers.NumLock));
 
     [Test]
     public void MultipleFlags_ReturnsCombination()

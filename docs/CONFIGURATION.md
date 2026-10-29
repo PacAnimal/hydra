@@ -121,10 +121,14 @@ Use `Esc` to close the TUI. It does not change Hydra's running state.
 - `allowSystemSleep` — `true` lets the operating system's normal idle policy put this machine fully to sleep. Hydra stops treating background peer activity as local activity, leaves the relay when a screen-count condition no longer matches, and closes the relay before OS suspend (default: `false`).
 - `screenLockPropagation` — propagate a Mac/Windows master's local lock to connected slaves (master only; default: `false`)
 - `accelerateMouseWheel` — apply the platform wheel-acceleration behavior (default: `true`)
+- `modifierNumLock` — the NumLock a keypad key crosses with while Super, Control or Alt is held, whatever the master's own NumLock says: `true` types its digit (`KP_4`), `false` its navigation key (`KP_Left`; the decimal key becomes `KP_Delete`, and a keypad comma key that NumLock does not change, as on ABNT2 and JIS keypads, is left alone, except on a headless Linux master, whose own NumLock-off already sends that key as `KP_Delete`). A key keeps it through its repeats and release, whichever is let go first, and keys pressed without those modifiers are untouched. For keypad shortcuts on a slave (window tiling on Super+keypad) that should work with NumLock either way. A macOS master's keypad always types digits, so only `false` changes anything there. Hotkeys (`hotkeys`) see the key as this makes it, so bind the form the setting gives: `Super+KP_4` under `true`, `Super+KP_Left` under `false`, and either fires whatever NumLock says (master only; default: `null`, which leaves the keypad alone)
 - `conditions` — optional object; if set, this profile only activates when **all** specified conditions are met (see [Network-aware config](#network-aware-config))
   - `ssid` — activates when connected to this WiFi network name (case-insensitive)
   - `screenCount` — activates when exactly this many screens are connected (integer ≥ 1)
   - `isPluggedIn` — `true` activates when on AC power; `false` activates when on battery
+  - `address` — activates while this machine has this IP address (`"192.168.1.7"`) or one in this network (`"192.168.1.0/24"`, IPv4 or IPv6)
+  - `gatewayMac` — activates behind the router with this MAC address (`"a4:91:b1:0c:22:7e"`)
+  - `wired` — `true` activates while a network cable is connected; `false` while none is
 
 ## Screen layout
 
@@ -259,7 +263,10 @@ Each profile has a `profileName` — logged at startup so you always know which 
 - `conditions: { "ssid": "..." }` — activates when connected to the named WiFi network (case-insensitive)
 - `conditions: { "screenCount": 2 }` — activates when exactly 2 screens are connected
 - `conditions: { "isPluggedIn": true }` — activates when on AC power; `false` for battery-only
-- Conditions are **AND-ed** — `{ "ssid": "Office", "screenCount": 2 }` requires both to match simultaneously
+- `conditions: { "address": "10.20.0.0/16" }` — activates while any interface has an address in that network. A bare address (`"192.168.1.7"`) matches only itself, which suits a static IP. A network with bits set past its prefix (`"192.168.1.7/24"`) is refused, since it could mean either
+- `conditions: { "gatewayMac": "a4:91:b1:0c:22:7e" }` — activates behind the router with that hardware address. This is the way to tell networks apart over a cable, and also over Wi-Fi: two homes both on `192.168.1.x` behind a `192.168.1.1` have different routers. Find it with `arp -n 192.168.1.1` (macOS, Linux) or `Get-NetNeighbor 192.168.1.1` (Windows), with your gateway's address; once a profile uses `gatewayMac`, Hydra logs the current one (`Network links: …, gateway MAC …`). Dashes and dropped leading zeros (`a4:91:b1:c:22:7e`, as macOS's `arp` prints them) are accepted
+- `conditions: { "wired": true }` — activates while a physical wired interface has a link (a cable plugged in at both ends), whether or not the address is on it or on a bridge it belongs to; `false` while none has. Wi-Fi, bridges, VPNs and virtual machines' adapters (Docker, Hyper-V's vEthernet, the Thunderbolt Bridge) are never the wired interface themselves
+- Conditions are **AND-ed** — `{ "ssid": "Office", "screenCount": 2 }` requires both to match simultaneously, and `{ "wired": true, "gatewayMac": "a4:91:b1:0c:22:7e" }` means docked at that desk
 - No `conditions` (or `{}`) — fallback, activates when no other profile matches
 
 A fallback profile is optional. Without one, Hydra idles when no profile matches — e.g. at a coffee shop.
@@ -267,6 +274,8 @@ A fallback profile is optional. Without one, Hydra idles when no profile matches
 Rules: at most one fallback, no two profiles with identical condition tuples, no duplicate profile names — validated at startup.
 
 Hydra re-evaluates conditions automatically when the network changes, screens are connected/disconnected, or the power source changes, and restarts with the appropriate profile if needed.
+
+The address and gateway conditions read every interface, so a VPN or a second network adapter adds to what can match rather than hiding the first. Hydra logs the addresses and whether it is wired at startup (`Network links: wired, addresses …`). `gatewayMac` looks at IPv4 default gateways only, and while a gateway's MAC has not resolved, any switch that depends on it waits (a warning says so) while the rest still happen. On macOS the router's MAC is read by Hydra's shield helper, which macOS asks you to allow on the local network the first time a profile uses `gatewayMac`; until it is allowed, the MAC stays unresolved.
 
 **Example — laptop as slave at home, master at work:**
 
@@ -330,8 +339,8 @@ A common setup: at home your stationary desktop controls your laptop (the laptop
 
 ## Hotkeys
 
-By default every hotkey uses **Ctrl+Alt+Super** (Super = ⌘ on macOS, Win on Windows) plus one letter. All of
-them can be rebound — see [Customising hotkeys](#customising-hotkeys) below.
+By default every hotkey uses **Ctrl+Alt+Super** (Super = ⌘ on macOS, Win on Windows) plus a letter or an arrow. All
+of them can be rebound or turned off — see [Customising hotkeys](#customising-hotkeys) below.
 
 | Default hotkey | Action name | Action |
 |--------|--------|--------|
@@ -341,6 +350,10 @@ them can be rebound — see [Customising hotkeys](#customising-hotkeys) below.
 | `Ctrl+Alt+Super+V` | `pasteFiles` | Paste previously copied files to the current machine |
 | `Ctrl+Alt+Super+K` | `lockSlaves` | Lock every connected slave |
 | `Ctrl+Alt+Super+Z` | `missionControl` | Send Mission Control to the current remote screen (macOS slave) |
+| `Ctrl+Alt+Super+Up` | `switchMonitorUp` | Move to the screen above (see [Switching monitors](#switching-monitors)) |
+| `Ctrl+Alt+Super+Down` | `switchMonitorDown` | Move to the screen below |
+| `Ctrl+Alt+Super+Left` | `switchMonitorLeft` | Move to the screen on the left |
+| `Ctrl+Alt+Super+Right` | `switchMonitorRight` | Move to the screen on the right |
 
 **Lock all slaves:** `Ctrl+Alt+Super+K` sends a lock to every connected slave — the same action `screenLockPropagation` performs when the master's own machine locks. It is the only way to trigger it from a **remote-only master**, which has no screen of its own to lock and therefore never fires the underlying event. It is not gated on `screenLockPropagation`: that setting governs automatic propagation, while the hotkey is an explicit request. A slave that has seen local input more recently than the master still declines to lock, on the assumption that someone is sitting at it.
 
@@ -348,6 +361,26 @@ them can be rebound — see [Customising hotkeys](#customising-hotkeys) below.
 
 - **With a local screen** (a desktop or laptop set `remoteOnly`), the hotkey is a remote/local toggle: press once to pass input through to the physical machine running Hydra, press again to re-lock to remote. The OSD reads `Input: local` / `Input: remote`.
 - **Headless** (a Pi with no display), there is nothing to pass input *to*, so the hotkey keeps the meaning it has everywhere else: it confines the cursor to the current remote screen, and pressing it again lets the cursor roam between slaves. The OSD reads `Cursor lock: On` / `Cursor lock: Off`. Before this, unlocking on a headless master handed input to a local screen that did not exist and the keyboard and mouse went dead until the hotkey was pressed again.
+
+### Switching monitors
+
+Hold `Ctrl+Alt+Super` and tap an arrow to move to the next screen that way, whether it is another monitor of the same
+machine or another machine. The cursor lands in the middle of that screen (hidden if it is hidden now), and the window
+you last worked in there comes forward. The move happens when you let go of the arrow.
+
+When several screens share that edge, a second arrow picks which: hold the first and press a perpendicular one, then
+let go of either. `Up` then `Right` goes to a screen along the right third of the top edge; `Right` then `Up` to one
+along the upper third of the right edge. A lone arrow aims at the middle third. Whichever screen is closest to the
+aimed third is picked, ties going to the left or upper one; with only one screen that way, every combination starting
+with that arrow reaches it. An arrow along the same edge (`Up` then `Down`) cancels the move.
+
+The switch moves the cursor even when it is locked to a screen, since it is an explicit request; a mouse button held
+on a remote still keeps the cursor there, as at an edge. A remote-only master never lands on its own screens.
+
+Like every hotkey, the chord still reaches the master's own apps while the cursor is at home on macOS and Windows. On a
+Mac running Rectangle, `Ctrl+Opt+Cmd+Left`/`Right` is also its "next display" shortcut, so rebind one of the two. On an
+X11 master the chords are grabbed while at home; one that another application already holds works only on a remote,
+and a warning at startup says so.
 
 **Relative mouse:** relative mode sends mouse deltas instead of absolute coordinates — useful for games or 3D apps that capture the cursor. Toggled per-screen; an on-screen notification confirms the current state.
 
@@ -370,7 +403,13 @@ nothing.
 
 Each value is an **array**, so one action can have several chords — useful for keeping the default while adding
 something reachable one-handed. A listed array **replaces** that action's default entirely: to keep the default
-as well, list it, as `toggleCursorLock` does above. Actions you don't mention keep their defaults.
+as well, list it, as `toggleCursorLock` does above. Actions you don't mention keep their defaults, and an empty
+array, `[]`, turns an action off (logged at startup). A chord bound to two actions stays with the one listed first in
+the table above, with a warning.
+
+The monitor switch's directions combine only when their chords share modifiers: `"switchMonitorUp": ["Ctrl+Alt+KP_8"]`
+pairs with `"switchMonitorRight": ["Ctrl+Alt+KP_6"]`, but not with the default `Ctrl+Alt+Super+Right`. A direction
+that can never pair with a perpendicular one is warned about at startup.
 
 **Writing a chord.** Join parts with `+`, in any order, case-insensitively: `Ctrl+Alt+Super+L`, `cmd+alt+ctrl+l`
 and `L+Ctrl+Alt+Super` are the same binding. Modifier names, with aliases:
@@ -411,6 +450,7 @@ Names are case-insensitive. Any of them combines with any modifiers.
 | Locks | `CapsLock` `NumLock` `ScrollLock` |
 | PC extras | `Pause` `PrintScreen` `Menu` |
 | Numpad | `KP_0` `KP_1` `KP_2` `KP_3` `KP_4` `KP_5` `KP_6` `KP_7` `KP_8` `KP_9` `KP_Enter` `KP_Add` `KP_Subtract` `KP_Multiply` `KP_Divide` `KP_Decimal` `KP_Equal` `KP_Space` `KP_Tab` |
+| Numpad, NumLock off | `KP_Home` `KP_End` `KP_PageUp` `KP_PageDown` `KP_Left` `KP_Right` `KP_Up` `KP_Down` `KP_Begin` `KP_Insert` `KP_Delete` |
 | Media | `AudioMute` `AudioVolumeUp` `AudioVolumeDown` `AudioPlay` `AudioStop` `AudioNext` `AudioPrev` |
 | System | `BrightnessUp` `BrightnessDown` `Eject` `MissionControl` |
 | macOS text | `MoveToBeginningOfLine` `MoveToEndOfLine` |

@@ -8,8 +8,35 @@ export interface ValidationError {
 
 function isUnconditional(p: HydraProfile): boolean {
   if (!p.conditions) return true
-  const { ssid, screenCount, isPluggedIn } = p.conditions
-  return !ssid && screenCount === undefined && isPluggedIn === undefined
+  const { ssid, screenCount, isPluggedIn, address, gatewayMac, wired } = p.conditions
+  return !ssid && screenCount === undefined && isPluggedIn === undefined && !address && !gatewayMac && wired === undefined
+}
+
+// six octets split by ':' or '-', each one or two hex digits, or twelve digits unsplit, as Hydra reads them; null if neither
+export function normalizeMac(mac: string): string | null {
+  const trimmed = mac.trim()
+  const octets = /^[0-9a-f]{12}$/i.test(trimmed) ? trimmed.match(/../g)! : trimmed.split(/[:-]/)
+  if (octets.length !== 6 || !octets.every(o => /^[0-9a-f]{1,2}$/i.test(o))) return null
+  return octets.map(o => o.toLowerCase().padStart(2, '0')).join(':')
+}
+
+// an address (192.168.1.7) or a network (192.168.1.0/24) as one network string, a bare address its own /32 or /128;
+// null where Hydra refuses it, which includes an IPv4 network with host bits set past the prefix
+export function normalizeAddress(text: string): string | null {
+  const [address, prefix, ...rest] = text.trim().split('/')
+  if (rest.length > 0 || (prefix !== undefined && !/^\d{1,3}$/.test(prefix))) return null
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(address)
+  if (v4) {
+    const octets = v4.slice(1).map(Number)
+    const bits = prefix === undefined ? 32 : Number(prefix)
+    if (octets.some(o => o > 255) || bits > 32) return null
+    const value = octets.reduce((n, o) => n * 256 + o, 0)
+    if (value % 2 ** (32 - bits) !== 0) return null
+    return `${octets.join('.')}/${bits}`
+  }
+  if (!address.includes(':') || !/^[0-9a-f:.]+$/i.test(address)) return null
+  const bits = prefix === undefined ? 128 : Number(prefix)
+  return bits > 128 ? null : `${address.toLowerCase()}/${bits}`
 }
 
 // returns the effective hosts for a profile (from layout or explicit)
@@ -60,7 +87,16 @@ export function validate(profiles: HydraProfile[], name?: string, log: LogCap = 
   const seen = new Set<string>()
   profiles.forEach((p, i) => {
     if (isUnconditional(p)) return
-    const key = `${p.conditions?.ssid ?? ''}|${p.conditions?.screenCount ?? ''}|${p.conditions?.isPluggedIn ?? ''}`
+    const c = p.conditions
+    if (c?.address && normalizeAddress(c.address) === null) {
+      errors.push({ path: `profiles[${i}].conditions.address`, message: 'address must be an IP address or a network such as 192.168.1.0/24, with no bits set past the prefix' })
+    }
+    if (c?.gatewayMac && normalizeMac(c.gatewayMac) === null) {
+      errors.push({ path: `profiles[${i}].conditions.gatewayMac`, message: 'gateway MAC must be a MAC address such as a4:91:b1:0c:22:7e' })
+    }
+    const mac = c?.gatewayMac ? normalizeMac(c.gatewayMac) ?? c.gatewayMac : ''
+    const address = c?.address ? normalizeAddress(c.address) ?? c.address : ''
+    const key = `${c?.ssid?.toLowerCase() ?? ''}|${c?.screenCount ?? ''}|${c?.isPluggedIn ?? ''}|${address}|${mac}|${c?.wired ?? ''}`
     if (seen.has(key)) {
       errors.push({ path: `profiles[${i}].conditions`, message: 'duplicate condition combination' })
     }
@@ -89,6 +125,10 @@ export function validate(profiles: HydraProfile[], name?: string, log: LogCap = 
 
     if (p.remoteOnly && p.mode !== 'Master') {
       errors.push({ path: `profiles[${i}].remoteOnly`, message: 'remoteOnly requires Master mode' })
+    }
+
+    if (p.mode === 'Master' && p.maxMouseHz !== undefined && (!Number.isInteger(p.maxMouseHz) || p.maxMouseHz < 1 || p.maxMouseHz > 1000)) {
+      errors.push({ path: `profiles[${i}].maxMouseHz`, message: 'maxMouseHz must be a whole number from 1 to 1000' })
     }
 
     if (p.syncScreensaver === false && p.mode !== 'Master') {

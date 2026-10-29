@@ -387,7 +387,10 @@ public class ScreenLayoutTests
         return new ScreenLayout(
             [Home, Remote],
             [
-                new HostConfig { Name = "home", DeadCorners = hostDeadCorners, Neighbours = [new NeighbourConfig { Direction = Direction.Right, Name = "remote" }] },
+                new HostConfig
+                {
+                    Name = "home", DeadCorners = hostDeadCorners, Neighbours = [new NeighbourConfig { Direction = Direction.Right, Name = "remote" }],
+                },
                 new HostConfig { Name = "remote", Neighbours = [new NeighbourConfig { Direction = Direction.Left, Name = "home" }] },
             ],
             rootDeadCorners,
@@ -574,7 +577,10 @@ public class ScreenLayoutTests
         var layout = new ScreenLayout(
             [a0, a1, b],
             [
-                new HostConfig { Name = "a", Neighbours = [new NeighbourConfig { Direction = Direction.Right, Name = "b", SourceScreen = "a:0", Mirror = false }] },
+                new HostConfig
+                {
+                    Name = "a", Neighbours = [new NeighbourConfig { Direction = Direction.Right, Name = "b", SourceScreen = "a:0", Mirror = false }],
+                },
             ],
             null,
             [],
@@ -626,7 +632,10 @@ public class ScreenLayoutTests
             new()
             {
                 Name = "win",
-                Neighbours = [new NeighbourConfig { Direction = Direction.Down, Name = "mac" }, new NeighbourConfig { Direction = Direction.Right, Name = "mac" }],
+                Neighbours =
+                [
+                    new NeighbourConfig { Direction = Direction.Down, Name = "mac" }, new NeighbourConfig { Direction = Direction.Right, Name = "mac" },
+                ],
             },
             new() { Name = "mac" },
         ];

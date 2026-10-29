@@ -5,6 +5,23 @@ export type UpdateChannel = 'stable' | 'edge'
 export type NetworkType = 'config' | 'embeddedStyx' | 'embeddedStyxServer'
 export type ClipboardSyncMode = 'Hydra' | 'System' | 'Off'
 
+// Hydra's rebindable hotkey actions and their defaults (docs/CONFIGURATION.md, Hotkeys)
+export const HOTKEY_ACTIONS: { action: string; label: string; defaultChord: string }[] = [
+  { action: 'toggleCursorLock', label: 'Cursor Lock', defaultChord: 'Ctrl+Alt+Super+L' },
+  { action: 'toggleRelativeMouse', label: 'Relative Mouse', defaultChord: 'Ctrl+Alt+Super+M' },
+  { action: 'copyFiles', label: 'Copy Files', defaultChord: 'Ctrl+Alt+Super+C' },
+  { action: 'pasteFiles', label: 'Paste Files', defaultChord: 'Ctrl+Alt+Super+V' },
+  { action: 'lockSlaves', label: 'Lock Slaves', defaultChord: 'Ctrl+Alt+Super+K' },
+  { action: 'missionControl', label: 'Mission Control', defaultChord: 'Ctrl+Alt+Super+Z' },
+  { action: 'switchMonitorUp', label: 'Monitor Up', defaultChord: 'Ctrl+Alt+Super+Up' },
+  { action: 'switchMonitorDown', label: 'Monitor Down', defaultChord: 'Ctrl+Alt+Super+Down' },
+  { action: 'switchMonitorLeft', label: 'Monitor Left', defaultChord: 'Ctrl+Alt+Super+Left' },
+  { action: 'switchMonitorRight', label: 'Monitor Right', defaultChord: 'Ctrl+Alt+Super+Right' },
+]
+
+// what a hotkey field holds for an action turned off, which Hydra spells as an empty list
+export const HOTKEY_DISABLED = 'none'
+
 export interface NeighbourConfig {
   id?: string
   direction: Direction
@@ -38,6 +55,9 @@ export interface ConfigConditions {
   ssid?: string
   screenCount?: number
   isPluggedIn?: boolean
+  address?: string
+  gatewayMac?: string
+  wired?: boolean
 }
 
 export interface EmbeddedStyxConfig {
@@ -83,7 +103,16 @@ export interface HydraProfile {
   syncScreensaver?: boolean
   screenLockPropagation?: boolean
   accelerateMouseWheel?: boolean
+  allowSystemSleep?: boolean
   clipboardSync?: ClipboardSyncMode
+  // master only
+  hideCursor?: boolean
+  maxMouseHz?: number
+  // the keypad's NumLock under Super/Ctrl/Alt: true digits, false navigation, undefined as pressed
+  modifierNumLock?: boolean
+  // action name to its chords as typed, one per line (a chord's key may itself be ',' or '+'); an empty or missing
+  // action keeps its default
+  hotkeys?: Record<string, string>
   debugShield?: boolean
   deadCorners?: number
   conditions?: ConfigConditions

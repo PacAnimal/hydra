@@ -21,7 +21,7 @@ public static class TransitionTestHelper
 
     // the standard two-host master, with room for the one setting a test wants to vary
     public static IHydraProfile ProfileWith(int? maxMouseHz = null, bool hideCursor = false, Dictionary<string, List<string>>? hotkeys = null,
-        ClipboardSyncMode clipboardSync = ClipboardSyncMode.Hydra) =>
+        ClipboardSyncMode clipboardSync = ClipboardSyncMode.Hydra, bool? modifierNumLock = null) =>
         Profile("home", new HydraConfig
         {
             Mode = Mode.Master,
@@ -29,6 +29,7 @@ public static class TransitionTestHelper
             HideCursor = hideCursor,
             Hotkeys = hotkeys,
             ClipboardSync = clipboardSync,
+            ModifierNumLock = modifierNumLock,
             Hosts =
             [
                 new HostConfig
@@ -64,20 +65,29 @@ public static class TransitionTestHelper
     /// <param name="clipboard">The local clipboard, for a test of clipboard sync.</param>
     /// <param name="localPlatform">The platform the router believes it runs on, rather than the one the test does.</param>
     /// <param name="loggerFactory">Where the router's other loggers come from, for a test that reads what a peer logged through it.</param>
+    /// <param name="windowFocus">What brings a window forward, for a test of the monitor switch's arrival.</param>
     public static TestServiceBundle CreateService(Func<long>? getTickCount = null, IActivityTracker? activityTracker = null, IWorldState? world = null,
         TimeProvider? timeProvider = null, IHydraProfile? profile = null, IFileSelectionDetector? selectionDetector = null, IOsdNotification? osd = null,
-        FileTransferService? fileTransfer = null, IScreenSaverSync? screenSaverSync = null, FakeScreenDetector? screens = null, ILogger<InputRouter>? log = null,
-        IClipboardSync? clipboard = null, PeerPlatform? localPlatform = null, ILoggerFactory? loggerFactory = null)
+        FileTransferService? fileTransfer = null, IScreenSaverSync? screenSaverSync = null, FakeScreenDetector? screens = null,
+        ILogger<InputRouter>? log = null, IClipboardSync? clipboard = null, PeerPlatform? localPlatform = null, ILoggerFactory? loggerFactory = null,
+        IWindowFocus? windowFocus = null)
     {
         var platform = new FakePlatform();
         var relay = new FakeRelay();
         screens ??= new FakeScreenDetector();
         var config = profile ?? TestConfig;
-        var tracker = activityTracker ?? new ActivityTracker(config, new Lazy<IRelaySender>(() => relay), new WorldState(), new NullScreenSaverSync(), NullLogger<ActivityTracker>.Instance);
-        var service = new InputRouter(platform, platform, config, relay, screens, loggerFactory ?? NullLoggerFactory.Instance, log ?? NullLogger<InputRouter>.Instance, screenSaverSync ?? new NullScreenSaverSync(), clipboard ?? new NullClipboardSync(),
-            fileTransfer ?? FileTransferService.Null(), selectionDetector ?? new NullFileSelectionDetector(), osd ?? new NullOsdNotification(), tracker, peerState: world,
-            getTickCount: getTickCount, timeProvider: timeProvider, localPlatform: localPlatform);
-        platform.AfterFireCallback = service.Flush;
+        var tracker = activityTracker ?? new ActivityTracker(config, new Lazy<IRelaySender>(() => relay), new WorldState(), new NullScreenSaverSync(),
+            NullLogger<ActivityTracker>.Instance);
+        var service = new InputRouter(platform, platform, config, relay, screens, loggerFactory ?? NullLoggerFactory.Instance,
+            log ?? NullLogger<InputRouter>.Instance, screenSaverSync ?? new NullScreenSaverSync(), clipboard ?? new NullClipboardSync(),
+            fileTransfer ?? FileTransferService.Null(), selectionDetector ?? new NullFileSelectionDetector(), osd ?? new NullOsdNotification(), tracker,
+            peerState: world, getTickCount: getTickCount, timeProvider: timeProvider, localPlatform: localPlatform, windowFocus: windowFocus);
+        // the entry's hash, read off the actor, settled too, as when it was read in line; a test of that read sets Flush alone
+        platform.AfterFireCallback = async () =>
+        {
+            await service.Flush();
+            await service.HashReads();
+        };
         return new TestServiceBundle(platform, relay, service);
     }
 
@@ -108,6 +118,15 @@ public static class TransitionTestHelper
     {
         platform.FireMouseMove(2559, 720);
         Assert.That(platform.IsOnVirtualScreen, Is.True, "pre-condition: on the remote screen");
+    }
+
+    // pushes the cursor right, a remote at a time, until it enters host
+    public static void MoveRightTo(FakePlatform platform, FakeRelay relay, string host)
+    {
+        bool Entered() => relay.Sent.Of(MessageKind.EnterScreen, host).Count > 0;
+        for (var i = 0; i < 40 && !Entered(); i++)
+            platform.FireMouseDelta(100, 0);
+        Assert.That(Entered(), Is.True, $"pre-condition: on {host}");
     }
 
     // remote-only: single remote host "mac", no local screens

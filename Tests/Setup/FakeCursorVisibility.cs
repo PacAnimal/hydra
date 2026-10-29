@@ -8,6 +8,7 @@ public sealed class FakeCursorVisibility : ICursor, ICursorHider
 
     public void Hide() => IsHidden = true;
     public void Show() => IsHidden = false;
+    public void WarpTo(int x, int y) { }
 
     public ValueTask HideCursor() { Hide(); return ValueTask.CompletedTask; }
     public ValueTask ShowCursor() { Show(); return ValueTask.CompletedTask; }

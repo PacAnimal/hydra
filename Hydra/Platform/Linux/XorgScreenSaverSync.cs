@@ -78,26 +78,10 @@ public sealed class XorgScreenSaverSync : PollingScreenSaverSync
         return false;
     }
 
-    // Probes DPMSForceLevel with a temporary error handler to detect servers that report DPMS
-    // as capable/enabled but fail ForceLevel with BadMatch (e.g. DPMS disabled via xset -dpms).
-    private bool ProbeDpmsForceLevel()
-    {
-        var gotError = false;
-        NativeMethods.XErrorHandlerDelegate handler = (_, _) => { gotError = true; return 0; };
-        var gcHandle = GCHandle.Alloc(handler);
-        try
-        {
-            var prev = NativeMethods.XSetErrorHandler(Marshal.GetFunctionPointerForDelegate(handler));
-            _ = NativeMethods.DPMSForceLevel(_display, NativeMethods.DPMSModeOn);
-            _ = NativeMethods.XSync(_display, false);
-            _ = NativeMethods.XSetErrorHandler(prev);
-            return !gotError;
-        }
-        finally
-        {
-            gcHandle.Free();
-        }
-    }
+    // Probes DPMSForceLevel to detect servers that report DPMS as capable/enabled but fail ForceLevel
+    // with BadMatch (e.g. DPMS disabled via xset -dpms).
+    private bool ProbeDpmsForceLevel() =>
+        XErrors.Succeeds(_display, () => _ = NativeMethods.DPMSForceLevel(_display, NativeMethods.DPMSModeOn));
 
     protected override Task OnShutdown(CancellationToken cancel)
     {

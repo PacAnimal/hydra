@@ -13,7 +13,8 @@ internal sealed class SlaveLocalInputWatcher(ILocalEventTap tap, IActivityTracke
     {
         if (!tap.IsAccessibilityTrusted())
         {
-            log.LogWarning("Accessibility permission not granted — open System Settings › Privacy & Security › Accessibility and enable Hydra, then Hydra will continue automatically.");
+            log.LogWarning("Accessibility permission not granted — open System Settings › Privacy & Security › Accessibility and enable Hydra, "
+                + "then Hydra will continue automatically.");
             await tap.WaitForAccessibilityTrusted(cancel);
             if (cancel.IsCancellationRequested) return;
             log.LogInformation("Accessibility permission granted");

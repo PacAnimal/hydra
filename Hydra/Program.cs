@@ -154,7 +154,7 @@ var services = builder.Services;
 services.AddEnvironmentConfiguration();
 
 // detect current network/screens and resolve which profile to use
-var detector = await CreateDetector(macNetworkState, services);
+var detector = await CreateDetector(macNetworkState, macShield, services);
 HydraConfig? config;
 if (configFile.Profile != null)
     config = HydraConfig.Resolve(profiles, new ConditionState([], 1), configFile.Profile);
@@ -165,7 +165,8 @@ else
     var activeSsids = (HydraConfig.HasSsidConditions(profiles) ? await detector.GetActiveSsids() : []) ?? [];
     var screenCount = HydraConfig.HasScreenCountConditions(profiles) ? GetScreenCount() : 1;
     var isPluggedIn = HydraConfig.HasPluggedInConditions(profiles) ? await detector.GetIsPluggedIn() : null;
-    config = HydraConfig.Resolve(profiles, new ConditionState(activeSsids, screenCount, isPluggedIn));
+    var links = HydraConfig.HasLinkConditions(profiles) ? await ReadNetworkLinks(detector, HydraConfig.HasGatewayMacConditions(profiles)) : null;
+    config = HydraConfig.Resolve(profiles, new ConditionState(activeSsids, screenCount, isPluggedIn, links));
 }
 
 // derive network config blob from embeddedStyx (explicit) or embeddedStyxServer (auto-localhost)
@@ -208,6 +209,9 @@ if (startupLog.IsEnabled(LogLevel.Information))
 
 foreach (var hotkeyError in profile.Hotkeys.Errors)
     startupLog.LogWarning("Hotkey config: {Error}", hotkeyError);
+if (startupLog.IsEnabled(LogLevel.Information))
+    foreach (var disabled in profile.Hotkeys.Disabled)
+        startupLog.LogInformation("Hotkey config: {Action} is disabled", disabled);
 
 if (config?.EmbeddedStyxServer != null && startupLog.IsEnabled(LogLevel.Information))
 {
@@ -271,9 +275,16 @@ if (config != null)
     if (profile.Mode == Mode.Master)
     {
         if (OperatingSystem.IsMacOS())
+        {
             services.AddSingleton<IPlatformInput, MacInputHandler>();
+            services.AddSingleton<IWindowFocus, MacWindowFocus>();
+        }
         else if (OperatingSystem.IsWindows())
+        {
             services.AddSingleton<IPlatformInput, WindowsInputHandler>();
+            // the input handler, so a window is focused behind the shield's teardown on its own thread
+            services.AddSingleton(sp => (IWindowFocus)sp.GetRequiredService<IPlatformInput>());
+        }
         else if (linuxConsoleMode)
         {
             if (!profile.RemoteOnly)
@@ -284,7 +295,10 @@ if (config != null)
             services.AddSingleton<IPlatformInput, EvdevInputHandler>();
         }
         else if (OperatingSystem.IsLinux())
+        {
             services.AddSingleton<IPlatformInput, XorgInputHandler>();
+            services.AddSingleton<IWindowFocus, XorgWindowFocus>();
+        }
         else
             throw new PlatformNotSupportedException($"Unsupported OS: {Environment.OSVersion}");
 
@@ -294,12 +308,22 @@ if (config != null)
     else if (profile.Mode == Mode.Slave)
     {
         if (OperatingSystem.IsMacOS())
+        {
             services.AddCoalescedOutput<MacOutputHandler>();
+            services.AddSingleton<IWindowFocus, MacWindowFocus>();
+        }
         else if (OperatingSystem.IsWindows())
+        {
             // guarded again: the platform analyzer does not follow the branch into a lambda
             services.AddCoalescedOutput<WindowsOutputHandler>(handler => { if (OperatingSystem.IsWindows()) handler.Initialize(); });
+            // the output handler, so a window is focused on the input desktop's thread
+            services.AddSingleton<IWindowFocus>(sp => OperatingSystem.IsWindows() ? sp.GetRequiredService<WindowsOutputHandler>() : new NullWindowFocus());
+        }
         else if (OperatingSystem.IsLinux())
+        {
             services.AddCoalescedOutput<XorgOutputHandler>();
+            services.AddSingleton<IWindowFocus, XorgWindowFocus>();
+        }
         else
             throw new PlatformNotSupportedException($"Unsupported OS: {Environment.OSVersion}");
 
@@ -447,13 +471,27 @@ app.Run();
 processLock?.Dispose();
 
 // creates the platform-specific network detector for use before DI is set up
-static async Task<INetworkDetector> CreateDetector(MacNetworkState? macNetworkState, IServiceCollection logServices)
+static async Task<INetworkDetector> CreateDetector(MacNetworkState? macNetworkState, MacShieldProcess? macShield, IServiceCollection logServices)
 {
-    if (OperatingSystem.IsMacOS()) return new MacNetworkDetector(macNetworkState);
+    if (OperatingSystem.IsMacOS()) return new MacNetworkDetector(macNetworkState, macShield);
     var cmdRunner = new CmdRunner(await logServices.CreateLogger<CmdRunner>());
     if (OperatingSystem.IsWindows()) return new WindowsNetworkDetector();
     if (OperatingSystem.IsLinux()) return new LinuxNetworkDetector(cmdRunner, await logServices.CreateLogger<LinuxNetworkDetector>());
     throw new PlatformNotSupportedException($"Unsupported OS: {Environment.OSVersion}");
+}
+
+// unknown when the platform could not be asked: the link conditions then match nothing, and NetworkWatcher retries
+static async Task<NetworkLinks?> ReadNetworkLinks(INetworkDetector detector, bool gatewayMacs)
+{
+    try
+    {
+        return await detector.GetNetworkLinks(gatewayMacs);
+    }
+    catch (Exception e) when (e is not OperationCanceledException)
+    {
+        Console.Error.WriteLine($"Network link detection failed: {e.Message}");
+        return null;
+    }
 }
 
 // returns the current number of connected screens

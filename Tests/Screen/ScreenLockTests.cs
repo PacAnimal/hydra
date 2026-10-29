@@ -189,7 +189,8 @@ public class ScreenLockTests : ServicesFixture
     [TestCase(false)]
     public async Task Confined_StaysOnHostButMovesBetweenItsMonitors(bool confined)
     {
-        var (platform, relay, _) = await Services.Start(TransitionTestHelper.CreateRemoteOnlyService(TransitionTestHelper.RemoteOnlyPairConfig, headless: true));
+        var (platform, relay, _) = await Services.Start(
+            TransitionTestHelper.CreateRemoteOnlyService(TransitionTestHelper.RemoteOnlyPairConfig, headless: true));
         await relay.FirePeersChanged("mac", "win");
         await TransitionTestHelper.AdvertiseScreens(relay, "mac", 2);
         await TransitionTestHelper.AdvertiseScreens(relay, "win", 1);
@@ -205,7 +206,8 @@ public class ScreenLockTests : ServicesFixture
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(relay.Sent.Of<EnterScreenMessage>(MessageKind.EnterScreen, "mac").Select(e => e.Screen), Does.Contain("mac:1"), "should move onto mac's second monitor");
+            Assert.That(relay.Sent.Of<EnterScreenMessage>(MessageKind.EnterScreen, "mac").Select(e => e.Screen), Does.Contain("mac:1"),
+                "should move onto mac's second monitor");
             Assert.That(relay.Sent.Of<EnterScreenMessage>(MessageKind.EnterScreen, "win"), confined ? Is.Empty : Is.Not.Empty,
                 confined ? "confinement should keep the cursor on mac" : "should cross to win");
         }
@@ -214,7 +216,8 @@ public class ScreenLockTests : ServicesFixture
     // -- helpers --
 
     // the chain master, with the cursor on remote
-    private Task<TestServiceBundle> VisitingChain() => Services.Visiting(TransitionTestHelper.CreateService(profile: TransitionTestHelper.ChainConfig), "remote", "remote2");
+    private Task<TestServiceBundle> VisitingChain() => Services.Visiting(
+        TransitionTestHelper.CreateService(profile: TransitionTestHelper.ChainConfig), "remote", "remote2");
 
     private static void AssertStayedOnRemote(FakeRelay relay)
     {

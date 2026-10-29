@@ -249,6 +249,16 @@ public class CoalescingOutputWrapperTests
     // deliver all enqueued events synchronously — deterministic, no sleep
     private void Drain() => _wrapper.DrainPending();
 
+    [Test]
+    public void RestoreLocks_RunsAfterTheKeysQueuedAheadOfIt()
+    {
+        var up = new KeyEventMessage(KeyEventType.KeyUp, KeyModifiers.None, null, SpecialKey.KP_4);
+        _wrapper.InjectKey(up);
+        _wrapper.RestoreLocks();
+        Drain();
+        Assert.That(_inner.Events, Is.EqualTo(new object[] { new KeyEvent(up), new RestoreLocksEvent() }));
+    }
+
     // -- recording infrastructure --
 
     private sealed class RecordingOutput : IPlatformOutput
@@ -260,6 +270,7 @@ public class CoalescingOutputWrapperTests
         public void InjectKey(KeyEventMessage msg) { lock (Events) Events.Add(new KeyEvent(msg)); }
         public void InjectMouseButton(MouseButtonMessage msg) { lock (Events) Events.Add(new ButtonEvent()); }
         public void InjectMouseScroll(MouseScrollMessage msg) { lock (Events) Events.Add(new ScrollEvent()); }
+        public void RestoreLocks() { lock (Events) Events.Add(new RestoreLocksEvent()); }
         public void Dispose() { }
     }
 
@@ -306,4 +317,5 @@ public class CoalescingOutputWrapperTests
     private record KeyEvent(KeyEventMessage Msg);
     private record ButtonEvent;
     private record ScrollEvent;
+    private record RestoreLocksEvent;
 }

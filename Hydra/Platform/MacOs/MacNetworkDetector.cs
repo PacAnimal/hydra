@@ -1,9 +1,12 @@
 namespace Hydra.Platform.MacOs;
 
 // reads macOS network state from MacNetworkState, which is populated by MacShieldProcess
-// (the hydra-shield Swift binary handles SSID detection via CoreWLAN).
-internal sealed class MacNetworkDetector(MacNetworkState? networkState = null) : INetworkDetector
+// (the hydra-shield Swift binary handles SSID detection via CoreWLAN, and reads the ARP table).
+internal sealed class MacNetworkDetector(MacNetworkState? networkState = null, MacShieldProcess? shield = null) : INetworkDetector
 {
+    public Task<NetworkLinks> GetNetworkLinks(bool gatewayMacs, CancellationToken cancel = default) =>
+        NetworkLinkReader.Read(new MacNetworkLinks(shield), gatewayMacs, cancel);
+
     public Task<List<string>?> GetActiveSsids(CancellationToken cancel = default)
     {
         // no state source wired up → detection unavailable (unknown), not "no wifi"

@@ -144,7 +144,8 @@ public class HeldKeyTests : ServicesFixture
     [Test]
     public async Task PressedOnOneMonitor_ItsUpIsForwardedOnTheSameHostsOtherMonitor()
     {
-        var (platform, relay, _) = await Services.Start(TransitionTestHelper.CreateRemoteOnlyService(TransitionTestHelper.RemoteOnlyPairConfig, headless: true));
+        var (platform, relay, _) = await Services.Start(
+            TransitionTestHelper.CreateRemoteOnlyService(TransitionTestHelper.RemoteOnlyPairConfig, headless: true));
         await relay.FirePeersChanged("mac", "win");
         await TransitionTestHelper.AdvertiseScreens(relay, "mac", 2);
         await TransitionTestHelper.AdvertiseScreens(relay, "win", 1);

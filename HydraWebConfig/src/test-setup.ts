@@ -1,4 +1,4 @@
-import '@testing-library/jest-dom'
+import '@testing-library/jest-dom/vitest'
 import { vi } from 'vitest'
 
 // jsdom doesn't implement HTMLDialogElement — stub globally

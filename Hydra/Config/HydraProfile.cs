@@ -31,6 +31,7 @@ public interface IHydraProfile
     bool AllowSystemSleep { get; }
     bool ScreenLockPropagation { get; }
     bool AccelerateMouseWheel { get; }
+    bool? ModifierNumLock { get; }
     HotkeyBindings Hotkeys { get; }
     int? DeadCorners { get; }
 
@@ -74,6 +75,7 @@ public class HydraProfile(HydraConfigFile configFile, HydraConfig? activeProfile
     public bool AllowSystemSleep => _activeProfile?.AllowSystemSleep ?? false;
     public bool ScreenLockPropagation => _activeProfile?.ScreenLockPropagation ?? false;
     public bool AccelerateMouseWheel => _activeProfile?.AccelerateMouseWheel ?? true;
+    public bool? ModifierNumLock => _activeProfile?.ModifierNumLock;
     public HotkeyBindings Hotkeys { get; } = HotkeyBindings.Build(activeProfile?.Hotkeys);
     public int? DeadCorners => _activeProfile?.DeadCorners;
 

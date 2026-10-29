@@ -1,13 +1,18 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
 using System.Text;
 
 namespace Hydra.Platform.Windows;
 
+[SupportedOSPlatform("windows")]
 internal sealed partial class WindowsNetworkDetector : INetworkDetector
 {
     public Task<List<string>?> GetActiveSsids(CancellationToken cancel = default) =>
         Task.FromResult(GetWifiSsids());
+
+    public Task<NetworkLinks> GetNetworkLinks(bool gatewayMacs, CancellationToken cancel = default) =>
+        NetworkLinkReader.Read(new WindowsNetworkLinks(), gatewayMacs, cancel);
 
     public Task<bool?> GetIsPluggedIn(CancellationToken cancel = default)
     {

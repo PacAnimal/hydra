@@ -13,7 +13,7 @@ public class StartedServicesTests
         var first = await services.Start(new RecordingService());
         await services.Start(new RecordingService { Fails = true });
 
-        Assert.ThrowsAsync<InvalidOperationException>(services.StopAll, "a single failure should surface as itself");
+        await Assert.ThrowsAsync<InvalidOperationException>(services.StopAll, "a single failure should surface as itself");
         Assert.That(first.Stopped, Is.True, "the older service was left running behind the failing one");
     }
 
@@ -24,9 +24,9 @@ public class StartedServicesTests
         await services.Start(new RecordingService { Fails = true });
         await services.Start(new RecordingService { Fails = true });
 
-        var thrown = Assert.ThrowsAsync<AggregateException>(services.StopAll);
+        var thrown = await Assert.ThrowsAsync<AggregateException>(services.StopAll);
 
-        Assert.That(thrown.InnerExceptions, Has.Count.EqualTo(2));
+        Assert.That(thrown!.InnerExceptions, Has.Count.EqualTo(2));
     }
 
     [Test]
@@ -36,7 +36,7 @@ public class StartedServicesTests
         var service = await services.Start(new RecordingService { Fails = true });
         var owned = services.Own(new RecordingDisposable(service));
 
-        Assert.ThrowsAsync<InvalidOperationException>(services.StopAll);
+        await Assert.ThrowsAsync<InvalidOperationException>(services.StopAll);
 
         Assert.That(owned.DisposedAfterStop, Is.True, "the owned resource was not disposed, or was disposed before the service stopped");
     }
@@ -48,11 +48,11 @@ public class StartedServicesTests
         var first = await services.Start(new RecordingService());
         await services.Start(new NeverStoppingService());
 
-        var thrown = Assert.ThrowsAsync<TimeoutException>(services.StopAll);
+        var thrown = await Assert.ThrowsAsync<TimeoutException>(services.StopAll);
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(thrown.Message, Does.Contain(nameof(NeverStoppingService)));
+            Assert.That(thrown!.Message, Does.Contain(nameof(NeverStoppingService)));
             Assert.That(first.Stopped, Is.True, "the older service was left running behind the hung one");
         }
     }
@@ -67,9 +67,9 @@ public class StartedServicesTests
         {
             // stopped before ExecuteAsync runs, BackgroundService cancels it unstarted and stops at once
             await hung.Executing.WaitAsync(Bound);
-            var thrown = Assert.ThrowsAsync<TimeoutException>(services.StopAll);
+            var thrown = await Assert.ThrowsAsync<TimeoutException>(services.StopAll);
 
-            Assert.That(thrown.Message, Does.Contain(nameof(TokenIgnoringService)));
+            Assert.That(thrown!.Message, Does.Contain(nameof(TokenIgnoringService)));
         }
         finally
         {

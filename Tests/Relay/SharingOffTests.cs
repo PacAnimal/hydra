@@ -3,7 +3,9 @@ using Hydra.Config;
 using Hydra.FileTransfer;
 using Hydra.Platform;
 using Hydra.Relay;
+using Microsoft.Extensions.Time.Testing;
 using Tests.Setup;
+using static Tests.Setup.ClipboardStreaming;
 
 namespace Tests.Relay;
 
@@ -11,9 +13,12 @@ namespace Tests.Relay;
 // master by its own profile or a slave's screen info, the slave by its own profile, even towards a master that never
 // read that screen info
 [TestFixture]
-public class SharingOffTests : ServicesFixture
+public class SharingOffTests : MasterClipboardFixture
 {
-    private const string Master = "master-pc";
+    private readonly SlaveRelays _slaves = new();
+
+    [TearDown]
+    public Task StopSlaves() => _slaves.StopAll();
 
     // -- a master that is off --
 
@@ -22,14 +27,16 @@ public class SharingOffTests : ServicesFixture
     {
         var clipboard = new FakeClipboardSync();
         clipboard.SetupText("secret");
-        var (platform, relay, _) = await StartMaster(clipboard, profile: SharingOff);
+        var (platform, relay, service) = await StartMaster(clipboard, profile: SharingOff);
 
         VisitAndLeaveRemote(platform);
+        await service.Flush();
+        await service.HashReads();
 
         using (Assert.EnterMultipleScope())
         {
             Assert.That(relay.Sent.Snapshot().Where(s => MessageKinds.IsClipboard(s.Kind)), Is.Empty);
-            Assert.That(Reads(clipboard), Is.Zero);
+            Assert.That(clipboard.ReadCallCount, Is.Zero);
         }
     }
 
@@ -38,15 +45,21 @@ public class SharingOffTests : ServicesFixture
     {
         var clipboard = new FakeClipboardSync();
         clipboard.SetupText("mine");
-        var (platform, relay, _) = await StartMaster(clipboard, profile: SharingOff);
+        var (platform, relay, service) = await StartMaster(clipboard, profile: SharingOff);
         VisitAndLeaveRemote(platform);
+        var stream = StreamedAnswer(1, new ClipboardPullResponseMessage(1, null, ImagePng: BigImage(2)));
 
         await SimulatePullRequest(relay);
         await AnswerPull(relay, new ClipboardPullResponseMessage(1, "theirs"));
+        await Begin(relay, stream);
+        await Chunks(relay, stream);
+        await service.Flush();
+        await service.HashReads();
 
         using (Assert.EnterMultipleScope())
         {
             Assert.That(clipboard.SetClipboardCallCount, Is.Zero);
+            Assert.That(clipboard.ClearClipboardCallCount, Is.Zero);
             Assert.That(clipboard.Text, Is.EqualTo("mine"));
             Assert.That(relay.Sent.Snapshot().Where(s => MessageKinds.IsClipboard(s.Kind)), Is.Empty);
         }
@@ -87,12 +100,14 @@ public class SharingOffTests : ServicesFixture
     {
         var clipboard = new FakeClipboardSync();
         clipboard.SetupText("secret");
-        var (platform, relay, _) = await StartMaster(clipboard);
+        var (platform, relay, service) = await StartMaster(clipboard);
         await TransitionTestHelper.AdvertiseScreens(relay, "remote", 1, sharingOff: true);
         relay.Sent.Clear();
 
         VisitAndLeaveRemote(platform);
         await SimulatePullRequest(relay);
+        await service.Flush();
+        await service.HashReads();
 
         Assert.That(relay.Sent.Snapshot().Where(s => MessageKinds.IsClipboard(s.Kind)), Is.Empty);
     }
@@ -102,13 +117,14 @@ public class SharingOffTests : ServicesFixture
     {
         var clipboard = new FakeClipboardSync();
         clipboard.SetupText("shared");
-        var (platform, relay, _) = await StartMaster(clipboard);
+        var (platform, relay, service) = await StartMaster(clipboard);
         await TransitionTestHelper.AdvertiseScreens(relay, "remote", 1, sharingOff: true);
         await TransitionTestHelper.AdvertiseScreens(relay, "remote", 1);
 
         TransitionTestHelper.EnterRemote(platform);
+        await service.HashReads();
 
-        Assert.That(relay.Sent.Of(MessageKind.ClipboardHash, "remote"), Is.Not.Empty);
+        Assert.That(Hashes(relay, "remote"), Is.Not.Empty);
     }
 
     // a peer's flag goes with it, so the next one by that name is shared with unless it says otherwise
@@ -206,7 +222,7 @@ public class SharingOffTests : ServicesFixture
     [Test]
     public async Task OnSlave_SaysSoInItsScreenInfo()
     {
-        var slave = new TestableSlaveRelay(clipboard: new FakeClipboardSync());
+        var slave = _slaves.Add(new TestableSlaveRelay(clipboard: new FakeClipboardSync()));
 
         await slave.SimulateMasterConfig(Master);
 
@@ -220,7 +236,8 @@ public class SharingOffTests : ServicesFixture
         clipboard.SetupText("secret");
         var slave = OffSlave(clipboard);
 
-        await slave.SimulateReceive(Master, MessageKind.ClipboardPull, new ClipboardPullMessage(7).ToSaneJson());
+        await Pull(slave, pullId: 7);
+        await slave.Sent.WaitFor(MessageKind.ClipboardPullResponse).WaitAsync(Bound);
 
         var answer = slave.Sent.Of<ClipboardPullResponseMessage>(MessageKind.ClipboardPullResponse, Master).Single();
         using (Assert.EnterMultipleScope())
@@ -228,7 +245,32 @@ public class SharingOffTests : ServicesFixture
             Assert.That(answer.PullId, Is.EqualTo(7));
             Assert.That(answer.Unchanged, Is.True);
             Assert.That(answer.Text, Is.Null);
-            Assert.That(Reads(clipboard), Is.Zero);
+            Assert.That(clipboard.ReadCallCount, Is.Zero);
+        }
+    }
+
+    [Test]
+    public async Task OffSlave_AbortsAStreamSilently_AndKeepsItsClipboard()
+    {
+        var clipboard = new FakeClipboardSync();
+        clipboard.SetupText("mine");
+        var osd = new RecordingOsd();
+        var slave = OffSlave(clipboard, osd);
+        var stream = HashedPush(3, new ClipboardPushMessage(BigText('x')));
+
+        await Begin(slave, stream);
+        await Chunks(slave, stream);
+        await slave.ClipboardIdle();
+
+        var abort = slave.Sent.Of<ClipboardStreamAbortMessage>(MessageKind.ClipboardStreamAbort, Master).Single();
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(abort.Id, Is.EqualTo(3));
+            Assert.That(abort.Failed, Is.Not.True, "a failed abort would show Clipboard Transfer Failed on the master");
+            Assert.That(clipboard.ClearClipboardCallCount, Is.Zero);
+            Assert.That(clipboard.SetClipboardCallCount, Is.Zero);
+            Assert.That(clipboard.Text, Is.EqualTo("mine"));
+            Assert.That(osd.Shown.Count, Is.Zero);
         }
     }
 
@@ -239,17 +281,17 @@ public class SharingOffTests : ServicesFixture
         clipboard.SetupText("mine");
         var slave = OffSlave(clipboard);
 
-        await slave.SimulateReceive(Master, MessageKind.ClipboardHash, new ClipboardHashMessage(42).ToSaneJson());
-        // a hash offering only the selection, which a slave sharing would read its own selection for
-        await slave.SimulateReceive(Master, MessageKind.ClipboardHash, new ClipboardHashMessage(null, PrimaryText: "theirs").ToSaneJson());
+        await slave.SimulateReceive(Master, MessageKind.ClipboardHash, new ClipboardHashMessage(42, Visit: 1).ToSaneJson());
+        await slave.SimulateReceive(Master, MessageKind.ClipboardHash, new ClipboardHashMessage(null, Pending: true).ToSaneJson());
         await slave.SimulateReceive(Master, MessageKind.ClipboardPush, new ClipboardPushMessage("theirs").ToSaneJson());
+        await slave.ClipboardIdle();
 
         using (Assert.EnterMultipleScope())
         {
             Assert.That(clipboard.Text, Is.EqualTo("mine"));
-            Assert.That(clipboard.PrimaryText, Is.Null);
             Assert.That(clipboard.SetClipboardCallCount, Is.Zero);
-            Assert.That(Reads(clipboard), Is.Zero);
+            Assert.That(clipboard.ClearClipboardCallCount, Is.Zero);
+            Assert.That(clipboard.ReadCallCount, Is.Zero);
             Assert.That(slave.Sent.Snapshot().Where(s => MessageKinds.IsClipboard(s.Kind)), Is.Empty);
         }
     }
@@ -258,7 +300,7 @@ public class SharingOffTests : ServicesFixture
     public async Task OffSlave_AnswersAFileSelectionQuery_ThatItIsOff()
     {
         var finder = new GatedFileSelectionDetector();
-        var slave = new TestableSlaveRelay(clipboard: new FakeClipboardSync(), selectionDetector: finder, clipboardSync: ClipboardSyncMode.Off);
+        var slave = _slaves.Add(new TestableSlaveRelay(clipboard: new FakeClipboardSync(), selectionDetector: finder, clipboardSync: ClipboardSyncMode.Off));
 
         await slave.SimulateReceive(Master, MessageKind.FileSelectionQuery, new FileSelectionQueryMessage().ToSaneJson());
 
@@ -288,21 +330,24 @@ public class SharingOffTests : ServicesFixture
         }
     }
 
-    // a dormant slave that is off refuses as off, saying so
+    // a dormant slave that is off refuses as off: silently, and saying so
     [Test]
     public async Task DormantOffSlave_RefusesAsOff()
     {
-        var slave = OffSlave(new FakeClipboardSync());
+        var osd = new RecordingOsd();
+        var slave = OffSlave(new FakeClipboardSync(), osd);
         await slave.Dormancy.Enter();
+        var stream = HashedPush(4, new ClipboardPushMessage(BigText('x')));
 
-        await slave.SimulateReceive(Master, MessageKind.ClipboardPull, new ClipboardPullMessage(4).ToSaneJson());
+        await Begin(slave, stream);
         await slave.SimulateReceive(Master, MessageKind.FileSelectionQuery, new FileSelectionQueryMessage().ToSaneJson());
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(slave.Sent.Of<ClipboardPullResponseMessage>(MessageKind.ClipboardPullResponse, Master).Single().Unchanged, Is.True);
+            Assert.That(slave.Sent.Of<ClipboardStreamAbortMessage>(MessageKind.ClipboardStreamAbort, Master).Single().Failed, Is.Not.True);
             Assert.That(slave.Sent.Of<FileSelectionResponseMessage>(MessageKind.FileSelectionResponse, Master).Single().Message,
                 Is.EqualTo(FileTransferService.SharingOffOsd));
+            Assert.That(osd.Shown.Count, Is.Zero);
         }
     }
 
@@ -321,27 +366,9 @@ public class SharingOffTests : ServicesFixture
 
     private static readonly IHydraProfile SharingOff = TransitionTestHelper.ProfileWith(clipboardSync: ClipboardSyncMode.Off);
 
-    private static TestableSlaveRelay OffSlave(IClipboardSync clipboard) => new(clipboard: clipboard, clipboardSync: ClipboardSyncMode.Off);
-
-    private static int Reads(FakeClipboardSync clipboard) => clipboard.GetTextCallCount + clipboard.GetPrimaryTextCallCount + clipboard.GetImagePngCallCount;
-
-    // a master with "remote" online
-    private async Task<TestServiceBundle> StartMaster(IClipboardSync clipboard, IHydraProfile? profile = null) =>
-        await Services.StartOnline(TransitionTestHelper.CreateService(profile: profile, clipboard: clipboard));
-
-    // onto the remote and back off its left edge, which pulls from it; the middle move is the warp artifact, dropped
-    private static void VisitAndLeaveRemote(FakePlatform platform)
-    {
-        TransitionTestHelper.EnterRemote(platform);
-        platform.FireMouseMove(1280, 720);
-        platform.FireMouseMove(1275, 720);
-    }
-
-    private static Task AnswerPull(FakeRelay relay, ClipboardPullResponseMessage response) =>
-        relay.FireMessageReceived("remote", MessageKind.ClipboardPullResponse, response.ToSaneJson());
-
-    private static Task SimulatePullRequest(FakeRelay relay) =>
-        relay.FireMessageReceived("remote", MessageKind.ClipboardPullRequest, new ClipboardPullRequestMessage().ToSaneJson());
+    private TestableSlaveRelay OffSlave(IClipboardSync clipboard, IOsdNotification? osd = null) =>
+        _slaves.Add(new TestableSlaveRelay(clipboard: clipboard, osd: osd ?? new RecordingOsd(), clock: new FakeTimeProvider(),
+            clipboardSync: ClipboardSyncMode.Off));
 
     // an OSD shows where the cursor is: on the remote through the relay, else on the master
     private static async Task<string> Shown(bool onTheRemote, RecordingOsd osd, FakeRelay relay) =>

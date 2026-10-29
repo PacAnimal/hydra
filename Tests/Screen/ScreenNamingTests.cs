@@ -68,7 +68,8 @@ public class ScreenNamingTests : ServicesFixture
         var log = new CapturingLog<InputRouter>(LogLevel.Warning);
         var world = new WorldState();
         var ticks = new SteppableTicks();
-        var bundle = await Services.Start(TransitionTestHelper.CreateService(profile: TransitionTestHelper.ChainConfig, world: world, log: log, getTickCount: ticks.Now));
+        var bundle = await Services.Start(
+            TransitionTestHelper.CreateService(profile: TransitionTestHelper.ChainConfig, world: world, log: log, getTickCount: ticks.Now));
         await TransitionTestHelper.BringHostsOnline(bundle.Relay, ["remote", "remote2"]);
         TransitionTestHelper.EnterRemote(bundle.Platform);
         for (var i = 0; i < 30; i++)
@@ -87,8 +88,8 @@ public class ScreenNamingTests : ServicesFixture
         using (Assert.EnterMultipleScope())
         {
             Assert.That(peerScreens["remote"].Select(e => e.Name), Is.EqualTo(["remote"]), "the foreign entry never reaches the world");
-            Assert.That(sent.Where(s => s.Kind is MessageKind.MouseMove or MessageKind.MouseMoveDelta).SelectMany(s => s.Targets), Is.Not.Empty.And.All.EqualTo("remote2"),
-                "the cursor stays on remote2");
+            Assert.That(sent.Where(s => s.Kind is MessageKind.MouseMove or MessageKind.MouseMoveDelta).SelectMany(s => s.Targets),
+                Is.Not.Empty.And.All.EqualTo("remote2"), "the cursor stays on remote2");
             Assert.That(sent.Any(s => s.Kind is MessageKind.EnterScreen or MessageKind.LeaveScreen), Is.False, "no host change");
             Assert.That(log.Messages, Is.EqualTo(["remote sent screen remote2, which are not its own or repeat one it already sent; ignored"]));
         }
@@ -129,5 +130,6 @@ public class ScreenNamingTests : ServicesFixture
     private static ScreenInfoEntry Entry(string name, int x) => new(name, x, 0, 2560, 1440, 1.0m);
 
     private static async Task Advertise(FakeRelay relay, string host, params ScreenInfoEntry[] entries) =>
-        await relay.FireMessageReceived(host, MessageKind.ScreenInfo, JsonSerializer.Serialize(new ScreenInfoMessage([.. entries], PeerPlatform.Linux), SaneJson.Options));
+        await relay.FireMessageReceived(host, MessageKind.ScreenInfo,
+            JsonSerializer.Serialize(new ScreenInfoMessage([.. entries], PeerPlatform.Linux), SaneJson.Options));
 }

@@ -33,6 +33,27 @@ public class MacKeyResolverTests
         return ev;
     }
 
+    // -- the keypad's decimal key, for modifierNumLock --
+
+    [TestCase(MacVirtualKey.KeypadDecimal, true)]
+    [TestCase(0x2FUL /* kVK_ANSI_Period */, false)]
+    public void TheKeypadsDecimalKeys_AreStampedAsIt_DownAndUp(ulong vk, bool keypadDecimal)
+    {
+        var resolver = new MacKeyResolver();
+        var down = KeyDownEvent(vk);
+        try
+        {
+            KeyEvent[] events =
+            [
+                .. (resolver.Resolve(NativeMethods.KCGEventKeyDown, down) ?? []).OfType<KeyEvent>(),
+                .. (resolver.Resolve(NativeMethods.KCGEventKeyUp, down) ?? []).OfType<KeyEvent>(),
+            ];
+            Assume.That(events, Is.Not.Empty, "the running layout gives this key something");
+            Assert.That(events.Select(e => e.IsKeypadDecimal), Is.All.EqualTo(keypadDecimal));
+        }
+        finally { NativeMethods.CFRelease(down); }
+    }
+
     // -- ScrollLock toggle --
 
     [Test]
@@ -69,6 +90,21 @@ public class MacKeyResolverTests
                 "ScrollLock bit must travel on all events while toggle is active");
         }
         finally { NativeMethods.CFRelease(shiftEv); }
+    }
+
+    // -- the keypad: macOS flags each of its keys as from the numeric pad, which travels as NumLock (as in Synergy) --
+
+    [Test]
+    public void KeypadDigit_CarriesNumLock()
+    {
+        var r = new MacKeyResolver();
+        var ev = KeyDownEvent(MacVirtualKey.Keypad4, NativeMethods.KCGEventFlagMaskNumericPad);
+        try
+        {
+            var down = r.Resolve(NativeMethods.KCGEventKeyDown, ev)!.Single()!;
+            Assert.That((down.Key, down.Modifiers), Is.EqualTo((SpecialKey.KP_4, KeyModifiers.NumLock)), "a slave must type the digit, not navigate");
+        }
+        finally { NativeMethods.CFRelease(ev); }
     }
 
     // -- Reset() preserves ScrollLock --

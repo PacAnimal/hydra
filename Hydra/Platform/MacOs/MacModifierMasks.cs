@@ -4,10 +4,14 @@ namespace Hydra.Platform.MacOs;
 // (in the low word of CGEventFlags) for its own side and the other side.
 internal static class MacModifierMasks
 {
-    private static readonly ModifierMasks Shift = new(NativeMethods.KCGEventFlagMaskShift, NativeMethods.NxDeviceLShiftKeyMask, NativeMethods.NxDeviceRShiftKeyMask);
-    private static readonly ModifierMasks Control = new(NativeMethods.KCGEventFlagMaskControl, NativeMethods.NxDeviceLCtlKeyMask, NativeMethods.NxDeviceRCtlKeyMask);
-    private static readonly ModifierMasks Option = new(NativeMethods.KCGEventFlagMaskAlternate, NativeMethods.NxDeviceLAltKeyMask, NativeMethods.NxDeviceRAltKeyMask);
-    private static readonly ModifierMasks Command = new(NativeMethods.KCGEventFlagMaskCommand, NativeMethods.NxDeviceLCmdKeyMask, NativeMethods.NxDeviceRCmdKeyMask);
+    private static readonly ModifierMasks Shift =
+        new(NativeMethods.KCGEventFlagMaskShift, NativeMethods.NxDeviceLShiftKeyMask, NativeMethods.NxDeviceRShiftKeyMask);
+    private static readonly ModifierMasks Control =
+        new(NativeMethods.KCGEventFlagMaskControl, NativeMethods.NxDeviceLCtlKeyMask, NativeMethods.NxDeviceRCtlKeyMask);
+    private static readonly ModifierMasks Option =
+        new(NativeMethods.KCGEventFlagMaskAlternate, NativeMethods.NxDeviceLAltKeyMask, NativeMethods.NxDeviceRAltKeyMask);
+    private static readonly ModifierMasks Command =
+        new(NativeMethods.KCGEventFlagMaskCommand, NativeMethods.NxDeviceLCmdKeyMask, NativeMethods.NxDeviceRCmdKeyMask);
     private static readonly ModifierMasks[] Sided = [Shift, Control, Option, Command];
 
     // masks for a modifier vk; all zero for a key that is not a modifier

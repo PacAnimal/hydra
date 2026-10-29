@@ -13,6 +13,7 @@ internal static class WinVirtualKey
     // editing / control
     internal const int Back = 0x08;        // backspace
     internal const int Tab = 0x09;
+    internal const int Clear = 0x0C;       // keypad 5, numlock off
     internal const int Return = 0x0D;
     internal const int Escape = 0x1B;
     internal const int Space = 0x20;

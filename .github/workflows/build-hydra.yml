@@ -162,7 +162,10 @@ jobs:
           shield=$(find "$DOTNET_BUNDLE_EXTRACT_BASE_DIR" -path '*/hydra-shield.app/Contents/MacOS/hydra-shield' -print -quit)
           test -n "$shield" || { echo "no hydra-shield in the extracted bundle"; exit 1; }
           chmod +x "$shield"
-          test "$(printf '1\n0\n' | "$shield")" = "$(printf '1\n0')"
+          # an echo frame (ShieldChannel's framing) comes back unchanged, among anything the shield says unasked
+          frame='\x19\x00\x00\x00\x82\xa4kind\xa4echo\xa7payload\xa5smoke'
+          out=$(printf "$frame" | "$shield" | xxd -p | tr -d '\n')
+          [[ "$out" == *"$(printf "$frame" | xxd -p | tr -d '\n')"* ]] || { echo "the shield did not echo: $out"; exit 1; }
 
       - name: Package artifact
         env:
@@ -209,7 +212,9 @@ jobs:
           channel=(--latest)
           title="Hydra $VERSION"
           if [ "$EDGE" == "true" ]; then channel=(--prerelease --latest=false); title="$title (edge)"; fi
+          # the tag goes on the commit this run built; left out, GitHub creates it on main's head, wrong for every edge push
           gh release create "v$VERSION" \
+            --target "$GITHUB_SHA" \
             --title "$title" \
             "${channel[@]}" \
             "${notes[@]}" \

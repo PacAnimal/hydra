@@ -61,7 +61,8 @@ public class CopyFilesHotkeyTests : ServicesFixture
         var osd = new RecordingOsd();
         var fileTransfer = FileTransferService.Null();
         fileTransfer.SetCopyBuffer("remote", ["/home/me/old.txt"]);
-        var (platform, relay, _) = await Services.StartOnline(TransitionTestHelper.CreateService(selectionDetector: finder, osd: osd, fileTransfer: fileTransfer));
+        var (platform, relay, _) = await Services.StartOnline(
+            TransitionTestHelper.CreateService(selectionDetector: finder, osd: osd, fileTransfer: fileTransfer));
         try
         {
             await Press(platform, 'c');
@@ -90,7 +91,8 @@ public class CopyFilesHotkeyTests : ServicesFixture
         var finder = new GatedFileSelectionDetector();
         var osd = new RecordingOsd();
         var fileTransfer = FileTransferService.Null();
-        var (platform, _, service) = await Services.StartOnline(TransitionTestHelper.CreateService(selectionDetector: finder, osd: osd, fileTransfer: fileTransfer));
+        var (platform, _, service) = await Services.StartOnline(
+            TransitionTestHelper.CreateService(selectionDetector: finder, osd: osd, fileTransfer: fileTransfer));
         try
         {
             await Press(platform, 'c');
@@ -152,7 +154,8 @@ public class CopyFilesHotkeyTests : ServicesFixture
     public async Task FailedLocalSelectionQuery_ReportsAndClearsThePendingCopy()
     {
         var osd = new RecordingOsd();
-        var (platform, _, service) = await Services.StartOnline(TransitionTestHelper.CreateService(selectionDetector: new ThrowingFileSelectionDetector(), osd: osd));
+        var (platform, _, service) = await Services.StartOnline(
+            TransitionTestHelper.CreateService(selectionDetector: new ThrowingFileSelectionDetector(), osd: osd));
 
         await Press(platform, 'c');
         await service.LocalSelectionQuery.WaitAsync(Bound);
@@ -260,7 +263,7 @@ public class CopyFilesHotkeyTests : ServicesFixture
             await finder.Queried.WaitAsync(Bound);
             TransitionTestHelper.EnterRemote(platform);
             await Press(platform, 'c');
-            MoveRightTo(platform, relay, "remote2");
+            TransitionTestHelper.MoveRightTo(platform, relay, "remote2");
             var sentBefore = relay.Sent.Snapshot().Count;
 
             await Press(platform, 'v');
@@ -385,7 +388,7 @@ public class CopyFilesHotkeyTests : ServicesFixture
         }
         await slave.Sent.WaitFor(MessageKind.FileSelectionResponse);
         await ForwardSelectionAnswers(slave, relay, service);
-        MoveRightTo(platform, relay, "remote2");
+        TransitionTestHelper.MoveRightTo(platform, relay, "remote2");
         var sentBefore = relay.Sent.Snapshot().Count;
 
         await Press(platform, 'v');
@@ -403,7 +406,7 @@ public class CopyFilesHotkeyTests : ServicesFixture
         var fileTransfer = FileTransferService.Null();
         var (platform, relay, _) = await VisitingForRemoteCopy(profile: TransitionTestHelper.ChainConfig, fileTransfer: fileTransfer);
         await Press(platform, 'c');
-        MoveRightTo(platform, relay, "remote2");
+        TransitionTestHelper.MoveRightTo(platform, relay, "remote2");
         await Press(platform, 'c');
 
         await relay.FireMessageReceived("remote", MessageKind.FileSelectionResponse, """{"paths":["/home/r/stale.txt"]}""");
@@ -517,8 +520,10 @@ public class CopyFilesHotkeyTests : ServicesFixture
 
     // a file manager that supports transfer but is never asked, for copies made on a remote screen
     // visiting "remote", with "remote2" online too on the chain
-    private Task<TestServiceBundle> VisitingForRemoteCopy(IHydraProfile? profile = null, IOsdNotification? osd = null, FileTransferService? fileTransfer = null) =>
-        Services.Visiting(TransitionTestHelper.CreateService(profile: profile, selectionDetector: new GatedFileSelectionDetector(), osd: osd, fileTransfer: fileTransfer),
+    private Task<TestServiceBundle> VisitingForRemoteCopy(
+        IHydraProfile? profile = null, IOsdNotification? osd = null, FileTransferService? fileTransfer = null) =>
+        Services.Visiting(
+            TransitionTestHelper.CreateService(profile: profile, selectionDetector: new GatedFileSelectionDetector(), osd: osd, fileTransfer: fileTransfer),
             profile == TransitionTestHelper.ChainConfig ? ["remote", "remote2"] : []);
 
     private static void ReturnHome(FakePlatform platform)
@@ -526,14 +531,6 @@ public class CopyFilesHotkeyTests : ServicesFixture
         for (var i = 0; i < 40 && platform.IsOnVirtualScreen; i++)
             platform.FireMouseDelta(-100, 0);
         Assert.That(platform.IsOnVirtualScreen, Is.False, "pre-condition: back home");
-    }
-
-    private static void MoveRightTo(FakePlatform platform, FakeRelay relay, string host)
-    {
-        bool Entered() => relay.Sent.Of(MessageKind.EnterScreen, host).Count > 0;
-        for (var i = 0; i < 40 && !Entered(); i++)
-            platform.FireMouseDelta(100, 0);
-        Assert.That(Entered(), Is.True, $"pre-condition: on {host}");
     }
 
     // hands the master whatever "remote" has answered so far, in order

@@ -22,13 +22,15 @@ public sealed class TestableSlaveRelay : SlaveRelayConnection
     public NullPlatformOutput Output { get; }
     // everything the slave sent
     public SentSignals Sent { get; } = new();
+    // while held, a reliable send (a clipboard stream's Begin or chunk) is recorded, then its sender parks until released
+    public Gate Reliable { get; } = new();
     private readonly WebApplicationFactory<global::Styx.Program>? _styx;
     private readonly NotificationQueue<bool> _authenticated = new();
 
     // a slave that really connects, to the in-process relay the network config points at
     public TestableSlaveRelay(WebApplicationFactory<global::Styx.Program> styx, string networkConfig, IFileSelectionDetector selectionDetector)
-        : this(MakeShared(null, null), null, null, null, new DormancyState(NullLogger<DormancyState>.Instance), new FakeScreenDetector(), new NullPlatformOutput(),
-            selectionDetector, new NullOsdNotification(), networkConfig, log: TestLog.CreateLogger<RelayConnection>()) =>
+        : this(MakeShared(null, null), null, null, null, new DormancyState(NullLogger<DormancyState>.Instance), new FakeScreenDetector(),
+            new NullPlatformOutput(), selectionDetector, new NullOsdNotification(), networkConfig, log: TestLog.CreateLogger<RelayConnection>()) =>
         _styx = styx;
 
     public TestableSlaveRelay(
@@ -43,11 +45,13 @@ public sealed class TestableSlaveRelay : SlaveRelayConnection
         IOsdNotification? osd = null,
         FileTransferService? fileTransfer = null,
         ILogger<RelayConnection>? log = null,
-        ClipboardSyncMode clipboardSync = ClipboardSyncMode.Hydra)
+        TimeProvider? clock = null,
+        ClipboardSyncMode clipboardSync = ClipboardSyncMode.Hydra,
+        IWindowFocus? windowFocus = null)
         : this(MakeShared(worldState, screenSaverSync, trackerClock), clipboard, cursorHider, screenSaverSync,
             dormancy ?? new DormancyState(NullLogger<DormancyState>.Instance), screens ?? new FakeScreenDetector(), new NullPlatformOutput(),
-            selectionDetector ?? new NullFileSelectionDetector(), osd ?? new NullOsdNotification(), fileTransfer: fileTransfer, log: log,
-            clipboardSync: clipboardSync)
+            selectionDetector ?? new NullFileSelectionDetector(), osd ?? new NullOsdNotification(), fileTransfer: fileTransfer, log: log, clock: clock,
+            clipboardSync: clipboardSync, windowFocus: windowFocus)
     { }
 
     // ActivityTracker and SlaveRelayConnection must share the same WorldState — chaining lets us build it once
@@ -64,7 +68,9 @@ public sealed class TestableSlaveRelay : SlaveRelayConnection
         string? networkConfig = null,
         FileTransferService? fileTransfer = null,
         ILogger<RelayConnection>? log = null,
-        ClipboardSyncMode clipboardSync = ClipboardSyncMode.Hydra)
+        TimeProvider? clock = null,
+        ClipboardSyncMode clipboardSync = ClipboardSyncMode.Hydra,
+        IWindowFocus? windowFocus = null)
         : base(
             TransitionTestHelper.Profile("slave", new HydraConfig { Mode = Mode.Slave, NetworkConfig = networkConfig, ClipboardSync = clipboardSync }),
             log ?? NullLogger<RelayConnection>.Instance,
@@ -75,10 +81,10 @@ public sealed class TestableSlaveRelay : SlaveRelayConnection
             screenSaverSync ?? new NullScreenSaverSync(),
             clipboard ?? new NullClipboardSync(),
             fileTransfer ?? FileTransferService.Null(), selectionDetector, osd,
-            deps.Tracker, dormancy)
+            deps.Tracker, dormancy, clock, windowFocus)
     {
         Tracker = deps.Tracker;
-        Dormancy = dormancy;
+        Dormancy = new DrainingDormancy(dormancy, ClipboardIdle);
         Screens = screens;
         Output = output;
     }
@@ -86,8 +92,30 @@ public sealed class TestableSlaveRelay : SlaveRelayConnection
     public Task SimulateConnected() => OnAuthenticated();
     public Task SimulateMasterConfig(string host) => OnReceive(host, MessageKind.MasterConfig, "{}"u8.ToArray());
     public Task SimulateMasterConfig(string host, string json) => OnReceive(host, MessageKind.MasterConfig, Encoding.UTF8.GetBytes(json));
-    public Task SimulateReceive(string host, MessageKind kind, string json) => OnReceive(host, kind, Encoding.UTF8.GetBytes(json));
-    public Task SimulateDisconnected() => OnDisconnected();
+    // clipboard work runs on the slave's worker, so each waits for it to finish before returning; Deliver does not
+    public async Task SimulateReceive(string host, MessageKind kind, string json)
+    {
+        await Deliver(host, kind, json);
+        await ClipboardIdle();
+    }
+
+    public Task Deliver(string host, MessageKind kind, string json) => OnReceive(host, kind, Encoding.UTF8.GetBytes(json));
+
+    public async Task SimulateDisconnected()
+    {
+        await OnDisconnected();
+        await ClipboardIdle();
+    }
+
+    // completes once the clipboard worker has handled everything handed to it so far
+    public Task ClipboardIdle() => DrainClipboardWork();
+
+    // a departure drops streams on the clipboard worker
+    protected override async Task OnPeers(string[] hostNames)
+    {
+        await base.OnPeers(hostNames);
+        await ClipboardIdle();
+    }
 
     // completes once the relay has logged the slave in again
     public Task NextAuthentication() => _authenticated.Next("the slave to authenticate");
@@ -107,6 +135,19 @@ public sealed class TestableSlaveRelay : SlaveRelayConnection
     }
 
     protected override void OnSent(string[] targetHosts, byte[] payload) => Sent.Record(targetHosts, payload);
+
+    // unconnected, the relay's own would record the send and then throw, ending a clipboard stream at its Begin
+    public override async ValueTask SendReliableAsync(string[] targetHosts, byte[] payload, CancellationToken cancel = default)
+    {
+        if (_styx != null)
+        {
+            await base.SendReliableAsync(targetHosts, payload, cancel);
+            return;
+        }
+        cancel.ThrowIfCancellationRequested();
+        OnSent(targetHosts, payload);
+        await Reliable.Passed(cancel);
+    }
 
     protected override void OnSentKey(string[] targetHosts, KeyEventMessage message) =>
         OnSent(targetHosts, MessageSerializer.Encode(MessageKind.KeyEvent, message));
@@ -128,4 +169,38 @@ public sealed class TestableSlaveRelay : SlaveRelayConnection
     }
 
     private record SharedDeps(IWorldState WorldState, IActivityTracker Tracker);
+
+    // going dormant drops streams on the clipboard worker, so Enter returns once it has
+    private sealed class DrainingDormancy(IDormancyState inner, Func<Task> idle) : IDormancyState
+    {
+        public bool IsDormant => inner.IsDormant;
+
+        public event Func<Task>? Entered
+        {
+            add => inner.Entered += value;
+            remove => inner.Entered -= value;
+        }
+
+        public event Func<Task>? Exited
+        {
+            add => inner.Exited += value;
+            remove => inner.Exited -= value;
+        }
+
+        public event Func<Task>? WakeDeadlineExpired
+        {
+            add => inner.WakeDeadlineExpired += value;
+            remove => inner.WakeDeadlineExpired -= value;
+        }
+
+        public async Task Enter()
+        {
+            await inner.Enter();
+            await idle();
+        }
+
+        public Task Exit() => inner.Exit();
+
+        public bool RequestWake() => inner.RequestWake();
+    }
 }

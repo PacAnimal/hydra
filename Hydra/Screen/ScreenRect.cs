@@ -14,6 +14,10 @@ public static class DirectionExtensions
         Direction.Down => Direction.Up,
         _ => throw new ArgumentOutOfRangeException(nameof(dir), dir, null),
     };
+
+    public static bool IsVertical(this Direction dir) => dir is Direction.Up or Direction.Down;
+
+    public static bool IsPerpendicularTo(this Direction dir, Direction other) => dir.IsVertical() != other.IsVertical();
 }
 
 public class ScreenIdentity

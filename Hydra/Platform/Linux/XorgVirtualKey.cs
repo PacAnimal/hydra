@@ -32,6 +32,17 @@ internal static class XorgVirtualKey
 
     // keypad
     internal const ulong KP_Space = 0xFF80;
+    internal const ulong KP_Home = 0xFF95;
+    internal const ulong KP_Left = 0xFF96;
+    internal const ulong KP_Up = 0xFF97;
+    internal const ulong KP_Right = 0xFF98;
+    internal const ulong KP_Down = 0xFF99;
+    internal const ulong KP_Prior = 0xFF9A;
+    internal const ulong KP_Next = 0xFF9B;
+    internal const ulong KP_End = 0xFF9C;
+    internal const ulong KP_Begin = 0xFF9D;
+    internal const ulong KP_Insert = 0xFF9E;
+    internal const ulong KP_Delete = 0xFF9F;
     internal const ulong KP_Tab = 0xFF89;
     internal const ulong KP_Enter = 0xFF8D;
     internal const ulong KP_Equal = 0xFFBD;
@@ -98,5 +109,6 @@ internal static class XorgVirtualKey
     internal const ulong Alt_L = 0xFFE9;
     internal const ulong Alt_R = 0xFFEA;
     internal const ulong Super_L = 0xFFEB;
+    internal const ulong VoidSymbol = 0xFFFFFF;
     internal const ulong Super_R = 0xFFEC;
 }

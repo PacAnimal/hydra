@@ -1,10 +1,11 @@
 using Cathedral.Extensions;
+using Hydra.Platform;
 using Hydra.Relay;
 using Hydra.Screen;
 
 namespace Hydra.Config;
 
-public record ConditionState(List<string> ActiveSsids, int ScreenCount, bool? IsPluggedIn = null);
+public record ConditionState(List<string> ActiveSsids, int ScreenCount, bool? IsPluggedIn = null, NetworkLinks? Links = null);
 
 public class HostConfig
 {
@@ -73,6 +74,9 @@ public class HydraConfig
     public bool AllowSystemSleep { get; init; }
     public bool ScreenLockPropagation { get; init; } = false;  // master only (Mac/Windows) — propagate machine lock to connected slaves
     public bool AccelerateMouseWheel { get; init; } = true;
+    // master only — the NumLock the keypad crosses with while Super, Control or Alt is held: true digits, false
+    // navigation, null (the default) the master's own NumLock. Each key keeps it until released (ModifierNumLock)
+    public bool? ModifierNumLock { get; init; }
     // master only — action name to the chords bound to it, e.g. "toggleCursorLock": ["ScrollLock"].
     // a listed array replaces that action's default entirely; see docs/CONFIGURATION.md for both lists.
     public Dictionary<string, List<string>>? Hotkeys { get; init; }
@@ -99,6 +103,12 @@ public class HydraConfig
 
     // true if any profile matches on AC power state — determines whether power detection is needed
     public static bool HasPluggedInConditions(List<HydraConfig> profiles) => profiles.Any(c => c.Conditions?.IsPluggedIn != null);
+
+    // true if any profile matches on address, gateway MAC or a wired link — determines whether those are read
+    public static bool HasLinkConditions(List<HydraConfig> profiles) => profiles.Any(c => c.Conditions?.HasLinkConditions == true);
+
+    // true if any profile matches on a gateway MAC — determines whether the neighbour table is read
+    public static bool HasGatewayMacConditions(List<HydraConfig> profiles) => profiles.Any(c => c.Conditions?.GatewayMac != null);
 
     // resolves the active profile from the list based on current condition state.
     // if profileOverride is set, that profile is returned unconditionally (ignores conditions).
@@ -209,14 +219,14 @@ public class HydraConfig
                 throw new InvalidOperationException("screenCount condition must be >= 1.");
         }
 
-        // no two conditional profiles may have identical (ssid, screenCount, isPluggedIn) tuples
-        var conditionKeys = profiles
+        // no two conditional profiles may have identical conditions; parsing also refuses a malformed address or MAC
+        var duplicate = profiles
             .Where(c => c.IsConditional)
-            .Select(c => (Ssid: c.Conditions!.Ssid?.ToLowerInvariant(), c.Conditions.ScreenCount, c.Conditions.IsPluggedIn))
-            .ToList();
-        var duplicate = conditionKeys.GroupBy(k => k).FirstOrDefault(g => g.Count() > 1);
+            .Select(c => ConditionKey(c.Conditions!))
+            .GroupBy(k => k)
+            .FirstOrDefault(g => g.Count() > 1);
         if (duplicate != null)
-            throw new InvalidOperationException($"hydra.conf has duplicate conditions for ssid='{duplicate.Key.Ssid}' screenCount='{duplicate.Key.ScreenCount}' isPluggedIn='{duplicate.Key.IsPluggedIn}'.");
+            throw new InvalidOperationException($"hydra.conf has duplicate conditions: {duplicate.Key}.");
 
         foreach (var cfg in profiles)
         {
@@ -241,6 +251,8 @@ public class HydraConfig
                 throw new InvalidOperationException("mouseScale is slave-only. Remove it from master profiles.");
             if (cfg.Mode == Mode.Master && cfg.ScreenDefinitions.Count > 0)
                 throw new InvalidOperationException("screenDefinitions is slave-only. Remove it from master profiles.");
+            if (cfg.Mode == Mode.Slave && cfg.ModifierNumLock != null)
+                throw new InvalidOperationException("modifierNumLock is master-only. Remove it from slave profiles.");
             if (cfg.Mode == Mode.Slave && cfg.MaxMouseHz != null)
                 throw new InvalidOperationException("maxMouseHz is master-only. Remove it from slave profiles.");
             // The ceiling is the sample rate itself: at 1000 Hz every sample a mouse reports is already
@@ -255,6 +267,11 @@ public class HydraConfig
             }
         }
     }
+
+    // conditions as compared for duplicates: ssid ignoring case, address and MAC as parsed
+    private static string ConditionKey(ConfigConditions c) =>
+        $"ssid='{c.Ssid?.ToLowerInvariant()}' screenCount='{c.ScreenCount}' isPluggedIn='{c.IsPluggedIn}' address='{c.AddressNetwork}' " +
+        $"gatewayMac='{(c.GatewayPhysicalAddress is { } mac ? NetworkLinks.FormatMac(mac) : null)}' wired='{c.Wired}'";
 
     // screens are named <host>:<n> (ScreenNaming), so a host named "a:1" could collide with host a's second monitor
     private static void RejectColon(string hostName)

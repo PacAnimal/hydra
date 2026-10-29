@@ -4,51 +4,105 @@ import CoreWLAN
 
 // tiny shield app — places a topmost window over the cursor park position (main screen center)
 // to absorb hover events while the KVM cursor is hidden there.
-// no dock icon, no menu bar. controlled via stdin: CmdHide/CmdShow/CmdDebug.
+// no dock icon, no menu bar. controlled by the Hydra parent over stdin/stdout.
 // automatically suppresses itself while a fullscreen app (e.g. a game) is running.
-// runs until killed by the parent process.
+// runs until killed by the parent process or until stdin closes.
 //
-// also handles macOS WiFi SSID detection on behalf of the Hydra parent:
-//   stdin CmdWifi         — activates WiFi monitoring (idempotent); requests location auth if needed
-//   stdout PfxSsid+Name   — current WiFi SSID (empty = not connected / not authorized)
-//   stdout PfxWifiAuth+n  — CLAuthorizationStatus raw value (0=notDetermined 1=restricted 2=denied 3/4=authorized)
-// emitted on activation and whenever SSID changes.
+// also reports the WiFi SSID and location auth, and the ARP table, on behalf of the parent, shows OSD notifications
+// and a file transfer progress panel.
 //
-// also manages a file transfer progress panel:
-//   stdin "transfer:begin;{totalBytes};{fileCount};{isSender};{b64name1|b64name2|...}"  — show panel in transferring mode (names are base64-encoded utf-8)
-//   stdin "transfer:pending;{totalBytes};{fileCount};{isSender};{b64name1|b64name2|...}" — show pending state
-//   stdin "transfer:start"                                                              — switch to progress bar
-//   stdin "transfer:progress:{bytes}:{speed}"                                          — update progress
-//   stdin "transfer:file:{base64-filename}"                                            — update current file name
-//   stdin "transfer:done"                                                              — show completed, auto-close
-//   stdin "transfer:error:{message}"                                                   — show error
-//   stdin "transfer:close"                                                             — force close
-//   stdout "transfer:cancel"                                                           — user clicked cancel
+// protocol: framed messagepack, see the table in Hydra/Platform/MacOs/ShieldChannel.cs.
 
-// stdin commands (C# → shield)
-let CmdHide = "0"
-let CmdShow = "1"
-let CmdDebug = "2"
-let CmdWifi = "wifi"
-let CmdTransferPrefix = "transfer:"
-let CmdOsdPrefix = "osd:"
+// serializes stdout writes: CoreWLAN and CoreLocation callbacks may arrive off the main thread
+private let stdoutLock = NSLock()
 
-// stdout prefixes (shield → C#)
-let PfxSsid = "ssid:"
-let PfxWifiAuth = "wifiauth:"
-let PfxTransferCancel = "transfer:cancel"
-
-// writes a line to stdout; exits cleanly if the pipe is broken (parent restarted)
-func writeState(_ line: String) {
-  let data = Data((line + "\n").utf8)
-  let result = data.withUnsafeBytes { Darwin.write(STDOUT_FILENO, $0.baseAddress!, $0.count) }
-  if result == -1 { exit(0) }
+// writes one framed message to stdout; exits cleanly if the pipe is broken (parent restarted)
+func writeMessage(_ kind: String, _ fields: [(String, MsgPackValue)] = []) {
+  let data = frame(msgPackEncode(.map([("kind", .string(kind))] + fields)))
+  stdoutLock.lock()
+  defer { stdoutLock.unlock() }
+  var offset = 0
+  while offset < data.count {
+    let result = data.withUnsafeBytes { Darwin.write(STDOUT_FILENO, $0.baseAddress! + offset, $0.count - offset) }
+    if result == -1 {
+      if errno == EINTR { continue }
+      exit(0)
+    }
+    offset += result
+  }
 }
 
 // writes an error line to stderr — for conditions that break the protocol
 func writeError(_ message: String) {
   let data = Data((message + "\n").utf8)
   _ = data.withUnsafeBytes { Darwin.write(STDERR_FILENO, $0.baseAddress!, $0.count) }
+}
+
+struct Neighbour {
+  let ip: String
+  let mac: Data
+}
+
+// the IPv4 ARP table's resolved entries, from the routing sysctl as arp(8) reads it. Local Network privacy leaves
+// the table empty for a process without the grant, which this bundle holds as it holds Location.
+// each message: rt_msghdr, then RTA_DST's sockaddr_in and RTA_GATEWAY's sockaddr_dl, each padded to 4 bytes
+// nil when the sysctl failed
+func readNeighbours() -> [Neighbour]? {
+  var mib: [Int32] = [CTL_NET, PF_ROUTE, 0, AF_INET, NET_RT_FLAGS, RTF_LLINFO]
+  var buffer: [UInt8] = []
+  var length = 0
+  // the table may grow between asking its size and reading it, which fails with ENOMEM
+  for _ in 0..<3 {
+    length = 0
+    guard sysctl(&mib, 6, nil, &length, nil, 0) == 0 else { return nil }
+    if length == 0 { return [] }
+    buffer = [UInt8](repeating: 0, count: length + 4096)
+    length = buffer.count
+    if sysctl(&mib, 6, &buffer, &length, nil, 0) == 0 { break }
+    if errno != ENOMEM { return nil }
+    length = -1
+  }
+  if length < 0 { return nil }
+
+  let header = MemoryLayout<rt_msghdr>.size
+  let wanted = RTA_DST | RTA_GATEWAY
+  var neighbours: [Neighbour] = []
+  var offset = 0
+  while offset + header <= length {
+    let message = buffer.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: offset, as: rt_msghdr.self) }
+    let end = offset + Int(message.rtm_msglen)
+    if end <= offset + header || end > length { break }
+    defer { offset = end }
+    let dst = offset + header
+    guard message.rtm_addrs & wanted == wanted, dst + 8 <= end, buffer[dst + 1] == UInt8(AF_INET) else { continue }
+    let dstLength = Int(buffer[dst])
+    let link = dst + (dstLength > 0 ? 1 + ((dstLength - 1) | 3) : 4)
+    guard link + 8 <= end, buffer[link + 1] == UInt8(AF_LINK) else { continue }
+    // sockaddr_dl: len, family, index (2), type, nlen, alen, slen, then the name and the address
+    let mac = link + 8 + Int(buffer[link + 5])
+    // an entry still resolving has no address yet
+    guard buffer[link + 6] == 6, mac + 6 <= end else { continue }
+    let ip = buffer[(dst + 4)..<(dst + 8)].map { String($0) }.joined(separator: ".")
+    neighbours.append(Neighbour(ip: ip, mac: Data(buffer[mac..<(mac + 6)])))
+  }
+  return neighbours
+}
+
+// a datagram to the discard port has the OS resolve the address, and has macOS ask for Local Network access the first
+// time; whether it arrives does not matter
+func poke(_ address: String) {
+  var target = sockaddr_in()
+  target.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+  target.sin_family = sa_family_t(AF_INET)
+  target.sin_port = in_port_t(9).bigEndian
+  guard inet_pton(AF_INET, address, &target.sin_addr) == 1 else { return }
+  let fd = socket(AF_INET, SOCK_DGRAM, 0)
+  guard fd >= 0 else { return }
+  defer { close(fd) }
+  var byte: UInt8 = 0
+  _ = withUnsafePointer(to: &target) {
+    $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { sendto(fd, &byte, 1, 0, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+  }
 }
 
 // full-coverage view that participates in hit testing and swallows all mouse events
@@ -104,11 +158,11 @@ class ShieldDelegate: NSObject, NSApplicationDelegate, CLLocationManagerDelegate
     w.alphaValue = 0.01
     w.isOpaque = false
     w.hasShadow = false
-    w.ignoresMouseEvents = true  // pass-through until "1" command received
+    w.ignoresMouseEvents = true  // pass-through until a "show" message arrives
     w.acceptsMouseMovedEvents = true
     w.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
     w.contentView = AbsorberView(frame: NSRect(origin: .zero, size: frame.size))
-    w.orderFrontRegardless()  // always composited so first CmdShow is instant
+    w.orderFrontRegardless()  // always composited so the first show is instant
     window = w
 
     // poll for fullscreen apps every 500ms; suppress window while one is active
@@ -116,38 +170,29 @@ class ShieldDelegate: NSObject, NSApplicationDelegate, CLLocationManagerDelegate
       self?.applyState()
     }
 
-    // read commands from parent process
+    // read framed messages from the parent process
     DispatchQueue.global(qos: .background).async { [weak self] in
-      while let line = readLine(strippingNewline: true) {
-        DispatchQueue.main.async {
-          guard let self else { return }
-          if line.hasPrefix(CmdOsdPrefix) {
-            let b64 = String(line.dropFirst(CmdOsdPrefix.count))
-            let msg = Data(base64Encoded: b64).flatMap { String(data: $0, encoding: .utf8) } ?? b64
-            self.osdPanel.show(msg)
-          } else if line.hasPrefix(CmdTransferPrefix) {
-            self.handleTransferCommand(line)
-          } else {
-            switch line {
-            case CmdShow:
-              self.desiredAbsorb = true
-              self.debugMode = false
-              self.applyState()
-              writeState(CmdShow)
-            case CmdDebug:
-              self.desiredAbsorb = true
-              self.debugMode = true
-              self.applyState()
-              writeState(CmdDebug)
-            case CmdWifi:
-              self.startWifiMonitoring()
-            default:  // CmdHide
-              self.desiredAbsorb = false
-              self.debugMode = false
-              self.applyState()
-              writeState(CmdHide)
-            }
+      var reader = FrameReader()
+      var chunk = [UInt8](repeating: 0, count: 64 * 1024)
+      readLoop: while true {
+        let n = chunk.withUnsafeMutableBytes { Darwin.read(STDIN_FILENO, $0.baseAddress!, $0.count) }
+        if n < 0 && errno == EINTR { continue }
+        if n <= 0 { break }
+        reader.append(Data(chunk[0..<n]))
+        while true {
+          let payload: Data?
+          do { payload = try reader.next() } catch {
+            // the length prefix is the only framing, so an oversized one leaves nothing to resync on
+            writeError("shield frame rejected: \(error)")
+            break readLoop
           }
+          guard let payload else { break }
+          let message: MsgPackValue
+          do { message = try msgPackDecode(payload) } catch {
+            writeError("shield frame could not be decoded: \(error)")
+            continue
+          }
+          DispatchQueue.main.async { self?.handleMessage(message) }
         }
       }
       // stdin closed — parent process died; exit so we don't linger as an orphan
@@ -155,7 +200,75 @@ class ShieldDelegate: NSObject, NSApplicationDelegate, CLLocationManagerDelegate
     }
   }
 
-  // MARK: - WiFi monitoring (activated on demand via "wifi" stdin command)
+  // MARK: - Messages from the parent
+
+  private func handleMessage(_ message: MsgPackValue) {
+    guard let kind = message["kind"]?.stringValue else {
+      writeError("shield message has no kind; ignored")
+      return
+    }
+    switch kind {
+    case "shield":
+      guard let seq = message["seq"]?.int64Value,
+        let state = message["state"]?.stringValue, ["hide", "show", "debug"].contains(state)
+      else {
+        writeError("shield message is malformed; ignored")
+        return
+      }
+      desiredAbsorb = state != "hide"
+      debugMode = state == "debug"
+      applyState()
+      writeMessage("ack", [("seq", .int(seq))])
+    case "wifi":
+      startWifiMonitoring()
+    case "neighbours":
+      guard let seq = message["seq"]?.int64Value else {
+        writeError("neighbours message is malformed; ignored")
+        return
+      }
+      let gateways = message["gateways"]?.arrayValue?.compactMap { $0.stringValue } ?? []
+      DispatchQueue.global(qos: .utility).async {
+        gateways.forEach(poke)
+        // no entries says the table could not be read, which Hydra takes as unknown rather than empty
+        guard let neighbours = readNeighbours() else {
+          writeMessage("ack", [("seq", .int(seq))])
+          return
+        }
+        let entries = neighbours.map { MsgPackValue.map([("ip", .string($0.ip)), ("mac", .binary($0.mac))]) }
+        writeMessage("ack", [("seq", .int(seq)), ("entries", .array(entries))])
+      }
+    case "osd":
+      if let text = message["text"]?.stringValue { osdPanel.show(text) }
+    case "transferBegin":
+      guard let totalBytes = message["totalBytes"]?.int64Value,
+        let fileCount = message["fileCount"]?.int64Value,
+        let isSender = message["isSender"]?.boolValue
+      else {
+        writeError("transferBegin is malformed; ignored")
+        return
+      }
+      let names = message["names"]?.arrayValue?.compactMap { $0.stringValue } ?? []
+      transferPanel.showBegin(names: names, totalBytes: totalBytes, fileCount: Int(fileCount), isSender: isSender)
+    case "transferFile":
+      if let name = message["name"]?.stringValue { transferPanel.updateCurrentFile(name) }
+    case "transferProgress":
+      if let bytes = message["bytes"]?.int64Value, let speed = message["speed"]?.doubleValue {
+        transferPanel.updateProgress(bytes: bytes, speed: speed)
+      }
+    case "transferDone":
+      transferPanel.showCompleted()
+    case "transferError":
+      transferPanel.showError(message["message"]?.stringValue ?? "")
+    case "transferClose":
+      transferPanel.close()
+    case "echo":
+      writeMessage("echo", [("payload", message["payload"] ?? .nil)])
+    default:
+      writeError("unknown shield message kind '\(kind)'; ignored")
+    }
+  }
+
+  // MARK: - WiFi monitoring (activated on demand via the "wifi" message)
 
   // CLLocationManager + CWWiFiClient for SSID — requires Location Services authorization
   private func startWifiMonitoring() {
@@ -167,25 +280,35 @@ class ShieldDelegate: NSObject, NSApplicationDelegate, CLLocationManagerDelegate
     locationManager = mgr
 
     let status = mgr.authorizationStatus
-    writeState("\(PfxWifiAuth)\(status.rawValue)")  // 0=notDetermined 1=restricted 2=denied 3=authorized 4=authorizedAlways
+    writeWifiAuth(status)
     switch status {
     case .notDetermined:
       mgr.requestAlwaysAuthorization()
     case .authorized, .authorizedAlways:
       startCoreWlan()
     default:
-      writeState(PfxSsid)
+      writeSsid(nil)
     }
   }
 
   func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-    writeState("\(PfxWifiAuth)\(manager.authorizationStatus.rawValue)")
+    writeWifiAuth(manager.authorizationStatus)
     switch manager.authorizationStatus {
     case .authorized, .authorizedAlways:
       startCoreWlan()
     default:
-      writeState(PfxSsid)
+      writeSsid(nil)
     }
+  }
+
+  // 0=notDetermined 1=restricted 2=denied 3=authorized 4=authorizedAlways
+  private func writeWifiAuth(_ status: CLAuthorizationStatus) {
+    writeMessage("wifiAuth", [("status", .int(Int64(status.rawValue)))])
+  }
+
+  // nil when not connected or not authorized
+  private func writeSsid(_ name: String?) {
+    writeMessage("ssid", [("name", name.map { .string($0) } ?? .nil)])
   }
 
   private func startCoreWlan() {
@@ -202,81 +325,8 @@ class ShieldDelegate: NSObject, NSApplicationDelegate, CLLocationManagerDelegate
   }
 
   private func reportSsid() {
-    let ssid = CWWiFiClient.shared().interface()?.ssid() ?? ""
-    writeState("\(PfxSsid)\(ssid)")
-  }
-
-  // MARK: - Transfer panel commands
-
-  // handles "transfer:begin;{totalBytes};{fileCount};{isSender};{b64name1|b64name2|...}"
-  //          "transfer:pending;{totalBytes};{fileCount};{isSender};{b64name1|b64name2|...}"
-  //          "transfer:start"
-  //          "transfer:progress:{bytes}:{speed}"
-  //          "transfer:file:{base64-filename}"
-  //          "transfer:done"
-  //          "transfer:error:{message}"
-  //          "transfer:close"
-  private func handleTransferCommand(_ line: String) {
-    let payload = String(line.dropFirst(CmdTransferPrefix.count))
-    if payload == "start" {
-      transferPanel.showTransferring()
-      return
-    }
-    if payload.hasPrefix("file:") {
-      let b64 = String(payload.dropFirst("file:".count))
-      let name = Data(base64Encoded: b64).flatMap { String(data: $0, encoding: .utf8) } ?? b64
-      transferPanel.updateCurrentFile(name)
-      return
-    }
-    if payload == "done" {
-      transferPanel.showCompleted()
-      return
-    }
-    if payload == "close" {
-      transferPanel.close()
-      return
-    }
-    if payload.hasPrefix("progress:") {
-      let parts = payload.dropFirst("progress:".count).split(separator: ":", maxSplits: 1)
-      if parts.count == 2,
-        let bytes = Int64(parts[0]),
-        let speed = Double(parts[1])
-      {
-        transferPanel.updateProgress(bytes: bytes, speed: speed)
-      }
-      return
-    }
-    if payload.hasPrefix("error:") {
-      let b64 = String(payload.dropFirst("error:".count))
-      let msg = Data(base64Encoded: b64).flatMap { String(data: $0, encoding: .utf8) } ?? b64
-      transferPanel.showError(msg)
-      return
-    }
-    if payload.hasPrefix("begin;") || payload.hasPrefix("pending;") {
-      // format: begin/pending;{totalBytes};{fileCount};{isSender};{b64name1|b64name2|...}
-      // names are base64-encoded utf-8 to handle special characters
-      let isBegin = payload.hasPrefix("begin;")
-      let rest = payload.dropFirst(isBegin ? "begin;".count : "pending;".count)
-      let parts = rest.split(separator: ";", maxSplits: 3)
-      if parts.count == 4,
-        let totalBytes = Int64(parts[0]),
-        let fileCount = Int(parts[1]),
-        let isSender = Bool(String(parts[2]))
-      {
-        let names = parts[3].split(separator: "|").compactMap { b64 -> String? in
-          guard let data = Data(base64Encoded: String(b64)) else { return nil }
-          return String(data: data, encoding: .utf8)
-        }
-        if isBegin {
-          transferPanel.showBegin(
-            names: names, totalBytes: totalBytes, fileCount: fileCount, isSender: isSender)
-        } else {
-          transferPanel.showPending(
-            names: names, totalBytes: totalBytes, fileCount: fileCount, isSender: isSender)
-        }
-      }
-      return
-    }
+    let ssid = CWWiFiClient.shared().interface()?.ssid()
+    writeSsid(ssid?.isEmpty == false ? ssid : nil)
   }
 
   // MARK: - Shield window
@@ -344,31 +394,6 @@ class TransferPanel: NSObject {
     progressBar?.doubleValue = 0
     cancelButton?.title = "Cancel"
     cancelButton?.isHidden = false
-    panel?.orderFrontRegardless()
-  }
-
-  func showPending(names: [String], totalBytes: Int64, fileCount: Int, isSender: Bool) {
-    self.totalBytes = totalBytes
-    buildPanelIfNeeded()
-    autoCloseTimer?.invalidate()
-
-    let verb = isSender ? "Sending" : "Receiving"
-    let nameStr = Self.formatNames(names)
-    titleLabel?.stringValue = "\(verb) \(fileCount) file\(fileCount == 1 ? "" : "s")"
-    subtitleLabel?.stringValue = nameStr
-    statusLabel?.stringValue = isSender ? "Drop to send" : "Waiting for sender…"
-    progressBar?.isIndeterminate = true
-    progressBar?.startAnimation(nil)
-    cancelButton?.title = "Cancel"
-    cancelButton?.isHidden = false
-    panel?.orderFrontRegardless()
-  }
-
-  func showTransferring() {
-    buildPanelIfNeeded()
-    statusLabel?.stringValue = "Transferring…"
-    progressBar?.isIndeterminate = false
-    progressBar?.doubleValue = 0
     panel?.orderFrontRegardless()
   }
 
@@ -472,7 +497,7 @@ class TransferPanel: NSObject {
   }
 
   @objc private func onCancel() {
-    writeState(PfxTransferCancel)
+    writeMessage("transferCancel")
     close()
   }
 

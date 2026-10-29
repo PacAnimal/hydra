@@ -301,7 +301,9 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         }
     }
 
-    public async ValueTask SendReliableAsync(string[] targetHosts, byte[] payload, CancellationToken cancel = default)
+    // virtual for tests alone: a test slave that never connects records a reliable send rather than throw, and no
+    // other seam reaches this method
+    public virtual async ValueTask SendReliableAsync(string[] targetHosts, byte[] payload, CancellationToken cancel = default)
     {
         OnSent(targetHosts, payload);
 
@@ -330,6 +332,7 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     protected virtual void OnSentDelta(string[] targetHosts, int dx, int dy) { }
 
     // IStyxClient
+    // the SignalR client runs these handlers one at a time, in arrival order, each awaited; ClientDispatchOrderTests pins it
     public async Task Receive(string sourceHost, string sourceIp, byte[] payload)
     {
         if (_encryption == null) return;

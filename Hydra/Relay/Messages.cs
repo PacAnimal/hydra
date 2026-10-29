@@ -1,4 +1,7 @@
+using System.Buffers;
 using System.Text;
+using System.Text.Encodings.Web;
+using System.Text.Json;
 using Cathedral.Config;
 using Cathedral.Extensions;
 using Hydra.Keyboard;
@@ -44,13 +47,18 @@ public enum MessageKind : byte
     RemoteManagementRequest = 34,
     RemoteManagementResponse = 35,
     KeyEventBatch = 36,         // master → slave: several KeyEvents in one frame, applied in order
+    ClipboardStreamBegin = 37,  // either → either: a large clipboard message follows in chunks; empty the clipboard until it lands
+    ClipboardStreamChunk = 38,  // either → either: part of a streamed clipboard message
+    ClipboardStreamAbort = 39,  // either → either: stop that stream
+    ClipboardPushNone = 40,     // master → slave: no push follows your pull request
 }
 
 public static class MessageKinds
 {
-    // every kind of the clipboard handshake, either direction
+    // every kind of the clipboard handshake and its streams, either direction
     public static bool IsClipboard(MessageKind kind) => kind is MessageKind.ClipboardHash or MessageKind.ClipboardPush or MessageKind.ClipboardPull
-        or MessageKind.ClipboardPullRequest or MessageKind.ClipboardPullResponse;
+        or MessageKind.ClipboardPullRequest or MessageKind.ClipboardPullResponse or MessageKind.ClipboardPushNone or MessageKind.ClipboardStreamBegin
+        or MessageKind.ClipboardStreamChunk or MessageKind.ClipboardStreamAbort;
 }
 
 /// <summary>
@@ -62,7 +70,7 @@ public enum RelayLane : byte
     /// <summary>Input and control. Strictly ordered, and everything not named below is here.</summary>
     Input,
 
-    /// <summary>The file-transfer stream, and only that. Strictly ordered within itself.</summary>
+    /// <summary>The file-transfer stream and clipboard stream chunks, and only those. Strictly ordered within itself.</summary>
     Bulk
 }
 
@@ -74,11 +82,15 @@ public static class MessageLane
     /// guard, and a Done that overtakes the last chunk truncates the transfer.</para>
     /// <para>Abort is input on purpose, to overtake the chunks it cancels. Nothing on the wire carries a transfer id, so a
     /// stale chunk arriving after a new transfer from the same host joins it, and fails its hash check.</para>
+    /// <para>A clipboard stream puts only its chunks on bulk. Begin is input so the receiver's clear overtakes later
+    /// keystrokes, and Abort to overtake the chunks it cancels. The sender sends Begin reliably before chunk 0, and chunks
+    /// carry the stream Id, so a chunk cannot join the wrong stream.</para>
     /// <para>Everything else, unknown kinds included, is input: the ordered lane is the safe one to be wrong in.</para>
     /// </summary>
     public static RelayLane Of(MessageKind kind) => kind switch
     {
-        MessageKind.FileTransferStart or MessageKind.FileTransferChunk or MessageKind.FileTransferDone => RelayLane.Bulk,
+        MessageKind.FileTransferStart or MessageKind.FileTransferChunk or MessageKind.FileTransferDone
+            or MessageKind.ClipboardStreamChunk => RelayLane.Bulk,
         _ => RelayLane.Input
     };
 
@@ -120,7 +132,9 @@ public record MasterConfigMessage(LogLevel? LogLevel);
 public record SlaveLogMessage(int Level, string Category, string Message, string? Exception);
 // IsRepeat marks an OS auto-repeat the master re-resolved (with live modifier/dead-key state) and forwarded, only for a
 // key whose down it forwarded; the slave injects it as a repeat of that held key.
-public record KeyEventMessage(KeyEventType Type, KeyModifiers Modifiers, char? Character, SpecialKey? Key, bool IsRepeat = false);
+// Chorded marks the release of a modifier a hotkey was pressed under on the master, which swallowed that key: the
+// release is no bare tap, so the slave opens no Start menu, overview or menu bar for it
+public record KeyEventMessage(KeyEventType Type, KeyModifiers Modifiers, char? Character, SpecialKey? Key, bool IsRepeat = false, bool? Chorded = null);
 
 /// <summary>
 /// Several key events in one frame, to be applied IN ORDER.
@@ -137,10 +151,14 @@ public record KeyEventMessage(KeyEventType Type, KeyModifiers Modifiers, char? C
 public record KeyEventBatchMessage(KeyEventMessage[] Events);
 public record MouseButtonMessage(MouseButton Button, bool IsPressed);
 public record MouseScrollMessage(short XDelta, short YDelta);
-public record EnterScreenMessage(string Screen, int X, int Y, int Width, int Height);
+// Focus: bring forward the window last worked in on that screen, as the monitor switch hotkey does on arrival.
+// CursorHidden: the switch started where the user saw no cursor, so it stays hidden here until the mouse is used
+public record EnterScreenMessage(string Screen, int X, int Y, int Width, int Height, bool Focus = false, bool CursorHidden = false);
 public record ScreensaverSyncMessage(bool Active);
 public record LeaveScreenMessage;
-public record ClipboardPullMessage(int PullId, ulong? MasterHash = null, ulong? MasterPrimaryHash = null);
+// ResendFrom: the first pull to this host whose answer the master did not take, so a clipboard synced by the full answer
+// to it or a later one is answered again, never Unchanged as synced
+public record ClipboardPullMessage(int PullId, ulong? MasterHash = null, ulong? MasterPrimaryHash = null, int? ResendFrom = null);
 // the selection a clipboard message carries; PrimaryIsText means it repeats the clipboard's text
 public interface IClipboardSelection
 {
@@ -155,15 +173,36 @@ public interface IClipboardPayload : IClipboardSelection
     byte[]? ImagePng { get; }
     string? Html { get; }
     byte[]? Rtf { get; }
+    // a password manager's copy, written with its markers on every host
+    bool? Concealed { get; }
 }
 
-public record ClipboardPushMessage(string Text, string? PrimaryText = null, byte[]? ImagePng = null, string? Html = null, byte[]? Rtf = null, bool? PrimaryIsText = null)
-    : IClipboardPayload;
-public record ClipboardPullResponseMessage(int PullId, string? Text, string? PrimaryText = null, byte[]? ImagePng = null, bool? Unchanged = null, string? Html = null,
-    byte[]? Rtf = null, bool? PrimaryIsText = null) : IClipboardPayload;
-// see ClipboardWire; a null Hash offers no clipboard, only the selection
-public record ClipboardHashMessage(ulong? Hash, string? PrimaryText = null, bool? PrimaryIsText = null, ulong? PrimaryHash = null) : IClipboardSelection;
-public record ClipboardPullRequestMessage;
+public record ClipboardPushMessage(
+    string Text, string? PrimaryText = null, byte[]? ImagePng = null, string? Html = null, byte[]? Rtf = null, bool? PrimaryIsText = null,
+    bool? Concealed = null) : IClipboardPayload;
+// Cleared: the concealed copy this host last answered with was emptied here since (its password manager cleared it);
+// Resends: a resend of the copy first answered to that older pull, which ranks it as that pull's answer
+public record ClipboardPullResponseMessage(
+    int PullId, string? Text, string? PrimaryText = null, byte[]? ImagePng = null, bool? Unchanged = null, string? Html = null,
+    byte[]? Rtf = null, bool? PrimaryIsText = null, bool? Concealed = null, bool? Cleared = null, int? Resends = null) : IClipboardPayload;
+// see ClipboardWire; a null Hash offers no clipboard, only the selection; Pending means a newer clipboard is on its way:
+// empty yours and wait for the next hash; Cleared means the master's concealed copy was emptied: clear yours if it is
+// still Hydra's write of that copy; Visit is the master's visit to this host it was offered on, echoed by the pull request;
+// ResendFrom: as a pull's, the master never took this host's answer from that pull on, so a clipboard synced by it is kept
+public record ClipboardHashMessage(
+    ulong? Hash, string? PrimaryText = null, bool? PrimaryIsText = null, ulong? PrimaryHash = null, bool? Pending = null,
+    bool? Cleared = null, int? Visit = null, int? ResendFrom = null) : IClipboardSelection;
+// visit: the hash's Visit
+public record ClipboardPullRequestMessage(int? Visit);
+// the pull request for visit gets no push: the master's clipboard is empty or unreadable, or the visit is outdated
+public record ClipboardPushNoneMessage(int? Visit);
+// Inner is the streamed message's kind (ClipboardPush or ClipboardPullResponse), BlobHash xxhash64 of its encoded bytes,
+// ContentHash the clipboard hash it carries, PullId the pull a streamed pull response answers, Resends its Resends
+public record ClipboardStreamBeginMessage(long Id, MessageKind Inner, int TotalBytes, ulong BlobHash, ulong ContentHash, int? PullId = null,
+    int? Resends = null);
+public record ClipboardStreamChunkMessage(long Id, int Offset, byte[] Data);
+// failed: the sender gave up on it (a send failed, or dormancy), which the receiver shows; else it was superseded
+public record ClipboardStreamAbortMessage(long Id, bool? Failed = null);
 public record LockScreenMessage(long MillisecondsSinceLastInput);
 
 public record FileTransferRequestMessage(string? SourceHost = null);
@@ -184,10 +223,13 @@ public record LatencyProbeResponseMessage(long Sequence);
 
 public static class MessageSerializer
 {
+    // relaxed escaping keeps non-ascii and markup as utf-8: the payload is aes-gcm encrypted end to end, never embedded in html
+    private static readonly JsonSerializerOptions EncodeOptions = new(SaneJson.CompactOptions) { Encoder = RelaxedUtf8Encoder.Instance };
+
     // wire format: [1 byte kind][utf-8 json]
     public static byte[] Encode<T>(MessageKind kind, T message)
     {
-        var json = message.ToSaneJsonBytes(SaneJson.CompactOptions);
+        var json = message.ToSaneJsonBytes(EncodeOptions);
         var result = new byte[1 + json.Length];
         result[0] = (byte)kind;
         json.CopyTo(result, 1);
@@ -199,6 +241,45 @@ public static class MessageSerializer
         if (payload.Length == 0) throw new ArgumentException("Empty payload", nameof(payload));
         var kind = (MessageKind)payload[0];
         return new DecodedMessage(kind, payload.AsMemory(1));
+    }
+
+    // UnsafeRelaxedJsonEscaping, but leaving a valid surrogate pair (an emoji) as utf-8 rather than two \u escapes
+    private sealed class RelaxedUtf8Encoder : JavaScriptEncoder
+    {
+        public static readonly RelaxedUtf8Encoder Instance = new();
+        private static readonly JavaScriptEncoder Relaxed = UnsafeRelaxedJsonEscaping;
+
+        public override int MaxOutputCharactersPerInputCharacter => Relaxed.MaxOutputCharactersPerInputCharacter;
+        public override bool WillEncode(int unicodeScalar) => unicodeScalar <= char.MaxValue && Relaxed.WillEncode(unicodeScalar);
+
+        public override unsafe bool TryEncodeUnicodeScalar(int unicodeScalar, char* buffer, int bufferLength, out int numberOfCharactersWritten) =>
+            Relaxed.TryEncodeUnicodeScalar(unicodeScalar, buffer, bufferLength, out numberOfCharactersWritten);
+
+        public override unsafe int FindFirstCharacterToEncode(char* text, int textLength)
+        {
+            var start = 0;
+            while (true)
+            {
+                var found = Relaxed.FindFirstCharacterToEncode(text + start, textLength - start);
+                if (found < 0) return -1;
+                var at = start + found;
+                if (at + 1 >= textLength || !char.IsSurrogatePair(text[at], text[at + 1])) return at;
+                start = at + 2;
+            }
+        }
+
+        public override int FindFirstCharacterToEncodeUtf8(ReadOnlySpan<byte> utf8Text)
+        {
+            var start = 0;
+            while (true)
+            {
+                var found = Relaxed.FindFirstCharacterToEncodeUtf8(utf8Text[start..]);
+                if (found < 0) return -1;
+                var at = start + found;
+                if (Rune.DecodeFromUtf8(utf8Text[at..], out var rune, out var consumed) != OperationStatus.Done || rune.IsBmp) return at;
+                start = at + consumed;
+            }
+        }
     }
 }
 

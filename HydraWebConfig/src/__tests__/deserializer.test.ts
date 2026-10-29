@@ -127,6 +127,14 @@ describe('deserialize', () => {
     expect(state.profiles[0].conditions?.isPluggedIn).toBe(false)
   })
 
+  it('parses the link conditions', () => {
+    const json = asFile(JSON.stringify([{ mode: 'Master', conditions: { address: '10.0.0.0/8', gatewayMac: 'a4:91:b1:0c:22:7e', wired: true } }]))
+    const c = deserialize(json).profiles[0].conditions
+    expect(c?.address).toBe('10.0.0.0/8')
+    expect(c?.gatewayMac).toBe('a4:91:b1:0c:22:7e')
+    expect(c?.wired).toBe(true)
+  })
+
   it('leaves isPluggedIn undefined when absent', () => {
     const json = asFile(JSON.stringify([{ mode: 'Master', conditions: { ssid: 'home' } }]))
     const state = deserialize(json)
@@ -230,10 +238,52 @@ describe('deserialize', () => {
     expect(state.profiles[0].hosts![0].neighbours![0].direction).toBe('Right')
   })
 
-  describe('clipboardSync', () => {
-    it('reads it by name in any case, or by number, as Hydra does', () => {
-      const read = (v: string) => deserialize(asFile(`[{"mode":"Slave","clipboardSync":${v}}]`)).profiles[0].clipboardSync
-      expect([read('"system"'), read('"OFF"'), read('2'), read('"1"'), read('3')]).toEqual(['System', 'Off', 'Off', 'System', undefined])
+  describe('modifierNumLock', () => {
+    it('reads true and false', () => {
+      expect(deserialize(asFile('[{"mode":"Master","modifierNumLock":true}]')).profiles[0].modifierNumLock).toBe(true)
+      expect(deserialize(asFile('[{"mode":"Master","modifierNumLock":false}]')).profiles[0].modifierNumLock).toBe(false)
+    })
+
+    it('reads null, like a missing key, as unset', () => {
+      expect(deserialize(asFile('[{"mode":"Master","modifierNumLock":null}]')).profiles[0].modifierNumLock).toBeUndefined()
+      expect(deserialize(asFile('[{"mode":"Master"}]')).profiles[0].modifierNumLock).toBeUndefined()
+    })
+  })
+
+  describe('the other profile settings Hydra has', () => {
+    it('reads them back, so loading and saving a file keeps them', () => {
+      const p = deserialize(asFile(
+        '[{"mode":"Master","accelerateMouseWheel":false,"allowSystemSleep":true,"clipboardSync":"system","hideCursor":true,"maxMouseHz":250}]',
+      )).profiles[0]
+      expect([p.accelerateMouseWheel, p.allowSystemSleep, p.clipboardSync, p.hideCursor, p.maxMouseHz]).toEqual([false, true, 'System', true, 250])
+    })
+
+    it('reads clipboardSync by number and maxMouseHz from a string, as Hydra does', () => {
+      const p = deserialize(asFile('[{"mode":"Master","clipboardSync":1,"maxMouseHz":"300"}]')).profiles[0]
+      expect([p.clipboardSync, p.maxMouseHz]).toEqual(['System', 300])
+      expect(deserialize(asFile('[{"mode":"Slave","clipboardSync":2}]')).profiles[0].clipboardSync).toEqual('Off')
+      expect(deserialize(asFile('[{"mode":"Slave","clipboardSync":"OFF"}]')).profiles[0].clipboardSync).toEqual('Off')
+      expect(deserialize(asFile('[{"mode":"Slave","clipboardSync":3}]')).profiles[0].clipboardSync).toBeUndefined()
+      expect(deserialize(asFile('[{"mode":"Master","clipboardSync":"1"}]')).profiles[0].clipboardSync).toBe('System')
+    })
+
+    it('does not read a number Hydra would not', () => {
+      expect(deserialize(asFile('[{"mode":"Master","maxMouseHz":"0x10"}]')).profiles[0].maxMouseHz).toBeUndefined()
+    })
+
+    it('reads an empty list as none, so saving keeps the action off', () => {
+      const p = deserialize(asFile('[{"mode":"Master","hotkeys":{"switchMonitorLeft":[]}}]')).profiles[0]
+      expect(p.hotkeys).toEqual({ switchMonitorLeft: 'none' })
+    })
+
+    it('reads hotkeys as each action\'s chords, one per line', () => {
+      const p = deserialize(asFile('[{"mode":"Master","hotkeys":{"toggleCursorLock":["Ctrl++","ScrollLock"]}}]')).profiles[0]
+      expect(p.hotkeys).toEqual({ toggleCursorLock: 'Ctrl++\nScrollLock' })
+    })
+
+    it('files a hotkey action spelled in another case under its own name, the first of two winning, as in Hydra', () => {
+      const p = deserialize(asFile('[{"mode":"Master","hotkeys":{"ToggleCursorLock":["F13"],"togglecursorlock":["F14"]}}]')).profiles[0]
+      expect(p.hotkeys).toEqual({ toggleCursorLock: 'F13' })
     })
   })
 })

@@ -140,8 +140,10 @@ public class StyxDocumentationTests : StyxFixtureBase
         File.WriteAllText(Path.Combine(_directory, "src", "main.rs"), RustDriver);
         // the whole dependency graph is pinned, so a crate released upstream cannot change what this test builds
         File.Copy(Path.Combine(TestLog.SolutionRoot, "Tests", "Styx", "StyxDocs.Cargo.lock"), Path.Combine(_directory, "Cargo.lock"));
-        // built once per machine and reused, so only the first run compiles the dependencies
-        var target = Path.Combine(Path.GetTempPath(), "hydra-styx-docs-rust");
+        // built once per machine and reused, so only the first run compiles the dependencies; never under temp, whose
+        // cleanup deletes files piecemeal, which cargo's fingerprints do not notice (a build script's output goes missing)
+        var target = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData, Environment.SpecialFolderOption.Create),
+            "hydra", "styx-docs-rust");
         await AssertMatches(await Run(Tool("cargo"), ["run", "--release", "--quiet", "--locked", "--"], CompileTimeout, ("CARGO_TARGET_DIR", target)));
     }
 

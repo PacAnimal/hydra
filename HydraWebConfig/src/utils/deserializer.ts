@@ -3,6 +3,7 @@ import type {
   Direction, Mode, LogLevel, UpdateChannel, FormState, EmbeddedStyxConfig, EmbeddedStyxServerConfig, NetworkType,
   ClipboardSyncMode,
 } from '../types'
+import { HOTKEY_ACTIONS, HOTKEY_DISABLED } from '../types'
 import { inferLayoutFromHosts } from './layout'
 
 const VALID_MODES: Mode[] = ['Master', 'Slave']
@@ -102,6 +103,9 @@ function parseConditions(obj: Record<string, unknown>): ConfigConditions {
     ssid: optStr(obj.ssid),
     screenCount: optNum(obj.screenCount),
     isPluggedIn: strictBool(obj.isPluggedIn),
+    address: optStr(obj.address),
+    gatewayMac: optStr(obj.gatewayMac),
+    wired: strictBool(obj.wired),
   }
 }
 
@@ -136,6 +140,20 @@ function coerceClipboardSync(v: unknown): ClipboardSyncMode | undefined {
   return clipboardSyncModes.find(m => m.toLowerCase() === lower)
 }
 
+// each action's chords, one per line for its field (an empty list, which turns it off, as HOTKEY_DISABLED), under the
+// action's own spelling: Hydra matches action names in any case, and takes the first of two that differ only in case,
+// as this does
+function parseHotkeys(v: unknown): Record<string, string> | undefined {
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) return undefined
+  const out: Record<string, string> = {}
+  for (const [name, chords] of Object.entries(v as Record<string, unknown>)) {
+    const action = HOTKEY_ACTIONS.find(a => a.action.toLowerCase() === name.toLowerCase())?.action ?? name
+    if (Array.isArray(chords) && !(action in out))
+      out[action] = chords.length === 0 ? HOTKEY_DISABLED : chords.filter((c): c is string => typeof c === 'string').join('\n')
+  }
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
 function parseProfile(obj: Record<string, unknown>): HydraProfile {
   if (typeof obj !== 'object' || obj === null || Array.isArray(obj)) {
     throw new Error('profile must be a JSON object')
@@ -168,8 +186,15 @@ function parseProfile(obj: Record<string, unknown>): HydraProfile {
     remoteOnly: optBool(obj.remoteOnly),
     syncScreensaver: optBool(obj.syncScreensaver),
     screenLockPropagation: optBool(obj.screenLockPropagation),
-    debugShield: optBool(obj.debugShield),
+    accelerateMouseWheel: strictBool(obj.accelerateMouseWheel),
+    allowSystemSleep: strictBool(obj.allowSystemSleep),
     clipboardSync: coerceClipboardSync(obj.clipboardSync),
+    hideCursor: strictBool(obj.hideCursor),
+    maxMouseHz: optNumber(obj.maxMouseHz),
+    // null, like a missing key, leaves the keypad alone
+    modifierNumLock: strictBool(obj.modifierNumLock),
+    hotkeys: parseHotkeys(obj.hotkeys),
+    debugShield: optBool(obj.debugShield),
     deadCorners: optNum(obj.deadCorners),
     conditions: obj.conditions ? parseConditions(obj.conditions as Record<string, unknown>) : undefined,
   }
