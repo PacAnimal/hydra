@@ -1,0 +1,33 @@
+name: Sync edge
+
+# work happens on edge, so every push to main is merged into it at once. Pushed with a deploy key (EDGE_SYNC_KEY),
+# not GITHUB_TOKEN, whose pushes trigger no workflows: edge then builds its prerelease as after any other push.
+# A conflict fails this run and leaves edge alone; merge by hand.
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: sync-edge
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: edge
+          fetch-depth: 0
+          ssh-key: ${{ secrets.EDGE_SYNC_KEY }}
+
+      - name: Merge main into edge
+        env:
+          SUBJECT: ${{ github.event.head_commit.message }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          if git merge-base --is-ancestor origin/main HEAD; then echo "edge already has main"; exit 0; fi
+          git merge --no-ff origin/main -m "Merge main into edge: ${SUBJECT%%$'\n'*}"
+          git push origin HEAD:edge
