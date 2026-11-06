@@ -50,7 +50,7 @@ internal static class XorgDisplayHelper
     {
         var result = new List<DetectedScreen>();
 
-        var resources = NativeMethods.XRRGetScreenResources(display, rootWindow);
+        var resources = NativeMethods.XRRGetScreenResourcesCurrent(display, rootWindow);
         if (resources == nint.Zero)
             return GetPrimaryFallback(display);
 
