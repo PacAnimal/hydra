@@ -268,8 +268,8 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
                 // one line is one notch on the wire
                 var fpDy = NativeMethods.CGEventGetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventFixedPtDeltaAxis1);
                 var fpDx = NativeMethods.CGEventGetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventFixedPtDeltaAxis2);
-                wireX = (short)Math.Clamp(fpDx * MouseScrollEvent.Notch >> 16, short.MinValue, short.MaxValue);
-                wireY = (short)Math.Clamp(fpDy * MouseScrollEvent.Notch >> 16, short.MinValue, short.MaxValue);
+                wireX = MouseScrollEvent.FromFixedLines(fpDx);
+                wireY = MouseScrollEvent.FromFixedLines(fpDy);
             }
             else
             {
