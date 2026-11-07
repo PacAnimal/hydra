@@ -49,7 +49,7 @@ public class SlaveHeldButtonTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(relay.Output.Keys.Select(k => k.Type), Is.EqualTo([KeyEventType.KeyDown, KeyEventType.KeyUp]));
-            Assert.That(relay.Output.LockRestores, Is.EqualTo([2]), "once, after the held key's up");
+            Assert.That(relay.Output.VisitEnds, Is.EqualTo([2]), "once, after the held key's up");
         }
     }
 

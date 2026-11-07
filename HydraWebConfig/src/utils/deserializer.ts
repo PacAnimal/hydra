@@ -190,6 +190,8 @@ function parseProfile(obj: Record<string, unknown>): HydraProfile {
     allowSystemSleep: strictBool(obj.allowSystemSleep),
     clipboardSync: coerceClipboardSync(obj.clipboardSync),
     hideCursor: strictBool(obj.hideCursor),
+    invertScrollX: strictBool(obj.invertScrollX),
+    invertScrollY: strictBool(obj.invertScrollY),
     maxMouseHz: optNumber(obj.maxMouseHz),
     // null, like a missing key, leaves the keypad alone
     modifierNumLock: strictBool(obj.modifierNumLock),

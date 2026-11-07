@@ -205,7 +205,9 @@ public class GuidedConfigDocumentTests
             "relativeMouseScale": 0.75,
             "deadCorners": 12,
             "maxMouseHz": 250,
-            "modifierNumLock": false
+            "modifierNumLock": false,
+            "invertScrollX": true,
+            "invertScrollY": true
           }]
         }
         """;
@@ -396,6 +398,8 @@ public class GuidedConfigDocumentTests
             Assert.That(profile.DeadCorners, Is.EqualTo(12));
             Assert.That(profile.MaxMouseHz, Is.EqualTo(250));
             Assert.That(profile.ModifierNumLock, Is.False);
+            Assert.That(profile.InvertScrollX, Is.True);
+            Assert.That(profile.InvertScrollY, Is.True);
         }
     }
 
@@ -473,7 +477,9 @@ public class GuidedConfigDocumentTests
         [GuidedFields.RelativeMouseScale] = "0.75",
         [GuidedFields.DeadCorners] = "12",
         [GuidedFields.MaxMouseHz] = "250",
-        [GuidedFields.ModifierNumLock] = "off"
+        [GuidedFields.ModifierNumLock] = "off",
+        [GuidedFields.InvertScrollX] = GuidedValues.On,
+        [GuidedFields.InvertScrollY] = GuidedValues.On
     };
 
     private static IEnumerable<string> KeysOf(JsonNode node) => node.AsObject().Select(p => p.Key);

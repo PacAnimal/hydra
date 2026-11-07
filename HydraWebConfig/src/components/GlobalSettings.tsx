@@ -112,6 +112,26 @@ export function GlobalSettings({ config, serverError, onChange }: Props) {
             />
             Allow System Sleep
           </label>
+          {!isMaster && (
+            <>
+              <label className="checkbox-label" title="Flip horizontal scrolling from every master">
+                <input
+                  type="checkbox"
+                  checked={config.invertScrollX === true}
+                  onChange={e => onChange({ invertScrollX: e.target.checked ? true : undefined })}
+                />
+                Invert Scroll X
+              </label>
+              <label className="checkbox-label" title="Flip vertical scrolling from every master">
+                <input
+                  type="checkbox"
+                  checked={config.invertScrollY === true}
+                  onChange={e => onChange({ invertScrollY: e.target.checked ? true : undefined })}
+                />
+                Invert Scroll Y
+              </label>
+            </>
+          )}
           {isMaster && (
             <>
               <label className="checkbox-label" title="Hide the master's local cursor while it is inactive or routed remotely">

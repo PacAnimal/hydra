@@ -260,36 +260,9 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
 
         if (type == NativeMethods.KCGEventScrollWheel)
         {
-            var isContinuous = NativeMethods.CGEventGetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventIsContinuous);
-            short wireX, wireY;
-            if (isContinuous != 0)
-            {
-                // trackpad / hi-res continuous: use 16.16 fixed-point deltas (preserves smooth granularity).
-                // one line is one notch on the wire
-                var fpDy = NativeMethods.CGEventGetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventFixedPtDeltaAxis1);
-                var fpDx = NativeMethods.CGEventGetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventFixedPtDeltaAxis2);
-                wireX = (short)Math.Clamp(fpDx * MouseScrollEvent.Notch >> 16, short.MinValue, short.MaxValue);
-                wireY = (short)Math.Clamp(fpDy * MouseScrollEvent.Notch >> 16, short.MinValue, short.MaxValue);
-            }
-            else
-            {
-                var dy = NativeMethods.CGEventGetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventDeltaAxis1);
-                var dx = NativeMethods.CGEventGetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventDeltaAxis2);
-                if (profile.AccelerateMouseWheel)
-                {
-                    // forward macOS line-delta acceleration as-is
-                    wireX = (short)Math.Clamp(dx * MouseScrollEvent.Notch, short.MinValue, short.MaxValue);
-                    wireY = (short)Math.Clamp(dy * MouseScrollEvent.Notch, short.MinValue, short.MaxValue);
-                }
-                else
-                {
-                    // one notch per event — discard macOS acceleration, let slave apply its own
-                    wireX = (short)(Math.Sign(dx) * MouseScrollEvent.Notch);
-                    wireY = (short)(Math.Sign(dy) * MouseScrollEvent.Notch);
-                }
-            }
-            if (wireX != 0 || wireY != 0)
-                _onMouseScroll?.Invoke(new MouseScrollEvent(wireX, wireY));
+            var scroll = WireScroll(eventRef, profile.AccelerateMouseWheel);
+            if (scroll.XDelta != 0 || scroll.YDelta != 0)
+                _onMouseScroll?.Invoke(scroll);
             return IsOnVirtualScreen ? nint.Zero : eventRef;
         }
 
@@ -316,6 +289,39 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
 
         // swallow all other events while on virtual screen (synergy: return nullptr when off-screen)
         return IsOnVirtualScreen ? nint.Zero : eventRef;
+    }
+
+    // a scroll event as it crosses the wire: one line is one notch
+    internal static MouseScrollEvent WireScroll(nint eventRef, bool accelerate)
+    {
+        var isContinuous = NativeMethods.CGEventGetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventIsContinuous);
+        short wireX, wireY;
+        if (isContinuous != 0)
+        {
+            // trackpad / hi-res continuous: use 16.16 fixed-point deltas (preserves smooth granularity)
+            var fpDy = NativeMethods.CGEventGetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventFixedPtDeltaAxis1);
+            var fpDx = NativeMethods.CGEventGetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventFixedPtDeltaAxis2);
+            wireX = MouseScrollEvent.FromFixedLines(fpDx);
+            wireY = MouseScrollEvent.FromFixedLines(fpDy);
+        }
+        else
+        {
+            var dy = NativeMethods.CGEventGetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventDeltaAxis1);
+            var dx = NativeMethods.CGEventGetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventDeltaAxis2);
+            if (accelerate)
+            {
+                // forward macOS line-delta acceleration as-is
+                wireX = (short)Math.Clamp(dx * MouseScrollEvent.Notch, short.MinValue, short.MaxValue);
+                wireY = (short)Math.Clamp(dy * MouseScrollEvent.Notch, short.MinValue, short.MaxValue);
+            }
+            else
+            {
+                // one notch per event — discard macOS acceleration, let slave apply its own
+                wireX = (short)(Math.Sign(dx) * MouseScrollEvent.Notch);
+                wireY = (short)(Math.Sign(dy) * MouseScrollEvent.Notch);
+            }
+        }
+        return new MouseScrollEvent(MouseScrollEvent.MacHorizontal(wireX), wireY);
     }
 
     // A key goes where its press went (KeyFates). A modifier follows the screen alone: its flags come from HID state a

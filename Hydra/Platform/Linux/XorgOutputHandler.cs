@@ -20,6 +20,7 @@ public sealed class XorgOutputHandler : IPlatformOutput, ICursor
     private readonly Lock _lock = new();                 // protects _tempBindings, _unusedKeycodes, _naturalHeld
     private readonly ILogger<XorgOutputHandler> _log;
     private readonly ShiftedKeypad _shiftedKeypad = new();
+    private readonly ScrollAccumulator _scrollNotches = new();
     private readonly NumLockRestore _numLockRestore = new();
     private int _keysymsPerKeycode = 4;  // actual server value; overridden in FindUnusedKeycodes
     private ulong[] _emptyCharSlots = [0UL, 0UL, 0UL, 0UL];  // pre-allocated; sized after FindUnusedKeycodes
@@ -144,8 +145,9 @@ public sealed class XorgOutputHandler : IPlatformOutput, ICursor
     public void InjectMouseScroll(MouseScrollMessage msg)
     {
         // x11 scroll: buttons 4=up, 5=down, 6=left, 7=right, a press per notch
-        InjectScrollAxis(4u, 5u, msg.YDelta / MouseScrollEvent.Notch);
-        InjectScrollAxis(7u, 6u, msg.XDelta / MouseScrollEvent.Notch);
+        var notches = _scrollNotches.Take(msg.XDelta, msg.YDelta);
+        InjectScrollAxis(4u, 5u, notches.Y);
+        InjectScrollAxis(7u, 6u, notches.X);
         _ = NativeMethods.XFlush(_display);
     }
 
@@ -286,8 +288,9 @@ public sealed class XorgOutputHandler : IPlatformOutput, ICursor
         _pendingLockedMods = lockedMods;
     }
 
-    public void RestoreLocks()
+    public void EndVisit()
     {
+        _scrollNotches.Reset();
         if (_numLockRestore.Take() is not { } before || LockedMods() is not { } lockedMods) return;
         SyncLockKey(XorgVirtualKey.NumLock, NativeMethods.Mod2Mask, before, ref lockedMods);
         _pendingLockedMods = lockedMods;

@@ -250,13 +250,13 @@ public class CoalescingOutputWrapperTests
     private void Drain() => _wrapper.DrainPending();
 
     [Test]
-    public void RestoreLocks_RunsAfterTheKeysQueuedAheadOfIt()
+    public void EndVisit_RunsAfterTheKeysQueuedAheadOfIt()
     {
         var up = new KeyEventMessage(KeyEventType.KeyUp, KeyModifiers.None, null, SpecialKey.KP_4);
         _wrapper.InjectKey(up);
-        _wrapper.RestoreLocks();
+        _wrapper.EndVisit();
         Drain();
-        Assert.That(_inner.Events, Is.EqualTo(new object[] { new KeyEvent(up), new RestoreLocksEvent() }));
+        Assert.That(_inner.Events, Is.EqualTo(new object[] { new KeyEvent(up), new EndVisitEvent() }));
     }
 
     // -- recording infrastructure --
@@ -270,7 +270,7 @@ public class CoalescingOutputWrapperTests
         public void InjectKey(KeyEventMessage msg) { lock (Events) Events.Add(new KeyEvent(msg)); }
         public void InjectMouseButton(MouseButtonMessage msg) { lock (Events) Events.Add(new ButtonEvent()); }
         public void InjectMouseScroll(MouseScrollMessage msg) { lock (Events) Events.Add(new ScrollEvent()); }
-        public void RestoreLocks() { lock (Events) Events.Add(new RestoreLocksEvent()); }
+        public void EndVisit() { lock (Events) Events.Add(new EndVisitEvent()); }
         public void Dispose() { }
     }
 
@@ -317,5 +317,5 @@ public class CoalescingOutputWrapperTests
     private record KeyEvent(KeyEventMessage Msg);
     private record ButtonEvent;
     private record ScrollEvent;
-    private record RestoreLocksEvent;
+    private record EndVisitEvent;
 }

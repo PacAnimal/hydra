@@ -31,6 +31,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
     private double _lastSingleClickY;
     private bool _cursorHidden;
     private bool _mousePositionInitialized;
+    private readonly ScrollAccumulator _scrollLines = new();
 
     // accumulated modifier state — updated on each modifier keydown/up
     private ulong _modifierFlags;        // generic CGEventFlag masks (e.g. kCGEventFlagMaskCommand)
@@ -277,20 +278,28 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
         NativeHelpers.PostAndRelease(eventRef);
     }
 
+    public void EndVisit() => _scrollLines.Reset();
+
     public void InjectMouseScroll(MouseScrollMessage msg)
     {
-        if (msg.YDelta == 0 && msg.XDelta == 0) return;
+        NativeHelpers.PostAndRelease(CreateMouseScrollEvent(msg, _scrollLines, _modifierFlags));
+    }
 
-        // one notch is one line: whole lines for the event constructor (kCGScrollEventUnitLine = 1)
-        var eventRef = NativeMethods.CGEventCreateScrollWheelEvent(nint.Zero, 1, 2, msg.YDelta / MouseScrollEvent.Notch, msg.XDelta / MouseScrollEvent.Notch);
-        if (eventRef == nint.Zero) return;
+    // the caller releases the event. one notch is one line: whole lines for the event constructor (kCGScrollEventUnitLine = 1)
+    internal static nint CreateMouseScrollEvent(MouseScrollMessage msg, ScrollAccumulator scrollLines, ulong flags)
+    {
+        if (msg.YDelta == 0 && msg.XDelta == 0) return nint.Zero;
 
-        // set 16.16 fixed-point line deltas for sub-line precision (reverses the input handler's conversion)
-        var yFixed = (long)msg.YDelta * 65536 / MouseScrollEvent.Notch;
-        var xFixed = (long)msg.XDelta * 65536 / MouseScrollEvent.Notch;
-        NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventFixedPtDeltaAxis1, yFixed);
-        NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventFixedPtDeltaAxis2, xFixed);
-        NativeHelpers.PostAndRelease(eventRef);
+        var x = MouseScrollEvent.MacHorizontal(msg.XDelta);
+        var lines = scrollLines.Take(x, msg.YDelta);
+        var eventRef = NativeMethods.CGEventCreateScrollWheelEvent2(nint.Zero, 1, 2, lines.Y, lines.X, 0);
+        if (eventRef == nint.Zero) return nint.Zero;
+
+        // 16.16 fixed-point line deltas for sub-line precision
+        NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventFixedPtDeltaAxis1, MouseScrollEvent.ToFixedLines(msg.YDelta));
+        NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventFixedPtDeltaAxis2, MouseScrollEvent.ToFixedLines(x));
+        NativeMethods.CGEventSetFlags(eventRef, flags);
+        return eventRef;
     }
 
     // through IOHIDPostEvent where it can, else as a CG event

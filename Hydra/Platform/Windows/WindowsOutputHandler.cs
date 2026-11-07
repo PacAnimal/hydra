@@ -64,7 +64,7 @@ public sealed class WindowsOutputHandler(ILogger<WindowsOutputHandler> log, IScr
         _dispatcher.Dispatch(new InjectMouseScrollCommand(msg));
     }
 
-    public void RestoreLocks()
+    public void EndVisit()
     {
         _dispatcher.Dispatch(new RestoreLocksCommand());
     }

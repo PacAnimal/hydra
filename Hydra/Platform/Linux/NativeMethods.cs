@@ -372,10 +372,12 @@ internal static partial class NativeMethods
 
     private const string XRandR = "libXrandr.so.2";
 
-    // returns nint (XRRScreenResources*) or nint.Zero
+    // returns nint (XRRScreenResources*) or nint.Zero. The server's current state, no probe of the outputs:
+    // XRRGetScreenResources probes every connector, which blocks the whole server (0.85 s for a disconnected
+    // DisplayPort on i915). The server updates this state itself on hotplug.
     [LibraryImport(XRandR)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    internal static partial nint XRRGetScreenResources(nint display, nint window);
+    internal static partial nint XRRGetScreenResourcesCurrent(nint display, nint window);
 
     // returns nint (XRROutputInfo*) or nint.Zero
     [LibraryImport(XRandR)]

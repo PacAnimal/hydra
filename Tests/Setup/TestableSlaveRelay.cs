@@ -47,11 +47,13 @@ public sealed class TestableSlaveRelay : SlaveRelayConnection
         ILogger<RelayConnection>? log = null,
         TimeProvider? clock = null,
         ClipboardSyncMode clipboardSync = ClipboardSyncMode.Hydra,
-        IWindowFocus? windowFocus = null)
+        IWindowFocus? windowFocus = null,
+        bool invertScrollX = false,
+        bool invertScrollY = false)
         : this(MakeShared(worldState, screenSaverSync, trackerClock), clipboard, cursorHider, screenSaverSync,
             dormancy ?? new DormancyState(NullLogger<DormancyState>.Instance), screens ?? new FakeScreenDetector(), new NullPlatformOutput(),
             selectionDetector ?? new NullFileSelectionDetector(), osd ?? new NullOsdNotification(), fileTransfer: fileTransfer, log: log, clock: clock,
-            clipboardSync: clipboardSync, windowFocus: windowFocus)
+            clipboardSync: clipboardSync, windowFocus: windowFocus, invertScrollX: invertScrollX, invertScrollY: invertScrollY)
     { }
 
     // ActivityTracker and SlaveRelayConnection must share the same WorldState — chaining lets us build it once
@@ -70,9 +72,18 @@ public sealed class TestableSlaveRelay : SlaveRelayConnection
         ILogger<RelayConnection>? log = null,
         TimeProvider? clock = null,
         ClipboardSyncMode clipboardSync = ClipboardSyncMode.Hydra,
-        IWindowFocus? windowFocus = null)
+        IWindowFocus? windowFocus = null,
+        bool invertScrollX = false,
+        bool invertScrollY = false)
         : base(
-            TransitionTestHelper.Profile("slave", new HydraConfig { Mode = Mode.Slave, NetworkConfig = networkConfig, ClipboardSync = clipboardSync }),
+            TransitionTestHelper.Profile("slave", new HydraConfig
+            {
+                Mode = Mode.Slave,
+                NetworkConfig = networkConfig,
+                ClipboardSync = clipboardSync,
+                InvertScrollX = invertScrollX,
+                InvertScrollY = invertScrollY
+            }),
             log ?? NullLogger<RelayConnection>.Instance,
             output,
             screens,

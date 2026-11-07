@@ -39,7 +39,7 @@ internal static partial class NativeMethods
     internal const int KCGMouseEventDeltaY = 5;
     internal const int KCGMouseEventButtonNumber = 3;
     internal const int KCGScrollWheelEventDeltaAxis1 = 11;        // integer line delta, vertical (positive = up)
-    internal const int KCGScrollWheelEventDeltaAxis2 = 12;        // integer line delta, horizontal (positive = right)
+    internal const int KCGScrollWheelEventDeltaAxis2 = 12;        // integer line delta, horizontal (positive = left, opposite the wire)
     internal const int KCGScrollWheelEventFixedPtDeltaAxis1 = 93; // 16.16 fixed-point line delta, vertical
     internal const int KCGScrollWheelEventFixedPtDeltaAxis2 = 94; // 16.16 fixed-point line delta, horizontal
     internal const int KCGScrollWheelEventIsContinuous = 88;      // 0 = discrete mouse wheel, 1 = continuous (trackpad)
@@ -226,9 +226,10 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial nint CGEventCreateMouseEvent(nint source, int mouseType, CGPoint mouseCursorPosition, int mouseButton);
 
+    // never the variadic CGEventCreateScrollWheelEvent: Apple's arm64 passes variadic arguments on the stack, which a P/Invoke can't
     [LibraryImport(CoreGraphics)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    internal static partial nint CGEventCreateScrollWheelEvent(nint source, int units, uint wheelCount, int wheel1, int wheel2);
+    internal static partial nint CGEventCreateScrollWheelEvent2(nint source, int units, uint wheelCount, int wheel1, int wheel2, int wheel3);
 
     [LibraryImport(CoreGraphics)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]

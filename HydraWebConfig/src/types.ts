@@ -105,6 +105,9 @@ export interface HydraProfile {
   accelerateMouseWheel?: boolean
   allowSystemSleep?: boolean
   clipboardSync?: ClipboardSyncMode
+  // slave only: flip a master's scroll on that axis
+  invertScrollX?: boolean
+  invertScrollY?: boolean
   // master only
   hideCursor?: boolean
   maxMouseHz?: number

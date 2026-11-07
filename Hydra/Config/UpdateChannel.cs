@@ -4,6 +4,6 @@ public enum UpdateChannel
 {
     // the latest full release
     Stable,
-    // the newest release of any kind, including prereleases built from the edge branch
+    // the newest prerelease built from the edge branch, never a full release
     Edge,
 }

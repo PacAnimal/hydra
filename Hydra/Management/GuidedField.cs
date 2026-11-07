@@ -45,7 +45,7 @@ internal static class GuidedFields
         "Allow Hydra's built-in updater to check for and apply releases.")
     { Fallback = GuidedValues.On };
     internal static readonly GuidedField UpdateChannel = new(GuidedSection.Global, 8, 0, null, "updateChannel", GuidedFieldKind.Choice, "Update Channel",
-        "Stable takes full releases only; Edge also takes prereleases built from the edge branch.")
+        "Stable takes full releases only; Edge takes only prereleases built from the edge branch.")
     {
         DefaultHint = nameof(Config.UpdateChannel.Stable),
         ChoiceEnum = typeof(UpdateChannel)
@@ -131,12 +131,19 @@ internal static class GuidedFields
     internal static readonly GuidedField ModifierNumLock = new(GuidedSection.Behaviour, 12, 0, null, "modifierNumLock", GuidedFieldKind.OptionalToggle,
         "Keypad NumLock", "Master: NumLock for a keypad key pressed with Super, Ctrl or Alt. on = digits, off = navigation, empty = as the master's NumLock says.")
     { DefaultHint = "as pressed" };
+    internal static readonly GuidedField InvertScrollX = new(GuidedSection.Behaviour, 14, 0, null, "invertScrollX", GuidedFieldKind.Toggle,
+        "Invert Scroll X", "Slave: flip horizontal scrolling from every master.")
+    { Fallback = GuidedValues.Off };
+    internal static readonly GuidedField InvertScrollY = new(GuidedSection.Behaviour, 16, 0, null, "invertScrollY", GuidedFieldKind.Toggle,
+        "Invert Scroll Y", "Slave: flip vertical scrolling from every master.")
+    { Fallback = GuidedValues.Off };
     internal static readonly IReadOnlyList<GuidedField> All =
     [
         Name, LogLevel, ProfileOverride, AutoUpdate, UpdateChannel, DebugShield, DebugMouse,
         ProfileName, Mode, Ssid, ScreenCount, ClipboardSync, IsPluggedIn, Address, GatewayMac, Wired, MouseScale, RelativeMouseScale, DeadCorners, MaxMouseHz,
         NetworkConfig, EmbeddedServer, EmbeddedPassword, EmbeddedPort, EmbeddedServerPassword,
-        HideCursor, RemoteOnly, SyncScreensaver, ScreenLockPropagation, AccelerateMouseWheel, AllowSystemSleep, ModifierNumLock
+        HideCursor, RemoteOnly, SyncScreensaver, ScreenLockPropagation, AccelerateMouseWheel, AllowSystemSleep, ModifierNumLock,
+        InvertScrollX, InvertScrollY
     ];
 
     internal static readonly IReadOnlyList<GuidedField> Root = [.. All.Where(f => f.IsRoot)];

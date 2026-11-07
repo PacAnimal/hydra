@@ -27,6 +27,28 @@ public class HydraConfigValidationTests
         Assert.That(HydraConfig.ParseAndValidate(json)[0].ModifierNumLock, Is.EqualTo(expected));
     }
 
+    // ─── invertScrollX / invertScrollY ────────────────────────────────────────
+
+    [TestCase("invertScrollX")]
+    [TestCase("invertScrollY")]
+    public void Validate_InvertScroll_OnMaster_Throws(string key)
+    {
+        var json = AsFile($$"""[{"mode":"Master","embeddedStyx":{"server":"https://localhost:5000","password":"pw"},"{{key}}":true}]""");
+        var ex = Assert.Throws<InvalidOperationException>(() => HydraConfig.ParseAndValidate(json));
+        Assert.That(ex!.Message, Does.Contain($"{key} is slave-only"));
+    }
+
+    [TestCase("", false, false)]
+    [TestCase(",\"invertScrollX\":true", true, false)]
+    [TestCase(",\"invertScrollY\":true", false, true)]
+    [TestCase(",\"invertScrollX\":true,\"invertScrollY\":true", true, true)]
+    public void InvertScroll_OnSlave_IsReadAsGiven_OffByDefault(string fields, bool expectedX, bool expectedY)
+    {
+        var json = AsFile($$"""[{"mode":"Slave","embeddedStyx":{"server":"https://localhost:5000","password":"pw"}{{fields}}}]""");
+        var profile = HydraConfig.ParseAndValidate(json)[0];
+        Assert.That(new[] { profile.InvertScrollX, profile.InvertScrollY }, Is.EqualTo([expectedX, expectedY]));
+    }
+
     // ─── maxMouseHz ───────────────────────────────────────────────────────────
 
     [Test]
