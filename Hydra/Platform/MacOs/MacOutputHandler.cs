@@ -280,20 +280,22 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
 
     public void InjectMouseScroll(MouseScrollMessage msg)
     {
-        NativeHelpers.PostAndRelease(CreateMouseScrollEvent(msg, _scrollLines.Take(msg.XDelta, msg.YDelta), _modifierFlags));
+        NativeHelpers.PostAndRelease(CreateMouseScrollEvent(msg, _scrollLines, _modifierFlags));
     }
 
     // the caller releases the event. one notch is one line: whole lines for the event constructor (kCGScrollEventUnitLine = 1)
-    internal static nint CreateMouseScrollEvent(MouseScrollMessage msg, ScrollNotches lines, ulong flags)
+    internal static nint CreateMouseScrollEvent(MouseScrollMessage msg, ScrollAccumulator scrollLines, ulong flags)
     {
         if (msg.YDelta == 0 && msg.XDelta == 0) return nint.Zero;
 
+        var x = MouseScrollEvent.MacHorizontal(msg.XDelta);
+        var lines = scrollLines.Take(x, msg.YDelta);
         var eventRef = NativeMethods.CGEventCreateScrollWheelEvent2(nint.Zero, 1, 2, lines.Y, lines.X, 0);
         if (eventRef == nint.Zero) return nint.Zero;
 
         // 16.16 fixed-point line deltas for sub-line precision
         NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventFixedPtDeltaAxis1, MouseScrollEvent.ToFixedLines(msg.YDelta));
-        NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventFixedPtDeltaAxis2, MouseScrollEvent.ToFixedLines(msg.XDelta));
+        NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventFixedPtDeltaAxis2, MouseScrollEvent.ToFixedLines(x));
         NativeMethods.CGEventSetFlags(eventRef, flags);
         return eventRef;
     }

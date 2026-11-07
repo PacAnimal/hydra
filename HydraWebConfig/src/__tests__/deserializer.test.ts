@@ -250,6 +250,18 @@ describe('deserialize', () => {
     })
   })
 
+  describe('invertScrollX and invertScrollY', () => {
+    it('read true back', () => {
+      const p = deserialize(asFile('[{"mode":"Slave","invertScrollX":true,"invertScrollY":true}]')).profiles[0]
+      expect([p.invertScrollX, p.invertScrollY]).toEqual([true, true])
+    })
+
+    it('read a missing key as unset', () => {
+      const p = deserialize(asFile('[{"mode":"Slave"}]')).profiles[0]
+      expect([p.invertScrollX, p.invertScrollY]).toEqual([undefined, undefined])
+    })
+  })
+
   describe('the other profile settings Hydra has', () => {
     it('reads them back, so loading and saving a file keeps them', () => {
       const p = deserialize(asFile(

@@ -42,4 +42,27 @@ public class MouseScrollEventTests
     {
         Assert.That(MouseScrollEvent.FromFixedLines(MouseScrollEvent.ToFixedLines(delta)), Is.EqualTo(delta));
     }
+
+    [TestCase((short)120, (short)-120)]
+    [TestCase((short)-30, (short)30)]
+    [TestCase((short)0, (short)0)]
+    [TestCase(short.MaxValue, (short)-short.MaxValue)]
+    [TestCase(short.MinValue, short.MaxValue)]
+    public void Invert_FlipsTheSign_ClampingTheOneWithoutAMirror(short delta, short expected)
+    {
+        Assert.That(MouseScrollEvent.Invert(delta), Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void MacHorizontal_RunsOppositeTheWire()
+    {
+        // the wire's right (Windows' WM_MOUSEHWHEEL, X11's button 7) is macOS's left
+        Assert.That(MouseScrollEvent.MacHorizontal(120), Is.EqualTo(-120));
+    }
+
+    [Test]
+    public void MacHorizontal_BothWays_LeavesMacToMacUnchanged()
+    {
+        Assert.That(MouseScrollEvent.MacHorizontal(MouseScrollEvent.MacHorizontal(-90)), Is.EqualTo(-90));
+    }
 }

@@ -309,6 +309,23 @@ describe('serialize', () => {
     })
   })
 
+  describe('invertScrollX and invertScrollY', () => {
+    it('are left out when off', () => {
+      const json = JSON.parse(serialize(state({ mode: 'Slave', invertScrollX: false })))
+      expect(['invertScrollX' in json.profiles[0], 'invertScrollY' in json.profiles[0]]).toEqual([false, false])
+    })
+
+    it('write true on a slave', () => {
+      const p = JSON.parse(serialize(state({ mode: 'Slave', invertScrollX: true, invertScrollY: true }))).profiles[0]
+      expect([p.invertScrollX, p.invertScrollY]).toEqual([true, true])
+    })
+
+    it('are never written on a master, which Hydra would refuse', () => {
+      const p = JSON.parse(serialize(state({ mode: 'Master', invertScrollX: true, invertScrollY: true }))).profiles[0]
+      expect(['invertScrollX' in p, 'invertScrollY' in p]).toEqual([false, false])
+    })
+  })
+
   describe('the other profile settings Hydra has', () => {
     it('writes hideCursor and maxMouseHz on a master only', () => {
       const master = JSON.parse(serialize(state({ mode: 'Master', hideCursor: true, maxMouseHz: 250 }))).profiles[0]

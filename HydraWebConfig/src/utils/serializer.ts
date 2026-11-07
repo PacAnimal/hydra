@@ -103,10 +103,12 @@ function serializeProfile(p: HydraProfile): Record<string, unknown> {
     }
   }
 
-  // mouseScale, relativeMouseScale, and screenDefinitions are slave-only
+  // mouseScale, relativeMouseScale, invertScrollX/Y, and screenDefinitions are slave-only
   if (p.mode !== 'Master') {
     if (p.mouseScale !== undefined) out.mouseScale = p.mouseScale
     if (p.relativeMouseScale !== undefined) out.relativeMouseScale = p.relativeMouseScale
+    if (p.invertScrollX === true) out.invertScrollX = true
+    if (p.invertScrollY === true) out.invertScrollY = true
     const screens = (p.screenDefinitions ?? []).filter(
       s => s.displayName || s.outputName || s.platformId
     )

@@ -347,7 +347,7 @@ public class SlaveRelayConnection : RelayConnection
                     break;
                 }
             case MessageKind.MouseScroll:
-                HandleInputMessage<MouseScrollMessage>(body, sourceHost, _output.InjectMouseScroll);
+                HandleInputMessage<MouseScrollMessage>(body, sourceHost, scroll => _output.InjectMouseScroll(Inverted(scroll)));
                 break;
             case MessageKind.EnterScreen:
                 {
@@ -695,6 +695,11 @@ public class SlaveRelayConnection : RelayConnection
         ShowCursorFor(sourceHost, mouse: true);
         handler(msg);
     }
+
+    // the profile's invertScrollX/invertScrollY, on whatever platform injects it
+    private MouseScrollMessage Inverted(MouseScrollMessage scroll) => new(
+        Profile.InvertScrollX ? MouseScrollEvent.Invert(scroll.XDelta) : scroll.XDelta,
+        Profile.InvertScrollY ? MouseScrollEvent.Invert(scroll.YDelta) : scroll.YDelta);
 
     // input from a master on screen shows the cursor; after a monitor switch, only its mouse does (_hiddenUntilMouse)
     private void ShowCursorFor(string sourceHost, bool mouse)
