@@ -46,7 +46,7 @@ public class XorgNumLockRestoreTests
         Tap(SpecialKey.KP_Home);
         Assert.That(NumLockOn(), Is.False, "pre-condition: synced off for the keypad's Home");
 
-        _output.RestoreLocks();
+        _output.EndVisit();
 
         Assert.That(NumLockOn(), Is.True);
     }
@@ -56,14 +56,14 @@ public class XorgNumLockRestoreTests
     {
         SetNumLockLocally(true);
         Tap(SpecialKey.KP_Home);
-        _output.RestoreLocks();
+        _output.EndVisit();
         SetNumLockLocally(false);
         _now += 1000;
 
         _output.InjectKey(new KeyEventMessage(KeyEventType.KeyDown, KeyModifiers.None, null, SpecialKey.KP_Home));
         var underNumLock = NumLockOn();
         _output.InjectKey(new KeyEventMessage(KeyEventType.KeyUp, KeyModifiers.None, null, SpecialKey.KP_Home));
-        _output.RestoreLocks();
+        _output.EndVisit();
 
         using (Assert.EnterMultipleScope())
         {

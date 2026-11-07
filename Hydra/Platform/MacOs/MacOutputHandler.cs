@@ -278,6 +278,8 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
         NativeHelpers.PostAndRelease(eventRef);
     }
 
+    public void EndVisit() => _scrollLines.Reset();
+
     public void InjectMouseScroll(MouseScrollMessage msg)
     {
         NativeHelpers.PostAndRelease(CreateMouseScrollEvent(msg, _scrollLines, _modifierFlags));

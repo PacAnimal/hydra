@@ -21,4 +21,14 @@ public class ScrollAccumulatorTests
 
         Assert.That(scroll.Take(60, -30), Is.EqualTo(new ScrollNotches(1, -1)));
     }
+
+    [Test]
+    public void Reset_DropsBothAxesRemainders()
+    {
+        var scroll = new ScrollAccumulator();
+        scroll.Take(60, -90);
+        scroll.Reset();
+
+        Assert.That(scroll.Take(60, -30), Is.EqualTo(new ScrollNotches(0, 0)));
+    }
 }

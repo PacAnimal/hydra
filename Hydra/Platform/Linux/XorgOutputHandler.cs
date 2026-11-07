@@ -288,8 +288,9 @@ public sealed class XorgOutputHandler : IPlatformOutput, ICursor
         _pendingLockedMods = lockedMods;
     }
 
-    public void RestoreLocks()
+    public void EndVisit()
     {
+        _scrollNotches.Reset();
         if (_numLockRestore.Take() is not { } before || LockedMods() is not { } lockedMods) return;
         SyncLockKey(XorgVirtualKey.NumLock, NativeMethods.Mod2Mask, before, ref lockedMods);
         _pendingLockedMods = lockedMods;

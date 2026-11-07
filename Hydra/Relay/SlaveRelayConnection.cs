@@ -828,7 +828,7 @@ public class SlaveRelayConnection : RelayConnection
         foreach (var button in _heldButtons)
             _output.InjectMouseButton(new MouseButtonMessage(button, false));
         _heldButtons.Clear();
-        _output.RestoreLocks();
+        _output.EndVisit();
     }
 
     private async Task HandleMasterConfig(string masterHost, ReadOnlyMemory<byte> body)

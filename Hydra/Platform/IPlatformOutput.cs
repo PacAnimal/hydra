@@ -9,8 +9,8 @@ public interface IPlatformOutput : IDisposable
     void InjectKey(KeyEventMessage msg);
     void InjectMouseButton(MouseButtonMessage msg);
     void InjectMouseScroll(MouseScrollMessage msg);
-    // the visit is over: give back any lock state synced for it (NumLockRestore)
-    void RestoreLocks() { }
+    // the visit is over: give back any lock state synced for it (NumLockRestore), drop a scroll's leftover fraction of a notch
+    void EndVisit() { }
     bool IsAccessibilityTrusted() => true;
     Task WaitForAccessibilityTrusted(CancellationToken cancel) => Task.CompletedTask;
 }
