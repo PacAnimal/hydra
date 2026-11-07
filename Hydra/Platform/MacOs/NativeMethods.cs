@@ -228,7 +228,7 @@ internal static partial class NativeMethods
 
     [LibraryImport(CoreGraphics)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    internal static partial nint CGEventCreateScrollWheelEvent(nint source, int units, uint wheelCount, int wheel1, int wheel2);
+    internal static partial nint CGEventCreateScrollWheelEvent2(nint source, int units, uint wheelCount, int wheel1, int wheel2, int wheel3);
 
     [LibraryImport(CoreGraphics)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
