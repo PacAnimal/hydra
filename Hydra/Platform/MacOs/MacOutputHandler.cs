@@ -279,18 +279,32 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
 
     public void InjectMouseScroll(MouseScrollMessage msg)
     {
-        if (msg.YDelta == 0 && msg.XDelta == 0) return;
+        NativeHelpers.PostAndRelease(CreateMouseScrollEvent(msg));
+    }
 
-        // one notch is one line: whole lines for the event constructor (kCGScrollEventUnitLine = 1)
-        var eventRef = NativeMethods.CGEventCreateScrollWheelEvent(nint.Zero, 1, 2, msg.YDelta / MouseScrollEvent.Notch, msg.XDelta / MouseScrollEvent.Notch);
-        if (eventRef == nint.Zero) return;
+    internal static nint CreateMouseScrollEvent(MouseScrollMessage msg)
+    {
+        if (msg.YDelta == 0 && msg.XDelta == 0) return nint.Zero;
 
-        // set 16.16 fixed-point line deltas for sub-line precision (reverses the input handler's conversion)
+        // Use the fixed-argument API. The variadic version uses a different calling convention on Apple Silicon and corrupts horizontal deltas.
+        var eventRef = NativeMethods.CGEventCreateScrollWheelEvent2(
+            nint.Zero,
+            1,
+            2,
+            msg.YDelta / MouseScrollEvent.Notch,
+            msg.XDelta / MouseScrollEvent.Notch,
+            0);
+
+        if (eventRef == nint.Zero) return nint.Zero;
+
+        // Preserve fractional scroll precision using 16.16 fixed-point deltas.
         var yFixed = (long)msg.YDelta * 65536 / MouseScrollEvent.Notch;
         var xFixed = (long)msg.XDelta * 65536 / MouseScrollEvent.Notch;
+
         NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventFixedPtDeltaAxis1, yFixed);
         NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventFixedPtDeltaAxis2, xFixed);
-        NativeHelpers.PostAndRelease(eventRef);
+
+        return eventRef;
     }
 
     // through IOHIDPostEvent where it can, else as a CG event
