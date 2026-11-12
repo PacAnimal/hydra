@@ -133,6 +133,9 @@ internal static partial class NativeMethods
 
     // poll() — block until fd is readable or timeoutMs elapses (timeout -1 = block forever)
     internal const short POLLIN = 0x0001;
+    internal const short POLLERR = 0x0008;
+    internal const short POLLHUP = 0x0010;
+    internal const short POLLNVAL = 0x0020;
 
     [LibraryImport("libc", EntryPoint = "poll")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]

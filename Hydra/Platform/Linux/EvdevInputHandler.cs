@@ -10,8 +10,16 @@ namespace Hydra.Platform.Linux;
 // cursor/warp are no-ops — remote-only mode uses deltas, not absolute positions.
 internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatformInput
 {
-    // open devices in poll order; one node can be both keyboard and pointer (a wireless receiver usually is)
+    // how often the event loop looks for devices plugged in since it started
+    private const int RescanMs = 2000;
+
+    // open devices in poll order; one node can be both keyboard and pointer (a wireless receiver usually is).
+    // The event loop adds and drops devices as they come and go, while the router grabs them from its own
+    // thread, so every access goes through _devicesLock and readers take a snapshot.
     private readonly List<InputDeviceRole> _devices = [];
+    private readonly Lock _devicesLock = new();
+    // event nodes that are neither keyboard nor pointer, so a rescan does not reopen them every time
+    private readonly HashSet<string> _ignored = [];
     private volatile bool _running;
     private volatile bool _grabbed;
     private Thread? _thread;
@@ -23,7 +31,12 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
 
     // An open device and what it is for. Scale is the udev hwdb MOUSE_DPI delta multiplier, 1.0
     // when the device has no entry or is not a pointer at all.
-    private sealed record InputDeviceRole(int Fd, bool Keyboard, bool Pointer, double Scale);
+    private sealed record InputDeviceRole(string Path, int Fd, bool Keyboard, bool Pointer, double Scale);
+
+    private InputDeviceRole[] Devices()
+    {
+        lock (_devicesLock) return [.. _devices];
+    }
 
     public bool IsOnVirtualScreen
     {
@@ -74,14 +87,15 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
                 xkb.Layout, xkb.Model, xkb.Variant is null ? "" : $" variant: {xkb.Variant}");
 
         DiscoverDevices();
+        var found = Devices();
 
-        if (_devices.Count == 0)
+        if (found.Length == 0)
             throw new InvalidOperationException("No input devices found in /dev/input/. Check permissions (user may need to be in 'input' group).");
 
         if (log.IsEnabled(LogLevel.Information))
         {
-            var keyboards = _devices.Count(d => d.Keyboard);
-            var pointers = _devices.Count(d => d.Pointer);
+            var keyboards = found.Count(d => d.Keyboard);
+            var pointers = found.Count(d => d.Pointer);
             log.LogInformation("Found {K} {Keyboards}, {M} mouse/pointer {Devices}",
                 keyboards, Pluralize.Of(keyboards, "keyboard"), pointers, Pluralize.Of(pointers, "device"));
         }
@@ -104,24 +118,39 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
     private void ReleaseDevices()
     {
         StopEventTap();   // stop polling before closing the fds the loop polls
-        if (_devices.Count == 0) return;
+        var devices = Devices();
+        if (devices.Length == 0) return;
 
         if (_grabbed) SetGrab(false);
-        foreach (var device in _devices)
+        foreach (var device in devices)
             _ = EvdevNativeMethods.Close(device.Fd);
-        if (log.IsEnabled(LogLevel.Debug)) log.LogDebug("Released {Count} input {Devices}", _devices.Count, Pluralize.Of(_devices.Count, "device"));
-        _devices.Clear();
+        if (log.IsEnabled(LogLevel.Debug)) log.LogDebug("Released {Count} input {Devices}", devices.Length, Pluralize.Of(devices.Length, "device"));
+        lock (_devicesLock)
+        {
+            _devices.Clear();
+            _ignored.Clear();
+        }
         _grabbed = false;
     }
 
-    private void DiscoverDevices()
+    // opens every event node not already open (or known to be neither keyboard nor pointer) and returns the new
+    // devices; at start that is all of them, later the ones plugged in since
+    private List<InputDeviceRole> DiscoverDevices()
     {
-        var paths = Directory.GetFiles("/dev/input", "event*").OrderBy(p => p);
+        var added = new List<InputDeviceRole>();
+        var paths = Directory.GetFiles("/dev/input", "event*").OrderBy(p => p).ToList();
+        HashSet<string> known;
+        lock (_devicesLock)
+        {
+            // a node that went away may come back as a different device under the same name
+            _ignored.IntersectWith(paths);
+            known = [.. _devices.Select(d => d.Path), .. _ignored];
+        }
         var evTypeBuf = new byte[1];
         var keyBuf = new byte[96];
         var relBuf = new byte[2];
 
-        foreach (var path in paths)
+        foreach (var path in paths.Where(p => !known.Contains(p)))
         {
             var fd = EvdevNativeMethods.Open(path, EvdevNativeMethods.O_RDONLY | EvdevNativeMethods.O_NONBLOCK | EvdevNativeMethods.O_CLOEXEC);
             if (fd < 0) continue;
@@ -151,11 +180,14 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
             if (!isKeyboard && !isPointer)
             {
                 _ = EvdevNativeMethods.Close(fd);
+                lock (_devicesLock) _ignored.Add(path);
                 continue;
             }
 
             var scale = isPointer ? LinuxInputConfig.MouseScale(path) : 1.0;
-            _devices.Add(new InputDeviceRole(fd, isKeyboard, isPointer, scale));
+            var device = new InputDeviceRole(path, fd, isKeyboard, isPointer, scale);
+            lock (_devicesLock) _devices.Add(device);
+            added.Add(device);
 
             if (isPointer && Math.Abs(scale - 1.0) > 0.001 && log.IsEnabled(LogLevel.Information))
                 log.LogInformation("Mouse {Path}: MOUSE_DPI {Dpi} -> delta scale {Scale:0.##}",
@@ -165,24 +197,80 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
                 log.LogDebug("{Role}: {Path}",
                     isKeyboard && isPointer ? "Keyboard+Mouse" : isKeyboard ? "Keyboard" : "Mouse", path);
         }
+        return added;
+    }
+
+    // a device that was unplugged (or re-enumerated) reports POLLHUP/POLLERR on every poll from then on; left in
+    // the set it would spin the event loop, so it is closed and dropped
+    private void DropDevice(InputDeviceRole device)
+    {
+        lock (_devicesLock) _devices.Remove(device);
+        _ = EvdevNativeMethods.Close(device.Fd);
+        if (log.IsEnabled(LogLevel.Information)) log.LogInformation("Input device removed: {Path}", device.Path);
+    }
+
+    // devices plugged in since the last look; while the input is away they are grabbed as the others were
+    private void AddNewDevices()
+    {
+        List<InputDeviceRole> added;
+        try
+        {
+            added = DiscoverDevices();
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return;
+        }
+        if (added.Count == 0) return;
+        foreach (var device in added)
+            if (log.IsEnabled(LogLevel.Information))
+                log.LogInformation("Input device added: {Path} ({Role})", device.Path,
+                    device.Keyboard && device.Pointer ? "keyboard+mouse" : device.Keyboard ? "keyboard" : "mouse");
+        if (_grabbed) GrabDevices(added, true);
     }
 
     private void EventLoop()
     {
-        var polls = _devices.Select(d => new PollFd { Fd = d.Fd, Events = NativeMethods.POLLIN }).ToArray();
+        var devices = Devices();
+        var polls = devices.Select(d => new PollFd { Fd = d.Fd, Events = NativeMethods.POLLIN }).ToArray();
+        var nextScan = Environment.TickCount64 + RescanMs;
 
         // accumulated mouse deltas between SYN reports
         double pendingDx = 0, pendingDy = 0;
 
         while (_running)
         {
+            if (Environment.TickCount64 >= nextScan)
+            {
+                nextScan = Environment.TickCount64 + RescanMs;
+                AddNewDevices();
+            }
+
+            // the set changed (a device came or went): poll the new one
+            var current = Devices();
+            if (!current.SequenceEqual(devices))
+            {
+                devices = current;
+                polls = devices.Select(d => new PollFd { Fd = d.Fd, Events = NativeMethods.POLLIN }).ToArray();
+            }
+            if (polls.Length == 0)
+            {
+                Thread.Sleep(100);
+                continue;
+            }
+
             var ready = NativeMethods.Poll(ref polls[0], (uint)polls.Length, 100);
             if (ready <= 0) continue;
 
             for (var i = 0; i < polls.Length; i++)
             {
+                var device = devices[i];   // polls is built from devices, so the indices agree
+                if ((polls[i].Revents & (NativeMethods.POLLERR | NativeMethods.POLLHUP | NativeMethods.POLLNVAL)) != 0)
+                {
+                    DropDevice(device);
+                    continue;
+                }
                 if ((polls[i].Revents & NativeMethods.POLLIN) == 0) continue;
-                var device = _devices[i];   // polls is built from _devices, so the indices agree
 
                 while (true)
                 {
@@ -278,9 +366,11 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
     // reads bit n of an EVIOCGBIT capability bitmap
     private static bool TestBit(byte[] bits, int n) => n / 8 < bits.Length && (bits[n / 8] & (1 << (n % 8))) != 0;
 
-    private void SetGrab(bool grab)
+    private void SetGrab(bool grab) => GrabDevices(Devices(), grab);
+
+    private void GrabDevices(IEnumerable<InputDeviceRole> devices, bool grab)
     {
-        foreach (var fd in _devices.Select(d => d.Fd))
+        foreach (var fd in devices.Select(d => d.Fd))
         {
             var r = EvdevNativeMethods.ioctl_grab(fd, EvdevNativeMethods.EVIOCGRAB, grab ? 1 : 0);
             if (r >= 0) continue;
