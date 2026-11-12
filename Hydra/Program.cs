@@ -257,8 +257,13 @@ services.AddHostedSingleton(sp => new NetworkWatcher(
 
 if (config != null)
 {
+    // Hyprland (Wayland) master: evdev input, cursor and monitors from the compositor's IPC socket, and the Wayland
+    // clipboard through wl-clipboard (XWayland's, without it)
+    var hyprlandMaster = OperatingSystem.IsLinux() && profile.Mode == Mode.Master && HyprlandIpc.Available;
+    var hasXDisplay = Environment.GetEnvironmentVariable("DISPLAY") != null;
+
     // console mode: no X display available — use evdev input and null screen detector
-    var linuxConsoleMode = OperatingSystem.IsLinux() && Environment.GetEnvironmentVariable("DISPLAY") == null;
+    var linuxConsoleMode = OperatingSystem.IsLinux() && !hyprlandMaster && !hasXDisplay;
 
     // screen detector must be registered before any service that awaits IScreenDetector.Get() at startup
     if (OperatingSystem.IsMacOS())
@@ -267,6 +272,8 @@ if (config != null)
         services.AddHostedService<IScreenDetector, WindowsScreenDetector>();
     else if (linuxConsoleMode)
         services.AddHostedService<IScreenDetector, NullScreenDetector>();
+    else if (hyprlandMaster)
+        services.AddHostedService<IScreenDetector, HyprlandScreenDetector>();
     else if (OperatingSystem.IsLinux())
         services.AddHostedService<IScreenDetector, XorgScreenDetector>();
     else
@@ -293,6 +300,11 @@ if (config != null)
                 return;
             }
             services.AddSingleton<IPlatformInput, EvdevInputHandler>();
+        }
+        else if (hyprlandMaster)
+        {
+            services.AddSingleton<IPlatformInput, HyprlandInputHandler>();
+            services.AddSingleton<IWindowFocus, HyprlandWindowFocus>();
         }
         else if (OperatingSystem.IsLinux())
         {
@@ -354,7 +366,7 @@ if (config != null)
         services.AddHostedService<IScreenSaverSync, MacScreenSaverSync>();
     else if (OperatingSystem.IsWindows())
         services.AddHostedService<IScreenSaverSync, WindowsScreenSaverSync>();
-    else if (linuxConsoleMode)
+    else if (linuxConsoleMode || (hyprlandMaster && !hasXDisplay))
         services.AddSingleton<IScreenSaverSync, NullScreenSaverSync>();
     else if (OperatingSystem.IsLinux())
         services.AddHostedService<IScreenSaverSync, XorgScreenSaverSync>();
@@ -368,7 +380,9 @@ if (config != null)
         services.AddSingleton<IClipboardSync, MacClipboardSync>();
     else if (OperatingSystem.IsWindows())
         services.AddSingleton<IClipboardSync, WindowsClipboardSync>();
-    else if (OperatingSystem.IsLinux() && !linuxConsoleMode)
+    else if (hyprlandMaster && WaylandClipboardSync.Available)
+        services.AddSingleton<IClipboardSync, WaylandClipboardSync>();
+    else if (OperatingSystem.IsLinux() && hasXDisplay)
         services.AddSingleton<IClipboardSync, XorgClipboardSync>();
     else
         services.AddSingleton<IClipboardSync, NullClipboardSync>();
@@ -501,6 +515,11 @@ static int GetScreenCount()
     if (OperatingSystem.IsWindows()) return WindowsDisplayHelper.GetAllScreens().Count;
     if (OperatingSystem.IsLinux())
     {
+        if (HyprlandIpc.Available)
+        {
+            try { return HyprlandIpc.Monitors().Count; }
+            catch { return 1; }
+        }
         var display = XlibRuntime.TryOpenDisplay();
         if (display == nint.Zero) return 1;
         try
