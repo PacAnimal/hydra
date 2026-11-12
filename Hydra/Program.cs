@@ -257,8 +257,8 @@ services.AddHostedSingleton(sp => new NetworkWatcher(
 
 if (config != null)
 {
-    // Hyprland (Wayland) master: evdev input, cursor and monitors from the compositor's IPC socket. XWayland's
-    // DISPLAY, when there is one, is still used for the clipboard, which Hyprland mirrors to Wayland's.
+    // Hyprland (Wayland) master: evdev input, cursor and monitors from the compositor's IPC socket, and the Wayland
+    // clipboard through wl-clipboard (XWayland's, without it)
     var hyprlandMaster = OperatingSystem.IsLinux() && profile.Mode == Mode.Master && HyprlandIpc.Available;
     var hasXDisplay = Environment.GetEnvironmentVariable("DISPLAY") != null;
 
@@ -380,6 +380,8 @@ if (config != null)
         services.AddSingleton<IClipboardSync, MacClipboardSync>();
     else if (OperatingSystem.IsWindows())
         services.AddSingleton<IClipboardSync, WindowsClipboardSync>();
+    else if (hyprlandMaster && WaylandClipboardSync.Available)
+        services.AddSingleton<IClipboardSync, WaylandClipboardSync>();
     else if (OperatingSystem.IsLinux() && hasXDisplay)
         services.AddSingleton<IClipboardSync, XorgClipboardSync>();
     else
