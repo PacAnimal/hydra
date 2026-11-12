@@ -6,7 +6,8 @@ namespace Hydra.Platform.Linux;
 // console-setup never see these devices. The *configuration* those tools read is still where an
 // administrator expects to set this, though, so read it directly rather than inventing Hydra-specific
 // settings:
-//   * keyboard layout - XKB_DEFAULT_* if set, else /etc/default/keyboard (keyboard-configuration)
+//   * keyboard layout - XKB_DEFAULT_* if set, else Hyprland's input:kb_* in a Hyprland session,
+//                       else /etc/default/keyboard (keyboard-configuration)
 //   * pointer speed   - udev hwdb MOUSE_DPI, the same property libinput uses
 internal static class LinuxInputConfig
 {
@@ -22,7 +23,7 @@ internal static class LinuxInputConfig
 
     internal static XkbNames ResolveXkb()
     {
-        var file = ReadKeyboardFile();
+        var file = HyprlandIpc.Available ? ReadHyprlandKeyboard() : ReadKeyboardFile();
         return new XkbNames(
             Pick("XKB_DEFAULT_LAYOUT", file, "XKBLAYOUT") ?? "us",
             Pick("XKB_DEFAULT_MODEL", file, "XKBMODEL") ?? "pc105",
@@ -76,6 +77,16 @@ internal static class LinuxInputConfig
         var env = Environment.GetEnvironmentVariable(envVar);
         if (!string.IsNullOrWhiteSpace(env)) return env;
         return file.TryGetValue(fileKey, out var v) && !string.IsNullOrWhiteSpace(v) ? v : null;
+    }
+
+    // the compositor's own keyboard settings, under the keyboard-configuration names Pick reads
+    private static Dictionary<string, string> ReadHyprlandKeyboard()
+    {
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (option, key) in new[] { ("input:kb_layout", "XKBLAYOUT"), ("input:kb_model", "XKBMODEL"), ("input:kb_variant", "XKBVARIANT"), ("input:kb_options", "XKBOPTIONS") })
+            if (HyprlandIpc.GetOptionString(option) is { } value && !string.IsNullOrWhiteSpace(value) && value != "[[EMPTY]]")
+                result[key] = value.Trim();
+        return result;
     }
 
     // Shell-style KEY="value" lines, as written by keyboard-configuration.
