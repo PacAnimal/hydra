@@ -130,7 +130,7 @@ run_lane() {
 		echo "── $name: FAILED — could not read the lane's own output, so its verdict cannot be trusted ──" >&2
 		return 1
 	fi
-	# A filter that selects nothing EXITS ZERO. The linux lane is seven tests hanging off one
+	# A filter that selects nothing EXITS ZERO. The linux lane is the tests hanging off one
 	# [Category("Linux")] attribute, so renaming that attribute would otherwise report a green lane
 	# for ever while testing nothing at all.
 	if [ "$nothing" -eq 0 ]; then
@@ -158,10 +158,12 @@ run_mac() {
 # tests under xvfb-run (which starts a headless X server, sets DISPLAY, and tears it down).
 # The package list is shared with CI's Linux test job, and so are the server arguments: without -noreset
 # Xvfb resets each time its last client leaves, and a test connecting during that reset gets no display.
+# Privileged, with the kernel's devtmpfs bound over /dev/input, so the evdev tests' uinput devices get real nodes there.
 run_linux() {
 	echo "── Container X11 tests (Category=Linux, headless Xvfb) ────────────"
-	docker run --rm -v "$PWD":/src -w /src "$SDK_IMAGE" bash -c '
+	docker run --rm --privileged -v "$PWD":/src -w /src "$SDK_IMAGE" bash -c '
 		set -e
+		mkdir -p /run/devtmpfs /dev/input && mount -t devtmpfs devtmpfs /run/devtmpfs && mount --bind /run/devtmpfs/input /dev/input
 		apt-get update -qq
 		DEBIAN_FRONTEND=noninteractive xargs apt-get install -y -qq < .github/linux-test-packages.txt >/dev/null
 		xvfb-run -a -s "-screen 0 1280x1024x24 -noreset" dotnet test Hydra.sln --filter "Category=Linux"

@@ -156,7 +156,7 @@ internal sealed class ShieldChannel(Stream input, Stream output, ILogger log)
         }
         finally
         {
-            _pendingAcks.TryRemove(seq, out _);
+            _pendingAcks.TryRemove(KeyValuePair.Create(seq, waiter));
         }
     }
 

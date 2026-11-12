@@ -82,6 +82,18 @@ jobs:
         if: matrix.os == 'linux'
         run: sudo apt-get update -qq && xargs sudo apt-get install -y -qq < .github/linux-test-packages.txt
 
+      # the evdev tests make keyboards and mice through uinput; the runner's user may write uinput and read their nodes
+      - name: Allow uinput test devices
+        if: matrix.os == 'linux'
+        run: |
+          sudo modprobe uinput || true   # built in on some kernels
+          test -c /dev/uinput
+          echo 'KERNEL=="uinput", MODE="0666"' | sudo tee /etc/udev/rules.d/99-hydra-tests.rules
+          echo 'SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="hydra-test*", MODE="0666"' | sudo tee -a /etc/udev/rules.d/99-hydra-tests.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=uinput
+          sudo chmod 0666 /dev/uinput
+
       - name: Restore
         run: dotnet restore Hydra.sln
 

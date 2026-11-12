@@ -139,7 +139,7 @@ internal static partial class NativeMethods
 
     [LibraryImport("libc", EntryPoint = "poll")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    internal static partial int Poll(ref PollFd fds, uint nfds, int timeoutMs);
+    internal static partial int Poll(ref PollFd fds, nuint nfds, int timeoutMs);
 
     // -- events --
 
