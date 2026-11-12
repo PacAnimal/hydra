@@ -29,6 +29,8 @@ internal static partial class EvdevNativeMethods
     internal const int EVIOCGBIT_EV_KEY = unchecked((int)0x80604521);
     // EVIOCGBIT(EV_REL=2, 2): relative axis capabilities (2 bytes covers REL_HWHEEL=0x06, REL_WHEEL=0x08) — 0x80024522
     internal const int EVIOCGBIT_EV_REL = unchecked((int)0x80024522);
+    // EVIOCGKEY(96): the device's current key/button state, one bit per code — _IOR('E', 0x18, 96) = 0x80604518
+    internal const int EVIOCGKEY = unchecked((int)0x80604518);
 
     // -- event types --
 
@@ -45,6 +47,7 @@ internal static partial class EvdevNativeMethods
 
     // -- key/button codes --
 
+    internal const ushort BTN_MISC = 0x100;   // first button code: keyboard keys are the codes below it
     internal const ushort BTN_LEFT = 0x110;
     internal const ushort BTN_RIGHT = 0x111;
     internal const ushort BTN_MIDDLE = 0x112;

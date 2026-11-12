@@ -27,7 +27,8 @@ See the [project README](../README.md) for installation and a quick-start guide.
 
 - .NET 10
 - **macOS**: Accessibility permission (System Settings → Privacy & Security → Accessibility)
-- **Linux (with display)**: X11 with XInput2 (Wayland not yet supported)
+- **Linux (with display)**: X11 with XInput2
+- **Linux (Hyprland, Wayland)**: master only. The user must be in the `input` group (`sudo usermod -aG input $USER`, then log in again); `libxkbcommon` installed. Input is read from `/dev/input/event*`, and the cursor position, warping, hiding and monitor layout come from Hyprland's IPC socket. The keyboard layout comes from Hyprland's `input:kb_*` settings. Other Wayland compositors are not yet supported
 - **Linux (headless/console)**: `remoteOnly: true` in config; user must be in the `input` group (`sudo usermod -aG input $USER`) for `/dev/input/event*` access; `libxkbcommon` installed (`apt install libxkbcommon0`)
 
 ## Config file location

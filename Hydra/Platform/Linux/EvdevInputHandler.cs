@@ -20,6 +20,12 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
     private Action<MouseButtonEvent>? _onMouseButton;
     private Action<MouseScrollEvent>? _onMouseScroll;
     private EvdevKeyResolver? _keyResolver;
+    // set while a grab waits for the keys held at its start to go up (DeferKeyboardGrabWhileHeld)
+    private volatile bool _keyboardGrabPending;
+
+    // A desktop session (Hyprland) also reads these devices. A keyboard grabbed with keys down never shows the
+    // compositor their ups, so its modifiers would stick: the keyboards' grab then waits until every key is up.
+    internal bool DeferKeyboardGrabWhileHeld { get; init; }
 
     // An open device and what it is for. Scale is the udev hwdb MOUSE_DPI delta multiplier, 1.0
     // when the device has no entry or is not a pointer at all.
@@ -68,7 +74,17 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
 
         var xkb = LinuxInputConfig.ResolveXkb();
         _keyResolver?.Dispose();   // a re-tap would otherwise leak the previous xkb context/keymap
-        _keyResolver = new EvdevKeyResolver(xkb);
+        try
+        {
+            _keyResolver = new EvdevKeyResolver(xkb);
+        }
+        catch (InvalidOperationException) when (xkb.Options != null)
+        {
+            // an option only the desktop's own xkb files define (Omarchy's compose option) fails to compile here
+            log.LogWarning("Keyboard options '{Options}' did not compile; using the layout without them", xkb.Options);
+            xkb = xkb with { Options = null };
+            _keyResolver = new EvdevKeyResolver(xkb);
+        }
         if (log.IsEnabled(LogLevel.Information))
             log.LogInformation("Keyboard layout: {Layout} model: {Model}{Variant}",
                 xkb.Layout, xkb.Model, xkb.Variant is null ? "" : $" variant: {xkb.Variant}");
@@ -195,6 +211,7 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
                     {
                         if (device.Keyboard) HandleKeyboardEvent(ev);
                         else HandleButtonCode(ev.Code, ev.Value);
+                        if (ev.Value == 0 && _keyboardGrabPending) TryCompleteKeyboardGrab();
                     }
                     else if (device.Pointer)
                     {
@@ -278,9 +295,45 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
     // reads bit n of an EVIOCGBIT capability bitmap
     private static bool TestBit(byte[] bits, int n) => n / 8 < bits.Length && (bits[n / 8] & (1 << (n % 8))) != 0;
 
+    // whether any keyboard key (codes below the button range) is down on any keyboard, from the kernel's own state
+    internal bool KeysHeld() => _devices.Any(d => d.Keyboard && AnyBitSet(d.Fd, 1, EvdevNativeMethods.BTN_MISC));
+
+    // whether a mouse button is down on any pointer, from the kernel's state: it sees through our own grab
+    internal bool ButtonsHeld() => _devices.Any(d => d.Pointer && AnyBitSet(d.Fd, EvdevNativeMethods.BTN_LEFT, EvdevNativeMethods.BTN_EXTRA + 1));
+
+    private static bool AnyBitSet(int fd, int from, int to)
+    {
+        var state = new byte[96];
+        if (EvdevNativeMethods.ioctl_bit(fd, EvdevNativeMethods.EVIOCGKEY, state) < 0) return false;
+        for (var code = from; code < to; code++)
+            if (TestBit(state, code)) return true;
+        return false;
+    }
+
+    private void TryCompleteKeyboardGrab()
+    {
+        if (!_grabbed || KeysHeld()) return;
+        _keyboardGrabPending = false;
+        GrabDevices(_devices.Where(d => d.Keyboard), true);
+        if (log.IsEnabled(LogLevel.Debug)) log.LogDebug("Keys released: keyboard grab taken");
+    }
+
     private void SetGrab(bool grab)
     {
-        foreach (var fd in _devices.Select(d => d.Fd))
+        if (grab && DeferKeyboardGrabWhileHeld && KeysHeld())
+        {
+            _keyboardGrabPending = true;
+            GrabDevices(_devices.Where(d => !d.Keyboard), true);
+            if (log.IsEnabled(LogLevel.Debug)) log.LogDebug("Keys held: keyboard grab waits for their release");
+            return;
+        }
+        _keyboardGrabPending = false;
+        GrabDevices(_devices, grab);
+    }
+
+    private void GrabDevices(IEnumerable<InputDeviceRole> devices, bool grab)
+    {
+        foreach (var fd in devices.Select(d => d.Fd))
         {
             var r = EvdevNativeMethods.ioctl_grab(fd, EvdevNativeMethods.EVIOCGRAB, grab ? 1 : 0);
             if (r >= 0) continue;

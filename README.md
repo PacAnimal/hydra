@@ -106,7 +106,7 @@ All releases are [self-contained](https://github.com/PacAnimal/hydra/releases) â
 > **Priority:** Hydra runs above normal process priority so a busy machine doesn't stutter the cursor.
 > `--install` handles this automatically on macOS and Windows; on Linux, add `Nice=-10` to your systemd unit.
 
-> **Linux with display:** Requires X11 with XInput2. Wayland is not yet supported.
+> **Linux with display:** Requires X11 with XInput2. On Wayland, only Hyprland is supported, and only as a master: Hydra reads input from evdev and asks Hyprland for the cursor and monitors, so add yourself to the `input` group (`sudo usermod -aG input $USER`, then log in again). Other Wayland compositors are not yet supported.
 
 > **Linux headless (no display):** See [Remote-only / Raspberry Pi setup](docs/CONFIGURATION.md#headless-linux-no-display-server).
 
