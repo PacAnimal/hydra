@@ -15,7 +15,7 @@ using System.Security.Cryptography.X509Certificates;
 namespace Hydra.Relay;
 
 public class EmbeddedStyxServer(EmbeddedStyxServerConfig config, ILogger<EmbeddedStyxServer> log)
-    : SimpleHostedService(log)
+    : SimpleHostedService(log), IRelayReady
 {
     private readonly TaskCompletionSource _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private IClientRegistry? _registry;

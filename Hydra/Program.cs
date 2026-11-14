@@ -425,6 +425,9 @@ if (config != null)
     {
         services.AddSingleton(config.EmbeddedStyxServer);
         services.AddHostedSingleton<EmbeddedStyxServer>();
+        // the client dials it only when no embeddedStyx names another relay (see embeddedNetworkConfig)
+        if (config.EmbeddedStyx == null)
+            services.AddSingleton<IRelayReady>(sp => sp.GetRequiredService<EmbeddedStyxServer>());
     }
 
     if (profile.Mode == Mode.Slave)

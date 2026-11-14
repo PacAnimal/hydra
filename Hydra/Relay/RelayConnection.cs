@@ -16,7 +16,8 @@ using StyxConstants = Styx.Constants;
 
 namespace Hydra.Relay;
 
-public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log, IWorldState peerState)
+// relayReady is the in-process embedded relay this client dials, when there is one: the first connect waits for it
+public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log, IWorldState peerState, IRelayReady? relayReady = null)
     : SimpleHostedService(log), IStyxClient, IRelaySender
 {
     protected ILogger<RelayConnection> Log => log;
@@ -81,6 +82,8 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
     protected virtual TimeProvider AuthClock => TimeProvider.System;
     // times the fast-reconnect window after a wake, so a test can step past it
     protected virtual TimeProvider WakeClock => TimeProvider.System;
+    // times the first connect's wait for the embedded relay, so a test can expire it
+    protected virtual TimeProvider ReadyClock => TimeProvider.System;
 
     // ±25% jitter so peers that all dropped at once (e.g. a relay restart) don't reconnect in lockstep
     private static TimeSpan WithJitter(TimeSpan baseDelay)
@@ -473,6 +476,8 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
         if (log.IsEnabled(LogLevel.Information))
             log.LogInformation("Starting relay connection to {Server} as {HostName}", netConfig.StyxServer, hostName);
 
+        if (relayReady != null) await WaitForEmbeddedRelay(relayReady, cancel).ConfigureAwait(false);
+
         while (!cancel.IsCancellationRequested)
         {
             await WaitUntilConnectionResumed(cancel).ConfigureAwait(false);
@@ -538,6 +543,28 @@ public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log
 
     protected TimeSpan CurrentReconnectDelay()
         => CurrentReconnectDelayState().Delay;
+
+    // our own relay starts beside us, so a first connect before it listens is refused and costs a whole ReconnectDelay;
+    // one that never comes up falls through to the normal connect and retry
+    private async Task WaitForEmbeddedRelay(IRelayReady relay, CancellationToken cancel)
+    {
+        var cap = TimeSpan.FromSeconds(Constants.EmbeddedReadyTimeoutSeconds);
+        try
+        {
+            await relay.WaitForReady().WaitAsync(cap, ReadyClock, cancel).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            if (log.IsEnabled(LogLevel.Warning))
+                log.LogWarning("Embedded Styx relay not listening after {Seconds}s — connecting anyway", cap.TotalSeconds);
+        }
+        catch (Exception ex) when (!cancel.IsCancellationRequested)
+        {
+            // it failed or stopped before listening, and logged why itself
+            if (log.IsEnabled(LogLevel.Warning))
+                log.LogWarning("Embedded Styx relay did not start — connecting anyway: {Message}", ex.Message);
+        }
+    }
 
     protected long WakeStateVersion
     {
