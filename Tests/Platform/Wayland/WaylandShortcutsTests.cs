@@ -11,6 +11,27 @@ public class WaylandShortcutsTests
     private const uint KeyLeftCtrl = 29, KeyLeftShift = 42, KeyLeftAlt = 56, KeyRightAlt = 100, KeyLeftMeta = 125;
     private const uint KeyL = 38, KeyLeft = 105, KeyUp = 103, KeyF13 = 183;
     private const KeyModifiers Chord3 = KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Super;
+    private const uint ControlL = 0xFFE3, ShiftL = 0xFFE1, AltL = 0xFFE9, SuperL = 0xFFEB, Level3Shift = 0xFE03, ModeSwitch = 0xFF7E;
+
+    // each modifier on its usual key, as a stock keymap has them
+    private static readonly FakeKeymap Stock = new(new Dictionary<uint, uint>
+    {
+        [KeyLeftCtrl] = ControlL,
+        [KeyLeftShift] = ShiftL,
+        [KeyLeftAlt] = AltL,
+        [KeyLeftMeta] = SuperL,
+        [KeyRightAlt] = Level3Shift,
+    });
+
+    // a keymap as the keys it has and the keysym each types alone; a keysym found only above level 0 is in Upper
+    private sealed class FakeKeymap(Dictionary<uint, uint> keys, Dictionary<uint, uint>? upper = null) : IKeymapKeys
+    {
+        public uint? EvdevKeyFor(uint keysym) =>
+            keys.Where(k => k.Value == keysym).Select(k => (uint?)k.Key).FirstOrDefault()
+            ?? upper?.Where(k => k.Value == keysym).Select(k => (uint?)k.Key).FirstOrDefault();
+
+        public uint BaseKeysym(uint evdevKey) => keys.GetValueOrDefault(evdevKey);
+    }
 
     [Test]
     public void Trigger_OrdersTheModifiersAsTheSpec()
@@ -127,7 +148,7 @@ public class WaylandShortcutsTests
     [Test]
     public void Keys_AreTheModifiersThenTheKey()
     {
-        var keys = WaylandShortcuts.Keys(Chord3, KeyL);
+        var keys = WaylandShortcuts.Keys(Stock, Chord3, KeyL);
 
         using (Assert.EnterMultipleScope())
         {
@@ -139,7 +160,7 @@ public class WaylandShortcutsTests
     [Test]
     public void Keys_ShiftAndAltGr_TakeTheirOwnKeys()
     {
-        var keys = WaylandShortcuts.Keys(KeyModifiers.Shift | KeyModifiers.AltGr, KeyF13);
+        var keys = WaylandShortcuts.Keys(Stock, KeyModifiers.Shift | KeyModifiers.AltGr, KeyF13);
 
         Assert.That(keys?.Downs.ToList(), Is.EqualTo([KeyLeftShift, KeyRightAlt, KeyF13]));
     }
@@ -147,14 +168,60 @@ public class WaylandShortcutsTests
     [Test]
     public void Keys_AreNone_WhenTheKeymapHasNoKey()
     {
-        Assert.That(WaylandShortcuts.Keys(Chord3, null), Is.Null);
+        Assert.That(WaylandShortcuts.Keys(Stock, Chord3, null), Is.Null);
+    }
+
+    [Test]
+    public void Keys_FollowAModifierTheKeymapMoved()
+    {
+        // altwin:swap_alt_win: Super on the left Alt key, Alt on the left Super key
+        var swapped = new FakeKeymap(new Dictionary<uint, uint> { [KeyLeftCtrl] = ControlL, [KeyLeftAlt] = SuperL, [KeyLeftMeta] = AltL });
+
+        Assert.That(WaylandShortcuts.Keys(swapped, Chord3, KeyL)?.Modifiers, Is.EqualTo([KeyLeftCtrl, KeyLeftMeta, KeyLeftAlt]));
+    }
+
+    [Test]
+    public void Keys_TakeTheUsualKey_ForAModifierTheKeymapLacks()
+    {
+        var bare = new FakeKeymap([]);
+
+        Assert.That(WaylandShortcuts.Keys(bare, Chord3 | KeyModifiers.Shift | KeyModifiers.AltGr, KeyL)?.Modifiers,
+            Is.EqualTo([KeyLeftCtrl, KeyLeftAlt, KeyLeftShift, KeyLeftMeta, KeyRightAlt]));
+    }
+
+    [Test]
+    public void Keys_TakeModeSwitch_ForAltGr_WhenTheKeymapHasNoLevel3Shift()
+    {
+        const uint keyMenu = 127;
+        var keymap = new FakeKeymap(new Dictionary<uint, uint> { [keyMenu] = ModeSwitch });
+
+        Assert.That(WaylandShortcuts.Keys(keymap, KeyModifiers.AltGr, KeyL)?.Modifiers, Is.EqualTo([keyMenu]));
+    }
+
+    [Test]
+    public void Keys_TakeTheRightHandModifier_WhenTheKeymapHasNoLeftOne()
+    {
+        const uint altR = 0xFFEA;
+        var keymap = new FakeKeymap(new Dictionary<uint, uint> { [KeyRightAlt] = altR });
+
+        Assert.That(WaylandShortcuts.Keys(keymap, KeyModifiers.Alt, KeyL)?.Modifiers, Is.EqualTo([KeyRightAlt]));
+    }
+
+    [Test]
+    public void Keys_SkipAKeyTypingTheModifierOnlyOnAHigherLevel()
+    {
+        // a Super on a shifted level needs Shift held, which the chord does not press
+        const uint keyCompose = 127;
+        var keymap = new FakeKeymap([], new Dictionary<uint, uint> { [keyCompose] = SuperL });
+
+        Assert.That(WaylandShortcuts.Keys(keymap, KeyModifiers.Super, KeyL)?.Modifiers, Is.EqualTo([KeyLeftMeta]));
     }
 
     [Test]
     public void Held_OneChord_PressesAllAndReleasesInReverse()
     {
         var held = new HeldChords();
-        var keys = WaylandShortcuts.Keys(Chord3, KeyL)!;
+        var keys = WaylandShortcuts.Keys(Stock, Chord3, KeyL)!;
 
         using (Assert.EnterMultipleScope())
         {
@@ -169,8 +236,8 @@ public class WaylandShortcutsTests
     {
         // a second chord under the first's modifiers, the first let go first
         var held = new HeldChords();
-        var left = WaylandShortcuts.Keys(Chord3, KeyLeft)!;
-        var up = WaylandShortcuts.Keys(Chord3, KeyUp)!;
+        var left = WaylandShortcuts.Keys(Stock, Chord3, KeyLeft)!;
+        var up = WaylandShortcuts.Keys(Stock, Chord3, KeyUp)!;
 
         using (Assert.EnterMultipleScope())
         {
@@ -185,7 +252,7 @@ public class WaylandShortcutsTests
     public void Held_ARepeatedActivation_PressesNothing()
     {
         var held = new HeldChords();
-        var keys = WaylandShortcuts.Keys(Chord3, KeyL)!;
+        var keys = WaylandShortcuts.Keys(Stock, Chord3, KeyL)!;
         held.Press("ToggleCursorLock-0", keys);
 
         Assert.That(held.Press("ToggleCursorLock-0", keys), Is.Empty);
@@ -195,8 +262,8 @@ public class WaylandShortcutsTests
     public void Held_ReleaseAll_LetsGoOfEverything()
     {
         var held = new HeldChords();
-        held.Press("a-0", WaylandShortcuts.Keys(Chord3, KeyLeft)!);
-        held.Press("b-0", WaylandShortcuts.Keys(Chord3, KeyUp)!);
+        held.Press("a-0", WaylandShortcuts.Keys(Stock, Chord3, KeyLeft)!);
+        held.Press("b-0", WaylandShortcuts.Keys(Stock, Chord3, KeyUp)!);
 
         using (Assert.EnterMultipleScope())
         {
@@ -212,7 +279,7 @@ public class WaylandShortcutsTests
 [Category("Linux")]
 public class WaylandShortcutEventsTests
 {
-    private const uint KeyLeftCtrl = 29, KeyLeftAlt = 56, KeyLeftMeta = 125;
+    private const uint KeyLeftCtrl = 29, KeyLeftShift = 42, KeyLeftAlt = 56, KeyRightAlt = 100, KeyLeftMeta = 125, KeyF13 = 183;
 
     [OneTimeSetUp]
     public void RequireLinux()
@@ -255,7 +322,7 @@ public class WaylandShortcutEventsTests
         using var resolver = new EvdevKeyResolver(new LinuxInputConfig.XkbNames("us", "pc105", null, null));
         using var lookup = new XkbKeymapLookup(resolver.KeymapText());
         var binding = Chord("Ctrl+Alt+Super+L");
-        var keys = WaylandShortcuts.Keys(binding.Modifiers, lookup.EvdevKeyFor(WaylandShortcuts.Keysym(binding)))!;
+        var keys = WaylandShortcuts.Keys(lookup, binding.Modifiers, lookup.EvdevKeyFor(WaylandShortcuts.Keysym(binding)))!;
         var hotkeys = HotkeyBindings.Build(null);
 
         var downs = WaylandShortcuts.Events(resolver, keys.Downs, down: true);
@@ -272,6 +339,67 @@ public class WaylandShortcutEventsTests
             Assert.That(ups.Select(e => e.PhysicalKey).ToList(), Is.EqualTo(keys.Ups.Select(k => (int)k).ToList()));
             Assert.That(ups.Select(e => e.Type), Is.All.EqualTo(KeyEventType.KeyUp));
             Assert.That(HotkeyBinding.ChordModifiers(ups[^1]), Is.EqualTo(KeyModifiers.None));
+        }
+    }
+
+    [TestCase("altwin:swap_alt_win", KeyLeftCtrl, KeyLeftMeta, KeyLeftAlt)]
+    [TestCase("ctrl:swap_lalt_lctl", KeyLeftAlt, KeyLeftCtrl, KeyLeftMeta)]
+    [TestCase("ctrl:nocaps", KeyLeftCtrl, KeyLeftAlt, KeyLeftMeta)]
+    public void Chord_PressesAsTheHotkey_OnAKeymapWithRemappedModifiers(string options, uint ctrl, uint alt, uint super)
+    {
+        using var resolver = new EvdevKeyResolver(new LinuxInputConfig.XkbNames("us", "pc105", null, options));
+        using var lookup = new XkbKeymapLookup(resolver.KeymapText());
+        var binding = Chord("Ctrl+Alt+Super+L");
+        var keys = WaylandShortcuts.Keys(lookup, binding.Modifiers, lookup.EvdevKeyFor(WaylandShortcuts.Keysym(binding)))!;
+
+        var downs = WaylandShortcuts.Events(resolver, keys.Downs, down: true);
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(keys.Modifiers, Is.EqualTo([ctrl, alt, super]));
+            Assert.That(downs.Take(3).Select(e => e.Key).ToList(), Is.EqualTo(new SpecialKey?[] { SpecialKey.Control_L, SpecialKey.Alt_L, SpecialKey.Super_L }));
+            Assert.That(downs[^1].Character, Is.EqualTo('l'));
+            Assert.That(HotkeyBinding.ChordModifiers(downs[^1]), Is.EqualTo(KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Super));
+            Assert.That(HotkeyBindings.Build(null).Match(downs[^1]), Is.EqualTo(HotkeyAction.ToggleCursorLock));
+        }
+    }
+
+    [Test]
+    public void Chord_PressesShiftAndAltGr_OnTheirOwnKeys()
+    {
+        using var resolver = new EvdevKeyResolver(new LinuxInputConfig.XkbNames("de", "pc105", null, null));
+        using var lookup = new XkbKeymapLookup(resolver.KeymapText());
+
+        var keys = WaylandShortcuts.Keys(lookup, KeyModifiers.Shift | KeyModifiers.AltGr, KeyF13)!;
+        var downs = WaylandShortcuts.Events(resolver, keys.Modifiers, down: true);
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(keys.Modifiers, Is.EqualTo([KeyLeftShift, KeyRightAlt]));
+            Assert.That(downs.Select(e => e.Key).ToList(), Is.EqualTo(new SpecialKey?[] { SpecialKey.Shift_L, SpecialKey.AltGr }));
+        }
+    }
+
+    [Test]
+    public void Chord_PressesAltGr_OnTheKeymapsLevel3Key_WhereRightAltIsAlt()
+    {
+        // plain us types Alt_R on the right Alt key and has ISO_Level3_Shift only on <LVL3>
+        const uint keyLevel3 = 84;
+        using var resolver = new EvdevKeyResolver(new LinuxInputConfig.XkbNames("us", "pc105", null, null));
+        using var lookup = new XkbKeymapLookup(resolver.KeymapText());
+        var binding = Chord("AltGr+F5");
+        var keys = WaylandShortcuts.Keys(lookup, binding.Modifiers, lookup.EvdevKeyFor(WaylandShortcuts.Keysym(binding)))!;
+        var hotkeys = HotkeyBindings.Build(new Dictionary<string, List<string>> { ["CopyFiles"] = ["AltGr+F5"] });
+
+        var downs = WaylandShortcuts.Events(resolver, keys.Downs, down: true);
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(keys.Modifiers, Is.EqualTo([keyLevel3]));
+            Assert.That(downs[0].Key, Is.EqualTo(SpecialKey.AltGr));
+            Assert.That(downs[^1].Key, Is.EqualTo(SpecialKey.F5));
+            Assert.That(HotkeyBinding.ChordModifiers(downs[^1]), Is.EqualTo(KeyModifiers.AltGr));
+            Assert.That(hotkeys.Match(downs[^1]), Is.EqualTo(HotkeyAction.CopyFiles));
         }
     }
 }

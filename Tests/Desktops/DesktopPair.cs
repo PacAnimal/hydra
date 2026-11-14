@@ -121,10 +121,15 @@ public abstract class DesktopPair(DesktopKind masterKind, DesktopKind slaveKind)
             // the compositor's pointer may rest on the armed edge already, so the first test must not be the first to move it
             await Home();
         }
-        catch
+        catch (Exception e)
         {
-            await DumpLogs("at the setup failure");
-            throw;
+            // the console logger drops a OneTimeSetUp's output but prints its exception's message under every test, so
+            // the slave's tail rides in the message: the master's own last lines are in e's already. a timeout stays
+            // one, as HydraInstance's waits throw
+            var message = $"{e.Message}\n{LogTails("at the setup failure", 80, _slave)}";
+            if (e is TimeoutException)
+                throw new TimeoutException(message, e);
+            throw new InvalidOperationException(message, e);
         }
     }
 
@@ -157,20 +162,13 @@ public abstract class DesktopPair(DesktopKind masterKind, DesktopKind slaveKind)
     {
         if (TestContext.CurrentContext.Result.Outcome.Status != NUnit.Framework.Interfaces.TestStatus.Failed)
             return;
-        await DumpLogs("at the failure");
+        await TestContext.Out.WriteLineAsync(LogTails("at the failure", 150, _master, _slave));
     }
 
-    private async Task DumpLogs(string when)
-    {
-        foreach (var hydra in new[] { _master, _slave })
-        {
-            if (hydra == null)
-                continue;
-            await TestContext.Out.WriteLineAsync($"--- hydra '{hydra.Name}' log {when} (last 150 lines) ---");
-            foreach (var line in hydra.Log.TakeLast(150))
-                await TestContext.Out.WriteLineAsync(line);
-        }
-    }
+    // each started hydra's last lines under a label, in the order given; one not started yet has none
+    private static string LogTails(string when, int lines, params HydraInstance?[] hydras) =>
+        string.Join('\n', hydras.OfType<HydraInstance>().Select(hydra =>
+            $"--- hydra '{hydra.Name}' log {when} (last {lines} lines) ---\n{string.Join('\n', hydra.Log.TakeLast(lines))}"));
 
     [SetUp]
     public async Task BringCursorHome()

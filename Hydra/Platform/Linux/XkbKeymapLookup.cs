@@ -7,10 +7,18 @@ namespace Hydra.Platform.Linux;
 // the key and modifiers that type a keysym on a keymap; NumLock is the lock a keypad level needs on
 internal sealed record XkbKeyStroke(uint EvdevKey, bool Shift, bool AltGr, bool NumLock = false);
 
+// which key a keysym is on and what a key types alone, as a keymap answers it
+internal interface IKeymapKeys
+{
+    uint? EvdevKeyFor(uint keysym);
+
+    uint BaseKeysym(uint evdevKey);
+}
+
 // answers which evdev key, with which of Shift, AltGr and NumLock, types a keysym on a keymap given as text
 // (XKB_KEYMAP_FORMAT_TEXT_V1, as an EIS server hands it over libei). only layout group 0 is searched:
 // a stroke carries no group, so a key found in another group would type something else.
-internal sealed class XkbKeymapLookup : IDisposable
+internal sealed class XkbKeymapLookup : IKeymapKeys, IDisposable
 {
     private const int MaxMasks = 32;
     private const uint MaxInjectableXkbKey = 255;
@@ -67,7 +75,7 @@ internal sealed class XkbKeymapLookup : IDisposable
     internal static uint CharToKeysym(char c) =>
         char.IsSurrogate(c) ? 0 : EvdevNativeMethods.xkb_utf32_to_keysym(c);
 
-    internal uint? EvdevKeyFor(uint keysym) => Find(keysym)?.EvdevKey;
+    public uint? EvdevKeyFor(uint keysym) => Find(keysym)?.EvdevKey;
 
     // the lowest level of group 0 that types the keysym with at most Shift, AltGr and NumLock; null if none
     internal XkbKeyStroke? Find(uint keysym)
@@ -119,7 +127,7 @@ internal sealed class XkbKeymapLookup : IDisposable
     }
 
     // the keysym an evdev key types at level 0 of group 0; 0 (NoSymbol) when it types none
-    internal uint BaseKeysym(uint evdevKey)
+    public uint BaseKeysym(uint evdevKey)
     {
         lock (_lock) return _disposed ? 0 : Level0Keysym(evdevKey + 8);
     }

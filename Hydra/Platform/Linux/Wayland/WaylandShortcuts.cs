@@ -99,17 +99,35 @@ internal static class WaylandShortcuts
         return length is > 0 and < 64 ? Encoding.UTF8.GetString(buffer, 0, length) : null;
     }
 
-    // the chord's keys: its modifiers' left keys (AltGr's right Alt), then key; null when the keymap has no key
-    internal static ChordKeys? Keys(KeyModifiers modifiers, uint? key)
+    // the chord's keys: each modifier's key on the keymap, then key; null when the keymap has no key
+    internal static ChordKeys? Keys(IKeymapKeys keymap, KeyModifiers modifiers, uint? key)
     {
         if (key is not { } k) return null;
         var keys = new List<uint>(5);
-        if ((modifiers & KeyModifiers.Control) != 0) keys.Add(EvdevNativeMethods.KEY_LEFTCTRL);
-        if ((modifiers & KeyModifiers.Alt) != 0) keys.Add(EvdevNativeMethods.KEY_LEFTALT);
-        if ((modifiers & KeyModifiers.Shift) != 0) keys.Add(EvdevNativeMethods.KEY_LEFTSHIFT);
-        if ((modifiers & KeyModifiers.Super) != 0) keys.Add(EvdevNativeMethods.KEY_LEFTMETA);
-        if ((modifiers & KeyModifiers.AltGr) != 0) keys.Add(EvdevNativeMethods.KEY_RIGHTALT);
+        if ((modifiers & KeyModifiers.Control) != 0)
+            keys.Add(ModifierKey(keymap, EvdevNativeMethods.KEY_LEFTCTRL, XorgVirtualKey.Control_L, XorgVirtualKey.Control_R));
+        if ((modifiers & KeyModifiers.Alt) != 0) keys.Add(ModifierKey(keymap, EvdevNativeMethods.KEY_LEFTALT, XorgVirtualKey.Alt_L, XorgVirtualKey.Alt_R));
+        if ((modifiers & KeyModifiers.Shift) != 0)
+            keys.Add(ModifierKey(keymap, EvdevNativeMethods.KEY_LEFTSHIFT, XorgVirtualKey.Shift_L, XorgVirtualKey.Shift_R));
+        if ((modifiers & KeyModifiers.Super) != 0)
+            keys.Add(ModifierKey(keymap, EvdevNativeMethods.KEY_LEFTMETA, XorgVirtualKey.Super_L, XorgVirtualKey.Super_R));
+        if ((modifiers & KeyModifiers.AltGr) != 0)
+            keys.Add(ModifierKey(keymap, EvdevNativeMethods.KEY_RIGHTALT, XorgVirtualKey.ISO_Level3_Shift, XorgVirtualKey.Mode_switch));
         return new ChordKeys(keys, k);
+    }
+
+    // the key typing the first keysym the keymap has, alone (the left-hand one before the right): the usual key when
+    // it does (the keymap may also have it on a virtual key, such as Super_L on <SUPR>), else wherever an xkb option or
+    // the layout put it, else the usual key
+    private static uint ModifierKey(IKeymapKeys keymap, uint usual, params ReadOnlySpan<ulong> keysyms)
+    {
+        foreach (var keysym in keysyms)
+        {
+            if (keymap.BaseKeysym(usual) == keysym) return usual;
+            // a key typing it only on a higher level needs a modifier the chord does not press
+            if (keymap.EvdevKeyFor((uint)keysym) is { } code && keymap.BaseKeysym(code) == keysym) return code;
+        }
+        return usual;
     }
 
     // the key events a keyboard pressing (or releasing) keys in that order makes through the resolver

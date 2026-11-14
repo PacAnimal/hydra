@@ -1108,8 +1108,7 @@ internal sealed class WaylandInputHandler(ICaptureSession session, IHydraProfile
             if (!_tapped || Captured || !_chords.TryGetValue(id, out chord)) return;
             lookup = _lookup;
         }
-        var key = lookup?.EvdevKeyFor(WaylandShortcuts.Keysym(chord.Binding));
-        if (WaylandShortcuts.Keys(chord.Binding.Modifiers, key) is not { } codes)
+        if (lookup is null || WaylandShortcuts.Keys(lookup, chord.Binding.Modifiers, lookup.EvdevKeyFor(WaylandShortcuts.Keysym(chord.Binding))) is not { } codes)
         {
             if (log.IsEnabled(LogLevel.Warning)) log.LogWarning("Global shortcut {Id} fired, but the keymap has no key for its chord", id);
             return;
