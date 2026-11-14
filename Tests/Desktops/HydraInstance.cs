@@ -74,11 +74,14 @@ public sealed class HydraInstance : IAsyncDisposable
         });
 
     // the first log line containing fragment, seen already or still to come
-    public async Task WaitForLog(string fragment)
+    public Task WaitForLog(string fragment) => WaitForLog(fragment, Bound);
+
+    // as above, within bound rather than Bound
+    public async Task WaitForLog(string fragment, TimeSpan bound)
     {
         if (Log.Any(l => l.Contains(fragment, StringComparison.Ordinal)))
             return;
-        using var cts = new CancellationTokenSource(Bound);
+        using var cts = new CancellationTokenSource(bound);
         try
         {
             // a line logged after the scan above is still queued in the channel

@@ -95,27 +95,37 @@ public abstract class DesktopPair(DesktopKind masterKind, DesktopKind slaveKind)
         if (EvdevMaster)
             _hands = await UserHands.Attach(_masterDesktop, TestLog.Factory.CreateLogger<UserHands>(), PaceEvdev);
 
-        _master = await HydraInstance.Start(_masterDesktop, MasterName,
-            HydraInstance.MasterConfig(MasterName, SlaveName, port, remoteOnly: EvdevMaster));
-        // the slave dials the master's embedded relay; started before it listens, its first connect is refused and its
-        // retry waits a whole reconnect delay, which a cold desktop can push past the setup's bound
-        await Master.WaitForLog("Embedded Styx relay listening");
-        _slave = await HydraInstance.Start(_slaveDesktop, SlaveName, HydraInstance.SlaveConfig(SlaveName, port));
+        // a failed setup runs no test, so no [TearDown] dumps the hydras' logs; this does
+        try
+        {
+            _master = await HydraInstance.Start(_masterDesktop, MasterName,
+                HydraInstance.MasterConfig(MasterName, SlaveName, port, remoteOnly: EvdevMaster));
+            // the slave dials the master's embedded relay; started before it listens, its first connect is refused and its
+            // retry waits a whole reconnect delay, which a cold desktop can push past the setup's bound
+            await Master.WaitForLog("Embedded Styx relay listening", StartupBound);
+            _slave = await HydraInstance.Start(_slaveDesktop, SlaveName, HydraInstance.SlaveConfig(SlaveName, port));
 
-        await Master.WaitForLog("Screen info from hs");
-        // the wayland handler arms the slave's edge as a pointer barrier once it knows the slave's screen
-        if (_masterDesktop.IsWayland)
-            await Master.WaitForLog("Pointer barriers set: Right");
-        // a remote-only master enters the slave as soon as its screen is known
-        if (EvdevMaster)
-            await Master.WaitForLog(RemoteOnlyEnteredHs);
+            // a wayland slave reports its screen only once its portal session is up
+            await Master.WaitForLog("Screen info from hs", StartupBound);
+            // the wayland handler arms the slave's edge as a pointer barrier once it knows the slave's screen
+            if (_masterDesktop.IsWayland)
+                await Master.WaitForLog("Pointer barriers set: Right", StartupBound);
+            // a remote-only master enters the slave as soon as its screen is known
+            if (EvdevMaster)
+                await Master.WaitForLog(RemoteOnlyEnteredHs, StartupBound);
 
-        if (!EvdevMaster)
-            _hands = await UserHands.Attach(_masterDesktop, TestLog.Factory.CreateLogger<UserHands>(),
-                MasterKind == DesktopKind.Hyprland ? PaceHyprland : null);
+            if (!EvdevMaster)
+                _hands = await UserHands.Attach(_masterDesktop, TestLog.Factory.CreateLogger<UserHands>(),
+                    MasterKind == DesktopKind.Hyprland ? PaceHyprland : null);
 
-        // the compositor's pointer may rest on the armed edge already, so the first test must not be the first to move it
-        await Home();
+            // the compositor's pointer may rest on the armed edge already, so the first test must not be the first to move it
+            await Home();
+        }
+        catch
+        {
+            await DumpLogs("at the setup failure");
+            throw;
+        }
     }
 
     [OneTimeTearDown]
@@ -147,11 +157,16 @@ public abstract class DesktopPair(DesktopKind masterKind, DesktopKind slaveKind)
     {
         if (TestContext.CurrentContext.Result.Outcome.Status != NUnit.Framework.Interfaces.TestStatus.Failed)
             return;
+        await DumpLogs("at the failure");
+    }
+
+    private async Task DumpLogs(string when)
+    {
         foreach (var hydra in new[] { _master, _slave })
         {
             if (hydra == null)
                 continue;
-            await TestContext.Out.WriteLineAsync($"--- hydra '{hydra.Name}' log at the failure (last 150 lines) ---");
+            await TestContext.Out.WriteLineAsync($"--- hydra '{hydra.Name}' log {when} (last 150 lines) ---");
             foreach (var line in hydra.Log.TakeLast(150))
                 await TestContext.Out.WriteLineAsync(line);
         }
