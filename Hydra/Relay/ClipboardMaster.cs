@@ -32,6 +32,12 @@ public sealed class ClipboardMaster(IClipboardSync sync, ILogger log)
     private bool _concealed;
     // bumped by every apply or clear, so a read begun before one never writes its older state over it
     private int _version;
+    // told of each pull sent and when it settles; null for a clipboard that serves no paste on request, which tracks none
+    private readonly IPullObserver? _observer = sync as IPullObserver;
+    // writes under way (TakePullAnswer, LandHeld, ForgetPull): a pull they took is settled only once they are done; under _lock
+    private int _writing;
+    // the pulls sent whose Settled has not completed, under _lock
+    private readonly List<PendingPull> _unsettled = [];
 
     // for tests: what to offer a slave on entering it; null for nothing, as for a clipboard that could not be read. An
     // empty one after a concealed copy says so, for a slave still holding Hydra's write of that copy to clear it
@@ -87,11 +93,33 @@ public sealed class ClipboardMaster(IClipboardSync sync, ILogger log)
     // for tests: runs as a write waits its turn, before the gate
     internal Action? WaitingToWrite { get; set; }
 
-    // one clipboard write at a time (TakePullAnswer, LandHeld, ForgetPull)
+    // one clipboard write at a time (TakePullAnswer, LandHeld, ForgetPull); a pull it takes settles at LeaveWrite
     private void EnterWrite()
     {
         WaitingToWrite?.Invoke();
+        lock (_lock) _writing++;
         _writeGate.Wait();
+    }
+
+    private void LeaveWrite()
+    {
+        _writeGate.Release();
+        lock (_lock) _writing--;
+        Settle();
+    }
+
+    // completes the Settled of every pull sent that is neither out nor streaming any more, unless a write is under way,
+    // whose own end settles them once it has written; never under _lock
+    private void Settle()
+    {
+        List<PendingPull> settled;
+        lock (_lock)
+        {
+            if (_writing > 0 || _unsettled.Count == 0) return;
+            settled = [.. _unsettled.Where(p => !_hosts.Values.Any(h => h.Latest == p || h.Streaming == p || h.Held?.Pull == p))];
+            foreach (var pull in settled) _unsettled.Remove(pull);
+        }
+        foreach (var pull in settled) pull.Settled.TrySetResult();
     }
 
     // for tests: whether this thread holds the state's lock
@@ -110,6 +138,7 @@ public sealed class ClipboardMaster(IClipboardSync sync, ILogger log)
         ulong? pending;
         int id;
         int? resendFrom;
+        PendingPull sent;
         // read before the lock: on X11 the counter can ask the X server
         var now = _changes.Now();
         lock (_lock)
@@ -119,7 +148,9 @@ public sealed class ClipboardMaster(IClipboardSync sync, ILogger log)
             // the answer to the pull this replaces is ignored if it comes, so never taken
             if (pulls.Latest is { } replaced) NotTaken(replaced, now);
             id = ++_ids;
-            pulls.Latest = new PendingPull(new OutstandingPull(host, id), against, now);
+            sent = new PendingPull(new OutstandingPull(host, id), against, now);
+            pulls.Latest = sent;
+            if (_observer != null) _unsettled.Add(sent);
             // an answer held for the pull this replaces now waits on this one, which carries its content as pending
             if (pulls.Held is { } held)
             {
@@ -129,6 +160,9 @@ public sealed class ClipboardMaster(IClipboardSync sync, ILogger log)
             else pending = pulls.Streaming != null ? pendingFrom(host) : null;
             resendFrom = Standing(host, now)?.From;
         }
+        _observer?.PullSent(sent.Settled.Task);
+        // the pull this replaced, settled as it is no longer out
+        Settle();
         return ClipboardWire.ToPull(pending is { } hash ? against with { Hash = hash } : against, id, resendFrom);
     }
 
@@ -235,6 +269,7 @@ public sealed class ClipboardMaster(IClipboardSync sync, ILogger log)
                 pulls.Streaming = found;
             }
         }
+        Settle();
         return superseded;
     }
 
@@ -252,6 +287,7 @@ public sealed class ClipboardMaster(IClipboardSync sync, ILogger log)
             if (pulls.Latest == found) pulls.ForgetLatest();
             if (pulls.Streaming == found) pulls.Streaming = null;
         }
+        Settle();
         if (log.IsEnabled(LogLevel.Debug))
             log.LogDebug("Clipboard stream from {Host} refused: copied on the master since pull {PullId}", pull.Host, pull.Id);
         return true;
@@ -270,6 +306,7 @@ public sealed class ClipboardMaster(IClipboardSync sync, ILogger log)
             if (failed) NotTaken(streaming, now);
             pulls.Streaming = null;
         }
+        Settle();
     }
 
     // under _lock: the answer to pull was not taken, so host's next pull asks a resend from the first such pull still
@@ -309,7 +346,7 @@ public sealed class ClipboardMaster(IClipboardSync sync, ILogger log)
         }
         finally
         {
-            _writeGate.Release();
+            LeaveWrite();
         }
     }
 
@@ -372,7 +409,7 @@ public sealed class ClipboardMaster(IClipboardSync sync, ILogger log)
         }
         finally
         {
-            _writeGate.Release();
+            LeaveWrite();
         }
     }
 
@@ -400,7 +437,7 @@ public sealed class ClipboardMaster(IClipboardSync sync, ILogger log)
         }
         finally
         {
-            _writeGate.Release();
+            LeaveWrite();
         }
     }
 
@@ -628,8 +665,12 @@ public sealed class ClipboardMaster(IClipboardSync sync, ILogger log)
 
     private sealed record VersionedRead(ClipboardSnapshot? Clip, int Version);
 
-    // sentAt: the change counter when it went out, null where the platform keeps none
-    private sealed record PendingPull(OutstandingPull Ref, ClipboardBaseline Against, long? SentAt);
+    // sentAt: the change counter when it went out, null where the platform keeps none; settled: completed once it is
+    // neither out, streaming nor held, and no write is under way (Settle)
+    private sealed record PendingPull(OutstandingPull Ref, ClipboardBaseline Against, long? SentAt)
+    {
+        public TaskCompletionSource Settled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
 
     // the first pull to a host whose answer was not taken: its id, the change counter when it went out, and the known
     // clipboard's hash as it stands

@@ -106,7 +106,7 @@ All releases are [self-contained](https://github.com/PacAnimal/hydra/releases) â
 > **Priority:** Hydra runs above normal process priority so a busy machine doesn't stutter the cursor.
 > `--install` handles this automatically on macOS and Windows; on Linux, add `Nice=-10` to your systemd unit.
 
-> **Linux with display:** Requires X11 with XInput2. On Wayland, only Hyprland is supported, and only as a master: Hydra reads input from evdev and asks Hyprland for the cursor and monitors, so add yourself to the `input` group (`sudo usermod -aG input $USER`, then log in again). Other Wayland compositors are not yet supported.
+> **Linux with display:** X11 with XInput2, or Wayland through the desktop portals and libei (`libei`, `libffi`, `libxkbcommon`, and `libwayland-client` on a Hyprland slave): GNOME 46+, KDE Plasma 6.1+ and Hyprland (xdg-desktop-portal-hyprland 1.5+), each as master or slave. GNOME and KDE show the permission dialog on the first start, which later starts skip except on a GNOME 46-48 master; Hyprland asks none, master or slave. No `input` group is needed, though a Hyprland master in it reads the hotkeys at home from the keyboards (unless `readKeyboardsForHotkeys` is `false`), so every hotkey except a monitor switch to a remote works there ([Hyprland hotkeys](docs/CONFIGURATION.md#hyprland-hotkeys)). Wayland has [limitations](docs/CONFIGURATION.md#wayland-limitations).
 
 > **Linux headless (no display):** See [Remote-only / Raspberry Pi setup](docs/CONFIGURATION.md#headless-linux-no-display-server).
 

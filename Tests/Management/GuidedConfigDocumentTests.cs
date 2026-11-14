@@ -207,7 +207,8 @@ public class GuidedConfigDocumentTests
             "maxMouseHz": 250,
             "modifierNumLock": false,
             "invertScrollX": true,
-            "invertScrollY": true
+            "invertScrollY": true,
+            "readKeyboardsForHotkeys": false
           }]
         }
         """;
@@ -400,6 +401,7 @@ public class GuidedConfigDocumentTests
             Assert.That(profile.ModifierNumLock, Is.False);
             Assert.That(profile.InvertScrollX, Is.True);
             Assert.That(profile.InvertScrollY, Is.True);
+            Assert.That(profile.ReadKeyboardsForHotkeys, Is.False);
         }
     }
 
@@ -479,7 +481,8 @@ public class GuidedConfigDocumentTests
         [GuidedFields.MaxMouseHz] = "250",
         [GuidedFields.ModifierNumLock] = "off",
         [GuidedFields.InvertScrollX] = GuidedValues.On,
-        [GuidedFields.InvertScrollY] = GuidedValues.On
+        [GuidedFields.InvertScrollY] = GuidedValues.On,
+        [GuidedFields.ReadKeyboardsForHotkeys] = GuidedValues.Off
     };
 
     private static IEnumerable<string> KeysOf(JsonNode node) => node.AsObject().Select(p => p.Key);

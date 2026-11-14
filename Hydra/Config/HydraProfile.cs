@@ -31,6 +31,7 @@ public interface IHydraProfile
     bool AllowSystemSleep { get; }
     bool ScreenLockPropagation { get; }
     bool AccelerateMouseWheel { get; }
+    bool ReadKeyboardsForHotkeys { get; }
     bool InvertScrollX { get; }
     bool InvertScrollY { get; }
     bool? ModifierNumLock { get; }
@@ -77,6 +78,7 @@ public class HydraProfile(HydraConfigFile configFile, HydraConfig? activeProfile
     public bool AllowSystemSleep => _activeProfile?.AllowSystemSleep ?? false;
     public bool ScreenLockPropagation => _activeProfile?.ScreenLockPropagation ?? false;
     public bool AccelerateMouseWheel => _activeProfile?.AccelerateMouseWheel ?? true;
+    public bool ReadKeyboardsForHotkeys => _activeProfile?.ReadKeyboardsForHotkeys ?? true;
     public bool InvertScrollX => _activeProfile?.InvertScrollX ?? false;
     public bool InvertScrollY => _activeProfile?.InvertScrollY ?? false;
     public bool? ModifierNumLock => _activeProfile?.ModifierNumLock;

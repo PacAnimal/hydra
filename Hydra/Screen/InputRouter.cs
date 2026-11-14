@@ -29,7 +29,6 @@ public class InputRouter(
     IOsdNotification osd,
     IActivityTracker activityTracker,
     IWorldState? peerState = null,
-    Func<long>? getTickCount = null,
     PeerPlatform? localPlatform = null,
     TimeProvider? timeProvider = null,
     IWindowFocus? windowFocus = null)
@@ -51,7 +50,6 @@ public class InputRouter(
     private const double WarpDeadZone = 0.10;
 
     private readonly IWorldState _peerState = peerState ?? new WorldState();
-    private readonly Func<long> _getTickCount = getTickCount ?? (() => Environment.TickCount64);
     private readonly PeerPlatform _localPlatform = localPlatform ?? PeerPlatforms.Local;
 
     // channel-based actor model: single consumer processes all state mutations sequentially.
@@ -70,6 +68,13 @@ public class InputRouter(
     private ITimer? _mouseFlushTimer;
     private long _lastMouseBatchPostTick;
     private bool _mouseFlushArmed;
+    // sends what the throttle held back once its interval is up, so the last motion before the mouse stops still goes
+    private ITimer? _sendFlushTimer;
+    // the tick _sendFlushTimer is armed for, or null while it is not; only the actor touches it
+    private long? _sendFlushDeadline;
+
+    // milliseconds on the clock the router's timers run on, so the throttle and its flushes never disagree on the time
+    private long TickCount() => (long)_time.GetElapsedTime(0, _time.GetTimestamp()).TotalMilliseconds;
 
     internal int PostedMouseBatchCount => Volatile.Read(ref _postedMouseBatchCount);
 
@@ -149,6 +154,7 @@ public class InputRouter(
             st.LockedToScreen = true;  // default: locked to remote; hotkey unlocks to local
         st.Screens = BuildAllScreens(st.LocalScreens);
         st.Layout = new ScreenLayout(st.Screens, profile.Hosts, profile.DeadCorners, BuildScaleMap(st.LocalScreenEntries, []), log);
+        ReportCrossableEdges(st);
 
         if (log.IsEnabled(LogLevel.Information))
         {
@@ -165,10 +171,18 @@ public class InputRouter(
 
         // one-shot, and armed only while a batch is waiting, so an idle master schedules nothing
         _mouseFlushTimer = _time.CreateTimer(_ => FlushMouseBatch(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        _sendFlushTimer = _time.CreateTimer(_ => _commands.Writer.TryWrite(state =>
+        {
+            // a send since it was armed may have restarted the interval, so it sends only if due, and rearms if not
+            _sendFlushDeadline = null;
+            if (state.MotionUnsent) SendMousePositionIfDue(state, TickCount());
+            return ValueTask.CompletedTask;
+        }), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
 
         // start consumer before event tap so early events are processed
         _consumerTask = Task.Run(ProcessCommands, cancellationToken);
 
+        if (platform is IBarrierHits hits) hits.ReportHitsTo(OnBarrierHit);
         await platform.StartEventTap((x, y) => OnMouseMove(x, y), OnMouseDelta, OnKeyEvent, OnMouseButton, OnMouseScroll,
             onLocalActivity: () => _ = _commands.Writer.TryWrite(_ => activityTracker.LocalActivity()));
 
@@ -203,6 +217,8 @@ public class InputRouter(
         // no more samples can arrive, so nothing may post a batch after the writer completes
         _mouseFlushTimer?.Dispose();
         _mouseFlushTimer = null;
+        _sendFlushTimer?.Dispose();
+        _sendFlushTimer = null;
 
         // drain remaining commands, then stop consumer
         _commands.Writer.TryComplete();
@@ -309,6 +325,7 @@ public class InputRouter(
             st.LocalScreenEntries = snapshot.Entries;
             st.Screens = newScreens;
             st.Layout = new ScreenLayout(newScreens, profile.Hosts, profile.DeadCorners, BuildScaleMap(st.LocalScreenEntries, peerScreens), log);
+            ReportCrossableEdges(st);
 
             if (!st.Mouse.IsOnVirtualScreen)
             {
@@ -432,7 +449,7 @@ public class InputRouter(
             // a visit still waiting for the keyboard was never announced, so the host has nothing to leave
             var announced = !st.EnterPending;
             if (ReturnHome(st, LocalLandingPoint(st), slaveReachable: announced) is { } host && log.IsEnabled(LogLevel.Warning))
-                log.LogWarning("Returned to local screen from '{Host}': another client holds the keyboard or pointer", host);
+                log.LogWarning("Returned to local screen from '{Host}': input capture failed or was lost", host);
             return ValueTask.CompletedTask;
         });
     }
@@ -536,7 +553,7 @@ public class InputRouter(
     }
 
     private ValueTask BroadcastLockScreen(LocalMasterState st) =>
-        BroadcastToPeers(MessageKind.LockScreen, new LockScreenMessage(_getTickCount() - st.LastInputTick));
+        BroadcastToPeers(MessageKind.LockScreen, new LockScreenMessage(TickCount() - st.LastInputTick));
 
     // sends master's clipboard hash to slave; slave decides whether to request the full push. The read runs off the
     // actor, after EnterScreen went out; its hash goes only if no newer entry or request for host came since and the
@@ -1184,6 +1201,7 @@ public class InputRouter(
         st.ActiveLocalScreen = st.ActiveLocalScreen == null ? null
             : st.LocalScreens.FirstOrDefault(s => s.Name.EqualsIgnoreCase(st.ActiveLocalScreen.Name))
                 ?? st.LocalScreens.FirstOrDefault() ?? st.ActiveLocalScreen;
+        ReportCrossableEdges(st);
 
         // prune stale relative-mode entries for screens that no longer exist
         var validNames = new HashSet<string>(st.Screens.Select(s => s.Name), StringComparer.OrdinalIgnoreCase);
@@ -1259,7 +1277,7 @@ public class InputRouter(
             // the key as modifierNumLock makes it, for the hotkeys as well as the slave: every key passes through, home or
             // away, so a key's repeats and up always find what its down was made
             var keyEvent = _modifierNumLock.Apply(pressed);
-            st.LastInputTick = _getTickCount();
+            st.LastInputTick = TickCount();
             await activityTracker.LocalActivity();
             if (st.Mouse.IsOnVirtualScreen && log.IsEnabled(LogLevel.Debug))
                 log.LogDebug("Key: {Type}{Label} mods={Modifiers}", keyEvent.Type,
@@ -1341,6 +1359,11 @@ public class InputRouter(
                 {
                     var screenName = st.Mouse.CurrentScreen.Name;
                     var isNowRelative = !st.RelativeMouseScreens.GetValueOrDefault(screenName);
+                    // what the old mode has pending goes out in that mode, never into the new one
+                    SendUnsentMotion(st);
+                    st.PendingDx = 0;
+                    st.PendingDy = 0;
+                    st.MotionUnsent = false;
                     st.RelativeMouseScreens[screenName] = isNowRelative;
                     if (log.IsEnabled(LogLevel.Information))
                         log.LogInformation("Mouse mode for '{Screen}': {Mode}", screenName, isNowRelative ? "relative" : "absolute");
@@ -1467,7 +1490,7 @@ public class InputRouter(
         SealMouseBatch();
         _ = _commands.Writer.TryWrite(async st =>
         {
-            st.LastInputTick = _getTickCount();
+            st.LastInputTick = TickCount();
             PointerUsed(st);
             st.EdgeRefusalLogged = false;
             await activityTracker.LocalActivity();
@@ -1496,7 +1519,7 @@ public class InputRouter(
         SealMouseBatch();
         _ = _commands.Writer.TryWrite(async st =>
         {
-            st.LastInputTick = _getTickCount();
+            st.LastInputTick = TickCount();
             PointerUsed(st);
             await activityTracker.LocalActivity();
             // nothing reaches a remote not yet told of the visit
@@ -1515,6 +1538,7 @@ public class InputRouter(
         if (!relay.IsConnected || !st.Mouse.IsOnVirtualScreen) return;
 
         var screen = st.Mouse.CurrentScreen;
+        st.MotionUnsent = false;
 
         if (st.RelativeMouseScreens.GetValueOrDefault(screen.Name))
         {
@@ -1549,7 +1573,15 @@ public class InputRouter(
         var screen = st.Mouse.CurrentScreen;
         var isRelative = st.RelativeMouseScreens.GetValueOrDefault(screen.Name);
         if (isRelative && st.PendingDx == 0 && st.PendingDy == 0) return;
-        SendMousePosition(st, _getTickCount());
+        SendMousePosition(st, TickCount());
+    }
+
+    // A button, scroll or key goes out at once, but motion before it may still be held back by the send throttle;
+    // it goes first, or the click lands (or the shot fires) where the cursor was a moment earlier. Only what is
+    // unsent goes: a click after a still mouse sends nothing more.
+    private void SendUnsentMotion(LocalMasterState st)
+    {
+        if (st.MotionUnsent) SendMousePosition(st, TickCount());
     }
 
     // remap Home/End to platform-independent line-nav keys when master is not Mac.
@@ -1564,6 +1596,7 @@ public class InputRouter(
     {
         var target = st.Mouse.CurrentScreen?.Host;
         if (target == null) return;
+        SendUnsentMotion(st);
         relay.Send(target, kind, message);
     }
 
@@ -1575,6 +1608,7 @@ public class InputRouter(
     {
         var target = st.Mouse.CurrentScreen?.Host;
         if (target == null) return;
+        SendUnsentMotion(st);
         relay.SendKeyEvent([target], message);
     }
 
@@ -1627,20 +1661,30 @@ public class InputRouter(
             return;
         }
 
+        var now = TickCount();
+        if (IsRelative(st))
+        {
+            AccumulateScaled(st, dx, dy);
+            if (now - st.LastVirtualLogTick >= 100 && log.IsEnabled(LogLevel.Debug))
+            {
+                st.LastVirtualLogTick = now;
+                log.LogDebug("Mouse: relative, offset ({DX}, {DY})", (int)st.PendingDx, (int)st.PendingDy);
+            }
+            SendMousePositionIfDue(st, now);
+            if (!platform.RecentresItself) Recenter(st);
+            return;
+        }
+
         var prevScreen = st.Mouse.ApplyDelta(dx, dy);
         if (prevScreen != null)
             HandleIntraHostTransition(st);
         else
             AccumulateScaled(st, dx, dy);
 
-        var now = _getTickCount();
-        if (now - st.LastVirtualLogTick >= 100)
+        if (now - st.LastVirtualLogTick >= 100 && log.IsEnabled(LogLevel.Debug))
         {
             st.LastVirtualLogTick = now;
-            if (st.Mouse.IsOnVirtualScreen && st.RelativeMouseScreens.GetValueOrDefault(st.Mouse.CurrentScreen.Name) && log.IsEnabled(LogLevel.Debug))
-                log.LogDebug("Mouse: ({X}, {Y})  Offset: ({DX}, {DY})", (int)st.Mouse.X, (int)st.Mouse.Y, (int)st.PendingDx, (int)st.PendingDy);
-            else if (log.IsEnabled(LogLevel.Debug))
-                log.LogDebug("Mouse: ({X}, {Y})", (int)st.Mouse.X, (int)st.Mouse.Y);
+            log.LogDebug("Mouse: ({X}, {Y})", (int)st.Mouse.X, (int)st.Mouse.Y);
         }
 
         var leavingScreen = st.Mouse.CurrentScreen;
@@ -1650,10 +1694,17 @@ public class InputRouter(
         if (!platform.RecentresItself) Recenter(st);
     }
 
+    // Relative mode forwards every delta and never moves the virtual cursor, so nothing clamps and no edge is crossed:
+    // a game recentring its pointer would otherwise walk it into the edge. The cursor stays where the mode began.
+    private static bool IsRelative(LocalMasterState st) =>
+        st.Mouse.IsOnVirtualScreen && st.RelativeMouseScreens.GetValueOrDefault(st.Mouse.CurrentScreen.Name);
+
     private void HandleIntraHostTransition(LocalMasterState st)
     {
         st.PendingDx = 0;
         st.PendingDy = 0;
+        // the enter carries the position
+        st.MotionUnsent = false;
         if (!relay.IsConnected || !st.Mouse.IsOnVirtualScreen) return;
         SendEnterMessage(st.Mouse.CurrentScreen, (int)st.Mouse.X, (int)st.Mouse.Y);
     }
@@ -1668,6 +1719,8 @@ public class InputRouter(
         var host = st.Mouse.CurrentScreen.Host;
         st.EnterPending = false;
         if (slaveReachable) FlushMouseDelta(st);
+        _sendFlushTimer?.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        _sendFlushDeadline = null;
         st.Mouse.LeaveScreen();
         lock (_hashLock)
             _cursorHost = null;
@@ -1794,7 +1847,7 @@ public class InputRouter(
             // an actor command each costs a thread-pool wake per sample while buying nothing, since
             // sends are throttled to the configured rate anyway. Holding the batch for the rest of the interval
             // loses no movement: deltas accumulate and absolute samples keep the latest.
-            var due = _minMouseIntervalMs - (_getTickCount() - _lastMouseBatchPostTick);
+            var due = _minMouseIntervalMs - (TickCount() - _lastMouseBatchPostTick);
             if (due <= 0)
                 PostOpenMouseBatch();
             else
@@ -1814,7 +1867,7 @@ public class InputRouter(
         var batch = _openMouseBatch;
         if (batch == null) return;
         _openMouseBatch = null;
-        _lastMouseBatchPostTick = _getTickCount();
+        _lastMouseBatchPostTick = TickCount();
         if (!_commands.Writer.TryWrite(st => ProcessMouseBatch(st, batch))) return;
         Interlocked.Increment(ref _postedMouseBatchCount);
     }
@@ -1843,7 +1896,7 @@ public class InputRouter(
         lock (_mouseBatchLock)
             (x, y) = batch.Snapshot();
 
-        st.LastInputTick = _getTickCount();
+        st.LastInputTick = TickCount();
         PointerUsed(st);
         await activityTracker.LocalActivity();
 
@@ -1860,6 +1913,34 @@ public class InputRouter(
         await HandleMouseDelta(st, x, y);
     }
 
+    // A barrier hit (IBarrierHits): an absolute move onto the edge it hit, never coalesced with another, so each is
+    // answered. One that starts no visit is released by its serial; one dropped here (no layout yet) the platform's
+    // watchdog releases
+    private void OnBarrierHit(double x, double y, long hit)
+    {
+        // motion captured before the hit goes first
+        SealMouseBatch();
+        _commands.Writer.TryWrite(st => ProcessBarrierHit(st, x, y, hit));
+    }
+
+    private async ValueTask ProcessBarrierHit(LocalMasterState st, double x, double y, long hit)
+    {
+        st.LastInputTick = TickCount();
+        PointerUsed(st);
+        await activityTracker.LocalActivity();
+
+        if (st.Layout is null || st.ActiveLocalScreen is null) return;
+        if (st.Mouse.IsOnVirtualScreen)
+        {
+            // a hit queued behind the entry it raced (the watchdog released the first, so the pointer hit again): the
+            // visit rides on its capture, and a local edge point is no motion over there
+            if (log.IsEnabled(LogLevel.Debug)) log.LogDebug("Barrier hit {Hit} at ({X}, {Y}) came during a visit; ignored", hit, x, y);
+            return;
+        }
+        await HandleRealScreenMove(st, x, y);
+        if (!st.Mouse.IsOnVirtualScreen && platform is IBarrierHits hits) hits.StayedHome(hit);
+    }
+
     private async ValueTask HandleMouseDelta(LocalMasterState st, double dx, double dy)
     {
         if (!st.Mouse.IsOnVirtualScreen) return;
@@ -1867,18 +1948,21 @@ public class InputRouter(
         if (!platform.KeyboardCaptured) return;
 
         var leavingScreen = st.Mouse.CurrentScreen!;
-        var prevScreen = st.Mouse.ApplyDelta(dx, dy);
-        if (prevScreen != null)
+        if (!IsRelative(st))
         {
-            HandleIntraHostTransition(st);
-            if (!platform.RecentresItself) Recenter(st);
-            return;
+            var prevScreen = st.Mouse.ApplyDelta(dx, dy);
+            if (prevScreen != null)
+            {
+                HandleIntraHostTransition(st);
+                if (!platform.RecentresItself) Recenter(st);
+                return;
+            }
+
+            if (await TryHandleEdgeExit(st, leavingScreen)) return;
         }
 
-        if (await TryHandleEdgeExit(st, leavingScreen)) return;
-
         AccumulateScaled(st, dx, dy);
-        SendMousePositionIfDue(st, _getTickCount());
+        SendMousePositionIfDue(st, TickCount());
 
         if (!platform.RecentresItself) RecenterIfDrifted(st, dx, dy);
     }
@@ -2029,8 +2113,17 @@ public class InputRouter(
     // throttles mouse sends to the configured rate
     private void SendMousePositionIfDue(LocalMasterState st, long now)
     {
-        if (now - st.LastMouseSendTick >= _minMouseIntervalMs)
+        var due = _minMouseIntervalMs - (now - st.LastMouseSendTick);
+        if (due <= 0)
+        {
             SendMousePosition(st, now);
+            return;
+        }
+        // already armed to fire no later: a burst of held-back samples arms it once, not once a sample
+        var deadline = now + due;
+        if (_sendFlushDeadline <= deadline) return;
+        _sendFlushDeadline = deadline;
+        _sendFlushTimer?.Change(TimeSpan.FromMilliseconds(due), Timeout.InfiniteTimeSpan);
     }
 
     private enum MouseInputKind { Absolute, Delta }
@@ -2044,6 +2137,7 @@ public class InputRouter(
         var scale = isRelative ? (double)(st.Mouse.RelativeMouseScale ?? st.Mouse.MouseScale) : (double)st.Mouse.MouseScale;
         st.PendingDx += dx * scale;
         st.PendingDy += dy * scale;
+        st.MotionUnsent = true;
     }
 
     // Parks the cursor for the start of a visit. The anchor is set at once so pre-queued events compute a large
@@ -2100,6 +2194,7 @@ public class InputRouter(
         st.Mouse.EnterScreen(dest, remoteInfo.Screens, entryX, entryY, scale, remoteInfo.ScaleMap, remoteInfo.RelativeScaleMap);
         st.PendingDx = 0;
         st.PendingDy = 0;
+        st.MotionUnsent = false;
     }
 
     // sends EnterScreen relay message + pushes clipboard to destination host
@@ -2151,6 +2246,13 @@ public class InputRouter(
 
     private static ScreenRect? FindLocalScreenAt(LocalMasterState st, int x, int y) =>
         st.LocalScreens.FirstOrDefault(s => s.Contains(x, y));
+
+    // tells the platform every local span a crossing can start from; must be called from consumer
+    private void ReportCrossableEdges(LocalMasterState st)
+    {
+        if (st.Layout is not { } layout) return;
+        platform.CrossableEdgesChanged([.. st.LocalScreens.SelectMany(s => layout.CrossableSpans(s).Select(span => new CrossableEdge(s, span)))]);
+    }
 
     private void LogDetectedScreens(List<ScreenRect> detected)
     {
@@ -2240,6 +2342,8 @@ public class InputRouter(
         public long LastMouseSendTick;
         public double PendingDx;
         public double PendingDy;
+        // a move processed since the last send, still held back by the throttle
+        public bool MotionUnsent;
 
         // last time any input event was processed, regardless of destination (local or remote)
         public long LastInputTick;

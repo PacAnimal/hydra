@@ -1,4 +1,3 @@
-using Cathedral.Utils;
 using Hydra.Config;
 using Hydra.Relay;
 using Microsoft.Extensions.Time.Testing;
@@ -14,19 +13,20 @@ public class MouseThrottleTests : ServicesFixture
 
     private FakePlatform _platform = null!;
     private FakeRelay _relay = null!;
-    private readonly SteppableTicks _ticks = new();
+    private readonly FakeTimeProvider _time = new();
 
     [SetUp]
     public async Task SetUp()
     {
-        (_platform, _relay, _) = await Services.StartOnline(TransitionTestHelper.CreateService(getTickCount: _ticks.Now));
+        (_platform, _relay, _) = await Services.StartOnline(TransitionTestHelper.CreateService(timeProvider: _time));
     }
 
     [Test]
     public async Task MouseMoves_AreThrottled_ToMaxHz()
     {
-        // frozen clock: all 50 events share the same tick so only the first send fires
-        var (platform, relay, _) = await Services.Visiting(TransitionTestHelper.CreateService(getTickCount: () => 1000L));
+        // a fake clock never stepped: all 50 events share the same tick and the trailing send never fires, so only
+        // the first send goes
+        var (platform, relay, _) = await Services.Visiting(TransitionTestHelper.CreateService(timeProvider: new FakeTimeProvider()));
         relay.Sent.Clear();
 
         var warpX = platform.WarpX;
@@ -36,18 +36,18 @@ public class MouseThrottleTests : ServicesFixture
             platform.FireMouseMove(warpX + 5, warpY);
 
         var mouseMoves = relay.Sent.Of(MessageKind.MouseMove).Count;
-        Assert.That(mouseMoves, Is.LessThan(15),
+        Assert.That(mouseMoves, Is.EqualTo(1),
             $"Expected throttling but got {mouseMoves} MouseMove sends for 50 events");
     }
 
     [Test]
     public async Task RawMouseBurst_IsBoundedToInFlightAndPendingActorCommands()
     {
-        // frozen clock: every sample after the first lands inside one send interval
+        // a fake clock, stepped only to fire a flush: every sample between steps lands inside one send interval
         var tracker = new HeldActivityTracker();
         var timers = new FakeTimeProvider();
         var (platform, _, service) = await Services.Visiting(TransitionTestHelper.CreateService(
-            getTickCount: () => 1000L, activityTracker: tracker, timeProvider: timers));
+            activityTracker: tracker, timeProvider: timers));
 
         platform.AfterFireCallback = null;
         tracker.Hold();
@@ -79,10 +79,9 @@ public class MouseThrottleTests : ServicesFixture
     [Test]
     public async Task RawSamplesWithinOneInterval_PostASingleActorCommand()
     {
-        // frozen clock: the interval never elapses, so nothing but the first sample may post
-        var timers = new FakeTimeProvider();
+        // a fake clock never stepped: the interval never elapses, so nothing but the first sample may post
         var (platform, _, service) = await Services.Visiting(TransitionTestHelper.CreateService(
-            getTickCount: () => 1000L, timeProvider: timers));
+            timeProvider: new FakeTimeProvider()));
 
         platform.AfterFireCallback = null;
         var before = service.PostedMouseBatchCount;
@@ -113,15 +112,17 @@ public class MouseThrottleTests : ServicesFixture
 
     private async Task<int> SendsOverSixtyMillisecondsOfMotion(int? maxMouseHz)
     {
-        var now = new Boxed<long>(1000L);
+        // a fake clock: it moves only when stepped, so a trailing send firing on real time cannot add sends the count
+        // does not expect; one held back fires as its interval is stepped past, in place of the sample that would send
+        var time = new FakeTimeProvider();
         var (platform, relay, _) = await Services.Visiting(TransitionTestHelper.CreateService(
-            getTickCount: () => now.Value, profile: TransitionTestHelper.ProfileWith(maxMouseHz)));
+            timeProvider: time, profile: TransitionTestHelper.ProfileWith(maxMouseHz)));
         relay.Sent.Clear();
 
         // one sample per millisecond, so the send count is exactly the number of intervals elapsed
         for (var ms = 0; ms < 60; ms++)
         {
-            now.Value++;
+            time.Advance(TimeSpan.FromMilliseconds(1));
             platform.FireMouseMove(platform.WarpX + (ms % 2 == 0 ? 1 : 2), platform.WarpY);
         }
 
@@ -219,9 +220,9 @@ public class MouseThrottleTests : ServicesFixture
         var warpY = _platform.WarpY;
 
         // wait past the throttle interval to ensure a send happens
-        _ticks.Advance(20);
+        _time.Advance(TimeSpan.FromMilliseconds(20));
         _platform.FireMouseMove(warpX + 10, warpY + 5);
-        _ticks.Advance(20);
+        _time.Advance(TimeSpan.FromMilliseconds(20));
         _platform.FireMouseMove(warpX + 5, warpY);
 
         var deltaMessages = _relay.Sent.Of(MessageKind.MouseMoveDelta);
@@ -249,7 +250,7 @@ public class MouseThrottleTests : ServicesFixture
         var warpX = _platform.WarpX;
         var warpY = _platform.WarpY;
 
-        _ticks.Advance(20);
+        _time.Advance(TimeSpan.FromMilliseconds(20));
         _platform.FireMouseMove(warpX + 10, warpY);
 
         var absoluteMessages = _relay.Sent.Of(MessageKind.MouseMove);

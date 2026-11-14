@@ -22,5 +22,8 @@ internal sealed class ConfigDir(string configPath)
     internal string RemoteApplyMarker => Named(".hydra-remote-apply.json");
     internal string RemoteApplyBackup => Named(".hydra-remote-backup.conf");
 
+    // the desktop portal's restore tokens, one per mode, so a Wayland start skips the permission dialog
+    internal string PortalTokens => Named(".hydra-portal.json");
+
     private string Named(string name) => Path.Combine(DirectoryPath, name);
 }

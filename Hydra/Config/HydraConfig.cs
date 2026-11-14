@@ -74,6 +74,8 @@ public class HydraConfig
     public bool AllowSystemSleep { get; init; }
     public bool ScreenLockPropagation { get; init; } = false;  // master only (Mac/Windows) — propagate machine lock to connected slaves
     public bool AccelerateMouseWheel { get; init; } = true;
+    // hyprland master only — read hotkeys at home from /dev/input; false uses the GlobalShortcuts portal
+    public bool ReadKeyboardsForHotkeys { get; init; } = true;
     // slave only — flip the scroll a master sends on that axis before injecting it
     public bool InvertScrollX { get; init; }
     public bool InvertScrollY { get; init; }

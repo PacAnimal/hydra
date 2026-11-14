@@ -137,13 +137,16 @@ internal static class GuidedFields
     internal static readonly GuidedField InvertScrollY = new(GuidedSection.Behaviour, 16, 0, null, "invertScrollY", GuidedFieldKind.Toggle,
         "Invert Scroll Y", "Slave: flip vertical scrolling from every master.")
     { Fallback = GuidedValues.Off };
+    internal static readonly GuidedField ReadKeyboardsForHotkeys = new(GuidedSection.Behaviour, 18, 0, null, "readKeyboardsForHotkeys", GuidedFieldKind.Toggle,
+        "Read Keyboards", "Hyprland master: read hotkeys at home from /dev/input; off uses the desktop's shortcut portal.")
+    { Fallback = GuidedValues.On };
     internal static readonly IReadOnlyList<GuidedField> All =
     [
         Name, LogLevel, ProfileOverride, AutoUpdate, UpdateChannel, DebugShield, DebugMouse,
         ProfileName, Mode, Ssid, ScreenCount, ClipboardSync, IsPluggedIn, Address, GatewayMac, Wired, MouseScale, RelativeMouseScale, DeadCorners, MaxMouseHz,
         NetworkConfig, EmbeddedServer, EmbeddedPassword, EmbeddedPort, EmbeddedServerPassword,
         HideCursor, RemoteOnly, SyncScreensaver, ScreenLockPropagation, AccelerateMouseWheel, AllowSystemSleep, ModifierNumLock,
-        InvertScrollX, InvertScrollY
+        InvertScrollX, InvertScrollY, ReadKeyboardsForHotkeys
     ];
 
     internal static readonly IReadOnlyList<GuidedField> Root = [.. All.Where(f => f.IsRoot)];

@@ -92,6 +92,16 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial int XCloseDisplay(nint display);
 
+    // the largest request the server takes, in 4-byte units
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint XMaxRequestSize(nint display);
+
+    // the same with BIG-REQUESTS, 0 when the server lacks it
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint XExtendedMaxRequestSize(nint display);
+
     [LibraryImport(X11)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial nint XDefaultRootWindow(nint display);

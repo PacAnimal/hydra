@@ -118,16 +118,69 @@ public class ScreenLayout(List<ScreenRect> screens, List<HostConfig> configs, in
     // returns the neighbour, the mapped entry coords and the edge left by, or null.
     public EdgeHit? DetectEdgeExit(ScreenRect current, int x, int y)
     {
-        Direction? dir = null;
-        if (x <= JumpZone - 1) dir = Direction.Left;
-        else if (x >= current.Width - JumpZone) dir = Direction.Right;
-        else if (y <= JumpZone - 1) dir = Direction.Up;
-        else if (y >= current.Height - JumpZone) dir = Direction.Down;
-
-        if (dir is null) return null;
+        if (ExitEdge(current, x, y) is not { } dir) return null;
         var perpPos = dir is Direction.Left or Direction.Right ? y : x; // position along the crossed edge
-        var edgeLen = EdgeLength(current, dir.Value);
-        if (!_graph.TryGetValue((current.Name, dir.Value), out var links)) return null;
+        if (CrossingAt(current, dir, perpPos) is not { } crossing) return null;
+
+        var entry = MapEntry(crossing.Destination, dir, perpPos, EdgeLength(current, dir), crossing.Link);
+        return new EdgeHit(crossing.Destination, dir, entry, new ScreenEdge(current.Name, dir, perpPos));
+    }
+
+    // every run of pixels along local's edges where DetectEdgeExit finds a crossing, ordered by edge then position
+    public IReadOnlyList<EdgeSpan> CrossableSpans(ScreenRect local)
+    {
+        var spans = new List<EdgeSpan>();
+        foreach (var dir in Enum.GetValues<Direction>())
+        {
+            if (!_graph.ContainsKey((local.Name, dir))) continue;
+            var edgeLen = EdgeLength(local, dir);
+            int? start = null;
+            for (var p = 0; p <= edgeLen; p++)
+            {
+                var crosses = p < edgeLen && Crosses(local, dir, p);
+                if (crosses && start is null) start = p;
+                else if (!crosses && start is { } s)
+                {
+                    spans.Add(new EdgeSpan(dir, s, p));
+                    start = null;
+                }
+            }
+        }
+        return spans;
+    }
+
+    // whether DetectEdgeExit finds a crossing at perpPos along screen's dir edge; a corner pixel is its side edge's
+    private bool Crosses(ScreenRect screen, Direction dir, int perpPos)
+    {
+        var at = EdgePoint(screen, dir, perpPos);
+        return ExitEdge(screen, at.X, at.Y) == dir && CrossingAt(screen, dir, perpPos) is not null;
+    }
+
+    // the edge whose jump zone (x, y) is in, or null; a corner goes to Left or Right
+    private static Direction? ExitEdge(ScreenRect current, int x, int y)
+    {
+        if (x <= JumpZone - 1) return Direction.Left;
+        if (x >= current.Width - JumpZone) return Direction.Right;
+        if (y <= JumpZone - 1) return Direction.Up;
+        if (y >= current.Height - JumpZone) return Direction.Down;
+        return null;
+    }
+
+    // the outermost pixel perpPos along screen's dir edge (screen-local)
+    private static ScreenPoint EdgePoint(ScreenRect screen, Direction dir, int perpPos) => dir switch
+    {
+        Direction.Left => new(0, perpPos),
+        Direction.Right => new(screen.Width - 1, perpPos),
+        Direction.Up => new(perpPos, 0),
+        Direction.Down => new(perpPos, screen.Height - 1),
+        _ => throw new ArgumentOutOfRangeException(nameof(dir), dir, null),
+    };
+
+    // the link perpPos along current's dir edge crosses by and the online screen it reaches, or null
+    private Crossing? CrossingAt(ScreenRect current, Direction dir, int perpPos)
+    {
+        var edgeLen = EdgeLength(current, dir);
+        if (!_graph.TryGetValue((current.Name, dir), out var links)) return null;
 
         // normalized position along the edge [0,1]
         var normalized = edgeLen > 0 ? (perpPos + 0.5f) / edgeLen : 0f;
@@ -148,10 +201,7 @@ public class ScreenLayout(List<ScreenRect> screens, List<HostConfig> configs, in
         }
         if (match is null) return null;
 
-        if (Online(match.Destination, dir.Value) is not { } dest) return null;
-
-        var entry = MapEntry(dest, dir.Value, perpPos, edgeLen, match);
-        return new EdgeHit(dest, dir.Value, entry, new ScreenEdge(current.Name, dir.Value, perpPos));
+        return Online(match.Destination, dir) is { } dest ? new Crossing(match, dest) : null;
     }
 
     // skips through offline screens (Width/Height == 0 means slave not yet connected) to the next one on in dir
@@ -269,6 +319,8 @@ public class ScreenLayout(List<ScreenRect> screens, List<HostConfig> configs, in
     private static int EdgeLength(ScreenRect screen, Direction dir) => dir is Direction.Left or Direction.Right ? screen.Height : screen.Width;
 
     private sealed record EdgeNeighbour(ScreenRect Screen, double Start, double End);
+
+    private sealed record Crossing(EdgeLink Link, ScreenRect Destination);
 
     // one entry per edge segment connection
     private record EdgeLink(

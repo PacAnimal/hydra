@@ -88,6 +88,7 @@ function serializeProfile(p: HydraProfile): Record<string, unknown> {
 
   if (p.mode === 'Master') {
     if (p.hideCursor === true) out.hideCursor = true
+    if (p.readKeyboardsForHotkeys === false) out.readKeyboardsForHotkeys = false
     if (p.maxMouseHz !== undefined) out.maxMouseHz = p.maxMouseHz
     if (p.modifierNumLock !== undefined) out.modifierNumLock = p.modifierNumLock
     const hotkeys = serializeHotkeys(p.hotkeys)

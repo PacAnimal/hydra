@@ -1,0 +1,33 @@
+FROM fedora:44
+
+# the desktops the tests start in this image: the main image's set, with kde-x11 in place of kde
+ENV HYDRA_DESKTOP_KINDS=openbox,gnome,kde-x11,evdev
+
+# Plasma 6.8 dropped X11 and its kwin obsoletes kwin-x11, so kwin-x11 and its Plasma stack come from
+# Fedora 44's base repo only (6.6), and nothing installed after it may pull a newer kwin or plasma
+RUN dnf install -y --repo=fedora kwin-x11 \
+	&& dnf install -y --exclude='kwin*' --exclude='plasma*' \
+		mutter openbox xorg-x11-server-Xvfb \
+		xdg-desktop-portal libei libei-utils libxkbcommon \
+		wl-clipboard xclip xdotool python3-gobject gtk4 \
+		dbus-daemon dbus-tools procps-ng libcap dotnet-sdk-10.0 libffi gcc SDL3-devel \
+	&& dnf clean all \
+	&& test -x /usr/bin/kwin_x11
+
+# a binary with file capabilities cannot exec in an unprivileged container
+RUN x11="$(readlink -f /usr/bin/kwin_x11)" \
+	&& if [ -n "$(getcap "$x11")" ]; then setcap -r "$x11"; fi \
+	&& [ -z "$(getcap "$x11")" ]
+
+# a private dbus-daemon and the portals want a machine id, which the base image leaves empty
+RUN dbus-uuidgen --ensure=/etc/machine-id
+
+COPY hydratest-portal.py /usr/libexec/hydratest-portal
+COPY hydratest.portal /usr/share/xdg-desktop-portal/portals/
+COPY hydratest-portals.conf /usr/share/xdg-desktop-portal/
+COPY desktop.sh input-probe.py lane.sh /usr/local/bin/
+RUN chmod +x /usr/libexec/hydratest-portal /usr/local/bin/desktop.sh /usr/local/bin/input-probe.py /usr/local/bin/lane.sh
+
+# a game: a fullscreen window holding the pointer locked in relative mode, printing the motion it sees
+COPY game-probe.c /usr/local/src/
+RUN gcc -std=c11 -O2 -Wall -Wextra -o /usr/local/bin/game-probe /usr/local/src/game-probe.c -lSDL3

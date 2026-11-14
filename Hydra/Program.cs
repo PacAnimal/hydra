@@ -9,6 +9,7 @@ using Hydra.FileTransfer;
 using Hydra.Management;
 using Hydra.Platform;
 using Hydra.Platform.Linux;
+using Hydra.Platform.Linux.Wayland;
 using Hydra.Platform.MacOs;
 using Hydra.Platform.Windows;
 using Hydra.Relay;
@@ -18,6 +19,7 @@ using Hydra.Update;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 // ensure console can display non-ASCII characters (e.g. '€', 'ø') in debug logs
 Console.OutputEncoding = Encoding.UTF8;
@@ -257,13 +259,16 @@ services.AddHostedSingleton(sp => new NetworkWatcher(
 
 if (config != null)
 {
-    // Hyprland (Wayland) master: evdev input, cursor and monitors from the compositor's IPC socket, and the Wayland
-    // clipboard through wl-clipboard (XWayland's, without it)
-    var hyprlandMaster = OperatingSystem.IsLinux() && profile.Mode == Mode.Master && HyprlandIpc.Available;
+    // Wayland: input, injection, monitors and the clipboard through the desktop portals, on one session for the run
+    var wayland = WaylandDesktop.IsSession;
     var hasXDisplay = Environment.GetEnvironmentVariable("DISPLAY") != null;
 
     // console mode: no X display available — use evdev input and null screen detector
-    var linuxConsoleMode = OperatingSystem.IsLinux() && !hyprlandMaster && !hasXDisplay;
+    var linuxConsoleMode = OperatingSystem.IsLinux() && !wayland && !hasXDisplay;
+
+    // disposed with the host, after everything that uses it
+    if (wayland)
+        services.AddSingleton<IWaylandSession, WaylandSession>();
 
     // screen detector must be registered before any service that awaits IScreenDetector.Get() at startup
     if (OperatingSystem.IsMacOS())
@@ -272,8 +277,8 @@ if (config != null)
         services.AddHostedService<IScreenDetector, WindowsScreenDetector>();
     else if (linuxConsoleMode)
         services.AddHostedService<IScreenDetector, NullScreenDetector>();
-    else if (hyprlandMaster)
-        services.AddHostedService<IScreenDetector, HyprlandScreenDetector>();
+    else if (wayland)
+        services.AddHostedService<IScreenDetector, WaylandScreenDetector>();
     else if (OperatingSystem.IsLinux())
         services.AddHostedService<IScreenDetector, XorgScreenDetector>();
     else
@@ -301,10 +306,20 @@ if (config != null)
             }
             services.AddSingleton<IPlatformInput, EvdevInputHandler>();
         }
-        else if (hyprlandMaster)
+        else if (wayland)
         {
-            services.AddSingleton<IPlatformInput, HyprlandInputHandler>();
-            services.AddSingleton<IWindowFocus, HyprlandWindowFocus>();
+            if (profile.RemoteOnly)
+            {
+                Console.Error.WriteLine("remoteOnly is not supported on a Wayland master: the desktop portal captures input only when the pointer crosses a screen edge. Remove remoteOnly from hydra.conf, or run Hydra in an X11 session.");
+                return;
+            }
+            services.AddSingleton<IPlatformInput>(sp => new WaylandInputHandler(sp.GetRequiredService<IWaylandSession>(), sp.GetRequiredService<IHydraProfile>(),
+                sp.GetRequiredService<ILogger<WaylandInputHandler>>(), WaylandDesktop.IsHyprland, sp.GetService<ICaptureClipboard>(),
+                // xdg-desktop-portal-hyprland binds no shortcut by itself, so the hotkeys at home are read from the keyboards
+                // unless readKeyboardsForHotkeys is off
+                WaylandDesktop.IsHyprland && profile.ReadKeyboardsForHotkeys ? new EvdevKeySource(sp.GetRequiredService<ILogger<EvdevInputHandler>>()) : null,
+                WaylandDesktop.IsHyprland && !profile.ReadKeyboardsForHotkeys));
+            services.AddSingleton<IWindowFocus, NullWindowFocus>();
         }
         else if (OperatingSystem.IsLinux())
         {
@@ -331,6 +346,11 @@ if (config != null)
             // the output handler, so a window is focused on the input desktop's thread
             services.AddSingleton<IWindowFocus>(sp => OperatingSystem.IsWindows() ? sp.GetRequiredService<WindowsOutputHandler>() : new NullWindowFocus());
         }
+        else if (wayland)
+        {
+            services.AddCoalescedOutput<WaylandOutputHandler>();
+            services.AddSingleton<IWindowFocus, NullWindowFocus>();
+        }
         else if (OperatingSystem.IsLinux())
         {
             services.AddCoalescedOutput<XorgOutputHandler>();
@@ -346,10 +366,10 @@ if (config != null)
             services.AddSingleton<ILocalEventTap, MacInputHandler>();
         else if (OperatingSystem.IsWindows())
             services.AddSingleton<ILocalEventTap, WindowsInputHandler>();
-        else if (!linuxConsoleMode)
+        else if (!linuxConsoleMode && !wayland)
             services.AddSingleton<ILocalEventTap, XorgInputHandler>();
         else
-            services.AddSingleton<ILocalEventTap>(sp => sp.GetRequiredService<IPlatformInput>()); // no-op on console
+            services.AddSingleton<ILocalEventTap>(sp => sp.GetRequiredService<IPlatformInput>()); // no-op on console and Wayland
 
         services.AddHostedService<ICursorHider, CursorHiderService>();
         services.AddHostedService<SlaveLocalInputWatcher>();
@@ -366,7 +386,7 @@ if (config != null)
         services.AddHostedService<IScreenSaverSync, MacScreenSaverSync>();
     else if (OperatingSystem.IsWindows())
         services.AddHostedService<IScreenSaverSync, WindowsScreenSaverSync>();
-    else if (linuxConsoleMode || (hyprlandMaster && !hasXDisplay))
+    else if (linuxConsoleMode || wayland)
         services.AddSingleton<IScreenSaverSync, NullScreenSaverSync>();
     else if (OperatingSystem.IsLinux())
         services.AddHostedService<IScreenSaverSync, XorgScreenSaverSync>();
@@ -380,8 +400,13 @@ if (config != null)
         services.AddSingleton<IClipboardSync, MacClipboardSync>();
     else if (OperatingSystem.IsWindows())
         services.AddSingleton<IClipboardSync, WindowsClipboardSync>();
-    else if (hyprlandMaster && WaylandClipboardSync.Available)
-        services.AddSingleton<IClipboardSync, WaylandClipboardSync>();
+    else if (wayland)
+    {
+        // wl-clipboard when the portal has no clipboard; the master's input handler claims it for each visit
+        services.AddSingleton<PortalClipboardSync>();
+        services.AddSingleton<IClipboardSync>(sp => sp.GetRequiredService<PortalClipboardSync>());
+        services.AddSingleton<ICaptureClipboard>(sp => sp.GetRequiredService<PortalClipboardSync>());
+    }
     else if (OperatingSystem.IsLinux() && hasXDisplay)
         services.AddSingleton<IClipboardSync, XorgClipboardSync>();
     else
@@ -511,18 +536,16 @@ static async Task<NetworkLinks?> ReadNetworkLinks(INetworkDetector detector, boo
     }
 }
 
-// returns the current number of connected screens
+// returns the current number of connected screens; on Wayland the compositor's wl_outputs, counted over a short-lived
+// Wayland connection since the profile is picked from this count before DI, with XWayland's count (1 without it) when
+// the compositor cannot be asked
 static int GetScreenCount()
 {
     if (OperatingSystem.IsMacOS()) return MacDisplayHelper.GetAllScreens().Count;
     if (OperatingSystem.IsWindows()) return WindowsDisplayHelper.GetAllScreens().Count;
     if (OperatingSystem.IsLinux())
     {
-        if (HyprlandIpc.Available)
-        {
-            try { return HyprlandIpc.Monitors().Count; }
-            catch { return 1; }
-        }
+        if (WaylandDesktop.IsSession && CountWaylandOutputs() is { } outputs) return outputs;
         var display = XlibRuntime.TryOpenDisplay();
         if (display == nint.Zero) return 1;
         try
@@ -536,4 +559,20 @@ static int GetScreenCount()
         }
     }
     return 1;
+}
+
+// the compositor's outputs with a logical size; null when it cannot be reached or reports none
+static int? CountWaylandOutputs()
+{
+    try
+    {
+        using var client = WaylandClient.Connect(NullLogger.Instance);
+        using var outputs = new WaylandOutputs(client, NullLogger.Instance);
+        var count = outputs.Screens.Count;
+        return count > 0 ? count : null;
+    }
+    catch (Exception e) when (e is InvalidOperationException or ObjectDisposedException or DllNotFoundException or EntryPointNotFoundException)
+    {
+        return null;
+    }
 }

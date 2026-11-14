@@ -3,6 +3,7 @@ using Cathedral.Config;
 using Hydra.Relay;
 using Hydra.Screen;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Time.Testing;
 using Tests.Setup;
 
 namespace Tests.Screen;
@@ -67,9 +68,9 @@ public class ScreenNamingTests : ServicesFixture
     {
         var log = new CapturingLog<InputRouter>(LogLevel.Warning);
         var world = new WorldState();
-        var ticks = new SteppableTicks();
+        var time = new FakeTimeProvider();
         var bundle = await Services.Start(
-            TransitionTestHelper.CreateService(profile: TransitionTestHelper.ChainConfig, world: world, log: log, getTickCount: ticks.Now));
+            TransitionTestHelper.CreateService(profile: TransitionTestHelper.ChainConfig, world: world, log: log, timeProvider: time));
         await TransitionTestHelper.BringHostsOnline(bundle.Relay, ["remote", "remote2"]);
         TransitionTestHelper.EnterRemote(bundle.Platform);
         for (var i = 0; i < 30; i++)
@@ -80,7 +81,7 @@ public class ScreenNamingTests : ServicesFixture
 
         // remote, earlier in the layout than remote2, claims the screen the cursor is on
         await Advertise(bundle.Relay, "remote", Entry("remote", 0), Entry("remote2", 2560));
-        ticks.Advance(20); // past the mouse throttle
+        time.Advance(TimeSpan.FromMilliseconds(20)); // past the mouse throttle
         bundle.Platform.FireMouseDelta(-10, 0);
 
         var sent = bundle.Relay.Sent.Snapshot();

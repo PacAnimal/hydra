@@ -110,6 +110,8 @@ export interface HydraProfile {
   invertScrollY?: boolean
   // master only
   hideCursor?: boolean
+  // hyprland: false serves the hotkeys at home from the GlobalShortcuts portal instead of /dev/input
+  readKeyboardsForHotkeys?: boolean
   maxMouseHz?: number
   // the keypad's NumLock under Super/Ctrl/Alt: true digits, false navigation, undefined as pressed
   modifierNumLock?: boolean

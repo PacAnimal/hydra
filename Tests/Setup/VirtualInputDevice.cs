@@ -40,17 +40,32 @@ public sealed class VirtualInputDevice : IDisposable
 
     // reports letter keys and Shift, so evdev's discovery takes it for a keyboard
     public static VirtualInputDevice Keyboard(string name) =>
-        Create(name, keys: [EvdevNativeMethods.KEY_A, KEY_LEFTSHIFT], relative: false);
+        Create(name, keys: [EvdevNativeMethods.KEY_A, KEY_LEFTSHIFT], rels: []);
+
+    // every key of a plain pc keyboard (evdev codes 1-127), for typing whole words
+    public static VirtualInputDevice FullKeyboard(string name) =>
+        Create(name, keys: [.. Enumerable.Range(1, 127).Select(code => (ushort)code)], rels: []);
 
     // relative X/Y and the left button, so discovery takes it for a pointer
     public static VirtualInputDevice Mouse(string name) =>
-        Create(name, keys: [EvdevNativeMethods.BTN_LEFT], relative: true);
+        Create(name, keys: [EvdevNativeMethods.BTN_LEFT], rels: [EvdevNativeMethods.REL_X, EvdevNativeMethods.REL_Y]);
+
+    // a three-button mouse with a vertical and a horizontal wheel
+    public static VirtualInputDevice WheelMouse(string name) =>
+        Create(name, keys: [EvdevNativeMethods.BTN_LEFT, EvdevNativeMethods.BTN_RIGHT, EvdevNativeMethods.BTN_MIDDLE,
+                EvdevNativeMethods.BTN_SIDE, EvdevNativeMethods.BTN_EXTRA],
+            rels: [EvdevNativeMethods.REL_X, EvdevNativeMethods.REL_Y, EvdevNativeMethods.REL_WHEEL, EvdevNativeMethods.REL_HWHEEL]);
 
     // a power button: neither keyboard nor pointer
     public static VirtualInputDevice Other(string name) =>
-        Create(name, keys: [KEY_POWER], relative: false);
+        Create(name, keys: [KEY_POWER], rels: []);
 
-    private static VirtualInputDevice Create(string name, ushort[] keys, bool relative)
+    // a wireless keyboard+mouse receiver's one node: letter keys, the left button and relative X/Y together
+    public static VirtualInputDevice Combo(string name) =>
+        Create(name, keys: [EvdevNativeMethods.KEY_A, KEY_LEFTSHIFT, EvdevNativeMethods.BTN_LEFT],
+            rels: [EvdevNativeMethods.REL_X, EvdevNativeMethods.REL_Y]);
+
+    private static VirtualInputDevice Create(string name, ushort[] keys, ushort[] rels)
     {
         var fd = EvdevNativeMethods.Open(Uinput, O_RDWR | O_NONBLOCK | O_CLOEXEC);
         if (fd < 0) throw new InvalidOperationException($"{Uinput} could not be opened");
@@ -59,11 +74,11 @@ public sealed class VirtualInputDevice : IDisposable
             Check(ioctl_int(fd, UI_SET_EVBIT, EvdevNativeMethods.EV_KEY), "UI_SET_EVBIT(EV_KEY)");
             foreach (var key in keys)
                 Check(ioctl_int(fd, UI_SET_KEYBIT, key), "UI_SET_KEYBIT");
-            if (relative)
+            if (rels.Length > 0)
             {
                 Check(ioctl_int(fd, UI_SET_EVBIT, EvdevNativeMethods.EV_REL), "UI_SET_EVBIT(EV_REL)");
-                Check(ioctl_int(fd, UI_SET_RELBIT, EvdevNativeMethods.REL_X), "UI_SET_RELBIT(REL_X)");
-                Check(ioctl_int(fd, UI_SET_RELBIT, EvdevNativeMethods.REL_Y), "UI_SET_RELBIT(REL_Y)");
+                foreach (var rel in rels)
+                    Check(ioctl_int(fd, UI_SET_RELBIT, rel), "UI_SET_RELBIT");
             }
 
             // struct uinput_setup: input_id { bustype, vendor, product, version }, name[80], ff_effects_max
@@ -124,6 +139,27 @@ public sealed class VirtualInputDevice : IDisposable
         Emit(EvdevNativeMethods.EV_KEY, code, down ? 1 : 0);
         Emit(EvdevNativeMethods.EV_SYN, 0, 0);
     }
+
+    // a button is a key to evdev (BTN_LEFT and up)
+    public void Button(ushort code, bool down) => Key(code, down);
+
+    // one relative motion report
+    public void Move(int dx, int dy)
+    {
+        if (dx != 0) Emit(EvdevNativeMethods.EV_REL, EvdevNativeMethods.REL_X, dx);
+        if (dy != 0) Emit(EvdevNativeMethods.EV_REL, EvdevNativeMethods.REL_Y, dy);
+        Emit(EvdevNativeMethods.EV_SYN, 0, 0);
+    }
+
+    // wheel notches, positive away from the user (up), as REL_WHEEL counts them
+    public void Wheel(int notches)
+    {
+        Emit(EvdevNativeMethods.EV_REL, EvdevNativeMethods.REL_WHEEL, notches);
+        Emit(EvdevNativeMethods.EV_SYN, 0, 0);
+    }
+
+    // wheel notches, positive towards the user (down), so REL_WHEEL gets the opposite sign
+    public void Scroll(int notches) => Wheel(-notches);
 
     private void Emit(ushort type, ushort code, int value)
     {

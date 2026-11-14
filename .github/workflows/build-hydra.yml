@@ -129,6 +129,28 @@ jobs:
         working-directory: HydraWebConfig/tools/tui-tests
         run: npm test
 
+  # the Category=Desktops tests against real headless GNOME, KDE (Wayland and X11) and openbox desktops and an evdev
+  # (console) master, in the two Fedora images from Tests/Wayland
+  test-desktops:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # the container is privileged and makes its evdev master through the host's /dev/uinput
+      - name: Allow uinput test devices
+        run: |
+          sudo modprobe uinput || true   # built in on some kernels
+          test -c /dev/uinput
+          echo 'KERNEL=="uinput", MODE="0666"' | sudo tee /etc/udev/rules.d/99-hydra-tests.rules
+          echo 'SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="hydra-test*", MODE="0666"' | sudo tee -a /etc/udev/rules.d/99-hydra-tests.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=uinput
+          sudo chmod 0666 /dev/uinput
+
+      - name: Test
+        run: ./run-tests.sh desktops
+
   build:
     runs-on: ${{ matrix.runner }}
     needs: [version]

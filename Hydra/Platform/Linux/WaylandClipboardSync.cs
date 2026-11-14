@@ -4,28 +4,27 @@ using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform.Linux;
 
-// The Wayland clipboard through wl-clipboard (wl-paste / wl-copy), which speak the compositor's data-control protocol
-// and so need no focused window. XWayland's clipboard only reaches Wayland's when the compositor bridges it, which a
-// Hyprland master cannot count on.
+// PortalClipboardSync's fallback when the portal offers no clipboard: wl-clipboard (wl-paste / wl-copy), which speaks the
+// compositor's data-control protocol and so needs no focused window.
 //
 // Each write is a wl-copy kept in the foreground: it serves the clipboard until another client copies, then exits, so
 // while it runs the clipboard is still Hydra's write (and ReadAll answers nothing, as X11 does for its own selection).
 // wl-copy offers one MIME type per process, so a write keeps the text when there is any, else the image; the formats
-// left out are reported as refused.
-internal sealed class WaylandClipboardSync(ILogger<WaylandClipboardSync> log) : IClipboardSync, IDisposable
+// left out are reported as refused. No change counter: wl-paste --watch could follow the owners, but hashes decide
+// where a platform keeps none.
+internal sealed class WaylandClipboardSync : IClipboardSync, IDisposable
 {
     private const int ReadTimeoutMs = 2000;
     // how long a write waits for wl-copy to take the clipboard before answering
     private const int WriteSettleMs = 50;
 
-    // KDE's mark of a password manager's copy, which wl-copy --sensitive offers
-    private const string PasswordHint = "x-kde-passwordManagerHint";
-
-    private static readonly string[] TextTypes = ["text/plain;charset=utf-8", "UTF8_STRING", "text/plain", "TEXT", "STRING"];
-
+    private readonly ILogger _log;
     private readonly Lock _lock = new();
     private Process? _clipboardOwner;
     private Process? _primaryOwner;
+
+    // under another's logger, as PortalClipboardSync's fallback
+    internal WaylandClipboardSync(ILogger log) => _log = log;
 
     internal static bool Available => OnPath("wl-copy") && OnPath("wl-paste") && Environment.GetEnvironmentVariable("WAYLAND_DISPLAY") != null;
 
@@ -41,18 +40,7 @@ internal sealed class WaylandClipboardSync(ILogger<WaylandClipboardSync> log) : 
         if (listed == null) return ClipboardRead.Empty;   // nothing copied
         var types = Encoding.UTF8.GetString(listed).Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToHashSet();
 
-        var textType = TextTypes.FirstOrDefault(types.Contains);
-        var text = textType != null ? Run(["-n", "-t", textType]) : null;
-        var image = types.Contains("image/png") ? Run(["-t", "image/png"]) : null;
-        var html = types.Contains("text/html") ? Run(["-n", "-t", "text/html"]) : null;
-        var concealed = types.Contains(PasswordHint) && Run(["-n", "-t", PasswordHint]) is { } hint && Encoding.UTF8.GetString(hint).Trim() == "secret";
-
-        return new ClipboardRead(
-            text != null ? Encoding.UTF8.GetString(text) : null,
-            image is { Length: > 0 } ? image : null,
-            html != null ? Encoding.UTF8.GetString(html) : null,
-            null,
-            concealed);
+        return WaylandMime.ReadOffered(types, (type, _) => Run(type == WaylandMime.Png ? ["-t", type] : ["-n", "-t", type]), _log);
     }
 
     // never echo-suppressed: the selection travels as it stands, even when Hydra set it
@@ -72,13 +60,14 @@ internal sealed class WaylandClipboardSync(ILogger<WaylandClipboardSync> log) : 
     {
         // taking the selection back with the text it already holds would clear its owner's highlight
         if (GetPrimaryText() == text) return true;
-        var process = Copy(["-p"], Encoding.UTF8.GetBytes(text));
+        // a failed copy leaves the old owner serving, so the selection is not lost with it
+        if (Copy(["-p"], Encoding.UTF8.GetBytes(text)) is not { } process) return false;
         lock (_lock)
         {
             Stop(_primaryOwner);
             _primaryOwner = process;
         }
-        return process != null;
+        return true;
     }
 
     public bool CanUseEchoFallback() => OwnsClipboard();
@@ -94,20 +83,26 @@ internal sealed class WaylandClipboardSync(ILogger<WaylandClipboardSync> log) : 
         if (!string.IsNullOrEmpty(contents.Text))
         {
             data = Encoding.UTF8.GetBytes(contents.Text);
-            args.AddRange(["-t", "text/plain;charset=utf-8"]);
+            args.AddRange(["-t", WaylandMime.OfferedText[0]]);
             written = contents with { ImagePng = null, Html = null, Rtf = null };
         }
         else if (contents.ImagePng != null)
         {
             data = contents.ImagePng;
-            args.AddRange(["-t", "image/png"]);
+            args.AddRange(["-t", WaylandMime.Png]);
             written = contents with { Html = null, Rtf = null };
         }
         else if (contents.Html != null)
         {
             data = Encoding.UTF8.GetBytes(contents.Html);
-            args.AddRange(["-t", "text/html"]);
+            args.AddRange(["-t", WaylandMime.Html]);
             written = contents with { Rtf = null };
+        }
+        else if (contents.Rtf != null)
+        {
+            data = contents.Rtf;
+            args.AddRange(["-t", WaylandMime.Rtf]);
+            written = contents;
         }
         else
         {
@@ -116,13 +111,13 @@ internal sealed class WaylandClipboardSync(ILogger<WaylandClipboardSync> log) : 
             return contents;
         }
 
-        var process = Copy(args, data);
+        // a failed copy leaves the old owner serving: the clipboard was not replaced, so it must not be emptied either
+        if (Copy(args, data) is not { } process) return null;
         lock (_lock)
         {
             Stop(_clipboardOwner);
             _clipboardOwner = process;
         }
-        if (process == null) return null;
 
         if (contents.PrimaryText is { } primaryText) SetPrimaryText(primaryText);
         return written;
@@ -156,7 +151,7 @@ internal sealed class WaylandClipboardSync(ILogger<WaylandClipboardSync> log) : 
             // it has taken the clipboard once it has read stdin; an early exit means it could not
             if (process.WaitForExit(WriteSettleMs) && process.ExitCode != 0)
             {
-                if (log.IsEnabled(LogLevel.Warning)) log.LogWarning("wl-copy failed: {Error}", process.StandardError.ReadToEnd().Trim());
+                if (_log.IsEnabled(LogLevel.Warning)) _log.LogWarning("wl-copy failed: {Error}", process.StandardError.ReadToEnd().Trim());
                 process.Dispose();
                 return null;
             }
@@ -164,7 +159,7 @@ internal sealed class WaylandClipboardSync(ILogger<WaylandClipboardSync> log) : 
         }
         catch (Exception e)
         {
-            log.LogWarning(e, "wl-copy could not be run");
+            _log.LogWarning(e, "wl-copy could not be run");
             return null;
         }
     }
@@ -192,15 +187,28 @@ internal sealed class WaylandClipboardSync(ILogger<WaylandClipboardSync> log) : 
 
         using (process)
         {
-            using var output = new MemoryStream();
-            var copy = process.StandardOutput.BaseStream.CopyToAsync(output);
+            // read on the thread pool, so the timeout holds against an owner that never finishes; killing wl-paste ends it
+            var output = Task.Run(() => WaylandMime.ReadCapped(process.StandardOutput.BaseStream, ClipboardUtils.MaxClipboardBytes));
             var stderr = process.StandardError.ReadToEndAsync();
-            if (!copy.Wait(ReadTimeoutMs) || !process.WaitForExit(ReadTimeoutMs))
+            byte[]? data;
+            try
             {
-                try { process.Kill(); } catch { /* already gone */ }
-                throw new ClipboardUnreadableException("wl-paste did not answer in time");
+                if (!output.Wait(ReadTimeoutMs)) throw Unanswered(process);
+                data = output.Result;
             }
-            if (process.ExitCode == 0) return output.ToArray();
+            catch (AggregateException e)
+            {
+                Kill(process);
+                throw new ClipboardUnreadableException("wl-paste's output could not be read", e.InnerException);
+            }
+            if (data == null)
+            {
+                // over the cap: no clipboard could carry it, so that format is left out, as TrimToFit leaves it
+                Kill(process);
+                return null;
+            }
+            if (!process.WaitForExit(ReadTimeoutMs)) throw Unanswered(process);
+            if (process.ExitCode == 0) return data;
             // "Nothing is copied" / "No selection" / "No suitable type of content copied": empty, not unreadable
             var error = stderr.Result;
             if (error.Contains("Nothing is copied", StringComparison.OrdinalIgnoreCase)
@@ -211,9 +219,14 @@ internal sealed class WaylandClipboardSync(ILogger<WaylandClipboardSync> log) : 
         }
     }
 
-    private static void Stop(Process? process)
+    private static ClipboardUnreadableException Unanswered(Process process)
     {
-        if (process == null) return;
+        Kill(process);
+        return new ClipboardUnreadableException("wl-paste did not answer in time");
+    }
+
+    private static void Kill(Process process)
+    {
         try
         {
             if (!process.HasExited) process.Kill();
@@ -222,6 +235,12 @@ internal sealed class WaylandClipboardSync(ILogger<WaylandClipboardSync> log) : 
         {
             // already gone
         }
+    }
+
+    private static void Stop(Process? process)
+    {
+        if (process == null) return;
+        Kill(process);
         process.Dispose();
     }
 

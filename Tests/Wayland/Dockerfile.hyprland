@@ -1,0 +1,46 @@
+# Hyprland needs a KMS device and an active seat, which no container on a desktop host has, so this image
+# runs only inside the VM Tests/Wayland/vm/vm.sh boots. BASE and KEYRING are the per-architecture choice,
+# made in vm.sh; the defaults are Arch Linux ARM's.
+ARG BASE=docker.io/menci/archlinuxarm:latest
+FROM ${BASE}
+ARG KEYRING=archlinuxarm
+
+# the desktops the tests start in this image; hyprland owns the VM's one DRM device, so one at a time
+ENV HYDRA_DESKTOP_KINDS=hyprland,openbox,evdev
+
+# pacman's download sandbox needs kernel features a container may lack. A keyring that failed to populate
+# is caught by the install after it, which refuses packages it cannot verify.
+RUN sed -i '/^\[options\]/a DisableSandbox' /etc/pacman.conf \
+	&& pacman-key --init \
+	&& { pacman-key --populate "$KEYRING" >/dev/null 2>&1 || true; } \
+	&& pacman -Syu --noconfirm --needed \
+		hyprland xdg-desktop-portal xdg-desktop-portal-hyprland mesa seatd \
+		openbox xorg-server-xvfb libxss \
+		libei libxkbcommon wl-clipboard xclip xdotool python python-gobject gtk4 \
+		dbus procps-ng icu libffi gcc sdl3 curl \
+	&& pacman -Scc --noconfirm
+
+# .NET 10: the distribution's own SDK when it carries 10, else Microsoft's install script
+RUN pkg= \
+	&& for p in dotnet-sdk-10.0 dotnet-sdk; do \
+		if pacman -Si "$p" 2>/dev/null | grep -qE '^Version +: 10\.'; then pkg="$p"; break; fi; \
+	done \
+	&& if [ -n "$pkg" ]; then \
+		pacman -S --noconfirm --needed "$pkg" && pacman -Scc --noconfirm; \
+	else \
+		curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh \
+		&& bash /tmp/dotnet-install.sh --channel 10.0 --install-dir /usr/share/dotnet \
+		&& ln -sf /usr/share/dotnet/dotnet /usr/bin/dotnet \
+		&& rm /tmp/dotnet-install.sh; \
+	fi \
+	&& dotnet --list-sdks | grep -q '^10\.'
+
+# a private dbus-daemon and the portals want a machine id, which the base image leaves empty
+RUN dbus-uuidgen --ensure=/etc/machine-id
+
+COPY desktop.sh input-probe.py lane.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/desktop.sh /usr/local/bin/input-probe.py /usr/local/bin/lane.sh
+
+# a game: a fullscreen window holding the pointer locked in relative mode, printing the motion it sees
+COPY game-probe.c /usr/local/src/
+RUN gcc -std=c11 -O2 -Wall -Wextra -o /usr/local/bin/game-probe /usr/local/src/game-probe.c -lSDL3

@@ -45,15 +45,14 @@ public static class TransitionTestHelper
             ],
         });
 
-    /// <param name="getTickCount">The router's clock, for a test that needs to drive time rather than wait for it.</param>
     /// <param name="activityTracker">Substituted where a test asserts on what the router reported as activity.</param>
     /// <param name="world">
     /// The world the router records peers in. Pass one to READ what the router wrote — what a peer
     /// advertised is only observable there, and nothing else in the process can see it.
     /// </param>
     /// <param name="timeProvider">
-    /// Where the router's timers come from. Pass a <c>FakeTimeProvider</c> to fire the mouse-batch flush
-    /// on demand rather than racing the few milliseconds it is armed for.
+    /// The router's one clock: its mouse throttle reads it and its timers run on it. Pass a <c>FakeTimeProvider</c> to
+    /// step past the throttle and fire the mouse-batch flush and trailing send on demand rather than racing them.
     /// </param>
     /// <param name="profile">The master profile to run, for a test that varies a configured setting.</param>
     /// <param name="selectionDetector">The local file manager, for a test of the copy hotkey.</param>
@@ -66,7 +65,7 @@ public static class TransitionTestHelper
     /// <param name="localPlatform">The platform the router believes it runs on, rather than the one the test does.</param>
     /// <param name="loggerFactory">Where the router's other loggers come from, for a test that reads what a peer logged through it.</param>
     /// <param name="windowFocus">What brings a window forward, for a test of the monitor switch's arrival.</param>
-    public static TestServiceBundle CreateService(Func<long>? getTickCount = null, IActivityTracker? activityTracker = null, IWorldState? world = null,
+    public static TestServiceBundle CreateService(IActivityTracker? activityTracker = null, IWorldState? world = null,
         TimeProvider? timeProvider = null, IHydraProfile? profile = null, IFileSelectionDetector? selectionDetector = null, IOsdNotification? osd = null,
         FileTransferService? fileTransfer = null, IScreenSaverSync? screenSaverSync = null, FakeScreenDetector? screens = null,
         ILogger<InputRouter>? log = null, IClipboardSync? clipboard = null, PeerPlatform? localPlatform = null, ILoggerFactory? loggerFactory = null,
@@ -81,7 +80,7 @@ public static class TransitionTestHelper
         var service = new InputRouter(platform, platform, config, relay, screens, loggerFactory ?? NullLoggerFactory.Instance,
             log ?? NullLogger<InputRouter>.Instance, screenSaverSync ?? new NullScreenSaverSync(), clipboard ?? new NullClipboardSync(),
             fileTransfer ?? FileTransferService.Null(), selectionDetector ?? new NullFileSelectionDetector(), osd ?? new NullOsdNotification(), tracker,
-            peerState: world, getTickCount: getTickCount, timeProvider: timeProvider, localPlatform: localPlatform, windowFocus: windowFocus);
+            peerState: world, timeProvider: timeProvider, localPlatform: localPlatform, windowFocus: windowFocus);
         // the entry's hash, read off the actor, settled too, as when it was read in line; a test of that read sets Flush alone
         platform.AfterFireCallback = async () =>
         {
@@ -151,16 +150,16 @@ public static class TransitionTestHelper
 
     /// <param name="config">The master profile to run.</param>
     /// <param name="headless">No local screen at all, which is what turns the lock hotkey into confinement.</param>
-    /// <param name="getTickCount">The router's clock, for a test that needs to drive time rather than wait for it.</param>
+    /// <param name="timeProvider">The router's clock and timers, for a test that steps time rather than waits for it.</param>
     /// <param name="screens">The local screen detector, for a test that changes the screens while running.</param>
     /// <param name="screenSaverSync">The screensaver monitor, for a test that fires its activation.</param>
-    public static TestServiceBundle CreateRemoteOnlyService(IHydraProfile? config = null, bool headless = false, Func<long>? getTickCount = null,
+    public static TestServiceBundle CreateRemoteOnlyService(IHydraProfile? config = null, bool headless = false, TimeProvider? timeProvider = null,
         FakeScreenDetector? screens = null, IScreenSaverSync? screenSaverSync = null)
     {
         screens ??= new FakeScreenDetector();
         if (headless)
             screens.Snapshot = new LocalScreenSnapshot([], []);
-        return CreateService(getTickCount, profile: config ?? RemoteOnlyConfig, screenSaverSync: screenSaverSync, screens: screens);
+        return CreateService(timeProvider: timeProvider, profile: config ?? RemoteOnlyConfig, screenSaverSync: screenSaverSync, screens: screens);
     }
 
     // advertises one host's monitors, laid out left to right and named as the host itself names them

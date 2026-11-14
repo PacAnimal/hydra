@@ -1,6 +1,7 @@
 using Hydra.Mouse;
 using Hydra.Relay;
 using Hydra.Screen;
+using Microsoft.Extensions.Time.Testing;
 using Tests.Setup;
 
 namespace Tests.Screen;
@@ -10,7 +11,7 @@ public class RemoteOnlyTests : ServicesFixture
 {
     private FakePlatform _platform = null!;
     private FakeRelay _relay = null!;
-    private readonly SteppableTicks _ticks = new();
+    private readonly FakeTimeProvider _time = new();
     // a lone screen is named after its host; a second one renames it to host:0
     private static readonly ScreenRect Home = new("pi", "pi", 0, 0, 2560, 1440, IsLocal: true);
     // small enough that the default park point (1280, 720) is off it
@@ -20,7 +21,7 @@ public class RemoteOnlyTests : ServicesFixture
         new([.. screens], [.. screens.Select(s => new ScreenInfoEntry(s.Name, s.X, s.Y, s.Width, s.Height, 1.0m))]);
 
     [SetUp]
-    public async Task SetUp() => (_platform, _relay, _) = await Services.Start(TransitionTestHelper.CreateRemoteOnlyService(getTickCount: _ticks.Now));
+    public async Task SetUp() => (_platform, _relay, _) = await Services.Start(TransitionTestHelper.CreateRemoteOnlyService(timeProvider: _time));
 
     // replaces the router SetUp started
     private async Task Restart(TestServiceBundle bundle)
@@ -29,7 +30,7 @@ public class RemoteOnlyTests : ServicesFixture
         (_platform, _relay, _) = await Services.Start(bundle);
     }
 
-    private Task RestartWith(FakeScreenDetector screens) => Restart(TransitionTestHelper.CreateRemoteOnlyService(getTickCount: _ticks.Now, screens: screens));
+    private Task RestartWith(FakeScreenDetector screens) => Restart(TransitionTestHelper.CreateRemoteOnlyService(timeProvider: _time, screens: screens));
 
     // -- auto-entry --
 
@@ -59,7 +60,7 @@ public class RemoteOnlyTests : ServicesFixture
     [Test]
     public async Task AutoEntry_Headless_HasNothingToPark()
     {
-        await Restart(TransitionTestHelper.CreateRemoteOnlyService(headless: true, getTickCount: _ticks.Now));
+        await Restart(TransitionTestHelper.CreateRemoteOnlyService(headless: true, timeProvider: _time));
 
         await TransitionTestHelper.BringHostOnline(_relay, "mac");
 
@@ -192,7 +193,7 @@ public class RemoteOnlyTests : ServicesFixture
         Assert.That(_platform.IsOnVirtualScreen, Is.True);
 
         _relay.Sent.Clear();
-        _ticks.Advance(20); // exceed throttle interval
+        _time.Advance(TimeSpan.FromMilliseconds(20)); // exceed throttle interval
         _platform.FireMouseDelta(10, 5);
 
         var moves = _relay.Sent.Snapshot().Where(s => s.Kind is MessageKind.MouseMove or MessageKind.MouseMoveDelta).ToList();

@@ -19,6 +19,10 @@ internal static partial class EvdevNativeMethods
     // a second set that cannot grab anything, and input silently stops reaching any slave.
     internal const int O_CLOEXEC = 0x80000;
 
+    // errno from a failed open
+    internal const int EPERM = 1;
+    internal const int EACCES = 13;
+
     // -- ioctl commands (_IOC(dir, type, nr, size) = (dir<<30)|(size<<16)|(type<<8)|nr) --
 
     // EVIOCGRAB: exclusive device grab — _IOW('E', 0x90, int) = 0x40044590
@@ -29,7 +33,7 @@ internal static partial class EvdevNativeMethods
     internal const int EVIOCGBIT_EV_KEY = unchecked((int)0x80604521);
     // EVIOCGBIT(EV_REL=2, 2): relative axis capabilities (2 bytes covers REL_HWHEEL=0x06, REL_WHEEL=0x08) — 0x80024522
     internal const int EVIOCGBIT_EV_REL = unchecked((int)0x80024522);
-    // EVIOCGKEY(96): the device's current key/button state, one bit per code — _IOR('E', 0x18, 96) = 0x80604518
+    // EVIOCGKEY(96): keys and buttons down now (96 bytes = KEY_MAX+1 bits) — _IOC(_IOC_READ, 'E', 0x18, 96) = 0x80604518
     internal const int EVIOCGKEY = unchecked((int)0x80604518);
 
     // -- event types --
@@ -37,6 +41,11 @@ internal static partial class EvdevNativeMethods
     internal const ushort EV_SYN = 0x00;
     internal const ushort EV_KEY = 0x01;
     internal const ushort EV_REL = 0x02;
+
+    // -- synchronization codes --
+
+    internal const ushort SYN_REPORT = 0x00;
+    internal const ushort SYN_DROPPED = 0x03;
 
     // -- relative axis codes --
 
@@ -47,24 +56,36 @@ internal static partial class EvdevNativeMethods
 
     // -- key/button codes --
 
-    internal const ushort BTN_MISC = 0x100;   // first button code: keyboard keys are the codes below it
     internal const ushort BTN_LEFT = 0x110;
     internal const ushort BTN_RIGHT = 0x111;
     internal const ushort BTN_MIDDLE = 0x112;
     internal const ushort BTN_SIDE = 0x113;
     internal const ushort BTN_EXTRA = 0x114;
     internal const ushort KEY_A = 0x1E;       // used to detect keyboard capability
+    internal const ushort KEY_LEFTCTRL = 29;
+    internal const ushort KEY_LEFTSHIFT = 42;
+    internal const ushort KEY_LEFTALT = 56;
+    internal const ushort KEY_RIGHTALT = 100;
+    internal const ushort KEY_LEFTMETA = 125;
+    internal const ushort KEY_MAX = 0x2FF;
+    // the first button code: EV_KEY codes from here up are buttons, not keys
+    internal const ushort BTN_MISC = 0x100;
 
     // -- libxkbcommon direction constants --
 
     internal const int XKB_KEY_UP = 0;
     internal const int XKB_KEY_DOWN = 1;
     internal const int XKB_STATE_MODS_EFFECTIVE = 1 << 3;
+    internal const uint XKB_STATE_MODS_DEPRESSED = 1 << 0;
+    internal const uint XKB_STATE_MODS_LATCHED = 1 << 1;
+    internal const uint XKB_STATE_MODS_LOCKED = 1 << 2;
     internal const uint XKB_STATE_LAYOUT_EFFECTIVE = 1 << 7;
+    internal const int XKB_KEYMAP_FORMAT_TEXT_V1 = 1;
+    internal const uint XKB_MOD_INVALID = uint.MaxValue;
 
     // -- libc file I/O --
 
-    [LibraryImport(Libc, EntryPoint = "open", StringMarshalling = StringMarshalling.Utf8)]
+    [LibraryImport(Libc, EntryPoint = "open", StringMarshalling = StringMarshalling.Utf8, SetLastError = true)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial int Open(string path, int flags);
 
@@ -75,6 +96,10 @@ internal static partial class EvdevNativeMethods
     [LibraryImport(Libc, EntryPoint = "read")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial nint Read(int fd, ref InputEvent buf, nuint count);
+
+    [LibraryImport(Libc, EntryPoint = "free")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void Free(nint ptr);
 
     // -- ioctl overloads --
 
@@ -99,6 +124,15 @@ internal static partial class EvdevNativeMethods
     [LibraryImport(Xkb)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial nint xkb_keymap_new_from_names(nint context, ref XkbRuleNames names, int flags);
+
+    [LibraryImport(Xkb, StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint xkb_keymap_new_from_string(nint context, string text, int format, int flags);
+
+    // returns a malloc'd NUL-terminated string the caller frees with free(); 0 on failure.
+    [LibraryImport(Xkb)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint xkb_keymap_get_as_string(nint keymap, int format);
 
     [LibraryImport(Xkb)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
@@ -139,11 +173,47 @@ internal static partial class EvdevNativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial uint xkb_state_serialize_layout(nint state, uint components);
 
+    [LibraryImport(Xkb)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial uint xkb_state_serialize_mods(nint state, uint components);
+
     // returns the number of keysyms and writes a pointer to the keysym array into symsOut.
     // symsOut points into keymap-owned memory — do not free.
     [LibraryImport(Xkb)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial int xkb_keymap_key_get_syms_by_level(nint keymap, uint key, uint layout, uint level, out nint symsOut);
+
+    [LibraryImport(Xkb)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial uint xkb_keymap_min_keycode(nint keymap);
+
+    [LibraryImport(Xkb)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial uint xkb_keymap_max_keycode(nint keymap);
+
+    [LibraryImport(Xkb)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial uint xkb_keymap_num_layouts_for_key(nint keymap, uint key);
+
+    [LibraryImport(Xkb)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial uint xkb_keymap_num_levels_for_key(nint keymap, uint key, uint layout);
+
+    // fills masksOut with up to masksSize modifier masks (real mods) any of which selects the level; returns how many.
+    // libxkbcommon >= 1.0.
+    [LibraryImport(Xkb)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nuint xkb_keymap_key_get_mods_for_level(nint keymap, uint key, uint layout, uint level, [Out] uint[] masksOut, nuint masksSize);
+
+    // returns XKB_KEY_NoSymbol (0) if the codepoint has no keysym.
+    [LibraryImport(Xkb)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial uint xkb_utf32_to_keysym(uint ucs);
+
+    // writes the keysym's name (NUL-terminated, truncated to size) into buffer; returns its length, -1 for an invalid keysym
+    [LibraryImport(Xkb)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int xkb_keysym_get_name(uint keysym, [Out] byte[] buffer, nuint size);
 }
 
 // Linux input_event struct (24 bytes on 64-bit: 8+8 timeval, 2 type, 2 code, 4 value)

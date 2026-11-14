@@ -101,11 +101,6 @@ public sealed class XorgOutputHandler : IPlatformOutput, ICursor
             var keysym = XorgKeysym.Of(ch);
             InjectCharKeysym(keysym, isDown, msg.Modifiers);
         }
-        else if (msg.Key is SpecialKey.MoveToBeginningOfLine or SpecialKey.MoveToEndOfLine)
-        {
-            var keysym = msg.Key == SpecialKey.MoveToBeginningOfLine ? XorgVirtualKey.Home : XorgVirtualKey.End;
-            InjectKeysym(keysym, isDown);
-        }
         else if (msg.Key == SpecialKey.MissionControl)
         {
             // tap Super_L to trigger GNOME Activities / KDE Overview
@@ -124,7 +119,7 @@ public sealed class XorgOutputHandler : IPlatformOutput, ICursor
                 InjectKeysym(XorgVirtualKey.VoidSymbol, true);
                 InjectKeysym(XorgVirtualKey.VoidSymbol, false);
             }
-            var keysym = XorgKeysym.Of(key);
+            var keysym = XorgKeysym.Injected(key);
             if (keysym != 0)
                 InjectKeysym(keysym, isDown);
             // invalidate tracked state so next sync re-queries from server

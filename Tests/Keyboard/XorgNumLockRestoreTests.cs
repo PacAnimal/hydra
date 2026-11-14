@@ -14,7 +14,7 @@ public class XorgNumLockRestoreTests
     private nint _display;
     private uint _numLockKeycode;
     private long _now;
-    private XorgOutputHandler _output = null!;
+    private XorgOutputHandler? _output;
 
     [OneTimeSetUp]
     public void RequireX11() => X11Required.OrIgnore();
@@ -33,10 +33,13 @@ public class XorgNumLockRestoreTests
     [TearDown]
     public void Close()
     {
-        _output.Dispose();
+        _output?.Dispose();
+        _output = null;
+        if (_display == nint.Zero) return;
         // every Linux test shares the one Xvfb, which starts with NumLock off
-        SetNumLockLocally(false);
+        if (_numLockKeycode != 0) SetNumLockLocally(false);
         _ = NativeMethods.XCloseDisplay(_display);
+        _display = nint.Zero;
     }
 
     [Test]
@@ -46,7 +49,7 @@ public class XorgNumLockRestoreTests
         Tap(SpecialKey.KP_Home);
         Assert.That(NumLockOn(), Is.False, "pre-condition: synced off for the keypad's Home");
 
-        _output.EndVisit();
+        _output!.EndVisit();
 
         Assert.That(NumLockOn(), Is.True);
     }
@@ -56,7 +59,7 @@ public class XorgNumLockRestoreTests
     {
         SetNumLockLocally(true);
         Tap(SpecialKey.KP_Home);
-        _output.EndVisit();
+        _output!.EndVisit();
         SetNumLockLocally(false);
         _now += 1000;
 
@@ -74,7 +77,7 @@ public class XorgNumLockRestoreTests
 
     private void Tap(SpecialKey key)
     {
-        _output.InjectKey(new KeyEventMessage(KeyEventType.KeyDown, KeyModifiers.None, null, key));
+        _output!.InjectKey(new KeyEventMessage(KeyEventType.KeyDown, KeyModifiers.None, null, key));
         _output.InjectKey(new KeyEventMessage(KeyEventType.KeyUp, KeyModifiers.None, null, key));
     }
 

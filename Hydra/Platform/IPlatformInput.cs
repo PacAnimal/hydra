@@ -84,4 +84,11 @@ public interface IPlatformInput : IAsyncDisposable, ICursor, ILocalEventTap
         WarpCursor(x, y);
         return ValueTask.CompletedTask;
     }
+
+    // Every local screen's edge spans a crossing can start from, given again whenever the layout or the online set may
+    // have changed (Wayland: where to place pointer barriers). The platforms that see the cursor at home ignore it.
+    void CrossableEdgesChanged(IReadOnlyList<CrossableEdge> edges) { }
 }
+
+// a span along one local screen's edge, in that screen's coordinates; Screen.X/Y make it global
+public sealed record CrossableEdge(ScreenRect Screen, EdgeSpan Span);

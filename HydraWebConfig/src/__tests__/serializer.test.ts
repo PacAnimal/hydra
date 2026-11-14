@@ -334,6 +334,14 @@ describe('serialize', () => {
       expect(['hideCursor' in slave, 'maxMouseHz' in slave]).toEqual([false, false])
     })
 
+    it('writes readKeyboardsForHotkeys on a master only, and only when off', () => {
+      const off = JSON.parse(serialize(state({ mode: 'Master', readKeyboardsForHotkeys: false }))).profiles[0]
+      const on = JSON.parse(serialize(state({ mode: 'Master', readKeyboardsForHotkeys: true }))).profiles[0]
+      const slave = JSON.parse(serialize(state({ mode: 'Slave', readKeyboardsForHotkeys: false }))).profiles[0]
+      expect(off.readKeyboardsForHotkeys).toBe(false)
+      expect(['readKeyboardsForHotkeys' in on, 'readKeyboardsForHotkeys' in slave]).toEqual([false, false])
+    })
+
     it('writes allowSystemSleep and clipboardSync only when not the default', () => {
       const set = JSON.parse(serialize(state({ mode: 'Slave', allowSystemSleep: true, clipboardSync: 'System' }))).profiles[0]
       const unset = JSON.parse(serialize(state({ mode: 'Slave', allowSystemSleep: false, clipboardSync: 'Hydra' }))).profiles[0]

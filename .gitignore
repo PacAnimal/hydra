@@ -158,3 +158,6 @@ docs/assets/hero.gif
 
 # local scratch notes, not part of the published docs
 todo.md
+
+# python bytecode from the desktop lane scripts
+__pycache__/

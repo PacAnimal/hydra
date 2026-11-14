@@ -23,6 +23,7 @@ public class ConfigDirTests
             Assert.That(dir.ManagementState, Is.EqualTo(Path.Combine(directory, ".hydra-management.json")));
             Assert.That(dir.RemoteApplyMarker, Is.EqualTo(Path.Combine(directory, ".hydra-remote-apply.json")));
             Assert.That(dir.RemoteApplyBackup, Is.EqualTo(Path.Combine(directory, ".hydra-remote-backup.conf")));
+            Assert.That(dir.PortalTokens, Is.EqualTo(Path.Combine(directory, ".hydra-portal.json")));
         }
     }
 

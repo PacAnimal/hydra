@@ -38,12 +38,8 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
     private Action<MouseButtonEvent>? _onMouseButton;
     private Action<MouseScrollEvent>? _onMouseScroll;
     private EvdevKeyResolver? _keyResolver;
-    // set while a grab waits for the keys held at its start to go up (DeferKeyboardGrabWhileHeld)
-    private volatile bool _keyboardGrabPending;
-
-    // A desktop session (Hyprland) also reads these devices. A keyboard grabbed with keys down never shows the
-    // compositor their ups, so its modifiers would stick: the keyboards' grab then waits until every key is up.
-    internal bool DeferKeyboardGrabWhileHeld { get; init; }
+    // set by StartKeyWatch: keyboards only, never grabbed, every key raw to this instead of resolved
+    private Action<uint, bool>? _onRawKey;
 
     // where the event nodes are; tests point it at a directory of links to devices they made
     internal string InputDir { get; init; } = "/dev/input";
@@ -60,6 +56,9 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
 
         // key and button codes down here; released by hand when the device vanishes, since its own ups are then unreadable
         public HashSet<ushort> Held { get; } = [];
+
+        // whether the events read are being dropped after a buffer overflow
+        public EvdevResync Sync { get; } = new();
 
         // motion accumulated between SYN reports
         public double PendingDx { get; set; }
@@ -82,7 +81,7 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
             {
                 if (_grabbed == value) return;
                 _grabbed = value;
-                SetGrab(value);
+                GrabDevices(_devices, value);
             }
             if (value) _keyResolver?.Reset();  // clear stale state from previous grab session
         }
@@ -112,27 +111,14 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
         // and every grab on the new set would fail with EBUSY
         ReleaseDevices();
 
+        _onRawKey = null;
         _onMouseDelta = onMouseDelta;
         _onKeyEvent = onKeyEvent;
         _onMouseButton = onMouseButton;
         _onMouseScroll = onMouseScroll;
 
-        var xkb = LinuxInputConfig.ResolveXkb();
         _keyResolver?.Dispose();   // a re-tap would otherwise leak the previous xkb context/keymap
-        try
-        {
-            _keyResolver = new EvdevKeyResolver(xkb);
-        }
-        catch (InvalidOperationException) when (xkb.Options != null)
-        {
-            // an option only the desktop's own xkb files define (Omarchy's compose option) fails to compile here
-            log.LogWarning("Keyboard options '{Options}' did not compile; using the layout without them", xkb.Options);
-            xkb = xkb with { Options = null };
-            _keyResolver = new EvdevKeyResolver(xkb);
-        }
-        if (log.IsEnabled(LogLevel.Information))
-            log.LogInformation("Keyboard layout: {Layout} model: {Model}{Variant}",
-                xkb.Layout, xkb.Model, xkb.Variant is null ? "" : $" variant: {xkb.Variant}");
+        _keyResolver = EvdevKeyResolver.FromSystemLayout(log);
 
         int generation;
         lock (_devicesLock) generation = _generation;
@@ -161,6 +147,49 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
         return Task.CompletedTask;
     }
 
+    // Reads the keyboards beside whoever else does (the compositor): no grab, no pointers, no resolving, each key's
+    // evdev code and whether it went down to onKey on the event loop's thread, repeats left out. Keyboards plugged in
+    // later are picked up as they come; false, with nothing open and no watch started, when the user cannot read the
+    // keyboards: the directory is unreadable, or no keyboard opened and some node refused for want of permission (a
+    // user outside the input group is often granted the gamepads but no keyboard). Waiting for a keyboard to be
+    // plugged in is only for an input directory where nothing was refused.
+    internal bool StartKeyWatch(Action<uint, bool> onKey)
+    {
+        ReleaseDevices();
+
+        _onRawKey = onKey;
+        _onMouseDelta = null;
+        _onKeyEvent = null;
+        _onMouseButton = null;
+        _onMouseScroll = null;
+
+        int generation;
+        lock (_devicesLock) generation = _generation;
+        var scans = new ScanState();
+        DiscoveryResult scan;
+        try
+        {
+            scan = DiscoverDevices(generation, scans, waitForUdev: false);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+        if (scan.Added.Count == 0 && scan.Denied > 0) return false;
+        if (scan.Added.Count == 0)
+        {
+            if (log.IsEnabled(LogLevel.Information)) log.LogInformation("No keyboard to watch for hotkeys yet; waiting for one to be plugged in");
+        }
+        else if (log.IsEnabled(LogLevel.Information))
+            log.LogInformation("Watching {K} {Keyboards} for hotkeys", scan.Added.Count, Pluralize.Of(scan.Added.Count, "keyboard"));
+
+        _watcher = WatchInputDir();
+        var rescanMs = _watcher != null ? WatchedRescanMs : UnwatchedRescanMs;
+        _thread = new Thread(() => EventLoop(generation, scans, rescanMs)) { Name = "HydraEvdevKeyWatch", IsBackground = true };
+        _thread.Start();
+        return true;
+    }
+
     public void StopEventTap()
     {
         lock (_devicesLock) _generation++;
@@ -184,7 +213,6 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
             _devices.Clear();
             _devicesVersion++;
             _grabbed = false;
-            _keyboardGrabPending = false;
         }
         if (count > 0 && log.IsEnabled(LogLevel.Debug)) log.LogDebug("Released {Count} input {Devices}", count, Pluralize.Of(count, "device"));
     }
@@ -224,6 +252,7 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
         var keyBuf = new byte[96];
         var relBuf = new byte[2];
         var unopened = 0;
+        var denied = 0;
         var pending = false;
 
         foreach (var path in paths.Where(p => !open.Contains(p)))
@@ -245,6 +274,7 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
             if (fd < 0)
             {
                 unopened++;
+                if (System.Runtime.InteropServices.Marshal.GetLastPInvokeError() is EvdevNativeMethods.EACCES or EvdevNativeMethods.EPERM) denied++;
                 continue;
             }
 
@@ -264,7 +294,8 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
                 && TestBit(keyBuf, EvdevNativeMethods.KEY_A);
 
             // mouse/pointer: supports EV_REL with X and Y axes
-            var isPointer = hasRel
+            // a key watch reads a combined device for its keys only
+            var isPointer = _onRawKey == null && hasRel
                 && EvdevNativeMethods.ioctl_bit(fd, EvdevNativeMethods.EVIOCGBIT_EV_REL, relBuf) >= 0
                 && TestBit(relBuf, EvdevNativeMethods.REL_X)
                 && TestBit(relBuf, EvdevNativeMethods.REL_Y);
@@ -292,7 +323,7 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
                 _devices.Add(device);
                 _devicesVersion++;
                 // grabbed in the same section that adds it, so a release taking the lock next releases it too
-                if (_grabbed && !(device.Keyboard && _keyboardGrabPending)) GrabDevices([device], true);
+                if (_grabbed) GrabDevices([device], true);
             }
             added.Add(device);
             scans.PendingSince.Remove(path);
@@ -303,7 +334,7 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
 
             if (log.IsEnabled(LogLevel.Debug)) log.LogDebug("{Role}: {Path}", device.Role, path);
         }
-        return new DiscoveryResult(added, paths.Count, unopened, pending);
+        return new DiscoveryResult(added, paths.Count, unopened, denied, pending);
     }
 
     // A device that was unplugged (or re-enumerated) reports POLLHUP/POLLERR on every poll from then on; left in
@@ -394,11 +425,18 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
                     var r = EvdevNativeMethods.Read(device.Fd, ref ev, (nuint)System.Runtime.InteropServices.Marshal.SizeOf<InputEvent>());
                     if (r <= 0) break;
 
+                    var action = device.Sync.Next(ev.Type, ev.Code);
+                    if (action == EvdevSyncAction.Discard) continue;
+                    if (action == EvdevSyncAction.Resync)
+                    {
+                        Resync(device);
+                        continue;
+                    }
+
                     // dispatch on the event, not the device: a combo device sends keys and motion down one fd
                     if (ev.Type == EvdevNativeMethods.EV_KEY)
                     {
-                        HandleKeyCode(device, ev.Code, ev.Value);
-                        if (ev.Value == 0 && _keyboardGrabPending) TryCompleteKeyboardGrab();
+                        if (!EvdevResync.IsStale(device.Held, ev.Code, ev.Value)) HandleKeyCode(device, ev.Code, ev.Value);
                     }
                     else if (device.Pointer)
                         HandleMouseEvent(ev, device);
@@ -407,11 +445,37 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
         }
     }
 
+    // the kernel's buffer overflowed and the gap is over: what went up or down unseen is made up from the key state,
+    // through the same path a read event takes; motion from the gap is lost
+    private void Resync(InputDevice device)
+    {
+        device.PendingDx = 0;
+        device.PendingDy = 0;
+        var keys = new byte[EvdevResync.KeyBytes];
+        if (EvdevNativeMethods.ioctl_bit(device.Fd, EvdevNativeMethods.EVIOCGKEY, keys) < 0)
+        {
+            log.LogWarning("Input events dropped on {Path} and EVIOCGKEY failed; held keys may be wrong", device.Path);
+            return;
+        }
+        var changes = EvdevResync.Diff(device.Held, keys);
+        if (log.IsEnabled(LogLevel.Information))
+            log.LogInformation("Input events dropped on {Path}; resynced {Count} {Keys}", device.Path, changes.Count, Pluralize.Of(changes.Count, "key"));
+        foreach (var change in changes)
+            HandleKeyCode(device, change.Code, change.Down ? 1 : 0);
+    }
+
     private void HandleKeyCode(InputDevice device, ushort code, int value)
     {
         if (value == 1) device.Held.Add(code);
         else if (value == 0) device.Held.Remove(code);
 
+        if (_onRawKey != null)
+        {
+            // codes below BTN_MISC (0x100) only: a keyboard+mouse receiver's buttons are not hotkeys, nor are the keys
+            // from KEY_OK (0x160) up, KEY_FN and KEY_MACRO* among them (a resync's replay comes through here too)
+            if (value != 2 && code < EvdevNativeMethods.BTN_MISC) _onRawKey(code, value == 1);
+            return;
+        }
         if (device.Keyboard) HandleKeyboardEvent(code, value);
         else HandleButtonCode(code, value);
     }
@@ -472,69 +536,17 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
     private void HandleButtonCode(ushort code, int value)
     {
         if (value == 2) return;  // ignore repeat for buttons
-        var button = code switch
-        {
-            EvdevNativeMethods.BTN_LEFT => MouseButton.Left,
-            EvdevNativeMethods.BTN_RIGHT => MouseButton.Right,
-            EvdevNativeMethods.BTN_MIDDLE => MouseButton.Middle,
-            EvdevNativeMethods.BTN_SIDE => MouseButton.Extra1,
-            _ => MouseButton.Extra2,
-        };
-        _onMouseButton?.Invoke(new MouseButtonEvent(button, value == 1));
+        _onMouseButton?.Invoke(new MouseButtonEvent(EvdevButtons.Button(code), value == 1));
     }
 
     // reads bit n of an EVIOCGBIT capability bitmap
     private static bool TestBit(byte[] bits, int n) => n / 8 < bits.Length && (bits[n / 8] & (1 << (n % 8))) != 0;
 
-    // whether any keyboard key (codes below the button range) is down on any keyboard, from the kernel's own state
-    internal bool KeysHeld()
-    {
-        lock (_devicesLock) return _devices.Any(d => d.Keyboard && AnyBitSet(d.Fd, 1, EvdevNativeMethods.BTN_MISC));
-    }
-
-    // whether a mouse button is down on any pointer, from the kernel's state: it sees through our own grab
-    internal bool ButtonsHeld()
-    {
-        lock (_devicesLock) return _devices.Any(d => d.Pointer && AnyBitSet(d.Fd, EvdevNativeMethods.BTN_LEFT, EvdevNativeMethods.BTN_EXTRA + 1));
-    }
-
-    private static bool AnyBitSet(int fd, int from, int to)
-    {
-        var state = new byte[96];
-        if (EvdevNativeMethods.ioctl_bit(fd, EvdevNativeMethods.EVIOCGKEY, state) < 0) return false;
-        for (var code = from; code < to; code++)
-            if (TestBit(state, code)) return true;
-        return false;
-    }
-
-    private void TryCompleteKeyboardGrab()
-    {
-        lock (_devicesLock)
-        {
-            if (!_grabbed || !_keyboardGrabPending || KeysHeld()) return;
-            _keyboardGrabPending = false;
-            GrabDevices(_devices.Where(d => d.Keyboard), true);
-        }
-        if (log.IsEnabled(LogLevel.Debug)) log.LogDebug("Keys released: keyboard grab taken");
-    }
-
-    // callers hold _devicesLock
-    private void SetGrab(bool grab)
-    {
-        if (grab && DeferKeyboardGrabWhileHeld && KeysHeld())
-        {
-            _keyboardGrabPending = true;
-            GrabDevices(_devices.Where(d => !d.Keyboard), true);
-            if (log.IsEnabled(LogLevel.Debug)) log.LogDebug("Keys held: keyboard grab waits for their release");
-            return;
-        }
-        _keyboardGrabPending = false;
-        GrabDevices(_devices, grab);
-    }
-
     // callers hold _devicesLock
     private void GrabDevices(IEnumerable<InputDevice> devices, bool grab)
     {
+        // a key watch reads beside the compositor, which must keep every key
+        if (_onRawKey != null) return;
         foreach (var fd in devices.Select(d => d.Fd))
         {
             var r = EvdevNativeMethods.ioctl_grab(fd, EvdevNativeMethods.EVIOCGRAB, grab ? 1 : 0);
@@ -570,7 +582,7 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
         }
     }
 
-    // what one scan of /dev/input found: the devices it opened, how many event nodes there were and how many of those
-    // could not be opened, and whether one is still waiting for udev
-    private sealed record DiscoveryResult(List<InputDevice> Added, int Nodes, int Unopened, bool Pending);
+    // what one scan of /dev/input found: the devices it opened, how many event nodes there were, how many of those
+    // could not be opened and how many of those for want of permission, and whether one is still waiting for udev
+    private sealed record DiscoveryResult(List<InputDevice> Added, int Nodes, int Unopened, int Denied, bool Pending);
 }

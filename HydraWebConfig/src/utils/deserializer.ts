@@ -190,6 +190,7 @@ function parseProfile(obj: Record<string, unknown>): HydraProfile {
     allowSystemSleep: strictBool(obj.allowSystemSleep),
     clipboardSync: coerceClipboardSync(obj.clipboardSync),
     hideCursor: strictBool(obj.hideCursor),
+    readKeyboardsForHotkeys: strictBool(obj.readKeyboardsForHotkeys),
     invertScrollX: strictBool(obj.invertScrollX),
     invertScrollY: strictBool(obj.invertScrollY),
     maxMouseHz: optNumber(obj.maxMouseHz),

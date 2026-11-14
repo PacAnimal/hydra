@@ -174,6 +174,14 @@ export function GlobalSettings({ config, serverError, onChange }: Props) {
                 />
                 Screen Lock Propagation
               </label>
+              <label className="checkbox-label" title="Hyprland: read hotkeys at home from the keyboards in /dev/input; unchecked, the desktop's GlobalShortcuts portal serves them">
+                <input
+                  type="checkbox"
+                  checked={config.readKeyboardsForHotkeys !== false}
+                  onChange={e => onChange({ readKeyboardsForHotkeys: e.target.checked ? undefined : false })}
+                />
+                Read Keyboards For Hotkeys
+              </label>
             </>
           )}
         </div>

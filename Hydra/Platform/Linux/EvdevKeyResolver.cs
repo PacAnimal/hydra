@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using Cathedral.Utils;
 using Hydra.Keyboard;
+using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform.Linux;
 
@@ -9,7 +10,8 @@ namespace Hydra.Platform.Linux;
 // XorgKeyResolver is reused directly — only the source of keysyms differs.
 internal sealed class EvdevKeyResolver : IDisposable
 {
-    private readonly nint _ctx;
+    private readonly XkbKeymap _xkb;
+    private readonly bool _ownsKeymap;
     private readonly nint _keymap;
     private nint _state;
     // Resolve() runs on the evdev event-loop thread; Reset()/Dispose() run on other threads (the
@@ -28,37 +30,37 @@ internal sealed class EvdevKeyResolver : IDisposable
     private readonly uint _scrollLockXkbKey;
 
     internal EvdevKeyResolver(LinuxInputConfig.XkbNames xkb)
+        : this(XkbKeymap.FromNames(xkb), true)
     {
-        var layout = xkb.Layout;
-        _ctx = EvdevNativeMethods.xkb_context_new(0);
-        if (_ctx == 0) throw new InvalidOperationException("Failed to create xkb context.");
+    }
 
-        // allocate native strings for rule names; freed in the finally below.
-        // Model comes from the system config too: a 105-key board is the common case but not a
-        // universal one, and getting it wrong misplaces the keys either side of Enter.
-        var names = new XkbRuleNames
-        {
-            Rules = Marshal.StringToCoTaskMemUTF8("evdev"),
-            Model = Marshal.StringToCoTaskMemUTF8(xkb.Model),
-            Layout = Marshal.StringToCoTaskMemUTF8(layout),
-            Variant = xkb.Variant is null ? 0 : Marshal.StringToCoTaskMemUTF8(xkb.Variant),
-            Options = xkb.Options is null ? 0 : Marshal.StringToCoTaskMemUTF8(xkb.Options),
-        };
+    // resolves on a keymap the caller owns and disposes after this resolver
+    internal EvdevKeyResolver(XkbKeymap keymap)
+        : this(keymap, false)
+    {
+    }
 
-        try
+    // builds from a keymap in XKB_KEYMAP_FORMAT_TEXT_V1, as an EIS server hands it over libei
+    internal static EvdevKeyResolver FromKeymap(string keymapText) => new(XkbKeymap.FromText(keymapText), true);
+
+    // the layout the system names (LinuxInputConfig.ResolveXkb), without its options when they do not compile here
+    internal static EvdevKeyResolver FromSystemLayout(ILogger log) => new(XkbKeymap.FromSystemLayout(log), true);
+
+    // the keymap this resolver resolves against, as XKB_KEYMAP_FORMAT_TEXT_V1 text
+    internal string KeymapText()
+    {
+        lock (_stateLock)
         {
-            _keymap = EvdevNativeMethods.xkb_keymap_new_from_names(_ctx, ref names, 0);
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            return _xkb.Text();
         }
-        finally
-        {
-            Marshal.FreeCoTaskMem(names.Rules);
-            Marshal.FreeCoTaskMem(names.Model);
-            Marshal.FreeCoTaskMem(names.Layout);
-            if (names.Variant != 0) Marshal.FreeCoTaskMem(names.Variant);
-            if (names.Options != 0) Marshal.FreeCoTaskMem(names.Options);
-        }
+    }
 
-        if (_keymap == 0) throw new InvalidOperationException($"Failed to create xkb keymap for layout '{layout}'.");
+    private EvdevKeyResolver(XkbKeymap keymap, bool ownsKeymap)
+    {
+        _xkb = keymap;
+        _ownsKeymap = ownsKeymap;
+        _keymap = keymap.Handle;
 
         // detect whether the keymap names ScrollLock as a virtual modifier; fall back to Mod3
         _scrollLockModName = EvdevNativeMethods.xkb_keymap_mod_get_index(_keymap, "ScrollLock") != uint.MaxValue
@@ -72,7 +74,9 @@ internal sealed class EvdevKeyResolver : IDisposable
         _scrollLockXkbKey = sclkKey != uint.MaxValue ? sclkKey : 0;
 
         _state = EvdevNativeMethods.xkb_state_new(_keymap);
-        if (_state == 0) throw new InvalidOperationException("Failed to create xkb state.");
+        if (_state != 0) return;
+        if (ownsKeymap) keymap.Dispose();
+        throw new InvalidOperationException("Failed to create xkb state.");
     }
 
     // value=1 → KeyDown, value=0 → KeyUp, value=2 → auto-repeat
@@ -235,8 +239,7 @@ internal sealed class EvdevKeyResolver : IDisposable
             // one-shot: block any later Resolve/Reset (e.g. from a shutdown-race) from touching freed state
             if (!_disposed.TrySet()) return;
             if (_state != 0) { EvdevNativeMethods.xkb_state_unref(_state); _state = 0; }
-            if (_keymap != 0) EvdevNativeMethods.xkb_keymap_unref(_keymap);
-            if (_ctx != 0) EvdevNativeMethods.xkb_context_unref(_ctx);
+            if (_ownsKeymap) _xkb.Dispose();
         }
     }
 }
