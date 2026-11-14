@@ -3,7 +3,7 @@
 
 Opens one undecorated fullscreen window on the first monitor and prints one JSON
 object per line to stdout for every input event. Reads JSON commands from stdin
-(clipboard, primary selection, present, quit) and answers each with one line.
+(clipboard, primary selection, present, hide, show, quit) and answers each with one line.
 Requires python3-gobject and GTK 4; no pip packages.
 """
 import base64
@@ -178,10 +178,32 @@ class Probe:
         elif "present" in cmd:
             self.win.present()
             emit({"presented": True})
+        elif "hide" in cmd:
+            # unmapped, so a game started meanwhile is the desktop's only window; flushed so the compositor has the
+            # unmap before the answer lets the test start it
+            self.win.set_visible(False)
+            self.win.get_display().flush()
+            emit({"hidden": True})
+        elif "show" in cmd:
+            self.show_again()
         elif "quit" in cmd:
             self.app.quit()
         else:
             raise ValueError(f"unknown command: {sorted(cmd)}")
+
+    def show_again(self):
+        # answered once mapped again, so the next test's click finds the probe in place
+        if self.win.get_mapped():
+            self.win.present()
+            emit({"shown": True})
+            return
+
+        def mapped(win):
+            win.disconnect(handler)
+            emit({"shown": True})
+
+        handler = self.win.connect("map", mapped)
+        self.win.present()
 
     def read_text(self, clipboard, reply_key):
         def done(cb, result):

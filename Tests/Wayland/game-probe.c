@@ -51,6 +51,7 @@ int main(void)
     if (watcher) SDL_DetachThread(watcher);
 
     bool ready = false;
+    bool fullscreen = false;
     bool running = true;
     int status = 0;
     Uint64 deadline = SDL_GetTicks() + READY_DEADLINE_MS;
@@ -62,6 +63,8 @@ int main(void)
             do {
                 if (e.type == SDL_EVENT_QUIT || e.type == stdin_closed_event) {
                     running = false;
+                } else if (e.type == SDL_EVENT_WINDOW_ENTER_FULLSCREEN || e.type == SDL_EVENT_WINDOW_LEAVE_FULLSCREEN) {
+                    fullscreen = e.type == SDL_EVENT_WINDOW_ENTER_FULLSCREEN;
                 } else if (e.type == SDL_EVENT_MOUSE_MOTION) {
                     printf("{\"rel\":[%g,%g],\"pos\":[%g,%g]}\n", e.motion.xrel, e.motion.yrel, e.motion.x, e.motion.y);
                     fflush(stdout);
@@ -88,12 +91,19 @@ int main(void)
             next_try = now + RETRY_MS;
         }
         bool relative = SDL_GetWindowRelativeMouseMode(window);
-        if (focused && relative) {
+        // fullscreen is asked for, but a compositor may map the window at its asked size first and make it fullscreen
+        // later: ready once the compositor says it is, as the asked size is reported before that
+        int w = 0, h = 0;
+        SDL_Rect display = {0};
+        SDL_GetWindowSize(window, &w, &h);
+        SDL_GetDisplayBounds(SDL_GetDisplayForWindow(window), &display);
+        if (focused && relative && fullscreen) {
             ready = true;
-            printf("{\"ready\":true,\"relative\":%s}\n", json_bool(relative));
+            printf("{\"ready\":true,\"relative\":%s,\"size\":[%d,%d]}\n", json_bool(relative), w, h);
             fflush(stdout);
         } else if (now >= deadline) {
-            printf("{\"ready\":false,\"focus\":%s,\"relative\":%s}\n", json_bool(focused), json_bool(relative));
+            printf("{\"ready\":false,\"focus\":%s,\"relative\":%s,\"fullscreen\":%s,\"size\":[%d,%d],\"display\":[%d,%d]}\n",
+                   json_bool(focused), json_bool(relative), json_bool(fullscreen), w, h, display.w, display.h);
             fflush(stdout);
             fprintf(stderr, "game-probe: no relative mode by the deadline: %s\n", SDL_GetError());
             status = 2;
