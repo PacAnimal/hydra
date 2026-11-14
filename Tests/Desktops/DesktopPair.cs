@@ -90,12 +90,10 @@ public abstract class DesktopPair(DesktopKind masterKind, DesktopKind slaveKind)
             _masterProbe = await Probe.Input(_masterDesktop);
         _slaveProbe = await Probe.Input(_slaveDesktop);
 
-        // the hands come first on evdev and hyprland, so the master finds their devices as it starts, as a user's
-        // keyboard is there before hydra (a keyboard plugged in later is the key source's own tests' business)
+        // the hands come first on evdev, so the master finds their devices as it starts; on hyprland they come after
+        // the master, so its hotkeys at home are read from a keyboard plugged in once it runs
         if (EvdevMaster)
             _hands = await UserHands.Attach(_masterDesktop, TestLog.Factory.CreateLogger<UserHands>(), PaceEvdev);
-        else if (MasterKind == DesktopKind.Hyprland)
-            _hands = await UserHands.Attach(_masterDesktop, TestLog.Factory.CreateLogger<UserHands>(), PaceHyprland);
 
         _master = await HydraInstance.Start(_masterDesktop, MasterName,
             HydraInstance.MasterConfig(MasterName, SlaveName, port, remoteOnly: EvdevMaster));
@@ -112,8 +110,9 @@ public abstract class DesktopPair(DesktopKind masterKind, DesktopKind slaveKind)
         if (EvdevMaster)
             await Master.WaitForLog(RemoteOnlyEnteredHs);
 
-        if (!EvdevMaster && MasterKind != DesktopKind.Hyprland)
-            _hands = await UserHands.Attach(_masterDesktop, TestLog.Factory.CreateLogger<UserHands>());
+        if (!EvdevMaster)
+            _hands = await UserHands.Attach(_masterDesktop, TestLog.Factory.CreateLogger<UserHands>(),
+                MasterKind == DesktopKind.Hyprland ? PaceHyprland : null);
 
         // the compositor's pointer may rest on the armed edge already, so the first test must not be the first to move it
         await Home();
