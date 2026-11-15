@@ -523,7 +523,8 @@ public class WaylandOutputHandlerEmissionTests
     [Test]
     public async Task UsRu_OnEisUnderGroup1_PunctuationShortcuts_AreTheUsKeysWithNoShift()
     {
-        // ru has , on Shift+slash, ; on Shift+4 and / on Shift+backslash; a shortcut takes the Latin group's key
+        // ru has , on Shift+slash, ; on Shift+4 and / on its own key (Shift+backslash, or LSGT on some xkeyboard-config
+        // versions); a shortcut takes the Latin group's key
         RequireLinux();
         var (handler, device) = await Started("EIS", keymap: true, layout: "us,ru", group: 1);
         foreach (var ch in ",./;") Shortcut(handler, ch);
@@ -767,7 +768,7 @@ public class WaylandOutputHandlerEmissionTests
         }
     }
 
-    private const uint KeyQ = 16, KeyY = 21, KeyV = 47, KeyBackslash = 43;
+    private const uint KeyQ = 16, KeyY = 21, KeyV = 47;
 
     [Test]
     public async Task UsDe_OnEisUnderGroup1_CtrlZ_IsTheDeKeyForZ()
@@ -827,16 +828,23 @@ public class WaylandOutputHandlerEmissionTests
     public async Task Ru_OnEis_CtrlC_TakesTheUsReferenceKey()
     {
         // ru alone has no Latin group: a shortcut ru does not type takes the us reference keymap's key, while ru's own
-        // exact / (Shift+backslash) comes first
+        // exact / comes first; which key that is varies with xkeyboard-config (Shift+backslash, or LSGT with no Shift),
+        // so it is read from the keymap, and it is never us's KEY_SLASH
         RequireLinux();
         var (handler, device) = await Started("EIS", keymap: true, layout: "ru");
+        using var lookup = new XkbKeymapLookup(device.Keymap!);
+        var slash = lookup.Find(XkbKeymapLookup.CharToKeysym('/')) ?? throw new AssertionException("pre-condition: ru types /");
+        Assert.That(slash.AltGr, Is.False, "pre-condition: ru types / with at most Shift");
         foreach (var ch in "cv/") Shortcut(handler, ch);
         var shortcuts = device.Sent.ToList();
         Type(handler, "c");
+        string[] slashStrokes = slash.Shift
+            ? [$"key {LeftShift} down", "frame", $"key {slash.EvdevKey} down", "frame", $"key {LeftShift} up", "frame", $"key {slash.EvdevKey} up", "frame"]
+            : Taps(slash.EvdevKey);
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(shortcuts, Is.EqualTo((string[])["start", .. Taps(KeyC, KeyV),
-                $"key {LeftShift} down", "frame", $"key {KeyBackslash} down", "frame", $"key {LeftShift} up", "frame", $"key {KeyBackslash} up", "frame"]));
+            Assert.That(slash.EvdevKey, Is.Not.EqualTo(KeySlash), "ru's own key, not the us reference key");
+            Assert.That(shortcuts, Is.EqualTo((string[])["start", .. Taps(KeyC, KeyV), .. slashStrokes]));
             Assert.That(device.Sent, Is.EqualTo(shortcuts), "a plain c is no shortcut and ru types none");
         }
     }
