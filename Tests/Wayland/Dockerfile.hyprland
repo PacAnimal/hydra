@@ -15,7 +15,7 @@ RUN sed -i '/^\[options\]/a DisableSandbox' /etc/pacman.conf \
 	&& { pacman-key --populate "$KEYRING" >/dev/null 2>&1 || true; } \
 	&& pacman -Syu --noconfirm --needed \
 		hyprland xdg-desktop-portal xdg-desktop-portal-hyprland mesa seatd \
-		openbox xorg-server-xvfb libxss \
+		openbox xorg-server-xvfb xorg-setxkbmap libxss \
 		libei libxkbcommon wl-clipboard xclip xdotool python python-gobject gtk4 \
 		dbus procps-ng icu libffi gcc sdl3 curl \
 	&& pacman -Scc --noconfirm

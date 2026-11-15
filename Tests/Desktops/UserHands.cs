@@ -9,7 +9,8 @@ using Tmds.DBus.Protocol;
 
 namespace Tests.Desktops;
 
-// the physical user's mouse and keyboard on a test desktop: xdotool on x11, the compositor's own eis socket on gnome
+// the physical user's mouse and keyboard on a test desktop: xtest keys (by physical key) and xdotool mouse on x11, the
+// compositor's own eis socket on gnome
 // and kde, uinput devices on bare evdev and on hyprland (which reads them through libinput). On x11 and eis a call returns once the display server or compositor has
 // processed its input (eis by a ping round trip after each frame), so steps never queue up behind each other;
 // on uinput, once its input has left this process.
@@ -23,13 +24,7 @@ internal sealed class UserHands : IAsyncDisposable
     private const int DiscretePerNotch = 120;
 
     // evdev codes EvdevNativeMethods does not declare
-    private const int KeyEsc = 1;
-    private const int KeyEnter = 28;
     private const int KeySpace = 57;
-    private const int KeyUp = 103;
-    private const int KeyLeft = 105;
-    private const int KeyRight = 106;
-    private const int KeyDown = 108;
 
     // evdev numbers the letter keys along the qwerty rows: q is 16, a is 30, z is 44
     private static readonly Dictionary<char, int> Letters = new[] { ("qwertyuiop", 16), ("asdfghjkl", 30), ("zxcvbnm", 44) }
@@ -53,7 +48,7 @@ internal sealed class UserHands : IAsyncDisposable
     {
         IBackend backend = desktop.Kind switch
         {
-            DesktopKind.Openbox or DesktopKind.KdeX11 => new XdotoolBackend(desktop),
+            DesktopKind.Openbox or DesktopKind.KdeX11 => new X11Backend(desktop),
             DesktopKind.Gnome => await EisBackend.Mutter(desktop, log),
             DesktopKind.Kde => await EisBackend.KWin(desktop, log),
             DesktopKind.Evdev => new UinputBackend(),
@@ -110,6 +105,20 @@ internal sealed class UserHands : IAsyncDisposable
         foreach (var c in ascii) await Tap(KeyFor(c));
     }
 
+    // physical keys, tapped one after another: what they type is up to the desktop's layout
+    public async Task TypeKeys(params int[] evdevKeys)
+    {
+        foreach (var key in evdevKeys) await Tap(key);
+    }
+
+    // the modifiers held in order around a tap of key, released in reverse
+    public async Task Chord(int[] modifiers, int key)
+    {
+        foreach (var modifier in modifiers) await Key(modifier, true);
+        await Tap(key);
+        for (var i = modifiers.Length - 1; i >= 0; i--) await Key(modifiers[i], false);
+    }
+
     private static int KeyFor(char c) => c switch
     {
         ' ' => KeySpace,
@@ -132,10 +141,11 @@ internal sealed class UserHands : IAsyncDisposable
         Task Scroll(int notches);
     }
 
-    private sealed class XdotoolBackend(Desktop desktop) : IBackend
+    // an x11 server's hands: keys through xtest by physical key, the mouse through xdotool
+    private sealed class X11Backend(Desktop desktop) : IBackend
     {
         public Task Move(int dx, int dy) =>
-            Run("mousemove_relative", "--", dx.ToString(CultureInfo.InvariantCulture), dy.ToString(CultureInfo.InvariantCulture));
+            Run("xdotool", "mousemove_relative", "--", dx.ToString(CultureInfo.InvariantCulture), dy.ToString(CultureInfo.InvariantCulture));
 
         public Task Button(int evdevButton, bool pressed)
         {
@@ -146,45 +156,46 @@ internal sealed class UserHands : IAsyncDisposable
                 EvdevNativeMethods.BTN_RIGHT => "3",
                 _ => throw new ArgumentException($"no x11 button for evdev button {evdevButton}", nameof(evdevButton)),
             };
-            return Run(pressed ? "mousedown" : "mouseup", button);
+            return Run("xdotool", pressed ? "mousedown" : "mouseup", button);
         }
 
-        public Task Key(int evdevKey, bool pressed) => Run(pressed ? "keydown" : "keyup", Keysym(evdevKey));
+        // xtest on the key's x keycode, evdev's plus 8 as xvfb's evdev rules number them: the physical key, whatever the
+        // layout. A python3 one-shot, as xdotool would pick a key by keysym; its XSync returns once the server has the event
+        public Task Key(int evdevKey, bool pressed) =>
+            Run("python3", "-c", FakeKey, (evdevKey + 8).ToString(CultureInfo.InvariantCulture), pressed ? "1" : "0");
 
         public Task Scroll(int notches) =>
-            Run("click", "--repeat", Math.Abs(notches).ToString(CultureInfo.InvariantCulture), notches > 0 ? "5" : "4");
+            Run("xdotool", "click", "--repeat", Math.Abs(notches).ToString(CultureInfo.InvariantCulture), notches > 0 ? "5" : "4");
 
-        private static string Keysym(int evdevKey)
-        {
-            foreach (var (letter, code) in Letters)
-                if (code == evdevKey) return letter.ToString();
-            return evdevKey switch
-            {
-                >= 2 and <= 10 => ((char)('1' + evdevKey - 2)).ToString(),
-                11 => "0",
-                KeySpace => "space",
-                KeyEnter => "Return",
-                KeyEsc => "Escape",
-                KeyLeft => "Left",
-                KeyRight => "Right",
-                KeyUp => "Up",
-                KeyDown => "Down",
-                EvdevNativeMethods.KEY_LEFTSHIFT => "Shift_L",
-                EvdevNativeMethods.KEY_LEFTCTRL => "Control_L",
-                EvdevNativeMethods.KEY_LEFTALT => "Alt_L",
-                EvdevNativeMethods.KEY_LEFTMETA => "Super_L",
-                _ => throw new ArgumentException($"no x keysym for evdev key {evdevKey}", nameof(evdevKey)),
-            };
-        }
+        private const string FakeKey = """
+            import ctypes, sys
+            x = ctypes.CDLL("libX11.so.6")
+            t = ctypes.CDLL("libXtst.so.6")
+            x.XOpenDisplay.restype = ctypes.c_void_p
+            x.XFlush.argtypes = [ctypes.c_void_p]
+            x.XSync.argtypes = [ctypes.c_void_p, ctypes.c_int]
+            x.XCloseDisplay.argtypes = [ctypes.c_void_p]
+            t.XTestFakeKeyEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_int, ctypes.c_ulong]
+            d = x.XOpenDisplay(None)
+            if not d:
+                sys.exit("cannot open display")
+            if not t.XTestFakeKeyEvent(d, int(sys.argv[1]), int(sys.argv[2]), 0):
+                sys.exit("XTestFakeKeyEvent failed")
+            x.XFlush(d)
+            x.XSync(d, 0)
+            x.XCloseDisplay(d)
+            """;
 
-        private async Task Run(params string[] args)
+        private async Task Run(string file, params string[] args)
         {
-            var info = desktop.Process("xdotool", args);
+            var info = desktop.Process(file, args);
             info.UseShellExecute = false;
             info.RedirectStandardError = true;
             using var process = System.Diagnostics.Process.Start(info)
-                ?? throw new InvalidOperationException("xdotool did not start");
+                ?? throw new InvalidOperationException($"{file} did not start");
+            process.StandardInput.Close();
             var stderr = process.StandardError.ReadToEndAsync();
+            var what = file == "python3" ? $"xtest key {args[^2]} {args[^1]}" : $"{file} {string.Join(' ', args)}";
             using var bound = new CancellationTokenSource(TestBound.Bound);
             try
             {
@@ -193,11 +204,11 @@ internal sealed class UserHands : IAsyncDisposable
             catch (OperationCanceledException)
             {
                 process.Kill(entireProcessTree: true);
-                throw new TimeoutException($"xdotool {string.Join(' ', args)} did not exit within {TestBound.Bound}");
+                throw new TimeoutException($"{what} did not exit within {TestBound.Bound}");
             }
             var error = await stderr;
             if (process.ExitCode != 0)
-                throw new InvalidOperationException($"xdotool {string.Join(' ', args)} exited {process.ExitCode}: {error.Trim()}");
+                throw new InvalidOperationException($"{what} exited {process.ExitCode}: {error.Trim()}");
         }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;

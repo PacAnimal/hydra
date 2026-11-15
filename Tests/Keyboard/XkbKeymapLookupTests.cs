@@ -235,6 +235,47 @@ public class XkbKeymapLookupTests
     }
 
     [Test]
+    public void RuUa_LatinGroup_IsNull_AndNeitherGroupIsLatin()
+    {
+        using var lookup = Lookup("ru,ua");
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(lookup.LatinGroup, Is.Null);
+            Assert.That((bool[])[lookup.IsLatinGroup(0), lookup.IsLatinGroup(1)], Is.EqualTo((bool[])[false, false]));
+        }
+    }
+
+    [Test]
+    public void SparseThreeLayouts_MasterAndSlaveAgreeOnTheLatinGroups()
+    {
+        // thirteen letter keys with group 1 only, which xkbcommon wraps into groups 2 and 3, and one key with all
+        // three: only group 1 has the letters on keys of its own
+        var letters = string.Concat(Enumerable.Range(0, 13).Select(i => $"key <K{24 + i}> {{ [ {(char)('a' + i)} ] }};\n"));
+        var keycodes = string.Concat(Enumerable.Range(24, 14).Select(k => $"<K{k}> = {k};\n"));
+        var text = $$"""
+            xkb_keymap {
+            xkb_keycodes { minimum = 8; maximum = 255; {{keycodes}} };
+            xkb_types { type "ONE_LEVEL" { modifiers = none; map[none] = Level1; level_name[Level1] = "Any"; }; };
+            xkb_compat { };
+            xkb_symbols {
+            name[Group1] = "Latin"; name[Group2] = "Cyrillic"; name[Group3] = "Greek";
+            {{letters}}key <K37> { symbols[Group1] = [ n ], symbols[Group2] = [ Cyrillic_te ], symbols[Group3] = [ Greek_nu ] };
+            };
+            };
+            """;
+        using var keymap = XkbKeymap.FromText(text);
+        using var lookup = new XkbKeymapLookup(keymap);
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(LatinShortcutKeysym.LatinLayouts(keymap.Handle), Is.EqualTo((bool[])[true, false, false]));
+            Assert.That((bool[])[lookup.IsLatinGroup(0), lookup.IsLatinGroup(1), lookup.IsLatinGroup(2)],
+                Is.EqualTo(LatinShortcutKeysym.LatinLayouts(keymap.Handle)));
+            Assert.That(lookup.LatinGroup, Is.Zero);
+        }
+    }
+
+    [Test]
     public void UsRu_EvdevKeyFor_TakesGroup0Only()
     {
         using var lookup = Lookup("us,ru");

@@ -79,6 +79,8 @@ internal static partial class EvdevNativeMethods
     internal const uint XKB_STATE_MODS_DEPRESSED = 1 << 0;
     internal const uint XKB_STATE_MODS_LATCHED = 1 << 1;
     internal const uint XKB_STATE_MODS_LOCKED = 1 << 2;
+    internal const uint XKB_STATE_LAYOUT_DEPRESSED = 1 << 4;
+    internal const uint XKB_STATE_LAYOUT_LATCHED = 1 << 5;
     internal const uint XKB_STATE_LAYOUT_EFFECTIVE = 1 << 7;
     internal const int XKB_KEYMAP_FORMAT_TEXT_V1 = 1;
     internal const uint XKB_MOD_INVALID = uint.MaxValue;
@@ -177,6 +179,11 @@ internal static partial class EvdevNativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial uint xkb_state_serialize_mods(nint state, uint components);
 
+    [LibraryImport(Xkb)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int xkb_state_update_mask(nint state, uint depressedMods, uint latchedMods, uint lockedMods,
+        uint depressedLayout, uint latchedLayout, uint lockedLayout);
+
     // returns the number of keysyms and writes a pointer to the keysym array into symsOut.
     // symsOut points into keymap-owned memory — do not free.
     [LibraryImport(Xkb)]
@@ -213,6 +220,11 @@ internal static partial class EvdevNativeMethods
     [LibraryImport(Xkb)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial uint xkb_utf32_to_keysym(uint ucs);
+
+    // returns 0 if the keysym has no Unicode character.
+    [LibraryImport(Xkb)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial uint xkb_keysym_to_utf32(uint keysym);
 
     // writes the keysym's name (NUL-terminated, truncated to size) into buffer; returns its length, -1 for an invalid keysym
     [LibraryImport(Xkb)]

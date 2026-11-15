@@ -7,7 +7,7 @@ ENV HYDRA_DESKTOP_KINDS=openbox,gnome,kde-x11,evdev
 # Fedora 44's base repo only (6.6), and nothing installed after it may pull a newer kwin or plasma
 RUN dnf install -y --repo=fedora kwin-x11 \
 	&& dnf install -y --exclude='kwin*' --exclude='plasma*' \
-		mutter openbox xorg-x11-server-Xvfb \
+		mutter openbox xorg-x11-server-Xvfb setxkbmap \
 		xdg-desktop-portal libei libei-utils libxkbcommon \
 		wl-clipboard xclip xdotool python3-gobject gtk4 \
 		dbus-daemon dbus-tools procps-ng libcap dotnet-sdk-10.0 libffi gcc SDL3-devel \

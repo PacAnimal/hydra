@@ -49,10 +49,15 @@ internal sealed class XorgKeyResolver
         // the reference is looked up by the X keycode itself: X servers on evdev (Xorg's libinput and evdev drivers,
         // Xwayland, Xvfb) number keys as xkbcommon does (evdev + 8); the legacy kbd driver's xfree86 codes agree on the
         // main alphanumeric block the fallback matters for. XkbKeycodeToKeysym gives NoSymbol for a group the key
-        // lacks, which the scan skips.
+        // lacks, which the scan skips. with AltGr the level (2) keeps its keysym, so Ctrl+AltGr+2 on ru(typo) is Ctrl+@;
+        // a key with no AltGr level types its base there, as xkbcommon's, so it takes the Latin key as without AltGr.
         if (isShortcut)
+        {
+            var shortcutLevel = level >= 2 && keysym == 0 ? 0 : level;
+            if (shortcutLevel != level) keysym = NativeMethods.XkbKeycodeToKeysym(display, keycode, group, 0);
             keysym = LatinShortcutKeysym.Resolve(keysym, group, XkbNumGroups,
-                g => NativeMethods.XkbKeycodeToKeysym(display, keycode, g, 0), g => IsLatinGroup(display, g), keycode);
+                g => NativeMethods.XkbKeycodeToKeysym(display, keycode, g, 0), g => IsLatinGroup(display, g), keycode, (uint)shortcutLevel);
+        }
 
         // fall back to base keysym (0,0) for modifier keys and unmapped levels
         if (keysym == 0)
@@ -240,9 +245,13 @@ internal sealed class XorgKeyResolver
     // maps a keysym to a printable char.
     // latin-1 printable range (0x0020-0x00FF) maps directly as unicode codepoints.
     // modern Unicode-extension keysyms (0x01000000 | codepoint) strip the flag bit.
-    // legacy named keysyms (latin 2-4, greek, cyrillic, arabic, etc.) use s_legacyKeysymMap.
-    // remaining keysyms in 0x0100-0xFDFF where keysym == unicode (e.g. EuroSign = 0x20AC) fall through.
-    internal static char? KeySymToChar(ulong keysym)
+    // legacy named keysyms (0x0100-0x20FF: latin 2-4, greek, cyrillic, arabic, ..., EuroSign) ask libxkbcommon,
+    // then LegacyKeysymMap. a legacy keysym neither knows is null, so the key is dropped rather than mistyped:
+    // their values are not code points (Ukrainian_ghe_with_upturn 0x06AD is ґ U+0491, not ڭ U+06AD).
+    // nothing else is a character: 0xFE00 up is dead keys and function keys, handled elsewhere.
+    internal static char? KeySymToChar(ulong keysym) => KeySymToChar(keysym, XkbKeysymToUtf32Available.Value);
+
+    internal static char? KeySymToChar(ulong keysym, bool useXkb)
     {
         if (keysym is >= 0x0020 and <= 0x00FF)
             return (char)keysym;
@@ -251,25 +260,43 @@ internal sealed class XorgKeyResolver
         if (keysym is >= 0x01000100 and <= 0x0100FFFF and not (>= 0x0100D800 and <= 0x0100DFFF))
             return (char)(keysym - 0x01000000);
 
-        // legacy named keysyms where X11 keysym value != unicode codepoint
-        if (LegacyKeysymMap.TryGetValue(keysym, out var mapped))
-            return mapped;
+        if (keysym is < 0x0100 or > 0x20FF) return null;
 
-        // 0xFE00-0xFEFF is the X11 dead-key / XFree86 extension range — not Unicode codepoints.
-        // unlisted dead keysyms in this range (e.g. XK_dead_currency 0xFE6F) would otherwise be
-        // returned as garbage characters rather than being handled by DeadKeyLookup or dropped.
-        // for any legacy script range NOT in LegacyKeysymMap, this cast also produces garbage —
-        // such scripts should either have map entries above or use the 0x01000000-extension format.
-        if (keysym is > 0x00FF and < 0xFE00)
-            return (char)keysym;
+        if (useXkb && PrintableBmpChar(EvdevNativeMethods.xkb_keysym_to_utf32((uint)keysym)) is { } ch)
+            return ch;
 
-        return null;
+        return LegacyKeySymToChar(keysym);
     }
+
+    // the table path alone, used where libxkbcommon is absent (an X11 master need not have it)
+    internal static char? LegacyKeySymToChar(ulong keysym) =>
+        LegacyKeysymMap.TryGetValue(keysym, out var mapped) ? mapped : null;
+
+    private static char? PrintableBmpChar(uint codepoint) =>
+        codepoint is 0 or > 0xFFFF || char.IsSurrogate((char)codepoint) || char.IsControl((char)codepoint)
+            ? null
+            : (char)codepoint;
+
+    private static readonly Lazy<bool> XkbKeysymToUtf32Available = new(() =>
+    {
+        try
+        {
+            _ = EvdevNativeMethods.xkb_keysym_to_utf32(0);
+            return true;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    });
 
     // Xkb group is encoded in bits 13-14 of the X11 state field (XkbGroupForCoreState macro)
     private static int ExtractGroup(uint state) => (int)((state >> 13) & 3);
 
     // read from the display each time rather than cached, so a layout changed at runtime (setxkbmap) is seen.
+    // Xlib selects XkbMapNotify as it loads its xkb copy (_XkbLoadDpy) and marks that copy stale on reading one, but
+    // nothing here sees the notify to key a cache of our own by, and the scan is cheap: XkbKeycodeToKeysym reads
+    // Xlib's client-side copy, a round trip only when it refetches after a pending refresh, and only on a shortcut key.
     // XkbKeycodeToKeysym gives NoSymbol past a key's last group, so a group the keymap lacks is not Latin.
     private static bool IsLatinGroup(nint display, int group)
     {
@@ -379,9 +406,12 @@ internal sealed class XorgKeyResolver
     // covers latin 2-4 (0x01xx-0x03xx), katakana (0x04xx), arabic (0x05xx), cyrillic (0x06xx),
     // greek (0x07xx), technical (0x08xx), special (0x09xx), publishing (0x0Axx), APL (0x0Bxx),
     // hebrew (0x0Cxx), thai (0x0Dxx), hangul (0x0Exx), latin 8 / Celtic (0x12xx), and latin 9 extras (0x13xx).
-    // excludes entries where keysym == unicode (those are handled by the raw-cast fallback).
+    // the fallback for KeySymToChar where libxkbcommon is absent, so it agrees with xkbcommon's keysym-utf.c on every
+    // keysym that has a character there (KeySymToChar_LegacyTable_AgreesWithXkbcommon); a keysym not here has none.
+    // the latin 8 (0x12xx) entries are XFree86's old values, which xkbcommon does not map; keysymdef.h now gives
+    // those letters 0x01000000-extension keysyms.
     // excludes the 0x01000000+ unicode-extension range (handled by the flag-strip case above).
-    // source: X11 keysymdef.h + XKBUtil.cpp from input-leap.
+    // source: X11 keysymdef.h, libxkbcommon src/keysym-utf.c and XKBUtil.cpp from input-leap.
     private static readonly Dictionary<ulong, char> LegacyKeysymMap = new()
     {
         // latin 2 (XK_LATIN2, byte 3 = 1)
@@ -633,6 +663,7 @@ internal sealed class XorgKeyResolver
         { 0x06AA, '\u045A' },  // XK_Cyrillic_nje
         { 0x06AB, '\u045B' },  // XK_Serbian_tshe
         { 0x06AC, '\u045C' },  // XK_Macedonia_kje
+        { 0x06AD, '\u0491' },  // XK_Ukrainian_ghe_with_upturn
         { 0x06AE, '\u045E' },  // XK_Byelorussian_shortu
         { 0x06AF, '\u045F' },  // XK_Cyrillic_dzhe
         { 0x06B0, '\u2116' },  // XK_numerosign
@@ -648,6 +679,7 @@ internal sealed class XorgKeyResolver
         { 0x06BA, '\u040A' },  // XK_Cyrillic_NJE
         { 0x06BB, '\u040B' },  // XK_Serbian_TSHE
         { 0x06BC, '\u040C' },  // XK_Macedonia_KJE
+        { 0x06BD, '\u0490' },  // XK_Ukrainian_GHE_WITH_UPTURN
         { 0x06BE, '\u040E' },  // XK_Byelorussian_SHORTU
         { 0x06BF, '\u040F' },  // XK_Cyrillic_DZHE
         { 0x06C0, '\u044E' },  // XK_Cyrillic_yu
@@ -868,6 +900,7 @@ internal sealed class XorgKeyResolver
         { 0x0AA8, '\u200A' },  // XK_hairspace
         { 0x0AA9, '\u2014' },  // XK_emdash
         { 0x0AAA, '\u2013' },  // XK_endash
+        { 0x0AAC, '\u2423' },  // XK_signifblank
         { 0x0AAE, '\u2026' },  // XK_ellipsis
         { 0x0AAF, '\u2025' },  // XK_doubbaselinedot
         { 0x0AB0, '\u2153' },  // XK_onethird
@@ -880,8 +913,9 @@ internal sealed class XorgKeyResolver
         { 0x0AB7, '\u215A' },  // XK_fivesixths
         { 0x0AB8, '\u2105' },  // XK_careof
         { 0x0ABB, '\u2012' },  // XK_figdash
-        { 0x0ABC, '\u2329' },  // XK_leftanglebracket
-        { 0x0ABE, '\u232A' },  // XK_rightanglebracket
+        { 0x0ABC, '\u27E8' },  // XK_leftanglebracket
+        { 0x0ABD, '\u002E' },  // XK_decimalpoint
+        { 0x0ABE, '\u27E9' },  // XK_rightanglebracket
         { 0x0AC3, '\u215B' },  // XK_oneeighth
         { 0x0AC4, '\u215C' },  // XK_threeeighths
         { 0x0AC5, '\u215D' },  // XK_fiveeighths
@@ -897,6 +931,7 @@ internal sealed class XorgKeyResolver
         { 0x0AD2, '\u201C' },  // XK_leftdoublequotemark
         { 0x0AD3, '\u201D' },  // XK_rightdoublequotemark
         { 0x0AD4, '\u211E' },  // XK_prescription
+        { 0x0AD5, '\u2030' },  // XK_permille
         { 0x0AD6, '\u2032' },  // XK_minutes
         { 0x0AD7, '\u2033' },  // XK_seconds
         { 0x0AD9, '\u271D' },  // XK_latincross
@@ -942,20 +977,20 @@ internal sealed class XorgKeyResolver
         { 0x0BA8, '\u2228' },  // XK_downcaret
         { 0x0BA9, '\u2227' },  // XK_upcaret
         { 0x0BC0, '\u00AF' },  // XK_overbar
-        { 0x0BC2, '\u22A5' },  // XK_downtack
+        { 0x0BC2, '\u22A4' },  // XK_downtack
         { 0x0BC3, '\u2229' },  // XK_upshoe
         { 0x0BC4, '\u230A' },  // XK_downstile
         { 0x0BC6, '\u005F' },  // XK_underbar
         { 0x0BCA, '\u2218' },  // XK_jot
         { 0x0BCC, '\u2395' },  // XK_quad
-        { 0x0BCE, '\u22A4' },  // XK_uptack
+        { 0x0BCE, '\u22A5' },  // XK_uptack
         { 0x0BCF, '\u25CB' },  // XK_circle
         { 0x0BD3, '\u2308' },  // XK_upstile
         { 0x0BD6, '\u222A' },  // XK_downshoe
         { 0x0BD8, '\u2283' },  // XK_rightshoe
         { 0x0BDA, '\u2282' },  // XK_leftshoe
-        { 0x0BDC, '\u22A2' },  // XK_lefttack
-        { 0x0BFC, '\u22A3' },  // XK_righttack
+        { 0x0BDC, '\u22A3' },  // XK_lefttack
+        { 0x0BFC, '\u22A2' },  // XK_righttack
 
         // hebrew (XK_HEBREW, byte 3 = C)
         { 0x0CDF, '\u2017' },  // XK_hebrew_doublelowline
@@ -1046,6 +1081,7 @@ internal sealed class XorgKeyResolver
         { 0x0DD8, '\u0E38' },  // XK_Thai_sarau
         { 0x0DD9, '\u0E39' },  // XK_Thai_sarauu
         { 0x0DDA, '\u0E3A' },  // XK_Thai_phinthu
+        { 0x0DDE, '\u0E3E' },  // XK_Thai_maihanakat_maitho (an unassigned code point, as xkbcommon has it)
         { 0x0DDF, '\u0E3F' },  // XK_Thai_baht
         { 0x0DE0, '\u0E40' },  // XK_Thai_sarae
         { 0x0DE1, '\u0E41' },  // XK_Thai_saraae
@@ -1197,6 +1233,9 @@ internal sealed class XorgKeyResolver
         { 0x13BC, '\u0152' },  // XK_OE              → Œ
         { 0x13BD, '\u0153' },  // XK_oe              → œ
         { 0x13BE, '\u0178' },  // XK_Ydiaeresis      → Ÿ
+
+        // currency (byte 3 = 0x20): EuroSign is the one legacy keysym here, and its value is its code point
+        { 0x20AC, '\u20AC' },  // XK_EuroSign        → €
     };
 
     // detects which X11 modifier slot holds Scroll_Lock (XK_Scroll_Lock = 0xFF14) and caches the mask.

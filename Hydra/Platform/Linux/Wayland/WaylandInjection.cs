@@ -75,8 +75,9 @@ internal static class WaylandInjection
     // a character on the key that types it, with Shift and AltGr pressed around it when the slave does not hold
     // them, and the held ones it does not want lifted around it unless a shortcut is being typed. the given group's
     // key is preferred; another group's only under anyGroup. a shortcut takes the given group's key where that group is
-    // Latin (Ctrl+z on QWERTZ's z key, as the desktop there matches it), else the first Latin group's (else group 0's),
-    // any group's where that has none: on a device that cannot select it the key goes in under the given group, as apps
+    // Latin (Ctrl+z on QWERTZ's z key, as the desktop there matches it), else the first Latin group's, else (no group
+    // being Latin) the given group's, as ru's and ua's keys for one character differ; any group's where that has
+    // none: on a device that cannot select it the key goes in under the given group, as apps
     // match Ctrl+С on a non-Latin layout as Ctrl+C, and the Latin key keeps a Ctrl+, from gaining the Shift ru's comma
     // needs. a character no key types is composed with the keymap's dead keys where it can be, as Deskflow does, in
     // the given group only, since a sequence goes in under one group
@@ -84,7 +85,7 @@ internal static class WaylandInjection
         uint group, bool anyGroup)
     {
         var lift = !IsShortcut(mods);
-        var preferred = lift || keymap.IsLatinGroup(group) ? group : keymap.LatinGroup ?? 0;
+        var preferred = lift || keymap.LatinGroup is not { } latin || keymap.IsLatinGroup(group) ? group : latin;
         var keysym = XkbKeymapLookup.CharToKeysym(ch);
 
         if (keymap.Find(keysym, preferred) is { } stroke && (anyGroup || !lift || stroke.Group == group))

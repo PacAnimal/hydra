@@ -24,7 +24,9 @@ internal sealed class WaylandInputHandler(ICaptureSession session, IHydraProfile
     // the kernel's keyboards, read for the hotkeys at home in place of the portal's shortcuts when any is readable
     IEvdevKeySource? keys = null,
     // no key source because readKeyboardsForHotkeys is off, so the portal's shortcuts are not a fallback to explain
-    bool keyboardsOff = false)
+    bool keyboardsOff = false,
+    // tests: starts the Hyprland layout watch for an attach, given the report callback; null starts the real one
+    Func<Action<HyprlandLayoutWatch, uint>, HyprlandLayoutWatch?>? layoutWatches = null)
     : IPlatformInput, IBarrierHits
 {
     // mutter's smooth scroll is clutter's steps times 10, a step a notch; other compositors may scale differently
@@ -106,6 +108,13 @@ internal sealed class WaylandInputHandler(ICaptureSession session, IHydraProfile
     // the keyboards' keys at home on _resolver's keymap, apart from it: a visit resets _resolver as it begins, which
     // would forget the down of a key pressed at home and released during the visit; null with no key source
     private EvdevKeyResolver? _homeResolver;
+    // the compositor's effective layout group from the last EIS keyboard modifiers or Hyprland's IPC, applied to every
+    // resolver; null until the first
+    private uint? _layoutGroup;
+    // Hyprland's active layout, whose portal sends no EIS keyboard modifiers; null elsewhere, and while detached
+    private HyprlandLayoutWatch? _layoutWatch;
+    // the capture's first key asks Hyprland's layout again: moving to another keyboard on another group raises no event
+    private bool _refreshOnKey;
 
     private GlobalShortcutsPortal? _shortcuts;
     // the session last bound: a portal session binds once, and a re-tap on the same one keeps what it bound
@@ -375,6 +384,8 @@ internal sealed class WaylandInputHandler(ICaptureSession session, IHydraProfile
             receiver.ScrollDelta += OnScrollDelta;
             receiver.ScrollStop += OnScrollStop;
             receiver.KeyboardKey += OnKeyboardKey;
+            receiver.KeyboardModifiers += OnKeyboardModifiers;
+            if (hyprland) _layoutWatch = layoutWatches is null ? HyprlandLayoutWatch.Start(FollowWatchedLayout, log, time) : layoutWatches(FollowWatchedLayout);
         }
         // a connection that dropped before the handlers were attached is a lost session, to be attached afresh
         if (receiver.IsDisconnected)
@@ -445,7 +456,10 @@ internal sealed class WaylandInputHandler(ICaptureSession session, IHydraProfile
             receiver.ScrollDelta -= OnScrollDelta;
             receiver.ScrollStop -= OnScrollStop;
             receiver.KeyboardKey -= OnKeyboardKey;
+            receiver.KeyboardModifiers -= OnKeyboardModifiers;
         }
+        _layoutWatch?.Dispose();
+        _layoutWatch = null;
         DetachShortcutsLocked();
         _portal = null;
         _receiver = null;
@@ -629,6 +643,7 @@ internal sealed class WaylandInputHandler(ICaptureSession session, IHydraProfile
         Activation activation;
         CancellationToken cancel;
         ReleaseClaim? claim = null;
+        HyprlandLayoutWatch? layoutWatch;
         lock (_lock)
         {
             var barrier = _barriers.GetValueOrDefault(barrierId) ?? WaylandBarriers.Nearest(_barriers.Values, x, y);
@@ -642,12 +657,16 @@ internal sealed class WaylandInputHandler(ICaptureSession session, IHydraProfile
             onHit = _onHit;
             cancel = _cancel;
             if (barrier is null) claim = ClaimReleaseLocked();
+            _refreshOnKey = barrier != null;
+            layoutWatch = _layoutWatch;
         }
         if (activation.Barrier is null)
         {
             Release(claim, activation, null);
             return;
         }
+        // the keyboard last typed on may be another one, on another group, than when Hyprland last said
+        _ = layoutWatch?.Refresh(after: time.GetTimestamp());
         // the router answers every absolute move, but one it drops (no layout yet, a failure) would hold the capture
         After(UnansweredHit, () => ReleaseUnanswered(activation), cancel);
         if (onHit != null) onHit(activation.Hit.X, activation.Hit.Y, activation.Serial);
@@ -699,6 +718,8 @@ internal sealed class WaylandInputHandler(ICaptureSession session, IHydraProfile
             resolver = _resolver;
         }
         resolver?.Reset();
+        // the reset's fresh state starts on the first group; the compositor's stays in effect
+        lock (_lock) ApplyLayoutLocked(resolver);
         if (!uncaptured)
         {
             // the portal sets the clipboard only while the capture is on, so the visit claims it now (off the router's
@@ -792,8 +813,21 @@ internal sealed class WaylandInputHandler(ICaptureSession session, IHydraProfile
     // a shortcut's chord then carries them and matches no hotkey. Called before the capture's state is cleared
     private void EndKeysLocked()
     {
-        if (Captured) _resolver?.Reset();
+        if (Captured)
+        {
+            _resolver?.Reset();
+            ApplyLayoutLocked(_resolver);
+        }
         ForgetHeldLocked();
+    }
+
+    // under _lock: the compositor's layout group, once it has told us one. pin, for the home resolver only: the compositor
+    // sees the keys at home too, so a toggle there comes back in its next report, and moving on it as well would apply it
+    // twice. The capture's resolver also toggles on its own keys, whatever the compositor makes of them, until a report
+    // says otherwise
+    private void ApplyLayoutLocked(EvdevKeyResolver? resolver, bool pin = false)
+    {
+        if (_layoutGroup is { } group) resolver?.SetLayout(group, pin);
     }
 
     // -- receiver, on the EIS dispatch thread --
@@ -821,6 +855,9 @@ internal sealed class WaylandInputHandler(ICaptureSession session, IHydraProfile
             _homeResolver = home;
             _lookup = lookup;
             _keymap = keymap;
+            // a keymap can come after the modifiers that named the group
+            ApplyLayoutLocked(resolver);
+            ApplyLayoutLocked(home, pin: true);
         }
         old?.Dispose();
         oldHome?.Dispose();
@@ -966,11 +1003,52 @@ internal sealed class WaylandInputHandler(ICaptureSession session, IHydraProfile
         }
     }
 
+    // the compositor's modifiers: only the layout group is taken, our own modifiers coming from the keys. The resolvers
+    // follow it, as a layout switch on the desktop types the new layout's characters on the slave
+    private void OnKeyboardModifiers(uint depressed, uint latched, uint locked, uint group) => FollowLayout(group);
+
+    // the compositor's layout group, from EIS or Hyprland's IPC, whichever told us last
+    private void FollowLayout(uint group)
+    {
+        bool changed;
+        lock (_lock) changed = FollowLayoutLocked(group);
+        LogLayout(changed, group);
+    }
+
+    // a report from a watch already detached (its query straddled the detach) is dropped, and so is one naming the group
+    // in use: applying it would undo a toggle made inside the capture since
+    private void FollowWatchedLayout(HyprlandLayoutWatch watch, uint group)
+    {
+        bool changed;
+        lock (_lock)
+        {
+            if (!ReferenceEquals(_layoutWatch, watch) || _layoutGroup == group) return;
+            changed = FollowLayoutLocked(group);
+        }
+        LogLayout(changed, group);
+    }
+
+    private bool FollowLayoutLocked(uint group)
+    {
+        var changed = _layoutGroup != group;
+        _layoutGroup = group;
+        ApplyLayoutLocked(_resolver);
+        ApplyLayoutLocked(_homeResolver, pin: true);
+        return changed;
+    }
+
+    private void LogLayout(bool changed, uint group)
+    {
+        if (changed && log.IsEnabled(LogLevel.Debug)) log.LogDebug("Compositor keyboard layout group: {Group}", group);
+    }
+
     private void OnKeyboardKey(uint code, bool pressed)
     {
+        var at = time.GetTimestamp();
         EvdevKeyResolver? resolver;
         Action<KeyEvent>? onKeyEvent;
         bool forward;
+        HyprlandLayoutWatch? layoutWatch = null;
         lock (_lock)
         {
             if (pressed) _keysHeld.Add(code);
@@ -978,7 +1056,15 @@ internal sealed class WaylandInputHandler(ICaptureSession session, IHydraProfile
             resolver = _resolver;
             forward = _onVirtual;
             onKeyEvent = _onKeyEvent;
+            if (_refreshOnKey && Captured)
+            {
+                _refreshOnKey = false;
+                layoutWatch = _layoutWatch;
+            }
         }
+        // asked again unless the capture's query asked after this key: that one may predate a switch to this keyboard.
+        // the answer is async, so this very key, and any before it lands, still resolves under the old group; accepted
+        _ = layoutWatch?.Refresh(after: at);
         // resolved even while the router decides, so the resolver's modifiers keep up; the resolver stamps PhysicalKey
         var events = resolver?.Resolve(code, pressed ? 1 : 0);
         if (!forward || events is null) return;

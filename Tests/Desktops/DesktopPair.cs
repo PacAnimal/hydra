@@ -72,6 +72,12 @@ public abstract class DesktopPair(DesktopKind masterKind, DesktopKind slaveKind)
     // why this fixture cannot run this pair, or null
     protected virtual string? Unsupported() => null;
 
+    // the xkb layout list each desktop starts with, as in "us,ru"; null is the image's default
+    protected virtual string? MasterLayout => null;
+    protected virtual string? SlaveLayout => null;
+    // the master's xkb option list, as in "grp:switch"; null is the image's default
+    protected virtual string? MasterOptions => null;
+
     [OneTimeSetUp]
     public async Task StartPair()
     {
@@ -84,8 +90,8 @@ public abstract class DesktopPair(DesktopKind masterKind, DesktopKind slaveKind)
 
         var port = 5700 + Interlocked.Increment(ref _fixtures);
 
-        _masterDesktop = await Desktop.Start(MasterKind, "m-" + Desktop.Arg(MasterKind));
-        _slaveDesktop = await Desktop.Start(SlaveKind, "s-" + Desktop.Arg(SlaveKind));
+        _masterDesktop = await Desktop.Start(MasterKind, "m-" + Desktop.Arg(MasterKind), MasterLayout, MasterOptions);
+        _slaveDesktop = await Desktop.Start(SlaveKind, "s-" + Desktop.Arg(SlaveKind), SlaveLayout);
         if (!EvdevMaster)
             _masterProbe = await Probe.Input(_masterDesktop);
         _slaveProbe = await Probe.Input(_slaveDesktop);

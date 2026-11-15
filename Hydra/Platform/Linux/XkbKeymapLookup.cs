@@ -112,23 +112,8 @@ internal sealed class XkbKeymapLookup : IKeymapKeys, IDisposable
         }
     }
 
-    // under _lock; by group, computed once
-    private bool[] LatinGroups()
-    {
-        if (_latinGroups is { } known) return known;
-        var min = EvdevNativeMethods.xkb_keymap_min_keycode(_keymap);
-        var max = EvdevNativeMethods.xkb_keymap_max_keycode(_keymap);
-        var latin = new bool[GroupCount()];
-        for (var group = 0u; group < latin.Length; group++)
-        {
-            var layout = group;
-            latin[group] = LatinShortcutKeysym.IsLatinLayout(min, max, key => layout < EvdevNativeMethods.xkb_keymap_num_layouts_for_key(_keymap, key)
-                ? LatinShortcutKeysym.BaseKeysym(_keymap, key, layout)
-                : 0);
-        }
-        _latinGroups = latin;
-        return latin;
-    }
+    // under _lock; by group, computed once, by the master's rule (LatinShortcutKeysym.LatinLayouts)
+    private bool[] LatinGroups() => _latinGroups ??= LatinShortcutKeysym.LatinLayouts(_keymap);
 
     // the lowest level that types the keysym with at most Shift, AltGr and NumLock, in the preferred group (the
     // slave's effective one) if it has one, else group 0, else the others in order; null if no group does

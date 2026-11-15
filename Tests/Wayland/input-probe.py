@@ -73,8 +73,8 @@ class Probe:
 
         keys = Gtk.EventControllerKey()
         keys.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
-        keys.connect("key-pressed", lambda _c, kv, _code, st: self.on_key(kv, st, True))
-        keys.connect("key-released", lambda _c, kv, _code, st: self.on_key(kv, st, False))
+        keys.connect("key-pressed", lambda _c, kv, code, st: self.on_key(kv, code, st, True))
+        keys.connect("key-released", lambda _c, kv, code, st: self.on_key(kv, code, st, False))
         win.add_controller(keys)
 
         GLib.io_add_watch(GLib.IOChannel.unix_new(0), GLib.PRIORITY_DEFAULT,
@@ -110,11 +110,11 @@ class Probe:
         emit({"scroll": [dx, dy], "unit": unit})
         return True
 
-    def on_key(self, keyval, state, pressed):
+    def on_key(self, keyval, keycode, state, pressed):
         name = Gdk.keyval_name(keyval) or ""
         if name in LEVEL3_KEYS:
             (self.level3_held.add if pressed else self.level3_held.discard)(name)
-        code = Gdk.keyval_to_unicode(keyval)
+        uc = Gdk.keyval_to_unicode(keyval)
         mods = [label for label, mask in (("shift", Gdk.ModifierType.SHIFT_MASK),
                                           ("control", Gdk.ModifierType.CONTROL_MASK),
                                           ("alt", Gdk.ModifierType.ALT_MASK),
@@ -122,7 +122,8 @@ class Probe:
                 if state & mask]
         if self.level3_held:  # GTK 4 has no AltGr modifier bit; track the key itself
             mods.append("altgr")
-        emit({"key": name, "char": chr(code) if code else "", "pressed": pressed, "mods": mods})
+        # code: the hardware keycode, evdev's plus 8 on x11 and wayland alike
+        emit({"key": name, "char": chr(uc) if uc else "", "code": keycode, "pressed": pressed, "mods": mods})
         return pressed  # swallow presses so GTK keybindings do not act on them
 
     # ---- stdin commands ----

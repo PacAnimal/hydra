@@ -11,7 +11,7 @@ public class LatinShortcutKeysymTests
 {
     private const ulong CyrillicEs = 0x6E3, LatinC = 0x63, LatinJ = 0x6A, LatinH = 0x68, Adiaeresis = 0xE4, F5 = 0xFFC2;
     private const ulong Period = 0x2E, Slash = 0x2F, Semicolon = 0x3B, GeorgianC = 0x010010EA;
-    private const ulong IsoLevel3Shift = 0xFE03, DeadAcute = 0xFE51;
+    private const ulong IsoLevel3Shift = 0xFE03, DeadAcute = 0xFE51, At = 0x40, Two = 0x32;
 
     private static ulong Resolve(ulong keysym, int active, ulong[] bases, bool[] latin) =>
         LatinShortcutKeysym.Resolve(keysym, active, bases.Length, i => bases[i], i => latin[i], 0);
@@ -74,6 +74,23 @@ public class LatinShortcutKeysymTests
         Assert.That(Resolve(GeorgianC, 0, [GeorgianC, LatinC], [false, true]), Is.EqualTo(LatinC));
     }
 
+    [TestCase(2u)]
+    [TestCase(3u)]
+    [TestCase(4u)]
+    public void AltGrLevel_OnANonLatinLayout_KeepsItsKeysym(uint level)
+    {
+        // ru(typo),us: Ctrl+AltGr+2 types @ (level 2); us's level 0 there is '2'
+        Assert.That(LatinShortcutKeysym.Resolve(At, 0, 2, _ => Two, i => i == 1, 0, level), Is.EqualTo(At));
+    }
+
+    [TestCase(0u)]
+    [TestCase(1u)]
+    public void BaseOrShiftLevel_OnANonLatinLayout_TakesTheLatinLayoutsBase(uint level)
+    {
+        ulong[] bases = [CyrillicEs, LatinC];
+        Assert.That(LatinShortcutKeysym.Resolve(CyrillicEs, 0, 2, i => bases[i], i => i == 1, 0, level), Is.EqualTo(LatinC));
+    }
+
     [Test]
     public void IsPrintable_CoversUnicodeKeysymsButNotC1()
     {
@@ -106,10 +123,11 @@ public class LatinShortcutKeysymTests
 [Category("Linux")]
 public class EvdevLatinShortcutTests
 {
-    private const uint KeyQ = 16, KeyY = 21, KeyJ = 36, KeyL = 38, KeyC = 46, KeyV = 47;
-    private const uint Key1 = 2, KeyMinus = 12, KeyLeftBrace = 26, KeySemicolon = 39, KeyApostrophe = 40, KeyGrave = 41;
+    private const uint KeyQ = 16, KeyY = 21, KeyG = 34, KeyJ = 36, KeyL = 38, KeyC = 46, KeyV = 47;
+    private const uint Key1 = 2, Key2 = 3, KeyMinus = 12, KeyLeftBrace = 26, KeySemicolon = 39, KeyApostrophe = 40, KeyGrave = 41;
     private const uint KeyComma = 51, KeyDot = 52, KeySlash = 53;
-    private const uint KeyLeftCtrl = 29, KeyLeftShift = 42, KeyLeftAlt = 56, KeyCapsLock = 58, KeyLeftMeta = 125;
+    private const uint KeyLeftCtrl = 29, KeyLeftShift = 42, KeyLeftAlt = 56, KeyCapsLock = 58, KeyLeftMeta = 125, KeyRightAlt = 100;
+    private const uint KeyF1 = 59, KeyF2 = 60, KeyNumLock = 69, KeyKpPlus = 78;
 
     [OneTimeSetUp]
     public void RequireLinux()
@@ -209,6 +227,111 @@ public class EvdevLatinShortcutTests
         // de swaps Y and Z: the qwerty Y key is de's Z
         using var resolver = Resolver("de");
         Assert.That(Press(resolver, KeyY, KeyLeftCtrl).Character, Is.EqualTo('z'));
+    }
+
+    [Test]
+    public void German_CtrlAltGr_KeepsTheAltGrCharacter()
+    {
+        // de: <AD01> { [ q, Q, at, Greek_OMEGA ] }, AltGr on ralt
+        using var resolver = Resolver("de");
+        Assert.That(Press(resolver, KeyQ, KeyLeftCtrl, KeyRightAlt).Character, Is.EqualTo('@'));
+    }
+
+    // symbols/pc's srvr_ctrl(fkey2vt) and keypad(operators) put F1-F12 and the keypad operators on type CTRL+ALT, whose
+    // Control+Alt level is XF86_Switch_VT_n or XF86_Next_VMode on every pc105 keymap: a shortcut's level never takes
+    // Control, Alt or Super
+    private static EvdevKeyResolver PlainUs() => new(new LinuxInputConfig.XkbNames("us", "pc105", null, null));
+
+    [Test]
+    public void Us_CtrlAltF1_IsF1()
+    {
+        using var resolver = PlainUs();
+        Assert.That(Press(resolver, KeyF1, KeyLeftCtrl, KeyLeftAlt).Key, Is.EqualTo(SpecialKey.F1));
+    }
+
+    [Test]
+    public void Us_CtrlAltSuperF2_IsF2()
+    {
+        using var resolver = PlainUs();
+        Assert.That(Press(resolver, KeyF2, KeyLeftCtrl, KeyLeftAlt, KeyLeftMeta).Key, Is.EqualTo(SpecialKey.F2));
+    }
+
+    [Test]
+    public void Us_NumLockOn_CtrlAltKpAdd_IsKpAdd()
+    {
+        using var resolver = PlainUs();
+        _ = resolver.Resolve(KeyNumLock, 1);
+        _ = resolver.Resolve(KeyNumLock, 0);
+
+        Assert.That(Press(resolver, KeyKpPlus, KeyLeftCtrl, KeyLeftAlt).Key, Is.EqualTo(SpecialKey.KP_Add));
+    }
+
+    [Test]
+    public void Us_CtrlAltSuperL_IsTheCursorLockHotkey()
+    {
+        using var resolver = PlainUs();
+        var chord = Press(resolver, KeyL, KeyLeftCtrl, KeyLeftAlt, KeyLeftMeta);
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(chord.Character, Is.EqualTo('l'));
+            Assert.That(HotkeyBindings.Build(null).Match(chord), Is.EqualTo(HotkeyAction.ToggleCursorLock));
+        }
+    }
+
+    [Test]
+    public void UsRu_SetLayout_TypesTheCompositorsGroup()
+    {
+        using var resolver = Resolver("us,ru");
+
+        resolver.SetLayout(1);
+        var ru = Press(resolver, KeyG);
+        var ruShifted = Press(resolver, KeyG, KeyLeftShift);
+        var copy = Press(resolver, KeyC, KeyLeftCtrl);
+        resolver.SetLayout(0);
+        var us = Press(resolver, KeyG);
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(ru.Character, Is.EqualTo('п'));
+            Assert.That(ruShifted.Character, Is.EqualTo('П'));
+            Assert.That(copy.Character, Is.EqualTo('c'));
+            Assert.That(us.Character, Is.EqualTo('g'));
+        }
+    }
+
+    [Test]
+    public void UsRu_SetLayout_KeepsHeldModifiers()
+    {
+        using var resolver = Resolver("us,ru");
+
+        _ = resolver.Resolve(KeyLeftShift, 1);
+        resolver.SetLayout(1);
+        var down = resolver.Resolve(KeyG, 1)![^1]!;
+
+        Assert.That(down.Character, Is.EqualTo('П'));
+    }
+
+    [Test]
+    public void UsRu_AGroupToggleAfterSetLayout_StillSwitches()
+    {
+        using var resolver = Resolver("us,ru");
+
+        resolver.SetLayout(1);
+        NextGroup(resolver);
+
+        Assert.That(Press(resolver, KeyG).Character, Is.EqualTo('g'));
+    }
+
+    [Test]
+    public void UsRu_SetLayoutPastTheLayouts_IsIgnored()
+    {
+        using var resolver = Resolver("us,ru");
+
+        resolver.SetLayout(1);
+        resolver.SetLayout(2);
+
+        Assert.That(Press(resolver, KeyG).Character, Is.EqualTo('п'));
     }
 
     [Test]
@@ -381,5 +504,72 @@ public class EvdevLatinShortcutTests
             Assert.That(upperC?.Shift, Is.True);
             Assert.That(LatinShortcutKeysym.ReferenceKeyFor(cyrillicEs), Is.Null);
         }
+    }
+
+    [Test]
+    public void ReferenceKeyFor_AnswersFromTheCache_MissesIncluded()
+    {
+        const uint cyrillicEf = 0x6C6;
+        var first = LatinShortcutKeysym.ReferenceKeyFor('v');
+        var miss = LatinShortcutKeysym.ReferenceKeyFor(cyrillicEf);
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(first?.EvdevKey, Is.EqualTo(KeyV));
+            Assert.That(LatinShortcutKeysym.IsReferenceKeyCached('v'), Is.True);
+            Assert.That(LatinShortcutKeysym.ReferenceKeyFor('v'), Is.SameAs(first));
+            Assert.That(miss, Is.Null);
+            Assert.That(LatinShortcutKeysym.IsReferenceKeyCached(cyrillicEf), Is.True);
+            Assert.That(LatinShortcutKeysym.ReferenceKeyFor(cyrillicEf), Is.Null);
+        }
+    }
+
+    // the shortcut keysym a key gives under an xkb state with the held keys down, as EvdevKeyResolver asks it
+    private static ulong ShortcutKeysym(string layout, string? variant, uint key, params uint[] held)
+    {
+        using var keymap = XkbKeymap.FromNames(new LinuxInputConfig.XkbNames(layout, "pc105", variant, null));
+        var state = EvdevNativeMethods.xkb_state_new(keymap.Handle);
+        try
+        {
+            foreach (var h in held) _ = EvdevNativeMethods.xkb_state_update_key(state, h + 8, EvdevNativeMethods.XKB_KEY_DOWN);
+            var latin = LatinShortcutKeysym.LatinLayouts(keymap.Handle);
+            var own = EvdevNativeMethods.xkb_state_key_get_one_sym(state, key + 8);
+            return LatinShortcutKeysym.ForState(keymap.Handle, state, key + 8, own, i => i >= 0 && i < latin.Length && latin[i],
+                LatinShortcutKeysym.LevelMods(keymap.Handle));
+        }
+        finally
+        {
+            EvdevNativeMethods.xkb_state_unref(state);
+        }
+    }
+
+    [Test]
+    public void RuTypo_CtrlAltGr_KeepsTheAltGrKeysym()
+    {
+        // ru(typo): <AE02> { [ 2, quotedbl, at, apostrophe ] }, AltGr on ralt (level3(ralt_switch))
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(ShortcutKeysym("ru", "typo", Key2, KeyLeftCtrl, KeyRightAlt), Is.EqualTo((ulong)'@'));
+            Assert.That(ShortcutKeysym("ru", "typo", Key2, KeyLeftCtrl, KeyLeftShift, KeyRightAlt), Is.EqualTo((ulong)'@'));
+            Assert.That(ShortcutKeysym("ru,us", "typo,", Key2, KeyLeftCtrl, KeyRightAlt), Is.EqualTo((ulong)'@'));
+        }
+    }
+
+    [Test]
+    public void RuTypo_CtrlWithoutAltGr_TakesTheLatinKey()
+    {
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(ShortcutKeysym("ru", "typo", KeyC, KeyLeftCtrl), Is.EqualTo((ulong)'c'));
+            Assert.That(ShortcutKeysym("ru", "typo", KeyC, KeyLeftCtrl, KeyLeftShift), Is.EqualTo((ulong)'c'));
+            Assert.That(ShortcutKeysym("ru,us", "typo,", KeySlash, KeyLeftCtrl), Is.EqualTo((ulong)'/'));
+        }
+    }
+
+    [Test]
+    public void RuTypo_CtrlAltGr_OnAKeyWithNoAltGrLevel_TakesTheLatinKey()
+    {
+        // ru(typo) gives <AB03> (с) no third level, so AltGr leaves it at its base
+        Assert.That(ShortcutKeysym("ru", "typo", KeyC, KeyLeftCtrl, KeyRightAlt), Is.EqualTo((ulong)'c'));
     }
 }

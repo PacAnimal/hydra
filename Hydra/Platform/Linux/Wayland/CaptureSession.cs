@@ -32,6 +32,8 @@ internal interface ICaptureReceiver
 {
     event Action<string?>? KeyboardKeymapChanged;
     event Action<uint, bool>? KeyboardKey;
+    // depressed, latched and locked modifiers, and the effective layout group
+    event Action<uint, uint, uint, uint>? KeyboardModifiers;
     event Action<double, double>? PointerMotion;
     event Action<uint, bool>? Button;
     event Action<double, double>? ScrollDelta;
@@ -116,6 +118,12 @@ internal sealed class WaylandCaptureSession(IWaylandSession session) : ICaptureS
         {
             add => receiver.KeyboardKey += value;
             remove => receiver.KeyboardKey -= value;
+        }
+
+        public event Action<uint, uint, uint, uint>? KeyboardModifiers
+        {
+            add => receiver.KeyboardModifiers += value;
+            remove => receiver.KeyboardModifiers -= value;
         }
 
         public event Action<double, double>? PointerMotion

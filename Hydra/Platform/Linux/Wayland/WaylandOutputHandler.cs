@@ -73,6 +73,8 @@ internal sealed class WaylandOutputHandler : IPlatformOutput, ICursor
     private readonly CancellationTokenSource _cancel = new();
     // a held key is the key the master pressed, whatever the keymap types it with
     private readonly Dictionary<HeldKey, uint> _heldKeys = [];
+    // the latest non-modifier press still held: the key a repeat of a character not held repeats
+    private HeldKey? _lastPress;
     private readonly HashSet<uint> _heldButtons = [];
     private readonly HashSet<char> _unmappable = [];
     private readonly HashSet<char> _otherGroup = [];
@@ -203,8 +205,13 @@ internal sealed class WaylandOutputHandler : IPlatformOutput, ICursor
 
             if (!isDown)
             {
+                // the up of any character the key was pressed for lets go of it once, and of every alias of it
                 if (_heldKeys.Remove(held, out var code))
+                {
                     foreach (var stroke in WaylandInjection.Release(keymap, msg, code)) SendKey(device, stroke.EvdevKey, stroke.Pressed);
+                    DropAliases(code);
+                }
+                if (_lastPress is { } last && !_heldKeys.ContainsKey(last)) _lastPress = null;
                 return;
             }
 
@@ -223,7 +230,12 @@ internal sealed class WaylandOutputHandler : IPlatformOutput, ICursor
 
             // a repeat lets go of the held key and presses it again, as Deskflow's does: the client's own repeat
             // timer restarts each time, so it never repeats on top of the master's
-            if (_heldKeys.Remove(held, out var repeated)) SendKey(device, repeated, false);
+            uint? released = null;
+            if (_heldKeys.Remove(held, out var repeated))
+            {
+                SendKey(device, repeated, false);
+                released = repeated;
+            }
 
             var group = device.Group;
             // a device that selects groups types in the one selected last, so text on another layout switches once
@@ -235,6 +247,7 @@ internal sealed class WaylandOutputHandler : IPlatformOutput, ICursor
                 && WaylandInjection.OnOtherGroup(keymap, elsewhere, group))
             {
                 LogOtherGroup(elsewhere, device);
+                if (released is { } gone) DropAliases(gone);
                 return;
             }
             // a character the keymap neither types nor composes, on a key bound to it where the device can upload a keymap
@@ -247,6 +260,7 @@ internal sealed class WaylandOutputHandler : IPlatformOutput, ICursor
             {
                 if (msg.Character is { } ch && _unmappable.Add(ch) && _log.IsEnabled(LogLevel.Debug))
                     _log.LogDebug("Character U+{Code:X4} is not on the keymap and its dead keys cannot compose it; {Device} cannot type it", (int)ch, device.Name);
+                if (released is { } gone) DropAliases(gone);
                 return;
             }
             // NumLock only before a key it changes, never for the master's bit on plain typing
@@ -255,13 +269,42 @@ internal sealed class WaylandOutputHandler : IPlatformOutput, ICursor
             // a lock key leaves the lock unknown until the device reports it again: EIS once the compositor answers,
             // a device that keeps its own modifiers as the key goes in
             if (msg.Key is SpecialKey.CapsLock or SpecialKey.NumLock) _lockedMods = null;
+            // a repeat of a character not held is the last press re-resolved onto another key ('2' then '@' under Shift,
+            // AltGr+q on de): that press's key goes up and it moves here, so the original's up lets go of this one
+            var modifier = msg.Key?.IsModifier() == true;
+            if (released == null && msg.IsRepeat && !modifier && _lastPress is { } press && _heldKeys.TryGetValue(press, out var joined) && joined != plan.Key)
+            {
+                SendKey(device, joined, false);
+                released = joined;
+            }
+            // another character held on the same key (д and l on us,ru's KEY_L, A and a) lets go of it first, as a
+            // repeat does, so the key is never pressed twice. the master re-resolves a held key's repeats (e then E
+            // under Shift, д then l after a group switch) and replays the first character's up, so that character
+            // stays an alias of the key, and any up of the key's characters lets go of it (see DropAliases)
+            if (plan.Key != released && _heldKeys.ContainsValue(plan.Key)) SendKey(device, plan.Key, false);
+            // the aliases of a repeat's key moved elsewhere follow it
+            if (released is { } moved && moved != plan.Key) Repoint(moved, plan.Key);
             // another layout group's key goes in under that group where the device can select it, kept selected until a
             // key needs another, so a word on that layout switches once; the device's own group selects null, and a key
             // every group types alike (a special key, a bound one) leaves the selection as it is
             if (plan.Group is { } planned) SelectGroup(device, planned == group ? null : planned);
             foreach (var stroke in plan.Strokes) SendKey(device, stroke.EvdevKey, stroke.Pressed);
             _heldKeys[held] = plan.Key;
+            if (!msg.IsRepeat && !modifier) _lastPress = held;
         }
+    }
+
+    // under _lock: a key let go of is let go of for every character held on it
+    private void DropAliases(uint code)
+    {
+        foreach (var (other, held) in _heldKeys)
+            if (held == code) _heldKeys.Remove(other);
+    }
+
+    // under _lock
+    private void Repoint(uint from, uint to)
+    {
+        foreach (var other in _heldKeys.Where(e => e.Value == from).Select(e => e.Key).ToList()) _heldKeys[other] = to;
     }
 
     // under _lock: the first refusal of a visit's device is the user's to see, the rest only in the debug log
@@ -401,6 +444,7 @@ internal sealed class WaylandOutputHandler : IPlatformOutput, ICursor
             _acquisition.Lost();
             Detach();
             _heldKeys.Clear();
+            _lastPress = null;
             _heldButtons.Clear();
         }
     }
@@ -414,6 +458,7 @@ internal sealed class WaylandOutputHandler : IPlatformOutput, ICursor
             _acquisition.Lost();
             Detach();
             _heldKeys.Clear();
+            _lastPress = null;
             _heldButtons.Clear();
         }
     }
@@ -522,8 +567,9 @@ internal sealed class WaylandOutputHandler : IPlatformOutput, ICursor
     {
         if (_heldKeys.Count > 0 && _log.IsEnabled(LogLevel.Debug))
             _log.LogDebug("Letting go of the held keys: {Keys}", string.Join(", ", _heldKeys.Keys.Select(k => k.Describe())));
-        foreach (var code in _heldKeys.Values) SendKey(device, code, false);
+        foreach (var code in _heldKeys.Values.Distinct()) SendKey(device, code, false);
         _heldKeys.Clear();
+        _lastPress = null;
         // the device's own group back, so the user's layout is as they left it
         SelectGroup(device, null);
         foreach (var button in _heldButtons) Emit(device, d => d.Button(button, false));

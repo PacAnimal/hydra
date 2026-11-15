@@ -1,3 +1,5 @@
+using System.Net.Sockets;
+using System.Text;
 using Hydra.Config;
 using Hydra.Keyboard;
 using Hydra.Mouse;
@@ -357,6 +359,239 @@ public class WaylandCaptureKeysTests
     }
 }
 
+// The compositor's layout group from EIS keyboard modifiers, through a real resolver on the compositor's keymap: a layout
+// switched on the desktop types its characters. Self-skips off Linux; runs in the test-linux CI job and run-tests.sh linux.
+[TestFixture]
+[Category("Linux")]
+public class WaylandCaptureLayoutTests
+{
+    private const uint KeyG = 34;
+    private static ScreenRect Main => new("home:0", "home", 0, 0, 1920, 1080, IsLocal: true);
+
+    private StartedTimers _time = null!;
+    private FakeCapturePortal _portal = null!;
+    private FakeCaptureSession _session = null!;
+    private WaylandInputHandler _handler = null!;
+    private NotificationQueue<long> _hits = null!;
+    private readonly List<KeyEvent> _keys = [];
+
+    [OneTimeSetUp]
+    public void RequireLinux()
+    {
+        if (!OperatingSystem.IsLinux())
+            Assert.Ignore("Requires Linux with libxkbcommon (run ./run-tests.sh linux)");
+    }
+
+    private static string Keymap(string layout, string? options = null) =>
+        XkbKeymapLookup.KeymapTextFromNames(new LinuxInputConfig.XkbNames(layout, "pc105", null, options));
+
+    // each Hyprland layout watch the handler starts, one an attach, with the report callback it was given
+    private NotificationQueue<(HyprlandLayoutWatch Watch, Action<HyprlandLayoutWatch, uint> Report)> _watches = null!;
+    // each group a watch reported from its own query
+    private NotificationQueue<uint> _reported = null!;
+
+    private async Task Start(string layout, string? options = null, bool hyprland = false, string? hyprlandDir = null)
+    {
+        _time = new StartedTimers();
+        _portal = new FakeCapturePortal();
+        _session = new FakeCaptureSession(_portal, Keymap(layout, options));
+        _hits = new NotificationQueue<long>();
+        _watches = new NotificationQueue<(HyprlandLayoutWatch, Action<HyprlandLayoutWatch, uint>)>();
+        _reported = new NotificationQueue<uint>();
+        lock (_keys) _keys.Clear();
+        // no sockets in the fixture's directory unless the test serves some, so a watch's own Refresh fails quietly
+        // and only the test reports
+        var dir = hyprlandDir ?? TestPaths.FreshFixtureRoot("hypw");
+        var time = _time;
+        var reported = _reported;
+        _handler = new WaylandInputHandler(_session, TransitionTestHelper.TestConfig, null, _time, NullLogger.Instance, hyprland: hyprland,
+            layoutWatches: report =>
+            {
+                var watch = HyprlandLayoutWatch.Unstarted(dir, (w, g) =>
+                {
+                    report(w, g);
+                    reported.Push(g);
+                }, NullLogger.Instance, time);
+                _watches.Push((watch, report));
+                return watch;
+            });
+        _handler.ReportHitsTo((_, _, hit) => _hits.Push(hit));
+        _handler.CrossableEdgesChanged([new CrossableEdge(Main, new EdgeSpan(Direction.Right, 0, 1080))]);
+        await _handler.StartEventTap((_, _) => { }, null, e => { lock (_keys) _keys.Add(e); }, _ => { }, _ => { });
+        await _portal.Until("enable", "the first barriers");
+        await _handler.BarrierWorkIdle.WaitAsync(Bound);
+    }
+
+    [TearDown]
+    public async Task TearDown() => await _handler.DisposeAsync();
+
+    private async Task Visit()
+    {
+        _portal.Activate(7, 1920, 500);
+        await _hits.Next("the barrier hit");
+        _handler.IsOnVirtualScreen = true;
+    }
+
+    private char? TypeG()
+    {
+        lock (_keys) _keys.Clear();
+        _session.Receiver.Key(KeyG, pressed: true);
+        _session.Receiver.Key(KeyG, pressed: false);
+        lock (_keys) return _keys[0].Character;
+    }
+
+    [Test]
+    public async Task TheCompositorsGroup_TypesItsLayout()
+    {
+        await Start("us,ru");
+        await Visit();
+
+        _session.Receiver.Modifiers(group: 1);
+
+        Assert.That(TypeG(), Is.EqualTo('п'));
+    }
+
+    [Test]
+    public async Task AGroupBeforeTheKeymap_AppliesOnceItArrives()
+    {
+        await Start("us");
+        _session.Receiver.Modifiers(group: 1);
+
+        _session.Receiver.ChangeKeymap(Keymap("us,ru"));
+        await Visit();
+
+        Assert.That(TypeG(), Is.EqualTo('п'));
+    }
+
+    // a lost session detaches its watch and the next attach starts another: a report the old one was still answering
+    // when it was replaced moves nothing
+    [Test]
+    public async Task OnHyprland_AReportFromAReplacedWatch_IsDropped()
+    {
+        await Start("us,ru", hyprland: true);
+        var (old, oldReport) = await _watches.Next("the first attach's watch");
+        _session.RaiseSessionLost();
+        var (current, report) = await _watches.Next("the next attach's watch");
+        await _portal.Until("enable", "the next attach's barriers");
+        await _handler.BarrierWorkIdle.WaitAsync(Bound);
+        await Visit();
+
+        oldReport(old, 1);
+        var afterOld = TypeG();
+        report(current, 1);
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(afterOld, Is.EqualTo('g'), "the replaced watch's report");
+            Assert.That(TypeG(), Is.EqualTo('п'), "the current watch's report");
+        }
+    }
+
+    // Hyprland sends no event when the user moves to another keyboard on another group: a capture's start asks again
+    [Test]
+    public async Task OnHyprland_ACaptureStart_AsksHyprlandForTheGroup()
+    {
+        if (OperatingSystem.IsWindows()) Assert.Ignore("Unix domain sockets: Linux and macOS only");
+        var dir = TestPaths.FreshFixtureRoot("hypw");
+        using var cancel = new CancellationTokenSource(Bound);
+        using var requests = ListenUnix(Path.Combine(dir, ".socket.sock"));
+        var server = ServeDevices(requests, _ => 1, cancel.Token);
+        await Start("us,ru", hyprland: true, hyprlandDir: dir);
+
+        await Visit();
+        var reported = await _reported.Next("the capture's answer");
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(reported, Is.EqualTo(1u));
+            Assert.That(TypeG(), Is.EqualTo('п'));
+        }
+        await cancel.CancelAsync();
+        await server;
+    }
+
+    // the capture's query may predate the switch to the keyboard typed on: its first key asks once more
+    [Test]
+    public async Task OnHyprland_ACapturesFirstKey_AsksHyprlandAgain()
+    {
+        if (OperatingSystem.IsWindows()) Assert.Ignore("Unix domain sockets: Linux and macOS only");
+        var dir = TestPaths.FreshFixtureRoot("hypw");
+        using var cancel = new CancellationTokenSource(Bound);
+        using var requests = ListenUnix(Path.Combine(dir, ".socket.sock"));
+        // the capture's request sees group 0, any later one group 1
+        var server = ServeDevices(requests, n => n == 1 ? 0 : 1, cancel.Token);
+        await Start("us,ru", hyprland: true, hyprlandDir: dir);
+
+        await Visit();
+        var atCapture = await _reported.Next("the capture's answer");
+        _time.Advance(TimeSpan.FromMilliseconds(10));
+        // this key resolves before the answer lands, under the old group
+        _ = TypeG();
+        var atKey = await _reported.Next("the first key's answer");
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(atCapture, Is.Zero);
+            Assert.That(atKey, Is.EqualTo(1u));
+            Assert.That(TypeG(), Is.EqualTo('п'));
+        }
+        await cancel.CancelAsync();
+        await server;
+    }
+
+    private static Socket ListenUnix(string path)
+    {
+        var listener = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+        listener.Bind(new UnixDomainSocketEndPoint(path));
+        listener.Listen(8);
+        return listener;
+    }
+
+    // answers each j/devices with the main keyboard's index for the nth request (from 1)
+    private static async Task ServeDevices(Socket listener, Func<int, int> index, CancellationToken cancel)
+    {
+        var served = 0;
+        try
+        {
+            while (true)
+            {
+                using var socket = await listener.AcceptAsync(cancel);
+                _ = await socket.ReceiveAsync(new byte[256], SocketFlags.None, cancel);
+                var answer = $$"""{"keyboards": [{"name": "kb", "active_layout_index": {{index(++served)}}, "main": true}]}""";
+                await socket.SendAsync(Encoding.UTF8.GetBytes(answer), SocketFlags.None, cancel);
+                socket.Shutdown(SocketShutdown.Both);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    // Hyprland's answer to a capture's refresh names the group already in use: a toggle made inside the capture stands,
+    // while an answer that differs still applies
+    [Test]
+    public async Task OnHyprland_AnAnswerNamingTheCurrentGroup_KeepsAToggleMadeInTheCapture()
+    {
+        const uint keyCapsLock = 58;
+        await Start("us,ru,gr", "grp:caps_toggle", hyprland: true);
+        var (watch, report) = await _watches.Next("the watch");
+        report(watch, 0);
+        await Visit();
+
+        _session.Receiver.Key(keyCapsLock, pressed: true);
+        _session.Receiver.Key(keyCapsLock, pressed: false);
+        report(watch, 0);
+        var toggled = TypeG();
+        report(watch, 2);
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(toggled, Is.EqualTo('п'), "the toggle to ru stands");
+            Assert.That(TypeG(), Is.EqualTo('γ'), "gr, the group Hyprland names");
+        }
+    }
+}
+
 // the run's portal session as the input handler sees it, serving the one fake portal and receiver
 internal sealed class FakeCaptureSession(FakeCapturePortal portal, string? keymap = null) : ICaptureSession
 {
@@ -444,8 +679,11 @@ internal sealed class FakeCapturePortal : ICapturePortal
 // the EIS receiver, fed by the test
 internal sealed class FakeCaptureReceiver(string? keymap = null) : ICaptureReceiver
 {
-    public event Action<string?>? KeyboardKeymapChanged { add { } remove { } }
+    private string? _keymap = keymap;
+
+    public event Action<string?>? KeyboardKeymapChanged;
     public event Action<uint, bool>? KeyboardKey;
+    public event Action<uint, uint, uint, uint>? KeyboardModifiers;
     public event Action<double, double>? PointerMotion { add { } remove { } }
     public event Action<uint, bool>? Button;
     public event Action<double, double>? ScrollDelta { add { } remove { } }
@@ -453,11 +691,20 @@ internal sealed class FakeCaptureReceiver(string? keymap = null) : ICaptureRecei
     public event Action<bool, bool>? ScrollStop { add { } remove { } }
     public event Action? Frame { add { } remove { } }
 
-    public string? KeyboardKeymap => keymap;
+    public string? KeyboardKeymap => Volatile.Read(ref _keymap);
     public bool IsDisconnected => false;
 
     public void Key(uint code, bool pressed) => KeyboardKey?.Invoke(code, pressed);
     public void Press(uint code, bool pressed) => Button?.Invoke(code, pressed);
+
+    // the compositor's modifiers, only the layout group set
+    public void Modifiers(uint group) => KeyboardModifiers?.Invoke(0, 0, 0, group);
+
+    public void ChangeKeymap(string? text)
+    {
+        Volatile.Write(ref _keymap, text);
+        KeyboardKeymapChanged?.Invoke(text);
+    }
 }
 
 // the kernel's keyboards, fed by the test; Start answers started

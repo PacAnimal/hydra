@@ -4,7 +4,7 @@ FROM fedora:45
 ENV HYDRA_DESKTOP_KINDS=openbox,gnome,kde,evdev
 
 RUN dnf install -y \
-		mutter kwin openbox xorg-x11-server-Xvfb \
+		mutter kwin openbox xorg-x11-server-Xvfb setxkbmap \
 		xdg-desktop-portal libei libei-utils libxkbcommon \
 		wl-clipboard xclip xdotool python3-gobject gtk4 \
 		dbus-daemon dbus-tools procps-ng libcap dotnet-sdk-10.0 libffi gcc SDL3-devel \

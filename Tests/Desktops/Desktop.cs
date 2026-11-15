@@ -17,15 +17,21 @@ public sealed class Desktop : IAsyncDisposable
 {
     private const string Script = "desktop.sh";
 
-    private Desktop(DesktopKind kind, string name, IReadOnlyDictionary<string, string> env)
+    private Desktop(DesktopKind kind, string name, string? layout, string? options, IReadOnlyDictionary<string, string> env)
     {
         Kind = kind;
         Name = name;
+        Layout = layout;
+        Options = options;
         Env = env;
     }
 
     public DesktopKind Kind { get; }
     public string Name { get; }
+    // the xkb layout list it started with, as in "us,ru"; null is the image's default, us
+    public string? Layout { get; }
+    // the xkb option list it started with, as in "grp:switch"; null is the image's default
+    public string? Options { get; }
     public IReadOnlyDictionary<string, string> Env { get; }
     public bool IsWayland => Kind == DesktopKind.Hyprland || Env.ContainsKey("WAYLAND_DISPLAY");
 
@@ -47,12 +53,18 @@ public sealed class Desktop : IAsyncDisposable
         return kinds.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).Contains(Arg(kind));
     }
 
-    public static async Task<Desktop> Start(DesktopKind kind, string name)
+    public static async Task<Desktop> Start(DesktopKind kind, string name, string? layout = null, string? options = null)
     {
         if (kind == DesktopKind.Evdev)
-            return new Desktop(kind, name, new Dictionary<string, string>());
+        {
+            if (layout != null)
+                throw new ArgumentException("evdev has no desktop to load a layout into", nameof(layout));
+            if (options != null)
+                throw new ArgumentException("evdev has no desktop to load xkb options into", nameof(options));
+            return new Desktop(kind, name, null, null, new Dictionary<string, string>());
+        }
 
-        var result = await Run(Arg(kind), name);
+        var result = await Run(layout, options, Arg(kind), name);
         if (result.ExitCode != 0)
             throw new InvalidOperationException($"desktop.sh {Arg(kind)} {name} exited {result.ExitCode}: {result.Stderr}");
 
@@ -63,7 +75,17 @@ public sealed class Desktop : IAsyncDisposable
             if (eq > 0)
                 env[line[..eq]] = line[(eq + 1)..];
         }
-        return new Desktop(kind, name, env);
+        return new Desktop(kind, name, layout, options, env);
+    }
+
+    // locks the active xkb layout group, 0 being the first layout in Layout
+    public async Task Group(int index)
+    {
+        if (Kind == DesktopKind.Evdev)
+            throw new InvalidOperationException("evdev has no desktop to switch the layout group of");
+        var result = await Run(null, null, "group", Name, index.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        if (result.ExitCode != 0)
+            throw new InvalidOperationException($"desktop.sh group {Name} {index} exited {result.ExitCode}: {result.Stderr}");
     }
 
     // a start info for a client of this desktop: its env, software rendering, all streams redirected
@@ -88,10 +110,10 @@ public sealed class Desktop : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         if (Kind != DesktopKind.Evdev)
-            await Run("stop", Name);
+            await Run(null, null, "stop", Name);
     }
 
-    private static async Task<ScriptResult> Run(params string[] args)
+    private static async Task<ScriptResult> Run(string? layout, string? options, params string[] args)
     {
         var info = new ProcessStartInfo(Script)
         {
@@ -101,6 +123,13 @@ public sealed class Desktop : IAsyncDisposable
         };
         foreach (var arg in args)
             info.ArgumentList.Add(arg);
+        // never inherited, so a layout-less start is the default one whatever the runner's env holds
+        info.Environment.Remove("HYDRA_XKB_LAYOUT");
+        info.Environment.Remove("HYDRA_XKB_OPTIONS");
+        if (layout != null)
+            info.Environment["HYDRA_XKB_LAYOUT"] = layout;
+        if (options != null)
+            info.Environment["HYDRA_XKB_OPTIONS"] = options;
 
         using var process = System.Diagnostics.Process.Start(info)
             ?? throw new InvalidOperationException("desktop.sh did not start");
