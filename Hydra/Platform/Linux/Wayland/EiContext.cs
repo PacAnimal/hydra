@@ -148,6 +148,9 @@ internal sealed class EiContext : IDisposable
     public EiDevice? Keyboard { get { lock (_lock) return Pick(EiCapabilities.Keyboard); } }
     public EiDevice? Pointer { get { lock (_lock) return Pick(EiCapabilities.Pointer); } }
     public EiDevice? AbsolutePointer { get { lock (_lock) return Pick(EiCapabilities.PointerAbsolute); } }
+    public bool CanTypeAndPoint { get { lock (_lock) return EiDevices.CanTypeAndPoint(_devices); } }
+    // the first absolute pointer's regions, resumed or not; null with none added
+    public IReadOnlyList<EiRegion>? AbsoluteRegions { get { lock (_lock) return EiDevices.AbsoluteRegions(_devices); } }
 
     // true once the EIS connection is gone; Disconnected has been or is about to be raised
     public bool IsDisconnected => _disconnected;
@@ -272,18 +275,7 @@ internal sealed class EiContext : IDisposable
         device.Emulating = true;
     }
 
-    // the first resumed device with the capability, the pointer preferred for buttons and scroll
-    private EiDevice? Pick(EiCapabilities capability)
-    {
-        if (capability is EiCapabilities.Button or EiCapabilities.Scroll)
-        {
-            var pointer = Pick(EiCapabilities.Pointer);
-            if (pointer != null && pointer.Has(capability)) return pointer;
-        }
-        foreach (var device in _devices)
-            if (device.IsResumed && device.Has(capability)) return device;
-        return null;
-    }
+    private EiDevice? Pick(EiCapabilities capability) => EiDevices.Pick(_devices, capability);
 
     // -- dispatch --
 
@@ -394,6 +386,7 @@ internal sealed class EiContext : IDisposable
                 paused.IsResumed = false;
                 paused.Emulating = false;
                 paused.Dirty = false;
+                if (_log.IsEnabled(LogLevel.Debug)) _log.LogDebug("EIS device paused: {Device}", paused);
                 raised.Add(() => DevicePaused?.Invoke(paused));
                 return false;
             case EI_EVENT_DEVICE_RESUMED:
@@ -401,6 +394,7 @@ internal sealed class EiContext : IDisposable
                 if (resumed == null) return false;
                 resumed.IsResumed = true;
                 if (_sender && _emulating) Start(resumed);
+                if (_log.IsEnabled(LogLevel.Debug)) _log.LogDebug("EIS device resumed: {Device}", resumed);
                 raised.Add(() => DeviceResumed?.Invoke(resumed));
                 return false;
             case EI_EVENT_KEYBOARD_MODIFIERS:

@@ -82,7 +82,7 @@ internal sealed class WaylandSession : IWaylandSession
         var live = await Current(cancel);
         if (live is SlaveLive slave)
         {
-            await slave.Ready().WaitAsync(cancel);
+            await slave.Known().WaitAsync(cancel);
             return slave.Regions();
         }
         var master = (MasterLive)live;
@@ -581,49 +581,24 @@ internal sealed class WaylandSession : IWaylandSession
     }
 
     // a slave's: an injection device, ready once it can type and point, and the screens it moves over
-    private abstract class SlaveLive(PortalBus bus) : Live(bus)
+    private abstract class SlaveLive : Live
     {
-        private TaskCompletionSource _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private IReadOnlyList<DetectedScreen>? _regions;
+        private readonly SlaveScreenState _state;
+
+        protected SlaveLive(PortalBus bus) : base(bus) => _state = new SlaveScreenState(Gate, () => IsLost);
 
         // made before the session is published
         internal abstract IInjectionDevice Device { get; }
 
-        protected override void OnLost()
-        {
-            lock (Gate)
-            {
-                _ready.TrySetException(new PortalException("The Wayland portal session was lost"));
-                // nobody may be waiting on it
-                _ = _ready.Task.Exception;
-            }
-        }
+        protected override void OnLost() => _state.Lost();
 
-        // completes while the device can type and point
-        internal Task Ready()
-        {
-            lock (Gate) return _ready.Task;
-        }
+        internal Task Ready() => _state.Ready();
 
-        internal IReadOnlyList<DetectedScreen> Regions()
-        {
-            lock (Gate) return _regions ?? [];
-        }
+        internal Task Known() => _state.Known();
 
-        // records readiness and, when known, the screens; true when the screens changed
-        protected bool Update(bool ready, IReadOnlyList<DetectedScreen>? regions)
-        {
-            lock (Gate)
-            {
-                if (IsLost) return false;
-                if (ready) _ready.TrySetResult();
-                else if (_ready.Task.IsCompleted) _ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                if (regions == null) return false;
-                var changed = _regions != null && ScreenRect.ScreenListChanged(regions, _regions);
-                _regions = regions;
-                return changed;
-            }
-        }
+        internal IReadOnlyList<DetectedScreen> Regions() => _state.Regions();
+
+        protected bool Update(bool ready, IReadOnlyList<DetectedScreen>? regions) => _state.Update(ready, regions);
     }
 
     // RemoteDesktop's session, its EIS sender and the outputs that name the absolute pointer's regions
@@ -653,9 +628,9 @@ internal sealed class WaylandSession : IWaylandSession
         internal bool DevicesChanged()
         {
             if (_ei is not { } ei) return false;
-            var ready = ei.Keyboard != null && (ei.Pointer != null || ei.AbsolutePointer != null);
-            // a paused absolute pointer keeps the regions it had
-            var regions = ei.AbsolutePointer?.Regions
+            var ready = ei.CanTypeAndPoint;
+            // added is enough: the regions are laid out before the compositor resumes the device, if it ever does
+            var regions = ei.AbsoluteRegions?
                 .Select(r => new ScreenBounds((int)r.X, (int)r.Y, (int)r.Width, (int)r.Height))
                 .ToList();
             return Update(ready, regions == null ? null : WaylandOutputs.Name(regions, Names?.Screens ?? [], "region"));
