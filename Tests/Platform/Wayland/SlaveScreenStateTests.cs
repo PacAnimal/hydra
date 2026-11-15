@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using Hydra.Platform;
 using Hydra.Platform.Linux.Wayland;
 
@@ -102,6 +103,64 @@ public class SlaveScreenStateTests
             Assert.That(_state.Update(true, [Screen]), Is.False);
             Assert.That(_state.Known().IsFaulted, Is.True);
             Assert.That(_state.Regions(), Is.Empty);
+        }
+    }
+
+    // the start thread and the EIS dispatch thread both re-read the devices; the read happens under the gate, so an
+    // update another thread made meanwhile is never overwritten by an older read
+    [Test]
+    public void Read_IsUnderTheGate()
+    {
+        var held = false;
+        _state.Update(() =>
+        {
+            held = _gate.IsHeldByCurrentThread;
+            return (true, [Screen]);
+        });
+        Assert.That(held, Is.True);
+    }
+
+    [Test]
+    public void LaterUpdate_ReadsTheLatestState_AndLeavesReady()
+    {
+        var device = new StrongBox<bool>(false);
+        _state.Update(() => (device.Value, null));
+        // the device resumed before the second update reads it
+        device.Value = true;
+        _state.Update(() => (device.Value, null));
+        Assert.That(_state.Ready().IsCompletedSuccessfully, Is.True);
+    }
+
+    [Test]
+    public void StaleReader_WaitsForTheGate_AndReadsTheNewerState()
+    {
+        var device = new StrongBox<bool>(false);
+        Task stale;
+        lock (_gate)
+        {
+            // the dispatch thread's update holds the gate; the start thread's reader cannot read until it is done
+            stale = Task.Run(() => _state.Update(() => (Volatile.Read(ref device.Value), null)));
+            Assert.That(stale.Wait(100), Is.False, "the reader must wait for the gate");
+            Volatile.Write(ref device.Value, true);
+            _state.Update(() => (Volatile.Read(ref device.Value), null));
+        }
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(stale.Wait(TimeSpan.FromSeconds(5)), Is.True);
+            Assert.That(_state.Ready().IsCompletedSuccessfully, Is.True);
+        }
+    }
+
+    [Test]
+    public void NotReadyAfterReady_StillResetsReady()
+    {
+        _state.Update(() => (true, [Screen]));
+        var ready = _state.Ready();
+        _state.Update(() => (false, null));
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(ready.IsCompletedSuccessfully, Is.True, "a waiter that already saw it ready keeps its result");
+            Assert.That(_state.Ready().IsCompleted, Is.False, "a paused device is not ready");
         }
     }
 }

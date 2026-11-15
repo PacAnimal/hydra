@@ -598,7 +598,7 @@ internal sealed class WaylandSession : IWaylandSession
 
         internal IReadOnlyList<DetectedScreen> Regions() => _state.Regions();
 
-        protected bool Update(bool ready, IReadOnlyList<DetectedScreen>? regions) => _state.Update(ready, regions);
+        protected bool Update(Func<(bool Ready, IReadOnlyList<DetectedScreen>? Regions)> read) => _state.Update(read);
     }
 
     // RemoteDesktop's session, its EIS sender and the outputs that name the absolute pointer's regions
@@ -624,16 +624,21 @@ internal sealed class WaylandSession : IWaylandSession
 
         internal override PortalClipboard? Clipboard(ILogger log) => _clipboard.Get(log);
 
-        // re-reads readiness and the absolute pointer's regions; true when the regions changed
+        // re-reads readiness and the absolute pointer's regions; true when the regions changed. Read under the gate: the
+        // start thread and the dispatch thread both call this, and a stale read must not land after a newer one. Gate
+        // before ei's lock; ei raises its events outside that lock
         internal bool DevicesChanged()
         {
             if (_ei is not { } ei) return false;
-            var ready = ei.CanTypeAndPoint;
-            // added is enough: the regions are laid out before the compositor resumes the device, if it ever does
-            var regions = ei.AbsoluteRegions?
-                .Select(r => new ScreenBounds((int)r.X, (int)r.Y, (int)r.Width, (int)r.Height))
-                .ToList();
-            return Update(ready, regions == null ? null : WaylandOutputs.Name(regions, Names?.Screens ?? [], "region"));
+            return Update(() =>
+            {
+                var ready = ei.CanTypeAndPoint;
+                // added is enough: the regions are laid out before the compositor resumes the device, if it ever does
+                var regions = ei.AbsoluteRegions?
+                    .Select(r => new ScreenBounds((int)r.X, (int)r.Y, (int)r.Width, (int)r.Height))
+                    .ToList();
+                return (ready, regions == null ? null : WaylandOutputs.Name(regions, Names?.Screens ?? [], "region"));
+            });
         }
 
         internal override async Task DisposeAsync(ILogger log)
@@ -667,9 +672,11 @@ internal sealed class WaylandSession : IWaylandSession
         // no portal session enables one here
         internal override PortalClipboard? Clipboard(ILogger log) => null;
 
-        // ready once the devices exist; true when the outputs differ from the last ones read
+        // ready once the devices exist; true when the outputs differ from the last ones read. Read under the gate, as
+        // the start thread and the Wayland thread both call this; gate before the outputs' lock, which they raise
+        // Changed outside
         internal bool SetOutputs() =>
-            _outputs is { } outputs && Volatile.Read(ref _device) != null && Update(true, outputs.Screens);
+            _outputs is { } outputs && Volatile.Read(ref _device) != null && Update(() => (true, outputs.Screens));
 
         internal override async Task DisposeAsync(ILogger log)
         {

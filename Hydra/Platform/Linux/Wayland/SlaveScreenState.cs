@@ -45,11 +45,15 @@ internal sealed class SlaveScreenState(Lock gate, Func<bool> isLost)
 
     // records readiness and, when known, the screens; a removed absolute pointer (null) keeps the last ones. true
     // when the screens changed
-    internal bool Update(bool ready, IReadOnlyList<DetectedScreen>? regions)
+    internal bool Update(bool ready, IReadOnlyList<DetectedScreen>? regions) => Update(() => (ready, regions));
+
+    // read under the gate: a stale read from another thread must not land after a newer one
+    internal bool Update(Func<(bool Ready, IReadOnlyList<DetectedScreen>? Regions)> read)
     {
         lock (gate)
         {
             if (isLost()) return false;
+            var (ready, regions) = read();
             if (ready) _ready.TrySetResult();
             else if (_ready.Task.IsCompleted) _ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var changed = false;
