@@ -26,6 +26,8 @@ internal sealed class VirtualInjectionDevice : IInjectionDevice
     // the keysym the spare key types on the keymap uploaded for it; null while the compositor's own is up
     private uint? _bound;
     private bool _spareHeld;
+    // the group a character from another layout is typed under; null for our own
+    private uint? _selectedGroup;
     private int _disposed;
 
     // takes the keymap over, disposed with the device
@@ -87,11 +89,31 @@ internal sealed class VirtualInjectionDevice : IInjectionDevice
     // ours to keep: the compositor takes the modifiers we send
     public uint? LockedModifiers => _modifiers.Current.Locked;
 
+    // the group the keys pressed on our keymap left, which is what the compositor has from us
+    public uint Group => _modifiers.Current.Group;
+
+    // the modifiers request carries the group, so any group can be sent
+    public bool SelectsGroup => true;
+
     public bool IsLost => _input.IsDisconnected;
 
     public event Action<uint>? LockedModifiersChanged;
 
     public event Action? Lost;
+
+    // the group rides on the modifiers sent from here on, until null sends our own back
+    public bool SelectGroup(uint? group)
+    {
+        var changed = false;
+        Send(() =>
+        {
+            if (_selectedGroup == group) return;
+            _selectedGroup = group;
+            SendModifiers();
+            changed = true;
+        });
+        return changed;
+    }
 
     // a virtual device is always on
     public void StartEmulating()
@@ -134,9 +156,7 @@ internal sealed class VirtualInjectionDevice : IInjectionDevice
             lockedBefore = _modifiers.Current.Locked;
             _input.Key(evdevKey, pressed);
             if (!_modifiers.Update(evdevKey, pressed)) return;
-            var now = _modifiers.Current;
-            _input.Modifiers(now.Depressed, now.Latched, now.Locked, now.Group);
-            changed = now;
+            changed = SendModifiers();
         });
         if (changed is { } mods && mods.Locked != lockedBefore) LockedModifiersChanged?.Invoke(mods.Locked);
         return sent;
@@ -155,8 +175,15 @@ internal sealed class VirtualInjectionDevice : IInjectionDevice
     private void Upload(string text)
     {
         _input.UploadKeymap(text);
+        SendModifiers();
+    }
+
+    // under _lock: our modifiers, under the selected group if any
+    private XkbModifiers SendModifiers()
+    {
         var now = _modifiers.Current;
-        _input.Modifiers(now.Depressed, now.Latched, now.Locked, now.Group);
+        _input.Modifiers(now.Depressed, now.Latched, now.Locked, _selectedGroup ?? now.Group);
+        return now;
     }
 
     public bool Button(uint evdevButton, bool pressed) => SendPointer(() => _input.Button(evdevButton, pressed));

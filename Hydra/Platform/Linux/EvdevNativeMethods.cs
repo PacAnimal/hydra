@@ -193,6 +193,10 @@ internal static partial class EvdevNativeMethods
 
     [LibraryImport(Xkb)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial uint xkb_keymap_num_layouts(nint keymap);
+
+    [LibraryImport(Xkb)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial uint xkb_keymap_num_layouts_for_key(nint keymap, uint key);
 
     [LibraryImport(Xkb)]

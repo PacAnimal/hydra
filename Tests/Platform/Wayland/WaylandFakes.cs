@@ -59,9 +59,10 @@ internal sealed class FakeWaylandSession : IWaylandSession, IDisposable
 
 // an injection device recording what it is sent, in order, as "key 30 down", "button 272 up", "abs 10,20", "rel 1,2",
 // "scroll 0,120" and "frame"; StartEmulating and StopEmulating as "start" and "stop". BindKeysym binds to bindKey,
-// when given, recorded as "bind 0xe9"
+// when given, recorded as "bind 0xe9". group is the effective layout group, settable as the compositor's modifiers
+// event would; it cannot select a group, as EIS cannot
 internal sealed class RecordingDevice(string name = "recording", string? keymap = null, IReadOnlyList<ScreenBounds>? regions = null, uint? locked = 0,
-    uint? bindKey = null) : IInjectionDevice
+    uint? bindKey = null, uint group = 0) : IInjectionDevice
 {
     private readonly List<string> _sent = [];
 
@@ -74,10 +75,14 @@ internal sealed class RecordingDevice(string name = "recording", string? keymap 
     public string? Keymap { get; } = keymap;
     public IReadOnlyList<ScreenBounds>? AbsoluteRegions { get; } = regions;
     public uint? LockedModifiers { get; } = locked;
+    public uint Group { get; set; } = group;
+    public bool SelectsGroup => false;
     public bool IsLost { get; private set; }
 
     public event Action<uint>? LockedModifiersChanged { add { } remove { } }
     public event Action? Lost;
+
+    public bool SelectGroup(uint? selected) => false;
 
     public void Lose()
     {

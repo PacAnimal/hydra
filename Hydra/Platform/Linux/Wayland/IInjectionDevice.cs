@@ -19,9 +19,19 @@ internal interface IInjectionDevice : IDisposable
     // the locked modifiers of the keymap as last known; null until known
     uint? LockedModifiers { get; }
 
+    // the effective layout group (xkb layout index) as last known; 0 until known
+    uint Group { get; }
+
+    // whether SelectGroup takes: an EIS client cannot change the compositor's group
+    bool SelectsGroup { get; }
+
     bool IsLost { get; }
 
     event Action<uint>? LockedModifiersChanged;
+
+    // the layout group keys go in under until called with null, which gives the device's own back; false when nothing
+    // was sent
+    bool SelectGroup(uint? group);
 
     // the connection behind the device is gone; raised once
     event Action? Lost;

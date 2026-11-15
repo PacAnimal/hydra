@@ -9,6 +9,7 @@ namespace Tests.Keyboard;
 public class XkbKeymapLookupTests
 {
     private const uint KeyA = 30, Key2 = 3, Key7 = 8, KeyQ = 16, KeyKp1 = 79, KeyEuro = 435;
+    private const uint KeyL = 38, Key1 = 2, Key3 = 4, KeyComma = 51, KeySlash = 53;
     private const uint KpOne = 0xFFB1, KpEnd = 0xFF9C;
 
     [OneTimeSetUp]
@@ -101,6 +102,147 @@ public class XkbKeymapLookupTests
     {
         using var lookup = Lookup("us");
         Assert.That(lookup.EvdevKeyFor(XkbKeymapLookup.CharToKeysym('A')), Is.EqualTo(KeyA));
+    }
+
+    [Test]
+    public void UsRu_CyrillicLetter_IsOnGroup1()
+    {
+        using var lookup = Lookup("us,ru");
+        Assert.That(lookup.Find(XkbKeymapLookup.CharToKeysym('д')), Is.EqualTo(new XkbKeyStroke(KeyL, false, false, Group: 1)));
+    }
+
+    [Test]
+    public void UsRu_CapitalCyrillicLetter_IsOnGroup1WithShift()
+    {
+        using var lookup = Lookup("us,ru");
+        Assert.That(lookup.Find(XkbKeymapLookup.CharToKeysym('Д')), Is.EqualTo(new XkbKeyStroke(KeyL, true, false, Group: 1)));
+    }
+
+    [Test]
+    public void UsRu_LatinLetter_IsOnGroup0()
+    {
+        using var lookup = Lookup("us,ru");
+        Assert.That(lookup.Find(XkbKeymapLookup.CharToKeysym('l')), Is.EqualTo(new XkbKeyStroke(KeyL, false, false)));
+    }
+
+    [Test]
+    public void RuUs_LatinLetter_IsOnGroup1()
+    {
+        using var lookup = Lookup("ru,us");
+        Assert.That(lookup.Find(XkbKeymapLookup.CharToKeysym('l')), Is.EqualTo(new XkbKeyStroke(KeyL, false, false, Group: 1)));
+    }
+
+    [Test]
+    public void RuUs_CyrillicLetter_IsOnGroup0()
+    {
+        using var lookup = Lookup("ru,us");
+        Assert.That(lookup.Find(XkbKeymapLookup.CharToKeysym('д')), Is.EqualTo(new XkbKeyStroke(KeyL, false, false)));
+    }
+
+    [Test]
+    public void UsRu_ADigitBothGroupsType_IsOnThePreferredGroup()
+    {
+        using var lookup = Lookup("us,ru");
+        var one = XkbKeymapLookup.CharToKeysym('1');
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(lookup.Find(one), Is.EqualTo(new XkbKeyStroke(Key1, false, false)));
+            Assert.That(lookup.Find(one, preferredGroup: 1), Is.EqualTo(new XkbKeyStroke(Key1, false, false, Group: 1)));
+        }
+    }
+
+    [Test]
+    public void UsRu_CommaBothGroupsType_IsOnThePreferredGroupsOwnKey()
+    {
+        // us has ',' on KEY_COMMA, ru on KEY_SLASH with Shift
+        using var lookup = Lookup("us,ru");
+        var comma = XkbKeymapLookup.CharToKeysym(',');
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(lookup.Find(comma), Is.EqualTo(new XkbKeyStroke(KeyComma, false, false)));
+            Assert.That(lookup.Find(comma, preferredGroup: 1), Is.EqualTo(new XkbKeyStroke(KeySlash, true, false, Group: 1)));
+        }
+    }
+
+    private const string CyrillicLetters = "абвгдеёжзийклмнопрстуфхцчшщъыьэюя";
+
+    private static void AssertEveryCyrillicLetterOn(XkbKeymapLookup lookup, uint group)
+    {
+        using (Assert.EnterMultipleScope())
+        {
+            foreach (var lower in CyrillicLetters)
+            {
+                var upper = char.ToUpperInvariant(lower);
+                var small = lookup.Find(XkbKeymapLookup.CharToKeysym(lower));
+                var capital = lookup.Find(XkbKeymapLookup.CharToKeysym(upper));
+                Assert.That(small?.Group, Is.EqualTo(group), $"{lower}");
+                Assert.That(small?.Shift, Is.False, $"{lower}");
+                Assert.That(capital?.Group, Is.EqualTo(group), $"{upper}");
+                Assert.That(capital?.Shift, Is.True, $"{upper}");
+                Assert.That(capital?.EvdevKey, Is.EqualTo(small?.EvdevKey), $"{upper} is on {lower}'s key");
+            }
+        }
+    }
+
+    [Test]
+    public void UsRu_EveryCyrillicLetter_IsOnGroup1()
+    {
+        using var lookup = Lookup("us,ru");
+        AssertEveryCyrillicLetterOn(lookup, 1);
+    }
+
+    [Test]
+    public void Ru_EveryCyrillicLetter_IsOnGroup0()
+    {
+        using var lookup = Lookup("ru");
+        AssertEveryCyrillicLetterOn(lookup, 0);
+    }
+
+    [Test]
+    public void UsRu_CyrillicPunctuation()
+    {
+        // ru: <AE03> { [ 3, numerosign ] }
+        using var lookup = Lookup("us,ru");
+        Assert.That(lookup.Find(XkbKeymapLookup.CharToKeysym('№')), Is.EqualTo(new XkbKeyStroke(Key3, true, false, Group: 1)));
+    }
+
+    [Test]
+    public void UsRu_LatinLetter_PreferredGroup1_StillFallsBackToGroup0()
+    {
+        using var lookup = Lookup("us,ru");
+        Assert.That(lookup.Find(XkbKeymapLookup.CharToKeysym('l'), preferredGroup: 1), Is.EqualTo(new XkbKeyStroke(KeyL, false, false)));
+    }
+
+    [TestCase("us", 0u)]
+    [TestCase("us,ru", 0u)]
+    [TestCase("ru,us", 1u)]
+    [TestCase("ru,ua,us", 2u)]
+    [TestCase("ru", null)]
+    [TestCase("ru,ua", null)]
+    public void LatinGroup_IsTheFirstGroupTypingLatinLetters(string layout, uint? expected)
+    {
+        using var lookup = Lookup(layout);
+        Assert.That(lookup.LatinGroup, Is.EqualTo(expected));
+    }
+
+    [TestCase("us,ru", true, false)]
+    [TestCase("ru,us", false, true)]
+    [TestCase("de,ru", true, false)]
+    public void IsLatinGroup_PerGroup(string layout, bool group0, bool group1)
+    {
+        using var lookup = Lookup(layout);
+        Assert.That((bool[])[lookup.IsLatinGroup(0), lookup.IsLatinGroup(1)], Is.EqualTo((bool[])[group0, group1]));
+    }
+
+    [Test]
+    public void UsRu_EvdevKeyFor_TakesGroup0Only()
+    {
+        using var lookup = Lookup("us,ru");
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(lookup.EvdevKeyFor(XkbKeymapLookup.CharToKeysym('l')), Is.EqualTo(KeyL));
+            Assert.That(lookup.EvdevKeyFor(XkbKeymapLookup.CharToKeysym('д')), Is.Null);
+        }
     }
 
     [Test]

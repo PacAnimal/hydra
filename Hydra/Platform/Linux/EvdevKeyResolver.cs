@@ -28,6 +28,8 @@ internal sealed class EvdevKeyResolver : IDisposable
     private readonly uint _capsLockXkbKey;
     private readonly uint _numLockXkbKey;
     private readonly uint _scrollLockXkbKey;
+    // which of the keymap's layouts type Latin letters, by layout index (LatinShortcutKeysym)
+    private readonly bool[] _latinLayouts;
 
     internal EvdevKeyResolver(LinuxInputConfig.XkbNames xkb)
         : this(XkbKeymap.FromNames(xkb), true)
@@ -72,6 +74,7 @@ internal sealed class EvdevKeyResolver : IDisposable
         _numLockXkbKey = nmlkKey != uint.MaxValue ? nmlkKey : 0;
         var sclkKey = EvdevNativeMethods.xkb_keymap_key_by_name(_keymap, "SCLK");
         _scrollLockXkbKey = sclkKey != uint.MaxValue ? sclkKey : 0;
+        _latinLayouts = LatinShortcutKeysym.LatinLayouts(_keymap);
 
         _state = EvdevNativeMethods.xkb_state_new(_keymap);
         if (_state != 0) return;
@@ -138,16 +141,21 @@ internal sealed class EvdevKeyResolver : IDisposable
     // Super or Control held
     private bool IsShortcut() => IsModActive("Mod4") || IsModActive("Control");
 
-    // a shortcut takes the level-0 base keysym, so it sends the unshifted char ('4' not '¤' on Norwegian for Super+Shift+4)
+    // a shortcut takes the level-0 base keysym, so it sends the unshifted char ('4' not '¤' on Norwegian for Super+Shift+4),
+    // and a Latin one for any printable key when the active layout is not Latin (Ctrl+C on ru sends Ctrl+c, Ctrl on
+    // ru's slash key Ctrl+/, LatinShortcutKeysym)
     private ulong ShortcutBaseKeysym(uint xkbKey, ulong keysym)
     {
         if (!IsShortcut()) return keysym;
         var layout = EvdevNativeMethods.xkb_state_serialize_layout(_state, EvdevNativeMethods.XKB_STATE_LAYOUT_EFFECTIVE);
-        var count = EvdevNativeMethods.xkb_keymap_key_get_syms_by_level(_keymap, xkbKey, layout, 0, out var symsPtr);
-        if (count > 0 && symsPtr != nint.Zero)
-            keysym = (uint)Marshal.ReadInt32(symsPtr);
-        return keysym;
+        var baseSym = LatinShortcutKeysym.BaseKeysym(_keymap, xkbKey, layout);
+        if (baseSym != 0) keysym = baseSym;
+        var layouts = (int)EvdevNativeMethods.xkb_keymap_num_layouts_for_key(_keymap, xkbKey);
+        return LatinShortcutKeysym.Resolve(keysym, (int)layout, layouts,
+            i => LatinShortcutKeysym.BaseKeysym(_keymap, xkbKey, (uint)i), IsLatinLayout, xkbKey);
     }
+
+    private bool IsLatinLayout(int layout) => layout >= 0 && layout < _latinLayouts.Length && _latinLayouts[layout];
 
     // keypad dual-purpose keys: normalize based on numlock state.
     // xkbcommon applies KEYPAD XOR semantics (numlock XOR shift → level), but we want

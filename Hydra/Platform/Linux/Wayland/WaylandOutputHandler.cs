@@ -75,6 +75,11 @@ internal sealed class WaylandOutputHandler : IPlatformOutput, ICursor
     private readonly Dictionary<HeldKey, uint> _heldKeys = [];
     private readonly HashSet<uint> _heldButtons = [];
     private readonly HashSet<char> _unmappable = [];
+    private readonly HashSet<char> _otherGroup = [];
+    // the first refusal of a character on another layout since the device came is logged where the user sees it
+    private bool _loggedOtherGroup;
+    // the group last selected on the device; null while it types under its own
+    private uint? _selectedGroup;
     private readonly ShiftedKeypad _shiftedKeypad = new();
     private readonly NumLockRestore _numLockRestore = new();
     private IWaylandSession? _session;
@@ -220,10 +225,24 @@ internal sealed class WaylandOutputHandler : IPlatformOutput, ICursor
             // timer restarts each time, so it never repeats on top of the master's
             if (_heldKeys.Remove(held, out var repeated)) SendKey(device, repeated, false);
 
-            var plan = WaylandInjection.Plan(keymap, msg, HeldModifiers(), ((_lockedMods ?? 0) & keymap.CapsLockMask) != 0);
+            var group = device.Group;
+            // a device that selects groups types in the one selected last, so text on another layout switches once
+            var effective = _selectedGroup ?? group;
+            var plan = WaylandInjection.Plan(keymap, msg, HeldModifiers(), ((_lockedMods ?? 0) & keymap.CapsLockMask) != 0, effective, device.SelectsGroup);
+            // a character only another layout group types: under the compositor's group its key types something else.
+            // a shortcut is never refused, its key going in under the compositor's group as apps match it
+            if (plan == null && !device.SelectsGroup && msg.Character is { } elsewhere && !WaylandInjection.IsShortcut(msg.Modifiers)
+                && WaylandInjection.OnOtherGroup(keymap, elsewhere, group))
+            {
+                LogOtherGroup(elsewhere, device);
+                return;
+            }
             // a character the keymap neither types nor composes, on a key bound to it where the device can upload a keymap
             if (plan == null && msg.Character is { } unmapped && device.BindKeysym(XkbKeymapLookup.CharToKeysym(unmapped)) is { } bound)
                 plan = WaylandInjection.PlanBound(bound);
+            // a shortcut neither the keymap nor a bound key types, on a keymap with no Latin group: the us reference's key
+            if (plan == null && msg.Character is { } shortcut && WaylandInjection.IsShortcut(msg.Modifiers) && keymap.LatinGroup == null)
+                plan = WaylandInjection.PlanReference(keymap, shortcut, HeldModifiers(), ((_lockedMods ?? 0) & keymap.CapsLockMask) != 0);
             if (plan == null)
             {
                 if (msg.Character is { } ch && _unmappable.Add(ch) && _log.IsEnabled(LogLevel.Debug))
@@ -236,9 +255,37 @@ internal sealed class WaylandOutputHandler : IPlatformOutput, ICursor
             // a lock key leaves the lock unknown until the device reports it again: EIS once the compositor answers,
             // a device that keeps its own modifiers as the key goes in
             if (msg.Key is SpecialKey.CapsLock or SpecialKey.NumLock) _lockedMods = null;
+            // another layout group's key goes in under that group where the device can select it, kept selected until a
+            // key needs another, so a word on that layout switches once; the device's own group selects null, and a key
+            // every group types alike (a special key, a bound one) leaves the selection as it is
+            if (plan.Group is { } planned) SelectGroup(device, planned == group ? null : planned);
             foreach (var stroke in plan.Strokes) SendKey(device, stroke.EvdevKey, stroke.Pressed);
             _heldKeys[held] = plan.Key;
         }
+    }
+
+    // under _lock: the first refusal of a visit's device is the user's to see, the rest only in the debug log
+    private void LogOtherGroup(char ch, IInjectionDevice device)
+    {
+        if (!_otherGroup.Add(ch)) return;
+        if (!_loggedOtherGroup)
+        {
+            _loggedOtherGroup = true;
+            if (_log.IsEnabled(LogLevel.Information))
+                _log.LogInformation("{Char} is on a layout the compositor has not selected; switch the slave's layout to type it", ch);
+        }
+        else if (_log.IsEnabled(LogLevel.Debug))
+        {
+            _log.LogDebug("{Char} is on a layout the compositor has not selected; {Device} cannot type it", ch, device.Name);
+        }
+    }
+
+    // under _lock; only a change is sent
+    private void SelectGroup(IInjectionDevice device, uint? group)
+    {
+        if (group == _selectedGroup || !device.SelectsGroup) return;
+        _selectedGroup = group;
+        Emit(device, d => d.SelectGroup(group));
     }
 
     public void EndVisit()
@@ -383,6 +430,9 @@ internal sealed class WaylandOutputHandler : IPlatformOutput, ICursor
         _nudged = false;
         _emulating = false;
         _lockedMods = null;
+        _selectedGroup = null;
+        _loggedOtherGroup = false;
+        _otherGroup.Clear();
         _keymap?.Dispose();
         _keymap = null;
         _keymapText = null;
@@ -474,6 +524,8 @@ internal sealed class WaylandOutputHandler : IPlatformOutput, ICursor
             _log.LogDebug("Letting go of the held keys: {Keys}", string.Join(", ", _heldKeys.Keys.Select(k => k.Describe())));
         foreach (var code in _heldKeys.Values) SendKey(device, code, false);
         _heldKeys.Clear();
+        // the device's own group back, so the user's layout is as they left it
+        SelectGroup(device, null);
         foreach (var button in _heldButtons) Emit(device, d => d.Button(button, false));
         _heldButtons.Clear();
     }

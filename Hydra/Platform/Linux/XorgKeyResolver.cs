@@ -20,6 +20,8 @@ internal sealed class XorgKeyResolver
     private readonly HashSet<uint> _seeded = [];
     // Resolve runs on the event-tap thread, Reset on whichever thread starts a grab
     private readonly Lock _lock = new();
+    // XkbNumKbdGroups: an X keyboard has at most four groups
+    private const int XkbNumGroups = 4;
 
     internal KeyEvent?[]? Resolve(int evType, uint keycode, uint state, nint display)
     {
@@ -41,12 +43,16 @@ internal sealed class XorgKeyResolver
         var level = ComputeLevel(state);
         var keysym = NativeMethods.XkbKeycodeToKeysym(display, keycode, group, level);
 
-        // shortcut on a non-Latin group: re-resolve in group 0 so the slave receives a base ASCII char
-        // it can turn into a keypress. gated on the keysym actually being non-ASCII — a second *Latin*
-        // group (Dvorak, AZERTY) keeps its own mapping, so Ctrl+J there stays Ctrl+J and does not
-        // silently become Ctrl+C. keysyms at 0xFF00+ (F-keys, modifiers) are group-independent.
-        if (isShortcut && group != 0 && keysym is > 0x7F and < 0xFF00)
-            keysym = NativeMethods.XkbKeycodeToKeysym(display, keycode, 0, level);
+        // shortcut on a non-Latin layout: any printable keysym (punctuation and digits included) takes the first Latin
+        // group's base keysym, else the us reference's, so the slave receives a Latin char it can turn into a keypress
+        // (LatinShortcutKeysym). a Latin group (Dvorak, AZERTY) keeps its own mapping, so Ctrl+J there stays Ctrl+J.
+        // the reference is looked up by the X keycode itself: X servers on evdev (Xorg's libinput and evdev drivers,
+        // Xwayland, Xvfb) number keys as xkbcommon does (evdev + 8); the legacy kbd driver's xfree86 codes agree on the
+        // main alphanumeric block the fallback matters for. XkbKeycodeToKeysym gives NoSymbol for a group the key
+        // lacks, which the scan skips.
+        if (isShortcut)
+            keysym = LatinShortcutKeysym.Resolve(keysym, group, XkbNumGroups,
+                g => NativeMethods.XkbKeycodeToKeysym(display, keycode, g, 0), g => IsLatinGroup(display, g), keycode);
 
         // fall back to base keysym (0,0) for modifier keys and unmapped levels
         if (keysym == 0)
@@ -262,6 +268,14 @@ internal sealed class XorgKeyResolver
 
     // Xkb group is encoded in bits 13-14 of the X11 state field (XkbGroupForCoreState macro)
     private static int ExtractGroup(uint state) => (int)((state >> 13) & 3);
+
+    // read from the display each time rather than cached, so a layout changed at runtime (setxkbmap) is seen.
+    // XkbKeycodeToKeysym gives NoSymbol past a key's last group, so a group the keymap lacks is not Latin.
+    private static bool IsLatinGroup(nint display, int group)
+    {
+        _ = NativeMethods.XDisplayKeycodes(display, out var min, out var max);
+        return LatinShortcutKeysym.IsLatinLayout((uint)min, (uint)max, k => NativeMethods.XkbKeycodeToKeysym(display, k, group, 0));
+    }
 
     // shift level: 0=base, 1=Shift, 2=AltGr, 3=Shift+AltGr.
     // when Super or Control is held (shortcut context), Shift is stripped from level so the base

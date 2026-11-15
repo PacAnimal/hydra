@@ -4,8 +4,9 @@ using Cathedral.Utils;
 
 namespace Hydra.Platform.Linux;
 
-// the key and modifiers that type a keysym on a keymap; NumLock is the lock a keypad level needs on
-internal sealed record XkbKeyStroke(uint EvdevKey, bool Shift, bool AltGr, bool NumLock = false);
+// the key and modifiers that type a keysym on a keymap; NumLock is the lock a keypad level needs on, Group the
+// layout group (xkb layout index) that must be effective for the key to type it
+internal sealed record XkbKeyStroke(uint EvdevKey, bool Shift, bool AltGr, bool NumLock = false, uint Group = 0);
 
 // which key a keysym is on and what a key types alone, as a keymap answers it
 internal interface IKeymapKeys
@@ -16,8 +17,9 @@ internal interface IKeymapKeys
 }
 
 // answers which evdev key, with which of Shift, AltGr and NumLock, types a keysym on a keymap given as text
-// (XKB_KEYMAP_FORMAT_TEXT_V1, as an EIS server hands it over libei). only layout group 0 is searched:
-// a stroke carries no group, so a key found in another group would type something else.
+// (XKB_KEYMAP_FORMAT_TEXT_V1, as an EIS server hands it over libei). every layout group is searched, and the stroke
+// says which group it needs: typing it under another group types something else, so a caller that cannot select
+// the group takes only a stroke in the effective one.
 internal sealed class XkbKeymapLookup : IKeymapKeys, IDisposable
 {
     private const int MaxMasks = 32;
@@ -31,9 +33,12 @@ internal sealed class XkbKeymapLookup : IKeymapKeys, IDisposable
     private readonly uint _numLockMask;
     private readonly Lock _lock = new();
     private readonly Toggle _disposed = new();
-    private readonly Dictionary<uint, XkbKeyStroke?> _cache = [];
+    // by group << 32 | keysym
+    private readonly Dictionary<ulong, XkbKeyStroke?> _cache = [];
     private readonly List<uint> _unbound = [];
     private bool _unboundSearched;
+    private uint? _groups;
+    private bool[]? _latinGroups;
 
     internal XkbKeymapLookup(string keymapText)
         : this(XkbKeymap.FromText(keymapText), true)
@@ -75,30 +80,113 @@ internal sealed class XkbKeymapLookup : IKeymapKeys, IDisposable
     internal static uint CharToKeysym(char c) =>
         char.IsSurrogate(c) ? 0 : EvdevNativeMethods.xkb_utf32_to_keysym(c);
 
-    public uint? EvdevKeyFor(uint keysym) => Find(keysym)?.EvdevKey;
+    // group 0's key only: its callers (special keys, chords) press no group
+    public uint? EvdevKeyFor(uint keysym) => Find(keysym) is { Group: 0 } stroke ? stroke.EvdevKey : null;
 
-    // the lowest level of group 0 that types the keysym with at most Shift, AltGr and NumLock; null if none
-    internal XkbKeyStroke? Find(uint keysym)
+    // the first layout group that types Latin letters (LatinShortcutKeysym's rule), whose key a shortcut is pressed on
+    // as the desktops match shortcuts; null when no group does
+    internal uint? LatinGroup
+    {
+        get
+        {
+            lock (_lock)
+            {
+                if (_disposed) return null;
+                var latin = LatinGroups();
+                for (var group = 0; group < latin.Length; group++)
+                    if (latin[group]) return (uint)group;
+                return null;
+            }
+        }
+    }
+
+    // whether the group types Latin letters: a shortcut there is pressed on its own key, as a desktop on that layout
+    // matches Ctrl+z on AZERTY's or QWERTZ's z key
+    internal bool IsLatinGroup(uint group)
+    {
+        lock (_lock)
+        {
+            if (_disposed) return false;
+            var latin = LatinGroups();
+            return group < latin.Length && latin[group];
+        }
+    }
+
+    // under _lock; by group, computed once
+    private bool[] LatinGroups()
+    {
+        if (_latinGroups is { } known) return known;
+        var min = EvdevNativeMethods.xkb_keymap_min_keycode(_keymap);
+        var max = EvdevNativeMethods.xkb_keymap_max_keycode(_keymap);
+        var latin = new bool[GroupCount()];
+        for (var group = 0u; group < latin.Length; group++)
+        {
+            var layout = group;
+            latin[group] = LatinShortcutKeysym.IsLatinLayout(min, max, key => layout < EvdevNativeMethods.xkb_keymap_num_layouts_for_key(_keymap, key)
+                ? LatinShortcutKeysym.BaseKeysym(_keymap, key, layout)
+                : 0);
+        }
+        _latinGroups = latin;
+        return latin;
+    }
+
+    // the lowest level that types the keysym with at most Shift, AltGr and NumLock, in the preferred group (the
+    // slave's effective one) if it has one, else group 0, else the others in order; null if no group does
+    internal XkbKeyStroke? Find(uint keysym, uint preferredGroup = 0)
     {
         if (keysym == 0) return null;
         lock (_lock)
         {
             if (_disposed) return null;
-            if (_cache.TryGetValue(keysym, out var cached)) return cached;
-            var stroke = Search(keysym);
-            _cache[keysym] = stroke;
-            return stroke;
+            var groups = GroupCount();
+            if (preferredGroup < groups && Cached(keysym, preferredGroup) is { } preferred) return preferred;
+            for (var group = 0u; group < groups; group++)
+                if (group != preferredGroup && Cached(keysym, group) is { } stroke) return stroke;
+            return null;
         }
     }
 
-    private XkbKeyStroke? Search(uint keysym)
+    // under _lock
+    private XkbKeyStroke? Cached(uint keysym, uint group)
+    {
+        var key = ((ulong)group << 32) | keysym;
+        if (_cache.TryGetValue(key, out var cached)) return cached;
+        var stroke = Search(keysym, group);
+        _cache[key] = stroke;
+        return stroke;
+    }
+
+    // under _lock; the most layouts any key has
+    private uint GroupCount()
+    {
+        if (_groups is { } known) return known;
+        var min = EvdevNativeMethods.xkb_keymap_min_keycode(_keymap);
+        var max = EvdevNativeMethods.xkb_keymap_max_keycode(_keymap);
+        var groups = 0u;
+        for (var key = min; key <= max; key++)
+            groups = Math.Max(groups, EvdevNativeMethods.xkb_keymap_num_layouts_for_key(_keymap, key));
+        _groups = groups;
+        return groups;
+    }
+
+    // the key's layout under the group: a key with one layout (Escape, the keypad) types it in every group; one
+    // with fewer than the group needs is skipped, since how it maps an out-of-range group is the keymap's choice
+    private uint? KeyLayout(uint key, uint group)
+    {
+        var layouts = EvdevNativeMethods.xkb_keymap_num_layouts_for_key(_keymap, key);
+        if (layouts == 0) return null;
+        if (group < layouts) return group;
+        return layouts == 1 ? 0 : null;
+    }
+
+    private XkbKeyStroke? Search(uint keysym, uint group)
     {
         var min = EvdevNativeMethods.xkb_keymap_min_keycode(_keymap);
         var max = EvdevNativeMethods.xkb_keymap_max_keycode(_keymap);
         var maxLevels = 0u;
         for (var key = min; key <= max; key++)
-            if (EvdevNativeMethods.xkb_keymap_num_layouts_for_key(_keymap, key) > 0)
-                maxLevels = Math.Max(maxLevels, EvdevNativeMethods.xkb_keymap_num_levels_for_key(_keymap, key, 0));
+            if (KeyLayout(key, group) is { } layout)
+                maxLevels = Math.Max(maxLevels, EvdevNativeMethods.xkb_keymap_num_levels_for_key(_keymap, key, layout));
 
         var masks = new uint[MaxMasks];
         // level outermost so a lower level on any key wins over a higher one
@@ -108,21 +196,21 @@ internal sealed class XkbKeymapLookup : IKeymapKeys, IDisposable
             {
                 // evdev keycode + 8 = xkb keycode; keys below 8 have no evdev code
                 if (key < 8) continue;
-                if (EvdevNativeMethods.xkb_keymap_num_layouts_for_key(_keymap, key) == 0) continue;
-                if (level >= EvdevNativeMethods.xkb_keymap_num_levels_for_key(_keymap, key, 0)) continue;
-                if (!LevelTypes(key, level, keysym)) continue;
-                var mask = LevelMask(key, level, masks);
+                if (KeyLayout(key, group) is not { } layout) continue;
+                if (level >= EvdevNativeMethods.xkb_keymap_num_levels_for_key(_keymap, key, layout)) continue;
+                if (!LevelTypes(key, layout, level, keysym)) continue;
+                var mask = LevelMask(key, layout, level, masks);
                 if (mask is not { } m) continue;
-                return new XkbKeyStroke(key - 8, (m & _shiftMask) != 0, (m & _altGrMask) != 0, (m & _numLockMask) != 0);
+                return new XkbKeyStroke(key - 8, (m & _shiftMask) != 0, (m & _altGrMask) != 0, (m & _numLockMask) != 0, group);
             }
         }
         return null;
     }
 
     // a level types the keysym only when it is that level's single keysym
-    private bool LevelTypes(uint key, uint level, uint keysym)
+    private bool LevelTypes(uint key, uint layout, uint level, uint keysym)
     {
-        var count = EvdevNativeMethods.xkb_keymap_key_get_syms_by_level(_keymap, key, 0, level, out var symsPtr);
+        var count = EvdevNativeMethods.xkb_keymap_key_get_syms_by_level(_keymap, key, layout, level, out var symsPtr);
         return count == 1 && symsPtr != nint.Zero && (uint)Marshal.ReadInt32(symsPtr) == keysym;
     }
 
@@ -183,9 +271,9 @@ internal sealed class XkbKeymapLookup : IKeymapKeys, IDisposable
     }
 
     // the mask with the fewest modifiers that selects the level using only Shift, AltGr and NumLock; null if none does
-    private uint? LevelMask(uint key, uint level, uint[] masks)
+    private uint? LevelMask(uint key, uint layout, uint level, uint[] masks)
     {
-        var count = (int)EvdevNativeMethods.xkb_keymap_key_get_mods_for_level(_keymap, key, 0, level, masks, (nuint)masks.Length);
+        var count = (int)EvdevNativeMethods.xkb_keymap_key_get_mods_for_level(_keymap, key, layout, level, masks, (nuint)masks.Length);
         var allowed = _shiftMask | _altGrMask | _numLockMask;
         uint? best = null;
         for (var i = 0; i < count && i < masks.Length; i++)

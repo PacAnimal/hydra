@@ -9,6 +9,7 @@ internal sealed class EiInjectionDevice : IInjectionDevice
     private readonly EiContext _ei;
     private readonly Lock _lock = new();
     private uint? _locked;
+    private uint _group;
     private EiDevice? _regionsOf;
     private IReadOnlyList<ScreenBounds>? _regions;
 
@@ -48,11 +49,25 @@ internal sealed class EiInjectionDevice : IInjectionDevice
         }
     }
 
+    // the compositor's, as its last modifiers event gave it
+    public uint Group
+    {
+        get
+        {
+            lock (_lock) return _group;
+        }
+    }
+
+    // libei has no request that sets the group: the compositor keeps it
+    public bool SelectsGroup => false;
+
     public bool IsLost => _ei.IsDisconnected;
 
     public event Action<uint>? LockedModifiersChanged;
 
     public event Action? Lost;
+
+    public bool SelectGroup(uint? group) => false;
 
     public void StartEmulating() => _ei.StartEmulating();
 
@@ -77,7 +92,11 @@ internal sealed class EiInjectionDevice : IInjectionDevice
 
     private void OnKeyboardModifiers(uint depressed, uint latched, uint locked, uint group)
     {
-        lock (_lock) _locked = locked;
+        lock (_lock)
+        {
+            _locked = locked;
+            _group = group;
+        }
         LockedModifiersChanged?.Invoke(locked);
     }
 
