@@ -556,10 +556,17 @@ public class WaylandCaptureLayoutTests
             while (true)
             {
                 using var socket = await listener.AcceptAsync(cancel);
-                _ = await socket.ReceiveAsync(new byte[256], SocketFlags.None, cancel);
-                var answer = $$"""{"keyboards": [{"name": "kb", "active_layout_index": {{index(++served)}}, "main": true}]}""";
-                await socket.SendAsync(Encoding.UTF8.GetBytes(answer), SocketFlags.None, cancel);
-                socket.Shutdown(SocketShutdown.Both);
+                try
+                {
+                    _ = await socket.ReceiveAsync(new byte[256], SocketFlags.None, cancel);
+                    var answer = $$"""{"keyboards": [{"name": "kb", "active_layout_index": {{index(++served)}}, "main": true}]}""";
+                    await socket.SendAsync(Encoding.UTF8.GetBytes(answer), SocketFlags.None, cancel);
+                    socket.Shutdown(SocketShutdown.Both);
+                }
+                catch (SocketException)
+                {
+                    // the watch hung up first: a query its dispose cancelled (macOS reports the late send as EPIPE)
+                }
             }
         }
         catch (OperationCanceledException)

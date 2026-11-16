@@ -79,11 +79,16 @@ public class HyprlandLayoutWatchTests
         var dir = TestPaths.FreshFixtureRoot("hypr");
         using var timeout = new CancellationTokenSource(Bound);
         var index = new StrongBox<int>(0);
+        var served = new StrongBox<int>(0);
+        // the requests served when the activelayout line is sent
+        var atEvent = new StrongBox<int>(-1);
+        var asked = Channel.CreateUnbounded<int>();
         var switched = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using var requests = Listen(Path.Combine(dir, ".socket.sock"));
         using var events = Listen(Path.Combine(dir, ".socket2.sock"));
-        var requestServer = ServeRequests(requests, () => Volatile.Read(ref index.Value), timeout.Token);
-        var eventServer = ServeEvents(events, switched.Task, timeout.Token);
+        var requestServer = ServeRequests(requests, () => Volatile.Read(ref index.Value), served, asked.Writer, timeout.Token);
+        var eventServer = ServeEvents(events, switched.Task, timeout.Token,
+            sending: () => Volatile.Write(ref atEvent.Value, Volatile.Read(ref served.Value)));
         var groups = Channel.CreateUnbounded<uint>();
         var log = new CapturingLog<HyprlandLayoutWatchTests>();
 
@@ -92,6 +97,10 @@ public class HyprlandLayoutWatchTests
         await using (watch)
         {
             var first = await groups.Reader.ReadAsync(timeout.Token);
+            // the start's query and the event connection's catch-up, both answered with 0: the 1 can only come from
+            // the query the event asks for
+            await asked.Reader.ReadAsync(timeout.Token);
+            await asked.Reader.ReadAsync(timeout.Token);
             Volatile.Write(ref index.Value, 1);
             switched.SetResult();
             var second = await groups.Reader.ReadAsync(timeout.Token);
@@ -101,6 +110,8 @@ public class HyprlandLayoutWatchTests
                 Assert.That(first, Is.Zero);
                 Assert.That(second, Is.EqualTo(1u));
                 Assert.That(log.Messages, Has.One.EqualTo("Keyboard layout: following Hyprland's active layout"));
+                Assert.That(Volatile.Read(ref atEvent.Value), Is.EqualTo(2), "only the start's query and the catch-up before the event");
+                Assert.That(Volatile.Read(ref served.Value), Is.GreaterThan(Volatile.Read(ref atEvent.Value)), "asked again after the event");
             }
         }
         await timeout.CancelAsync();
@@ -251,18 +262,29 @@ public class HyprlandLayoutWatchTests
     private static string Devices(int index) =>
         $$"""{"keyboards": [{"name": "kb", "layout": "us,ru", "active_layout_index": {{index}}, "active_keymap": "x", "main": true}]}""";
 
-    private static async Task ServeRequests(Socket listener, Func<int> index, CancellationToken cancel)
+    // served counts the requests answered and asked hears of each, both before the answer ends, so the watch sees
+    // neither its answer nor its report before them
+    private static async Task ServeRequests(Socket listener, Func<int> index, StrongBox<int> served, ChannelWriter<int> asked, CancellationToken cancel)
     {
         try
         {
             while (true)
             {
                 using var socket = await listener.AcceptAsync(cancel);
-                var buffer = new byte[256];
-                var read = await socket.ReceiveAsync(buffer, SocketFlags.None, cancel);
-                var answer = Encoding.UTF8.GetString(buffer, 0, read) == "j/devices" ? Devices(index()) : "unknown request";
-                await socket.SendAsync(Encoding.UTF8.GetBytes(answer), SocketFlags.None, cancel);
-                socket.Shutdown(SocketShutdown.Both);
+                try
+                {
+                    var buffer = new byte[256];
+                    var read = await socket.ReceiveAsync(buffer, SocketFlags.None, cancel);
+                    var answer = Encoding.UTF8.GetString(buffer, 0, read) == "j/devices" ? Devices(index()) : "unknown request";
+                    await socket.SendAsync(Encoding.UTF8.GetBytes(answer), SocketFlags.None, cancel);
+                    Interlocked.Increment(ref served.Value);
+                    asked.TryWrite(1);
+                    socket.Shutdown(SocketShutdown.Both);
+                }
+                catch (SocketException)
+                {
+                    // the watch hung up first: a query its dispose cancelled (macOS reports the late send as EPIPE)
+                }
             }
         }
         catch (OperationCanceledException)
@@ -279,22 +301,22 @@ public class HyprlandLayoutWatchTests
             while (true)
             {
                 using var socket = await listener.AcceptAsync(cancel);
-                var buffer = new byte[256];
-                var read = await socket.ReceiveAsync(buffer, SocketFlags.None, cancel);
-                var known = Encoding.UTF8.GetString(buffer, 0, read) == "j/devices";
-                var held = hold();
-                var answer = held.IsCompleted ? Devices(index()) : null;
-                asked.TryWrite(1);
-                await held.WaitAsync(cancel);
-                answer ??= Devices(index());
                 try
                 {
+                    var buffer = new byte[256];
+                    var read = await socket.ReceiveAsync(buffer, SocketFlags.None, cancel);
+                    var known = Encoding.UTF8.GetString(buffer, 0, read) == "j/devices";
+                    var held = hold();
+                    var answer = held.IsCompleted ? Devices(index()) : null;
+                    asked.TryWrite(1);
+                    await held.WaitAsync(cancel);
+                    answer ??= Devices(index());
                     await socket.SendAsync(Encoding.UTF8.GetBytes(known ? answer : "unknown request"), SocketFlags.None, cancel);
                     socket.Shutdown(SocketShutdown.Both);
                 }
                 catch (SocketException)
                 {
-                    // the watch gave up on this request (disposed)
+                    // the watch hung up first: a query its dispose cancelled (macOS reports the late send as EPIPE)
                 }
             }
         }
@@ -303,18 +325,26 @@ public class HyprlandLayoutWatchTests
         }
     }
 
-    private static async Task ServeEvents(Socket listener, Task switched, CancellationToken cancel)
+    // sends a workspace line, then the activelayout line once switched completes, calling sending just before it
+    private static async Task ServeEvents(Socket listener, Task switched, CancellationToken cancel, Action? sending = null)
     {
+        var sent = false;
         try
         {
             using var socket = await listener.AcceptAsync(cancel);
             await socket.SendAsync("workspace>>1\n"u8.ToArray(), SocketFlags.None, cancel);
             await switched.WaitAsync(cancel);
+            sending?.Invoke();
             await socket.SendAsync("activelayout>>kb,Russian\n"u8.ToArray(), SocketFlags.None, cancel);
+            sent = true;
             await Task.Delay(Timeout.Infinite, cancel);
         }
         catch (OperationCanceledException)
         {
+        }
+        catch (SocketException) when (sent)
+        {
+            // the watch hung up first, as its dispose may; before the line, a failure faults the test
         }
     }
 }
