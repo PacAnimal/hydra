@@ -326,6 +326,24 @@ describe('serialize', () => {
     })
   })
 
+  describe('macScrollLines', () => {
+    it('is left out when unset or at the default of 1', () => {
+      const unset = JSON.parse(serialize(state({ mode: 'Slave' }))).profiles[0]
+      const one = JSON.parse(serialize(state({ mode: 'Slave', macScrollLines: 1 }))).profiles[0]
+      expect(['macScrollLines' in unset, 'macScrollLines' in one]).toEqual([false, false])
+    })
+
+    it('is written on a slave', () => {
+      const p = JSON.parse(serialize(state({ mode: 'Slave', macScrollLines: 3 }))).profiles[0]
+      expect(p.macScrollLines).toBe(3)
+    })
+
+    it('is never written on a master, which Hydra would refuse', () => {
+      const p = JSON.parse(serialize(state({ mode: 'Master', macScrollLines: 3 }))).profiles[0]
+      expect('macScrollLines' in p).toBe(false)
+    })
+  })
+
   describe('the other profile settings Hydra has', () => {
     it('writes hideCursor and maxMouseHz on a master only', () => {
       const master = JSON.parse(serialize(state({ mode: 'Master', hideCursor: true, maxMouseHz: 250 }))).profiles[0]

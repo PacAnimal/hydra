@@ -221,6 +221,28 @@ describe('validate', () => {
       }
     })
   })
+
+  describe('macScrollLines', () => {
+    const slave = (macScrollLines: number) => ({ profileName: 'a', mode: 'Slave' as const, macScrollLines })
+    const linesErrors = (profile: Parameters<typeof validate>[0][number]) =>
+      validate([profile]).filter(e => e.path === 'profiles[0].macScrollLines')
+
+    it('accepts 1 and 3', () => {
+      expect(linesErrors(slave(1))).toEqual([])
+      expect(linesErrors(slave(3))).toEqual([])
+    })
+
+    it('refuses 0, more than 10, and fractions', () => {
+      for (const lines of [0, 11, 2.5]) {
+        expect(linesErrors(slave(lines))).toHaveLength(1)
+      }
+    })
+
+    it('is not checked on a master, which never writes it', () => {
+      expect(linesErrors({ profileName: 'a', mode: 'Master', macScrollLines: 0 })).toEqual([])
+    })
+  })
+
   describe('log cap', () => {
     const logErrors = (log: Parameters<typeof validate>[2]) => validate([p({})], undefined, log).map(e => e.path)
 

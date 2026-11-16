@@ -79,6 +79,8 @@ public class HydraConfig
     // slave only — flip the scroll a master sends on that axis before injecting it
     public bool InvertScrollX { get; init; }
     public bool InvertScrollY { get; init; }
+    // slave only (macOS) — the lines one wheel notch scrolls
+    public int MacScrollLines { get; init; } = HydraProfile.DefaultMacScrollLines;
     // master only — the NumLock the keypad crosses with while Super, Control or Alt is held: true digits, false
     // navigation, null (the default) the master's own NumLock. Each key keeps it until released (ModifierNumLock)
     public bool? ModifierNumLock { get; init; }
@@ -262,6 +264,10 @@ public class HydraConfig
                 throw new InvalidOperationException("invertScrollX is slave-only. Remove it from master profiles.");
             if (cfg.Mode == Mode.Master && cfg.InvertScrollY)
                 throw new InvalidOperationException("invertScrollY is slave-only. Remove it from master profiles.");
+            if (cfg.Mode == Mode.Master && cfg.MacScrollLines != HydraProfile.DefaultMacScrollLines)
+                throw new InvalidOperationException("macScrollLines is slave-only. Remove it from master profiles.");
+            if (cfg.MacScrollLines is < 1 or > HydraProfile.MaxMacScrollLines)
+                throw new InvalidOperationException($"macScrollLines must be between 1 and {HydraProfile.MaxMacScrollLines}.");
             if (cfg.Mode == Mode.Slave && cfg.MaxMouseHz != null)
                 throw new InvalidOperationException("maxMouseHz is master-only. Remove it from slave profiles.");
             // The ceiling is the sample rate itself: at 1000 Hz every sample a mouse reports is already

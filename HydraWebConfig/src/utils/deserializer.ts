@@ -193,6 +193,7 @@ function parseProfile(obj: Record<string, unknown>): HydraProfile {
     readKeyboardsForHotkeys: strictBool(obj.readKeyboardsForHotkeys),
     invertScrollX: strictBool(obj.invertScrollX),
     invertScrollY: strictBool(obj.invertScrollY),
+    macScrollLines: optNumber(obj.macScrollLines),
     maxMouseHz: optNumber(obj.maxMouseHz),
     // null, like a missing key, leaves the keypad alone
     modifierNumLock: strictBool(obj.modifierNumLock),

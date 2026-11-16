@@ -1,4 +1,5 @@
 using System.Runtime.Versioning;
+using Hydra.Config;
 using Hydra.Keyboard;
 using Hydra.Mouse;
 using Hydra.Relay;
@@ -32,6 +33,7 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
     private bool _cursorHidden;
     private bool _mousePositionInitialized;
     private readonly ScrollAccumulator _scrollLines = new();
+    private readonly int _linesPerNotch;
 
     // accumulated modifier state — updated on each modifier keydown/up
     private ulong _modifierFlags;        // generic CGEventFlag masks (e.g. kCGEventFlagMaskCommand)
@@ -43,9 +45,10 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
     private CFNotificationCallback? _layoutChangeCallback;  // keep-alive to prevent GC
     private readonly nint _layoutNotificationCenter;
 
-    public MacOutputHandler(ILogger<MacOutputHandler> log)
+    public MacOutputHandler(ILogger<MacOutputHandler> log, IHydraProfile profile)
     {
         _log = log;
+        _linesPerNotch = profile.MacScrollLines;
         _brightness = new MacBrightnessController();
         _mediaRemote = new MacMediaRemoteController();
         // rebuild char→vk map whenever the user switches keyboard layout mid-session
@@ -282,22 +285,23 @@ public sealed class MacOutputHandler : IPlatformOutput, ICursor
 
     public void InjectMouseScroll(MouseScrollMessage msg)
     {
-        NativeHelpers.PostAndRelease(CreateMouseScrollEvent(msg, _scrollLines, _modifierFlags));
+        NativeHelpers.PostAndRelease(CreateMouseScrollEvent(msg, _scrollLines, _linesPerNotch, _modifierFlags));
     }
 
-    // the caller releases the event. one notch is one line: whole lines for the event constructor (kCGScrollEventUnitLine = 1)
-    internal static nint CreateMouseScrollEvent(MouseScrollMessage msg, ScrollAccumulator scrollLines, ulong flags)
+    // the caller releases the event. one notch is linesPerNotch lines (macScrollLines): whole lines for the event
+    // constructor (kCGScrollEventUnitLine = 1), and the fixed-point deltas scaled to match
+    internal static nint CreateMouseScrollEvent(MouseScrollMessage msg, ScrollAccumulator scrollLines, int linesPerNotch, ulong flags)
     {
         if (msg.YDelta == 0 && msg.XDelta == 0) return nint.Zero;
 
         var x = MouseScrollEvent.MacHorizontal(msg.XDelta);
-        var lines = scrollLines.Take(x, msg.YDelta);
-        var eventRef = NativeMethods.CGEventCreateScrollWheelEvent2(nint.Zero, 1, 2, lines.Y, lines.X, 0);
+        var notches = scrollLines.Take(x, msg.YDelta);
+        var eventRef = NativeMethods.CGEventCreateScrollWheelEvent2(nint.Zero, 1, 2, notches.Y * linesPerNotch, notches.X * linesPerNotch, 0);
         if (eventRef == nint.Zero) return nint.Zero;
 
         // 16.16 fixed-point line deltas for sub-line precision
-        NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventFixedPtDeltaAxis1, MouseScrollEvent.ToFixedLines(msg.YDelta));
-        NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventFixedPtDeltaAxis2, MouseScrollEvent.ToFixedLines(x));
+        NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventFixedPtDeltaAxis1, MouseScrollEvent.ToFixedLines(msg.YDelta) * linesPerNotch);
+        NativeMethods.CGEventSetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventFixedPtDeltaAxis2, MouseScrollEvent.ToFixedLines(x) * linesPerNotch);
         NativeMethods.CGEventSetFlags(eventRef, flags);
         return eventRef;
     }

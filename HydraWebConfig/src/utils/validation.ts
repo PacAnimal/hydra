@@ -131,6 +131,10 @@ export function validate(profiles: HydraProfile[], name?: string, log: LogCap = 
       errors.push({ path: `profiles[${i}].maxMouseHz`, message: 'maxMouseHz must be a whole number from 1 to 1000' })
     }
 
+    if (p.mode !== 'Master' && p.macScrollLines !== undefined && (!Number.isInteger(p.macScrollLines) || p.macScrollLines < 1 || p.macScrollLines > 10)) {
+      errors.push({ path: `profiles[${i}].macScrollLines`, message: 'macScrollLines must be a whole number from 1 to 10' })
+    }
+
     if (p.syncScreensaver === false && p.mode !== 'Master') {
       errors.push({ path: `profiles[${i}].syncScreensaver`, message: 'syncScreensaver requires Master mode' })
     }

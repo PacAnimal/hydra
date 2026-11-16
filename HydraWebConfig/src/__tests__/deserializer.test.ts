@@ -262,6 +262,16 @@ describe('deserialize', () => {
     })
   })
 
+  describe('macScrollLines', () => {
+    it('reads the number back', () => {
+      expect(deserialize(asFile('[{"mode":"Slave","macScrollLines":3}]')).profiles[0].macScrollLines).toBe(3)
+    })
+
+    it('reads a missing key as unset', () => {
+      expect(deserialize(asFile('[{"mode":"Slave"}]')).profiles[0].macScrollLines).toBeUndefined()
+    })
+  })
+
   describe('the other profile settings Hydra has', () => {
     it('reads them back, so loading and saving a file keeps them', () => {
       const p = deserialize(asFile(

@@ -140,13 +140,16 @@ internal static class GuidedFields
     internal static readonly GuidedField ReadKeyboardsForHotkeys = new(GuidedSection.Behaviour, 18, 0, null, "readKeyboardsForHotkeys", GuidedFieldKind.Toggle,
         "Read Keyboards", "Hyprland master: read hotkeys at home from /dev/input; off uses the desktop's shortcut portal.")
     { Fallback = GuidedValues.On };
+    internal static readonly GuidedField MacScrollLines = new(GuidedSection.Behaviour, 20, 0, null, "macScrollLines", GuidedFieldKind.Integer,
+        "Mac Scroll Lines", $"macOS slave: lines one wheel notch scrolls, 1 to {HydraProfile.MaxMacScrollLines}. 3 matches Windows and X11 apps.")
+    { DefaultHint = $"{HydraProfile.DefaultMacScrollLines} line" };
     internal static readonly IReadOnlyList<GuidedField> All =
     [
         Name, LogLevel, ProfileOverride, AutoUpdate, UpdateChannel, DebugShield, DebugMouse,
         ProfileName, Mode, Ssid, ScreenCount, ClipboardSync, IsPluggedIn, Address, GatewayMac, Wired, MouseScale, RelativeMouseScale, DeadCorners, MaxMouseHz,
         NetworkConfig, EmbeddedServer, EmbeddedPassword, EmbeddedPort, EmbeddedServerPassword,
         HideCursor, RemoteOnly, SyncScreensaver, ScreenLockPropagation, AccelerateMouseWheel, AllowSystemSleep, ModifierNumLock,
-        InvertScrollX, InvertScrollY, ReadKeyboardsForHotkeys
+        InvertScrollX, InvertScrollY, ReadKeyboardsForHotkeys, MacScrollLines
     ];
 
     internal static readonly IReadOnlyList<GuidedField> Root = [.. All.Where(f => f.IsRoot)];

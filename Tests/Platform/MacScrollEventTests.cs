@@ -21,7 +21,7 @@ public class MacScrollEventTests
     [TestCase(240, -360, -3, -2, -196608, -131072)]
     public void CreatedEvent_KeepsEachAxis(int xDelta, int yDelta, int linesY, int linesX, long fixedY, long fixedX)
     {
-        var eventRef = MacOutputHandler.CreateMouseScrollEvent(new MouseScrollMessage((short)xDelta, (short)yDelta), new ScrollAccumulator(), 0);
+        var eventRef = MacOutputHandler.CreateMouseScrollEvent(new MouseScrollMessage((short)xDelta, (short)yDelta), new ScrollAccumulator(), 1, 0);
         Assert.That(eventRef, Is.Not.EqualTo(nint.Zero));
 
         try
@@ -40,6 +40,45 @@ public class MacScrollEventTests
         }
     }
 
+    // macScrollLines: one notch is that many lines, in the whole-line and the fixed-point fields, on both axes
+    [TestCase(1, 0, -120, -1, 0, -65536, 0)]
+    [TestCase(3, 0, -120, -3, 0, -196608, 0)]
+    [TestCase(3, 0, 120, 3, 0, 196608, 0)]
+    [TestCase(3, 120, 0, 0, -3, 0, -196608)]
+    [TestCase(3, -240, 120, 3, 6, 196608, 393216)]
+    public void CreatedEvent_ScalesByLinesPerNotch(int linesPerNotch, int xDelta, int yDelta, int linesY, int linesX, long fixedY, long fixedX)
+    {
+        var eventRef = MacOutputHandler.CreateMouseScrollEvent(new MouseScrollMessage((short)xDelta, (short)yDelta), new ScrollAccumulator(), linesPerNotch, 0);
+        Assert.That(eventRef, Is.Not.EqualTo(nint.Zero));
+
+        try
+        {
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(NativeMethods.CGEventGetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventDeltaAxis1), Is.EqualTo(linesY));
+                Assert.That(NativeMethods.CGEventGetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventDeltaAxis2), Is.EqualTo(linesX));
+                Assert.That(NativeMethods.CGEventGetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventFixedPtDeltaAxis1), Is.EqualTo(fixedY));
+                Assert.That(NativeMethods.CGEventGetIntegerValueField(eventRef, NativeMethods.KCGScrollWheelEventFixedPtDeltaAxis2), Is.EqualTo(fixedX));
+            }
+        }
+        finally
+        {
+            NativeMethods.CFRelease(eventRef);
+        }
+    }
+
+    // a half notch twice at 3 lines a notch: no whole line on the first, three on the second, 1.5 lines fixed-point each
+    [Test]
+    public void HalfNotchTwice_AtThreeLines_ScrollsThreeWholeLinesOnTheSecond()
+    {
+        var msg = new MouseScrollMessage(0, -60);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(LineDeltas(msg, 2, NativeMethods.KCGScrollWheelEventDeltaAxis1, linesPerNotch: 3), Is.EqualTo([0, -3]));
+            Assert.That(LineDeltas(msg, 2, NativeMethods.KCGScrollWheelEventFixedPtDeltaAxis1, linesPerNotch: 3), Is.EqualTo([-98304, -98304]));
+        }
+    }
+
     [Test]
     public void SmoothScroll_AddsUpToAWholeLine() =>
         Assert.That(LineDeltas(new MouseScrollMessage(0, -30), 4, NativeMethods.KCGScrollWheelEventDeltaAxis1), Is.EqualTo([0, 0, 0, -1]));
@@ -52,7 +91,7 @@ public class MacScrollEventTests
     public void CreatedEvent_CarriesHeldModifiers()
     {
         const ulong flags = NativeMethods.KCGEventFlagMaskShift | NativeMethods.KCGEventFlagMaskCommand;
-        var eventRef = MacOutputHandler.CreateMouseScrollEvent(new MouseScrollMessage(0, -120), new ScrollAccumulator(), flags);
+        var eventRef = MacOutputHandler.CreateMouseScrollEvent(new MouseScrollMessage(0, -120), new ScrollAccumulator(), 1, flags);
         Assert.That(eventRef, Is.Not.EqualTo(nint.Zero));
 
         try
@@ -68,7 +107,7 @@ public class MacScrollEventTests
     [Test]
     public void ZeroDelta_DoesNotCreateEvent()
     {
-        Assert.That(MacOutputHandler.CreateMouseScrollEvent(new MouseScrollMessage(0, 0), new ScrollAccumulator(), 0), Is.EqualTo(nint.Zero));
+        Assert.That(MacOutputHandler.CreateMouseScrollEvent(new MouseScrollMessage(0, 0), new ScrollAccumulator(), 1, 0), Is.EqualTo(nint.Zero));
     }
 
     // a master reads macOS's horizontal the other way round onto the wire, from a wheel or a trackpad
@@ -115,7 +154,7 @@ public class MacScrollEventTests
         try
         {
             var wire = MacInputHandler.WireScroll(sent, accelerate: true);
-            landed = MacOutputHandler.CreateMouseScrollEvent(new MouseScrollMessage(wire.XDelta, wire.YDelta), new ScrollAccumulator(), 0);
+            landed = MacOutputHandler.CreateMouseScrollEvent(new MouseScrollMessage(wire.XDelta, wire.YDelta), new ScrollAccumulator(), 1, 0);
             using (Assert.EnterMultipleScope())
             {
                 Assert.That(NativeMethods.CGEventGetIntegerValueField(landed, NativeMethods.KCGScrollWheelEventDeltaAxis2), Is.EqualTo(linesX));
@@ -140,14 +179,14 @@ public class MacScrollEventTests
         return eventRef;
     }
 
-    // the whole-line field of each of count events made from the same message, sharing one accumulator
-    private static List<long> LineDeltas(MouseScrollMessage msg, int count, int field)
+    // a field of each of count events made from the same message, sharing one accumulator
+    private static List<long> LineDeltas(MouseScrollMessage msg, int count, int field, int linesPerNotch = 1)
     {
         var lines = new ScrollAccumulator();
         var deltas = new List<long>();
         for (var i = 0; i < count; i++)
         {
-            var eventRef = MacOutputHandler.CreateMouseScrollEvent(msg, lines, 0);
+            var eventRef = MacOutputHandler.CreateMouseScrollEvent(msg, lines, linesPerNotch, 0);
             try
             {
                 deltas.Add(NativeMethods.CGEventGetIntegerValueField(eventRef, field));

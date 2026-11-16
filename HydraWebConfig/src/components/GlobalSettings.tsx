@@ -99,6 +99,18 @@ export function GlobalSettings({ config, serverError, onChange }: Props) {
                   onChange={e => onChange({ relativeMouseScale: e.target.value ? Number(e.target.value) : undefined })}
                 />
               </div>
+              <div className="field">
+                <label htmlFor="gs-macscrolllines" title="macOS slave only: the lines one wheel notch scrolls (1–10). 3 matches what Windows and X11 apps scroll per click">Mac Scroll Lines</label>
+                <input
+                  id="gs-macscrolllines"
+                  type="number"
+                  min="1"
+                  max="10"
+                  value={config.macScrollLines ?? ''}
+                  placeholder="1"
+                  onChange={e => onChange({ macScrollLines: e.target.value ? Number(e.target.value) : undefined })}
+                />
+              </div>
             </>
           )}
         </div>
