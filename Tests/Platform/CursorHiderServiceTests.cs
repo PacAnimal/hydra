@@ -80,6 +80,27 @@ public class CursorHiderServiceTests
         }
     }
 
+    // on Windows the position can't be read off the input desktop (the lock screen), where a hide can land
+    [Test]
+    public async Task HiddenWhileThePositionIsUnreadable_ALocalMoveOnceItReadsShowsIt()
+    {
+        var platform = new FakePlatform { TracksCursor = false };
+        using var hider = await Hidden(platform);
+        var polling = hider.Polling;
+
+        platform.TracksCursor = true;
+        hider.PollOnce(); // the baseline
+        platform.WarpCursor(2100, 400);
+        hider.PollOnce();
+        await hider.ExecuteOnce();
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(polling, Is.True);
+            Assert.That(platform.ShowCursorCalled, Is.True);
+        }
+    }
+
     [Test]
     public async Task AfterShow_NothingIsPinned()
     {
