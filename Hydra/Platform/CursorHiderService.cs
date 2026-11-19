@@ -93,6 +93,15 @@ public sealed class CursorHiderService(ILogger<CursorHiderService> log, IPlatfor
     // test seam: one poll of the cursor's position, as the timer makes
     internal void PollOnce() => OnPoll(null);
 
+    // test seam: whether the poll timer is running
+    internal bool Polling
+    {
+        get
+        {
+            lock (_stateLock) return _pollTimer != null;
+        }
+    }
+
     internal Task ExecuteOnce() => Execute(CancellationToken.None);
 
     protected override async Task Execute(CancellationToken cancel)
@@ -153,7 +162,7 @@ public sealed class CursorHiderService(ILogger<CursorHiderService> log, IPlatfor
     private void StartPollLocked()
     {
         StopPollLocked();
-        if (platform.GetCursorPosition() == null) return;
+        // started even while the position can't be read (Windows' lock screen); OnPoll waits for it
         _lastPosition = null;  // first poll establishes baseline after any pending warps settle
         _pollTimer = new Timer(OnPoll, null, LocalPollMs, LocalPollMs);
     }

@@ -19,6 +19,7 @@ internal sealed class WindowsCursorSnapshot : IDisposable
         if (IsHidden) return;
 
         var ids = AllCursorIds;
+        DestroySaved();
         _saved = new nint[ids.Length];
         for (var i = 0; i < ids.Length; i++)
         {
@@ -33,8 +34,8 @@ internal sealed class WindowsCursorSnapshot : IDisposable
         foreach (var id in ids)
         {
             var copy = NativeMethods.CopyCursor(blank);
-            if (copy != nint.Zero)
-                NativeMethods.SetSystemCursor(copy, id);
+            if (copy != nint.Zero && !NativeMethods.SetSystemCursor(copy, id))
+                NativeMethods.DestroyCursor(copy);
         }
         NativeMethods.DestroyCursor(blank);
         IsHidden = true;
@@ -56,8 +57,8 @@ internal sealed class WindowsCursorSnapshot : IDisposable
             if (_saved[i] == nint.Zero) continue;
             // SetSystemCursor takes ownership; pass a fresh copy so we keep our saved handle
             var copy = NativeMethods.CopyCursor(_saved[i]);
-            if (copy != nint.Zero)
-                NativeMethods.SetSystemCursor(copy, ids[i]);
+            if (copy != nint.Zero && !NativeMethods.SetSystemCursor(copy, ids[i]))
+                NativeMethods.DestroyCursor(copy);
         }
     }
 
@@ -68,11 +69,14 @@ internal sealed class WindowsCursorSnapshot : IDisposable
     public void Dispose()
     {
         if (IsHidden) Restore();
-        if (_saved != null)
-        {
-            foreach (var h in _saved)
-                if (h != nint.Zero) NativeMethods.DestroyCursor(h);
-            _saved = null;
-        }
+        DestroySaved();
+    }
+
+    private void DestroySaved()
+    {
+        if (_saved == null) return;
+        foreach (var h in _saved)
+            if (h != nint.Zero) NativeMethods.DestroyCursor(h);
+        _saved = null;
     }
 }
