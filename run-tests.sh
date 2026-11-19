@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
-# Hydra test runner — three lanes: native (this Mac), linux (headless X11 container), windows (real box).
+# Hydra test runner — five lanes: native (this Mac), linux (headless X11 container), desktops (headless
+# desktop container), hyprland (a real Hyprland in a qemu VM), windows (real box).
 #
 #   - mac     → runs natively on this Mac. Windows-only tests self-skip; the [Category("Linux")] X11
 #               tests self-skip too (no DISPLAY, and libX11 never loads), so a plain `dotnet test`
 #               is safe. This is what runs on every commit.
 #   - linux   → the real X11 selection-protocol tests (XorgClipboardSync) against a headless Xvfb
 #               server, inside a Linux dotnet-sdk container with Xvfb + xclip.
+#   - desktops → the [Category("Desktops")] tests against real headless GNOME (mutter), KDE (kwin,
+#               Wayland and X11) and openbox desktops, in the Fedora image built from Tests/Wayland.
+#   - hyprland → the same tests against a real Hyprland on a qemu VM's virtio-gpu (Tests/Wayland/vm/vm.sh).
+#               No qemu on this host is a clean skip.
 #   - windows → the Windows-only tests (WinKeyResolver ToUnicodeEx, ProcessLock file locking) and the
 #               rest of the suite, on the real Windows box. The working tree is synced over SSH to
 #               $WIN_DIR and built/tested there. The box keeps its own bin/obj between runs and nothing
@@ -28,9 +33,11 @@
 #   ./run-tests.sh          # default: mac, then linux
 #   ./run-tests.sh mac      # only the Mac-native run
 #   ./run-tests.sh linux    # only the container X11 lane (Category=Linux, under Xvfb)
+#   ./run-tests.sh desktops # only the container desktops lane (Category=Desktops)
+#   ./run-tests.sh hyprland # only the VM Hyprland lane (Category=Desktops; Tests/Wayland/vm/vm.sh down stops the VM)
 #   ./run-tests.sh windows  # only the Windows lane (sync + test on the real box)
 #                           # HYDRA_WINDOWS_TEST_FILTER='FullyQualifiedName~X' narrows it to matching tests
-#   ./run-tests.sh all      # mac + linux + windows
+#   ./run-tests.sh all      # mac + linux + desktops + hyprland + windows
 #   ./run-tests.sh selftest # the runner's OWN oracles — no lanes, ~1s
 set -euo pipefail
 
@@ -130,7 +137,7 @@ run_lane() {
 		echo "── $name: FAILED — could not read the lane's own output, so its verdict cannot be trusted ──" >&2
 		return 1
 	fi
-	# A filter that selects nothing EXITS ZERO. The linux lane is seven tests hanging off one
+	# A filter that selects nothing EXITS ZERO. The linux lane is the tests hanging off one
 	# [Category("Linux")] attribute, so renaming that attribute would otherwise report a green lane
 	# for ever while testing nothing at all.
 	if [ "$nothing" -eq 0 ]; then
@@ -158,14 +165,61 @@ run_mac() {
 # tests under xvfb-run (which starts a headless X server, sets DISPLAY, and tears it down).
 # The package list is shared with CI's Linux test job, and so are the server arguments: without -noreset
 # Xvfb resets each time its last client leaves, and a test connecting during that reset gets no display.
+# Privileged, with the kernel's devtmpfs bound over /dev/input, so the evdev tests' uinput devices get real nodes there.
 run_linux() {
 	echo "── Container X11 tests (Category=Linux, headless Xvfb) ────────────"
-	docker run --rm -v "$PWD":/src -w /src "$SDK_IMAGE" bash -c '
+	docker run --rm --privileged -v "$PWD":/src -w /src "$SDK_IMAGE" bash -c '
 		set -e
+		mkdir -p /run/devtmpfs /dev/input && mount -t devtmpfs devtmpfs /run/devtmpfs && mount --bind /run/devtmpfs/input /dev/input
 		apt-get update -qq
 		DEBIAN_FRONTEND=noninteractive xargs apt-get install -y -qq < .github/linux-test-packages.txt >/dev/null
 		xvfb-run -a -s "-screen 0 1280x1024x24 -noreset" dotnet test Hydra.sln --filter "Category=Linux"
 	'
+}
+
+# Container desktops lane: the Category=Desktops tests against real headless desktops (mutter, kwin
+# Wayland and X11, openbox), each started by the test itself through Tests/Wayland/desktop.sh.
+# Two images, because Plasma 6.8 dropped X11: Tests/Wayland/Dockerfile (Fedora 45, kwin Wayland) and
+# Tests/Wayland/Dockerfile.kde-x11 (Fedora 44's base repo, kwin_x11 6.6). Each image's HYDRA_DESKTOP_KINDS
+# names the desktops its tests start; each run gets its own verdict line.
+# Privileged, with the kernel's devtmpfs bound over /dev/input like the linux lane, because one desktop
+# combination drives a headless evdev master through uinput.
+run_desktops_image() {
+	local image="$1" dockerfile="$2"
+	echo "── Container desktop tests (Category=Desktops, $image) ─"
+	# checked, because run_lane clears errexit: a failed build would otherwise test a stale image
+	docker build -t "$image" -f "Tests/Wayland/$dockerfile" Tests/Wayland || return 1
+	docker run --rm --privileged -v "$PWD":/src -w /src "$image" bash -c '
+		set -e
+		mkdir -p /run/devtmpfs /dev/input && mount -t devtmpfs devtmpfs /run/devtmpfs && mount --bind /run/devtmpfs/input /dev/input
+		lane.sh dotnet test Hydra.sln --filter "Category=Desktops"
+	'
+}
+
+# Both images run whatever the first one did, so one failure never hides the other's verdict.
+run_desktops() {
+	local rc=0
+	run_lane desktops run_desktops_image hydra-desktops Dockerfile || rc=1
+	run_lane desktops-kde-x11 run_desktops_image hydra-desktops-kde-x11 Dockerfile.kde-x11 || rc=1
+	return "$rc"
+}
+
+# Hyprland lane: the Category=Desktops tests against a real Hyprland, which needs a KMS device and an active
+# seat that no container on a desktop host has. So it runs in a qemu VM (Tests/Wayland/vm/vm.sh: Fedora 45
+# with a virtio-gpu), in an Arch image built there from Tests/Wayland/Dockerfile.hyprland, on a fresh copy of
+# the tree. Its users' hands are uinput devices, which Hyprland reads through libinput like a real keyboard.
+# No qemu is a clean skip, because this host never claimed it could boot the VM; qemu present but the VM
+# failing is a failure. The VM stays up after the lane, so the next run skips its boot; `vm.sh down` stops it.
+run_hyprland() {
+	local why
+	if ! why="$(Tests/Wayland/vm/vm.sh check)"; then
+		echo "── Hyprland tests: skipped (this host cannot boot the VM) ────────"
+		echo "   The Category=Desktops tests against a real Hyprland need a qemu VM with a KMS device; this run" >&2
+		echo "   does not cover them. Missing: $(echo "$why" | paste -sd, - | sed 's/,/, /g')." >&2
+		return "$LANE_SKIPPED"
+	fi
+	echo "── VM desktop tests (Category=Desktops, real Hyprland) ───────────"
+	Tests/Wayland/vm/vm.sh run lane.sh dotnet test Hydra.sln --filter "Category=Desktops"
 }
 
 # ssh exits 255 for its own failures and passes the remote command's status through otherwise, so a 255
@@ -406,10 +460,12 @@ case "${1:-default}" in
 	selftest) run_selftest ;;
 	mac) run_lane mac run_mac ;;
 	linux) run_lane linux run_linux ;;
+	desktops) run_desktops ;;
+	hyprland) run_lane hyprland run_hyprland ;;
 	windows) run_lane windows run_windows ;;
 	default) run_lane mac run_mac; run_lane linux run_linux ;;
 	# The self-test first, and it costs about a second: everything below is judged by run_lane, so a
 	# run_lane that cannot tell a crash from a pass makes every verdict after it worthless.
-	all) run_selftest; run_lane mac run_mac; run_lane linux run_linux; run_lane windows run_windows ;;
-	*) echo "usage: $0 [mac|linux|windows|default|all|selftest]" >&2; exit 2 ;;
+	all) run_selftest; run_lane mac run_mac; run_lane linux run_linux; run_desktops; run_lane hyprland run_hyprland; run_lane windows run_windows ;;
+	*) echo "usage: $0 [mac|linux|desktops|hyprland|windows|default|all|selftest]" >&2; exit 2 ;;
 esac

@@ -73,5 +73,8 @@ public record EdgeHit(ScreenRect Destination, Direction Direction, ScreenPoint E
 // a position along one edge of a named screen
 public readonly record struct ScreenEdge(string Screen, Direction Edge, int Position);
 
+// a run of pixels along one edge of a screen, Start inclusive, End exclusive, 0-based from its top or left
+public sealed record EdgeSpan(Direction Direction, int Start, int End);
+
 // a pixel position, global or screen-local as its owner says
 public readonly record struct ScreenPoint(int X, int Y);

@@ -172,6 +172,19 @@ public class HydraConfigTests
     }
 
     [Test]
+    public void ReadKeyboardsForHotkeys_DefaultsOn_AndParsesFalse()
+    {
+        var defaults = HydraConfig.ParseAndValidate(AsFile($$"""[{"mode":"Master"{{Relay}}}]"""));
+        var disabled = HydraConfig.ParseAndValidate(AsFile($$"""[{"mode":"Master","readKeyboardsForHotkeys":false{{Relay}}}]"""));
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(defaults[0].ReadKeyboardsForHotkeys, Is.True);
+            Assert.That(disabled[0].ReadKeyboardsForHotkeys, Is.False);
+        }
+    }
+
+    [Test]
     public void KeysDifferingOnlyInCase_TheLastOneWins()
     {
         var lowerLast = HydraConfig.ParseAndValidate(AsFile($$"""

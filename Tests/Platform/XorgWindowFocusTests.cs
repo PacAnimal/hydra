@@ -33,10 +33,16 @@ public class XorgWindowFocusTests
     [TearDown]
     public void CloseDisplay()
     {
+        if (_display == nint.Zero)
+        {
+            _windows.Clear();
+            return;
+        }
         _ = NativeMethods.XDeleteProperty(_display, _root, Atom("_NET_CLIENT_LIST_STACKING"));
         foreach (var window in _windows) _ = NativeMethods.XDestroyWindow(_display, window);
         _windows.Clear();
         _ = NativeMethods.XCloseDisplay(_display);
+        _display = nint.Zero;
     }
 
     [Test]

@@ -92,6 +92,16 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial int XCloseDisplay(nint display);
 
+    // the largest request the server takes, in 4-byte units
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint XMaxRequestSize(nint display);
+
+    // the same with BIG-REQUESTS, 0 when the server lacks it
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint XExtendedMaxRequestSize(nint display);
+
     [LibraryImport(X11)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial nint XDefaultRootWindow(nint display);
@@ -133,10 +143,13 @@ internal static partial class NativeMethods
 
     // poll() — block until fd is readable or timeoutMs elapses (timeout -1 = block forever)
     internal const short POLLIN = 0x0001;
+    internal const short POLLERR = 0x0008;
+    internal const short POLLHUP = 0x0010;
+    internal const short POLLNVAL = 0x0020;
 
     [LibraryImport("libc", EntryPoint = "poll")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    internal static partial int Poll(ref PollFd fds, uint nfds, int timeoutMs);
+    internal static partial int Poll(ref PollFd fds, nuint nfds, int timeoutMs);
 
     // -- events --
 

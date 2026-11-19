@@ -49,6 +49,43 @@ public class HydraConfigValidationTests
         Assert.That(new[] { profile.InvertScrollX, profile.InvertScrollY }, Is.EqualTo([expectedX, expectedY]));
     }
 
+    // ─── macScrollLines ───────────────────────────────────────────────────────
+
+    [TestCase(0)]
+    [TestCase(11)]
+    [TestCase(-1)]
+    public void Validate_MacScrollLines_OutOfRange_Throws(int lines)
+    {
+        var json = AsFile($$"""[{"mode":"Slave","embeddedStyx":{"server":"https://localhost:5000","password":"pw"},"macScrollLines":{{lines}}}]""");
+        var ex = Assert.Throws<InvalidOperationException>(() => HydraConfig.ParseAndValidate(json));
+        Assert.That(ex!.Message, Does.Contain("macScrollLines must be between 1 and 10"));
+    }
+
+    [Test]
+    public void Validate_MacScrollLines_OnMaster_Throws()
+    {
+        var json = AsFile("""[{"mode":"Master","embeddedStyx":{"server":"https://localhost:5000","password":"pw"},"macScrollLines":3}]""");
+        var ex = Assert.Throws<InvalidOperationException>(() => HydraConfig.ParseAndValidate(json));
+        Assert.That(ex!.Message, Does.Contain("macScrollLines is slave-only"));
+    }
+
+    [Test]
+    public void MacScrollLines_OnMaster_AtTheDefault_IsAccepted()
+    {
+        var json = AsFile("""[{"mode":"Master","embeddedStyx":{"server":"https://localhost:5000","password":"pw"},"macScrollLines":1}]""");
+        Assert.That(HydraConfig.ParseAndValidate(json)[0].MacScrollLines, Is.EqualTo(1));
+    }
+
+    [TestCase("", 1)]
+    [TestCase(",\"macScrollLines\":1", 1)]
+    [TestCase(",\"macScrollLines\":3", 3)]
+    [TestCase(",\"macScrollLines\":10", 10)]
+    public void MacScrollLines_OnSlave_IsReadAsGiven_OneByDefault(string fields, int expected)
+    {
+        var json = AsFile($$"""[{"mode":"Slave","embeddedStyx":{"server":"https://localhost:5000","password":"pw"}{{fields}}}]""");
+        Assert.That(HydraConfig.ParseAndValidate(json)[0].MacScrollLines, Is.EqualTo(expected));
+    }
+
     // ─── maxMouseHz ───────────────────────────────────────────────────────────
 
     [Test]

@@ -88,6 +88,7 @@ function serializeProfile(p: HydraProfile): Record<string, unknown> {
 
   if (p.mode === 'Master') {
     if (p.hideCursor === true) out.hideCursor = true
+    if (p.readKeyboardsForHotkeys === false) out.readKeyboardsForHotkeys = false
     if (p.maxMouseHz !== undefined) out.maxMouseHz = p.maxMouseHz
     if (p.modifierNumLock !== undefined) out.modifierNumLock = p.modifierNumLock
     const hotkeys = serializeHotkeys(p.hotkeys)
@@ -103,12 +104,13 @@ function serializeProfile(p: HydraProfile): Record<string, unknown> {
     }
   }
 
-  // mouseScale, relativeMouseScale, invertScrollX/Y, and screenDefinitions are slave-only
+  // mouseScale, relativeMouseScale, invertScrollX/Y, macScrollLines, and screenDefinitions are slave-only
   if (p.mode !== 'Master') {
     if (p.mouseScale !== undefined) out.mouseScale = p.mouseScale
     if (p.relativeMouseScale !== undefined) out.relativeMouseScale = p.relativeMouseScale
     if (p.invertScrollX === true) out.invertScrollX = true
     if (p.invertScrollY === true) out.invertScrollY = true
+    if (p.macScrollLines !== undefined && p.macScrollLines !== 1) out.macScrollLines = p.macScrollLines
     const screens = (p.screenDefinitions ?? []).filter(
       s => s.displayName || s.outputName || s.platformId
     )

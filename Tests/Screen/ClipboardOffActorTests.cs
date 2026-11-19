@@ -29,12 +29,12 @@ public class ClipboardOffActorTests : MasterClipboardFixture
     public async Task ReadHung_InputStillReachesTheSlaveAndTheCursorCrossesToAnother()
     {
         var clipboard = Clipboard("on the master");
-        var ticks = new SteppableTicks();
-        var (platform, relay, _) = await Start(clipboard, getTickCount: ticks.Now);
+        var time = new FakeTimeProvider();
+        var (platform, relay, _) = await Start(clipboard, time: time);
         clipboard.ReadGate.Hold();
         TransitionTestHelper.EnterRemote(platform);
 
-        ticks.Advance(20); // past the mouse throttle
+        time.Advance(TimeSpan.FromMilliseconds(20)); // past the mouse throttle
         platform.FireMouseDelta(10, 0);
         platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyDown, 'a', KeyModifiers.None) with { PhysicalKey = KeyA });
         platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyUp, 'a', KeyModifiers.None) with { PhysicalKey = KeyA });
@@ -370,10 +370,10 @@ public class ClipboardOffActorTests : MasterClipboardFixture
     }
 
     // the router's fire callback flushes the actor alone, never waiting on a parked read
-    private async Task<TestServiceBundle> Start(FakeClipboardSync clipboard, Func<long>? getTickCount = null, ILogger<InputRouter>? log = null,
+    private async Task<TestServiceBundle> Start(FakeClipboardSync clipboard, ILogger<InputRouter>? log = null,
         bool chain = true, FakeTimeProvider? time = null)
     {
-        var bundle = TransitionTestHelper.CreateService(getTickCount: getTickCount, timeProvider: time ?? new FakeTimeProvider(),
+        var bundle = TransitionTestHelper.CreateService(timeProvider: time ?? new FakeTimeProvider(),
             profile: chain ? TransitionTestHelper.ChainConfig : TransitionTestHelper.TestConfig, log: log, clipboard: clipboard);
         bundle.Platform.AfterFireCallback = bundle.Service.Flush;
         return await Services.StartOnline(bundle, chain ? ["remote", "remote2"] : ["remote"]);

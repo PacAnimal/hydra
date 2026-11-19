@@ -91,7 +91,8 @@ internal sealed class RemoteManagementService(
             "");
         request = request with { Signature = RemoteManagementCrypto.SignRequest(request, signingSecret) };
         var completion = new TaskCompletionSource<RemoteWireResponse>(TaskCreationOptions.RunContinuationsAsynchronously);
-        if (!_pending.TryAdd(request.RequestId, new PendingRequest(host, responseSecret, completion)))
+        var pending = new PendingRequest(host, responseSecret, completion);
+        if (!_pending.TryAdd(request.RequestId, pending))
             throw new InvalidOperationException("Remote request ID collision.");
 
         try
@@ -101,7 +102,7 @@ internal sealed class RemoteManagementService(
             if (!response.Success) throw new InvalidOperationException(response.Error ?? "Remote management request failed.");
             return response.Json ?? throw new InvalidOperationException("Remote management response was empty.");
         }
-        finally { _pending.TryRemove(request.RequestId, out _); }
+        finally { _pending.TryRemove(KeyValuePair.Create(request.RequestId, pending)); }
     }
 
     private async Task OnMessageReceived(string sourceHost, MessageKind kind, ReadOnlyMemory<byte> body)

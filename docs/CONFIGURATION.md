@@ -27,8 +27,47 @@ See the [project README](../README.md) for installation and a quick-start guide.
 
 - .NET 10
 - **macOS**: Accessibility permission (System Settings → Privacy & Security → Accessibility)
-- **Linux (with display)**: X11 with XInput2 (Wayland not yet supported)
+- **Linux (with display)**: X11 with XInput2
+- **Linux (Wayland)**: through the XDG desktop portals (InputCapture on a master, RemoteDesktop on a slave, or wlroots virtual input where the portal has no RemoteDesktop) and libei; `libei` (`libei.so.1`), `libffi` (`libffi.so.8`) and `libxkbcommon` installed. Supported: GNOME 46+ and KDE Plasma 6.1+ (master and slave); Hyprland as master and slave: a master through `xdg-desktop-portal-hyprland` 1.5+'s InputCapture, a slave through the compositor's wlroots virtual pointer and keyboard (`zwlr_virtual_pointer_manager_v1`, `zwp_virtual_keyboard_manager_v1`), since its portal has no RemoteDesktop; that needs `libwayland-client` (`libwayland-client.so.0`), types with the keyboard layout set in Hyprland and asks no permission. On GNOME and KDE the first start shows the desktop's permission dialog; Hyprland asks none, master or slave. Hydra writes a hidden desktop entry, `~/.local/share/applications/org.cathedral.Hydra.desktop` (under `$XDG_DATA_HOME` when set), so the portal knows the app: its permissions and the hotkeys at home need it. On a master whose portal has InputCapture version 2, and on every slave, Hydra keeps the grant's restore token in `.hydra-portal.json` beside `hydra.conf`, so later starts restore it without asking; GNOME 46-48 ship InputCapture version 1, which shows the dialog on every master start and offers no portal clipboard. No `input` group is needed, except on a Hyprland master for every hotkey at home but a monitor switch to a remote (see [Hyprland hotkeys](#hyprland-hotkeys)). The clipboard goes through the portal, or `wl-clipboard` (`wl-copy`/`wl-paste`) when the portal offers none. See [Wayland limitations](#wayland-limitations)
 - **Linux (headless/console)**: `remoteOnly: true` in config; user must be in the `input` group (`sudo usermod -aG input $USER`) for `/dev/input/event*` access; `libxkbcommon` installed (`apt install libxkbcommon0`)
+
+### Wayland limitations
+
+- A GNOME or KDE slave types only characters on its keyboard layout, including ones the layout's dead keys compose (é as ´ then e on a German layout); anything else is dropped. A Hyprland slave types any character.
+- A master sees keys at home only through hotkeys, which need the desktop's GlobalShortcuts portal; without one the hotkeys work only on a remote screen. At home only the cursor lock, slave lock, copy-files and paste-files hotkeys work. A Hyprland master that can read `/dev/input` reads them from the keyboards, and every hotkey except a monitor switch to a remote works at home; see [Hyprland hotkeys](#hyprland-hotkeys).
+- A Hyprland master reading the keyboards sees keys typed at home even while the screen is locked or another VT or seat is active: nothing is forwarded to a slave from home, but a cursor-lock or slave-lock hotkey can be triggered from the lock screen.
+- Modifiers held across a return are not carried home: one pressed during a visit was never seen at home, so pressing a hotkey's last key again there does nothing until its modifiers are pressed again.
+- A click made just after returning to a Wayland master, before the desktop has handed the pointer back, can be lost: the app sees only its release.
+- A master starts a visit only when the pointer crosses a screen edge: the monitor-switch hotkeys cannot leave it for a remote, and `remoteOnly` is refused at startup.
+- On a Hyprland master a drag is not carried across the edge: the visit ends as the button is released, and the pointer stays at home by the edge, ready to cross again. `xdg-desktop-portal-hyprland` stops sending input after a capture that began with a button held.
+- No window focus on a monitor switch, no screensaver sync, and a slave sees no local input to count as activity.
+- If a visit ends before Hydra has taken over the master's clipboard (it never takes over a password manager's copy), or the slave's copy is of another kind (text vs image) than what the master's clipboard held at that visit, that copy can't be written after the return, and Hydra shows "Clipboard Transfer Failed". Formats the master's clipboard didn't hold then are dropped.
+- `hideCursor` has no effect.
+- Scroll speed is tuned on GNOME (mutter); on a KDE or Hyprland master a wheel notch may scroll a remote screen faster or slower.
+- Screens are named after the compositor's outputs (`DP-1`, `HDMI-A-1`, …), as `screenDefinitions` and neighbour rules match them; a screen with no output to match is reported as `zone-0`, … (master) or `region-0`, … (slave).
+- The `screenCount` condition (and a slave's dormancy, which rests on it) counts the compositor's outputs, or XWayland's screens when the compositor cannot be asked.
+
+### Hyprland hotkeys
+
+`xdg-desktop-portal-hyprland` does not bind Hydra's hotkeys itself, so a Hyprland master reads the hotkeys at home from the keyboards instead (without a grab, so the desktop still gets every key), and every hotkey except a monitor switch to a remote works at home. That needs read access to `/dev/input`, e.g. the user in the `input` group; Hydra logs `Hotkeys at home: read from the keyboards (evdev)` when it has it. Reading the keyboards means Hydra sees every key typed on the machine, the lock screen included, though it only acts on its hotkeys and sends nothing from home to a slave; set `readKeyboardsForHotkeys: false` in the profile (default: `true`) to leave `/dev/input` alone and have the portal serve them instead. Without read access, or with that setting off, the portal serves the hotkeys at home, and they work there only once bound in Hyprland's config. Hydra then warns at startup with the lines to add, in both forms. It warns even when they are already bound, since the portal never reports a shortcut's keys. For the default hotkeys, on Hyprland 0.56 and later, in `hyprland.lua`:
+
+```lua
+hl.bind("CTRL + ALT + SUPER + L", hl.dsp.global("org.cathedral.Hydra:ToggleCursorLock-0"))
+hl.bind("CTRL + ALT + SUPER + K", hl.dsp.global("org.cathedral.Hydra:LockSlaves-0"))
+hl.bind("CTRL + ALT + SUPER + C", hl.dsp.global("org.cathedral.Hydra:CopyFiles-0"))
+hl.bind("CTRL + ALT + SUPER + V", hl.dsp.global("org.cathedral.Hydra:PasteFiles-0"))
+```
+
+On older Hyprland, in `hyprland.conf`:
+
+```
+bind = CTRL ALT SUPER, l, global, org.cathedral.Hydra:ToggleCursorLock-0
+bind = CTRL ALT SUPER, k, global, org.cathedral.Hydra:LockSlaves-0
+bind = CTRL ALT SUPER, c, global, org.cathedral.Hydra:CopyFiles-0
+bind = CTRL ALT SUPER, v, global, org.cathedral.Hydra:PasteFiles-0
+```
+
+Each shortcut is named after its action and its place in that action's list of hotkeys (`-0` for the first, `-1` for the second, …). On a remote screen the hotkeys work without these lines.
 
 ## Config file location
 
@@ -121,7 +160,9 @@ Use `Esc` to close the TUI. It does not change Hydra's running state.
 - `allowSystemSleep` — `true` lets the operating system's normal idle policy put this machine fully to sleep. Hydra stops treating background peer activity as local activity, leaves the relay when a screen-count condition no longer matches, and closes the relay before OS suspend (default: `false`).
 - `screenLockPropagation` — propagate a Mac/Windows master's local lock to connected slaves (master only; default: `false`)
 - `accelerateMouseWheel` — apply the platform wheel-acceleration behavior (default: `true`)
+- `readKeyboardsForHotkeys` — on a Hyprland master, read the hotkeys at home from the keyboards in `/dev/input`; `false` uses the desktop's GlobalShortcuts portal instead, as when `/dev/input` cannot be read (see [Hyprland hotkeys](#hyprland-hotkeys)). No effect on other desktops or on slaves (default: `true`)
 - `invertScrollX` / `invertScrollY` — flip horizontal or vertical scrolling from every master before this machine injects it, whatever either side's platform (slave only; default: `false`). Horizontal scrolling already crosses between macOS and other platforms the right way round, so these are for taste, or for a device that reports one axis backwards
+- `macScrollLines` — the lines one wheel notch scrolls on this Mac, 1 to 10 (macOS slave only; default: `1`). macOS apps scroll by what the event carries, while Windows and X11 apps scroll 3 lines per click themselves, so `3` matches what a notch scrolls there. It scales every scroll this Mac injects, smooth (trackpad) scrolls from a Mac master included. On other slaves it has no effect
 - `modifierNumLock` — the NumLock a keypad key crosses with while Super, Control or Alt is held, whatever the master's own NumLock says: `true` types its digit (`KP_4`), `false` its navigation key (`KP_Left`; the decimal key becomes `KP_Delete`, and a keypad comma key that NumLock does not change, as on ABNT2 and JIS keypads, is left alone, except on a headless Linux master, whose own NumLock-off already sends that key as `KP_Delete`). A key keeps it through its repeats and release, whichever is let go first, and keys pressed without those modifiers are untouched. For keypad shortcuts on a slave (window tiling on Super+keypad) that should work with NumLock either way. A macOS master's keypad always types digits, so only `false` changes anything there. Hotkeys (`hotkeys`) see the key as this makes it, so bind the form the setting gives: `Super+KP_4` under `true`, `Super+KP_Left` under `false`, and either fires whatever NumLock says (master only; default: `null`, which leaves the keypad alone)
 - `conditions` — optional object; if set, this profile only activates when **all** specified conditions are met (see [Network-aware config](#network-aware-config))
   - `ssid` — activates when connected to this WiFi network name (case-insensitive)
@@ -383,7 +424,7 @@ Mac running Rectangle, `Ctrl+Opt+Cmd+Left`/`Right` is also its "next display" sh
 X11 master the chords are grabbed while at home; one that another application already holds works only on a remote,
 and a warning at startup says so.
 
-**Relative mouse:** relative mode sends mouse deltas instead of absolute coordinates — useful for games or 3D apps that capture the cursor. Toggled per-screen; an on-screen notification confirms the current state.
+**Relative mouse:** relative mode sends mouse deltas instead of absolute coordinates — useful for games or 3D apps that capture the cursor. Toggled per-screen; an on-screen notification confirms the current state. In relative mode the cursor never leaves the screen by an edge: toggle relative mode off, or use a monitor-switch hotkey, to leave.
 
 ### Customising hotkeys
 

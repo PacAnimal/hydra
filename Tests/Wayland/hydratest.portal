@@ -1,0 +1,4 @@
+[portal]
+DBusName=org.freedesktop.impl.portal.desktop.hydratest
+Interfaces=org.freedesktop.impl.portal.InputCapture;org.freedesktop.impl.portal.RemoteDesktop;org.freedesktop.impl.portal.Clipboard;org.freedesktop.impl.portal.GlobalShortcuts;
+UseIn=hydratest

@@ -21,7 +21,11 @@ public class XorgHotkeyGrabTests
     public void OpenDisplay() => _display = XlibRuntime.OpenDisplayOrThrow("hotkey grab tests");
 
     [TearDown]
-    public void CloseDisplay() => _ = NativeMethods.XCloseDisplay(_display);
+    public void CloseDisplay()
+    {
+        if (_display != nint.Zero) _ = NativeMethods.XCloseDisplay(_display);
+        _display = nint.Zero;
+    }
 
     [Test]
     public void TheDefaults_GrabTheLockAndTheFourArrows_UnderTheChord()

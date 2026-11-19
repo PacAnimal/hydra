@@ -36,7 +36,7 @@ public class CaptureFailedTests : ServicesFixture
 
         bundle.Platform.FireCaptureFailed();
 
-        var warned = log.Entries.Where(e => e.Level == LogLevel.Warning && e.Message.Contains("holds the keyboard or pointer")).ToList();
+        var warned = log.Entries.Where(e => e.Level == LogLevel.Warning && e.Message.Contains("input capture failed")).ToList();
         Assert.That(warned.Select(e => e.Message), Has.One.Contains("'remote'"));
     }
 
@@ -53,7 +53,7 @@ public class CaptureFailedTests : ServicesFixture
         {
             Assert.That(bundle.Platform.IsOnVirtualScreen, Is.False);
             Assert.That(bundle.Relay.Sent.Of(MessageKind.LeaveScreen), Is.Empty, "nothing to leave");
-            Assert.That(log.Messages, Has.None.Contains("holds the keyboard or pointer"));
+            Assert.That(log.Messages, Has.None.Contains("input capture failed"));
         }
     }
 

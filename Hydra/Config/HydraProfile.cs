@@ -31,8 +31,10 @@ public interface IHydraProfile
     bool AllowSystemSleep { get; }
     bool ScreenLockPropagation { get; }
     bool AccelerateMouseWheel { get; }
+    bool ReadKeyboardsForHotkeys { get; }
     bool InvertScrollX { get; }
     bool InvertScrollY { get; }
+    int MacScrollLines { get; }
     bool? ModifierNumLock { get; }
     HotkeyBindings Hotkeys { get; }
     int? DeadCorners { get; }
@@ -50,6 +52,8 @@ public class HydraProfile(HydraConfigFile configFile, HydraConfig? activeProfile
     // why it is a number rather than an ambition.
     public const int DefaultMaxMouseHz = 125;
     public const int MaxConfigurableMouseHz = 1000;
+    public const int DefaultMacScrollLines = 1;
+    public const int MaxMacScrollLines = 10;
 
     private readonly HydraConfig? _activeProfile = activeProfile;
 
@@ -77,8 +81,10 @@ public class HydraProfile(HydraConfigFile configFile, HydraConfig? activeProfile
     public bool AllowSystemSleep => _activeProfile?.AllowSystemSleep ?? false;
     public bool ScreenLockPropagation => _activeProfile?.ScreenLockPropagation ?? false;
     public bool AccelerateMouseWheel => _activeProfile?.AccelerateMouseWheel ?? true;
+    public bool ReadKeyboardsForHotkeys => _activeProfile?.ReadKeyboardsForHotkeys ?? true;
     public bool InvertScrollX => _activeProfile?.InvertScrollX ?? false;
     public bool InvertScrollY => _activeProfile?.InvertScrollY ?? false;
+    public int MacScrollLines => _activeProfile?.MacScrollLines ?? DefaultMacScrollLines;
     public bool? ModifierNumLock => _activeProfile?.ModifierNumLock;
     public HotkeyBindings Hotkeys { get; } = HotkeyBindings.Build(activeProfile?.Hotkeys);
     public int? DeadCorners => _activeProfile?.DeadCorners;

@@ -108,8 +108,12 @@ export interface HydraProfile {
   // slave only: flip a master's scroll on that axis
   invertScrollX?: boolean
   invertScrollY?: boolean
+  // slave only (macOS): the lines one wheel notch scrolls, 1 to 10
+  macScrollLines?: number
   // master only
   hideCursor?: boolean
+  // hyprland: false serves the hotkeys at home from the GlobalShortcuts portal instead of /dev/input
+  readKeyboardsForHotkeys?: boolean
   maxMouseHz?: number
   // the keypad's NumLock under Super/Ctrl/Alt: true digits, false navigation, undefined as pressed
   modifierNumLock?: boolean

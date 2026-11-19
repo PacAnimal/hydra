@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Net.Sockets;
 using ByteSizeLib;
@@ -1416,14 +1417,14 @@ internal static class HydraTui
             var output = new StringBuilder();
             output.AppendLine("Local Screens");
             foreach (var screen in s.LocalScreens)
-                output.AppendLine($"  {screen.Name,-28} {screen.Width,5}×{screen.Height,-5} scale {screen.MouseScale}");
+                output.AppendLine(CultureInfo.InvariantCulture, $"  {screen.Name,-28} {screen.Width,5}×{screen.Height,-5} scale {screen.MouseScale}");
             if (s.LocalScreens.Count == 0) output.AppendLine("  (none detected)");
             output.AppendLine().AppendLine("Peers");
             foreach (var peer in s.Peers)
             {
                 output.AppendLine($"  {(peer.Connected ? "●" : "○")} {peer.Name}  [{peer.Platform}]  {peer.Screens.Count} {Pluralize.Of(peer.Screens.Count, "screen")}");
                 foreach (var screen in peer.Screens)
-                    output.AppendLine($"      {screen.Name,-24} {screen.Width,5}×{screen.Height,-5} scale {screen.MouseScale}");
+                    output.AppendLine(CultureInfo.InvariantCulture, $"      {screen.Name,-24} {screen.Width,5}×{screen.Height,-5} scale {screen.MouseScale}");
             }
             if (s.Peers.Count == 0) output.AppendLine("  (no peers online)");
             return output.ToString();

@@ -17,7 +17,14 @@ public sealed class XorgScreenSaverSync : PollingScreenSaverSync
         if (_display == nint.Zero) return;
 
         _rootWindow = NativeMethods.XDefaultRootWindow(_display);
-        _hasSs = NativeMethods.XScreenSaverQueryExtension(_display, out _, out _);
+        try
+        {
+            _hasSs = NativeMethods.XScreenSaverQueryExtension(_display, out _, out _);
+        }
+        catch (DllNotFoundException e)
+        {
+            if (log.IsEnabled(LogLevel.Warning)) log.LogWarning("libXss not loadable; screensaver sync disabled: {Message}", e.Message);
+        }
         _hasDpms = NativeMethods.DPMSQueryExtension(_display, out _, out _) && NativeMethods.DPMSCapable(_display);
 
         if (_hasSs)

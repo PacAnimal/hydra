@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using Cathedral.Utils;
 using Hydra.Keyboard;
+using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform.Linux;
 
@@ -9,7 +10,8 @@ namespace Hydra.Platform.Linux;
 // XorgKeyResolver is reused directly — only the source of keysyms differs.
 internal sealed class EvdevKeyResolver : IDisposable
 {
-    private readonly nint _ctx;
+    private readonly XkbKeymap _xkb;
+    private readonly bool _ownsKeymap;
     private readonly nint _keymap;
     private nint _state;
     // Resolve() runs on the evdev event-loop thread; Reset()/Dispose() run on other threads (the
@@ -26,39 +28,45 @@ internal sealed class EvdevKeyResolver : IDisposable
     private readonly uint _capsLockXkbKey;
     private readonly uint _numLockXkbKey;
     private readonly uint _scrollLockXkbKey;
+    // which of the keymap's layouts type Latin letters, by layout index (LatinShortcutKeysym)
+    private readonly bool[] _latinLayouts;
+    // the modifiers a shortcut's level may take (LatinShortcutKeysym.LevelMods): never Control, Alt or Super
+    private readonly uint _levelMods;
+    // the locked layout held against our own keys (SetLayout's pin); null lets a group toggle move it
+    private uint? _pinnedLayout;
 
     internal EvdevKeyResolver(LinuxInputConfig.XkbNames xkb)
+        : this(XkbKeymap.FromNames(xkb), true)
     {
-        var layout = xkb.Layout;
-        _ctx = EvdevNativeMethods.xkb_context_new(0);
-        if (_ctx == 0) throw new InvalidOperationException("Failed to create xkb context.");
+    }
 
-        // allocate native strings for rule names; freed in the finally below.
-        // Model comes from the system config too: a 105-key board is the common case but not a
-        // universal one, and getting it wrong misplaces the keys either side of Enter.
-        var names = new XkbRuleNames
-        {
-            Rules = Marshal.StringToCoTaskMemUTF8("evdev"),
-            Model = Marshal.StringToCoTaskMemUTF8(xkb.Model),
-            Layout = Marshal.StringToCoTaskMemUTF8(layout),
-            Variant = xkb.Variant is null ? 0 : Marshal.StringToCoTaskMemUTF8(xkb.Variant),
-            Options = xkb.Options is null ? 0 : Marshal.StringToCoTaskMemUTF8(xkb.Options),
-        };
+    // resolves on a keymap the caller owns and disposes after this resolver
+    internal EvdevKeyResolver(XkbKeymap keymap)
+        : this(keymap, false)
+    {
+    }
 
-        try
+    // builds from a keymap in XKB_KEYMAP_FORMAT_TEXT_V1, as an EIS server hands it over libei
+    internal static EvdevKeyResolver FromKeymap(string keymapText) => new(XkbKeymap.FromText(keymapText), true);
+
+    // the layout the system names (LinuxInputConfig.ResolveXkb), without its options when they do not compile here
+    internal static EvdevKeyResolver FromSystemLayout(ILogger log) => new(XkbKeymap.FromSystemLayout(log), true);
+
+    // the keymap this resolver resolves against, as XKB_KEYMAP_FORMAT_TEXT_V1 text
+    internal string KeymapText()
+    {
+        lock (_stateLock)
         {
-            _keymap = EvdevNativeMethods.xkb_keymap_new_from_names(_ctx, ref names, 0);
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            return _xkb.Text();
         }
-        finally
-        {
-            Marshal.FreeCoTaskMem(names.Rules);
-            Marshal.FreeCoTaskMem(names.Model);
-            Marshal.FreeCoTaskMem(names.Layout);
-            if (names.Variant != 0) Marshal.FreeCoTaskMem(names.Variant);
-            if (names.Options != 0) Marshal.FreeCoTaskMem(names.Options);
-        }
+    }
 
-        if (_keymap == 0) throw new InvalidOperationException($"Failed to create xkb keymap for layout '{layout}'.");
+    private EvdevKeyResolver(XkbKeymap keymap, bool ownsKeymap)
+    {
+        _xkb = keymap;
+        _ownsKeymap = ownsKeymap;
+        _keymap = keymap.Handle;
 
         // detect whether the keymap names ScrollLock as a virtual modifier; fall back to Mod3
         _scrollLockModName = EvdevNativeMethods.xkb_keymap_mod_get_index(_keymap, "ScrollLock") != uint.MaxValue
@@ -70,9 +78,13 @@ internal sealed class EvdevKeyResolver : IDisposable
         _numLockXkbKey = nmlkKey != uint.MaxValue ? nmlkKey : 0;
         var sclkKey = EvdevNativeMethods.xkb_keymap_key_by_name(_keymap, "SCLK");
         _scrollLockXkbKey = sclkKey != uint.MaxValue ? sclkKey : 0;
+        _latinLayouts = LatinShortcutKeysym.LatinLayouts(_keymap);
+        _levelMods = LatinShortcutKeysym.LevelMods(_keymap);
 
         _state = EvdevNativeMethods.xkb_state_new(_keymap);
-        if (_state == 0) throw new InvalidOperationException("Failed to create xkb state.");
+        if (_state != 0) return;
+        if (ownsKeymap) keymap.Dispose();
+        throw new InvalidOperationException("Failed to create xkb state.");
     }
 
     // value=1 → KeyDown, value=0 → KeyUp, value=2 → auto-repeat
@@ -106,6 +118,7 @@ internal sealed class EvdevKeyResolver : IDisposable
         if (!isDown)
         {
             _ = EvdevNativeMethods.xkb_state_update_key(_state, xkbKey, EvdevNativeMethods.XKB_KEY_UP);
+            RepinLayout();
             var mods = GetModifiers();
             return [KeyResolver.ReplayKeyUp(_keyDownId, evdevCode, mods)];
         }
@@ -113,6 +126,7 @@ internal sealed class EvdevKeyResolver : IDisposable
         // resolve keysym BEFORE updating state (xkbcommon convention: keysym must not be affected by the event itself)
         var keysym = (ulong)EvdevNativeMethods.xkb_state_key_get_one_sym(_state, xkbKey);
         _ = EvdevNativeMethods.xkb_state_update_key(_state, xkbKey, EvdevNativeMethods.XKB_KEY_DOWN);
+        RepinLayout();
         if (keysym == 0) return null;
 
         keysym = NormalizeKeypadKeysym(xkbKey, ShortcutBaseKeysym(xkbKey, keysym));
@@ -134,16 +148,14 @@ internal sealed class EvdevKeyResolver : IDisposable
     // Super or Control held
     private bool IsShortcut() => IsModActive("Mod4") || IsModActive("Control");
 
-    // a shortcut takes the level-0 base keysym, so it sends the unshifted char ('4' not '¤' on Norwegian for Super+Shift+4)
-    private ulong ShortcutBaseKeysym(uint xkbKey, ulong keysym)
-    {
-        if (!IsShortcut()) return keysym;
-        var layout = EvdevNativeMethods.xkb_state_serialize_layout(_state, EvdevNativeMethods.XKB_STATE_LAYOUT_EFFECTIVE);
-        var count = EvdevNativeMethods.xkb_keymap_key_get_syms_by_level(_keymap, xkbKey, layout, 0, out var symsPtr);
-        if (count > 0 && symsPtr != nint.Zero)
-            keysym = (uint)Marshal.ReadInt32(symsPtr);
-        return keysym;
-    }
+    // a shortcut drops Shift from the level, so it sends the unshifted char ('4' not '¤' on Norwegian for Super+Shift+4),
+    // and a Latin one for any printable key when the active layout is not Latin (Ctrl+C on ru sends Ctrl+c, Ctrl on
+    // ru's slash key Ctrl+/); an AltGr level keeps its keysym (Ctrl+AltGr+2 on ru(typo) is Ctrl+@, LatinShortcutKeysym),
+    // and Control, Alt and Super pick no level (Ctrl+Alt+F1 is F1)
+    private ulong ShortcutBaseKeysym(uint xkbKey, ulong keysym) =>
+        IsShortcut() ? LatinShortcutKeysym.ForState(_keymap, _state, xkbKey, keysym, IsLatinLayout, _levelMods) : keysym;
+
+    private bool IsLatinLayout(int layout) => layout >= 0 && layout < _latinLayouts.Length && _latinLayouts[layout];
 
     // keypad dual-purpose keys: normalize based on numlock state.
     // xkbcommon applies KEYPAD XOR semantics (numlock XOR shift → level), but we want
@@ -193,6 +205,44 @@ internal sealed class EvdevKeyResolver : IDisposable
     private bool IsModActive(string name) =>
         EvdevNativeMethods.xkb_state_mod_name_is_active(_state, name, EvdevNativeMethods.XKB_STATE_MODS_EFFECTIVE) > 0;
 
+    // the compositor's effective layout group (EIS keyboard modifiers, Hyprland's active_layout_index), made the effective
+    // one, keeping our own modifiers; a group toggle pressed later still moves from it, unless pinned: then our keys never
+    // move the locked group, since the compositor saw them too and its next report carries the toggle. A group the
+    // keymap lacks is ignored
+    internal void SetLayout(uint group, bool pin = false)
+    {
+        lock (_stateLock)
+        {
+            if (_disposed || _state == 0) return;
+            if (group >= EvdevNativeMethods.xkb_keymap_num_layouts(_keymap)) return;
+            _pinnedLayout = pin ? group : null;
+            LockLayout(group);
+        }
+    }
+
+    // a key just moved the state: the pinned group locked back in, so a toggle at home is applied once, by the compositor
+    private void RepinLayout()
+    {
+        if (_pinnedLayout is { } group) LockLayout(group);
+    }
+
+    // group is the compositor's effective one, which may count a held or latched group key (grp:switch) we count too, so
+    // the locked group is the one that makes the effective group the report's rather than adding that key twice. The held
+    // and latched groups stay as they are, so the key's release still takes its group back off
+    private void LockLayout(uint group)
+    {
+        var depressed = EvdevNativeMethods.xkb_state_serialize_mods(_state, EvdevNativeMethods.XKB_STATE_MODS_DEPRESSED);
+        var latched = EvdevNativeMethods.xkb_state_serialize_mods(_state, EvdevNativeMethods.XKB_STATE_MODS_LATCHED);
+        var locked = EvdevNativeMethods.xkb_state_serialize_mods(_state, EvdevNativeMethods.XKB_STATE_MODS_LOCKED);
+        var depressedLayout = EvdevNativeMethods.xkb_state_serialize_layout(_state, EvdevNativeMethods.XKB_STATE_LAYOUT_DEPRESSED);
+        var latchedLayout = EvdevNativeMethods.xkb_state_serialize_layout(_state, EvdevNativeMethods.XKB_STATE_LAYOUT_LATCHED);
+        // serialized layouts are xkb_layout_index_t, a negative relative group arriving as its two's complement
+        var layouts = (long)EvdevNativeMethods.xkb_keymap_num_layouts(_keymap);
+        var held = (long)(int)depressedLayout + (int)latchedLayout;
+        var lockedLayout = (uint)((((group - held) % layouts) + layouts) % layouts);
+        _ = EvdevNativeMethods.xkb_state_update_mask(_state, depressed, latched, locked, depressedLayout, latchedLayout, lockedLayout);
+    }
+
     // resets resolver state when the evdev grab is re-established after a gap.
     // missed key-up events leave stale _keyDownId entries; clearing prevents phantom stuck-key suppression.
     // xkb state is also recreated: stale modifier bits (e.g. Shift held when focus switched away) would
@@ -219,6 +269,7 @@ internal sealed class EvdevKeyResolver : IDisposable
             if (_capsLockXkbKey != 0 && capsLockWasActive) RestoreLock(_capsLockXkbKey);
             if (_numLockXkbKey != 0 && numLockWasActive) RestoreLock(_numLockXkbKey);
             if (_scrollLockXkbKey != 0 && scrollLockWasActive) RestoreLock(_scrollLockXkbKey);
+            RepinLayout();
         }
     }
 
@@ -235,8 +286,7 @@ internal sealed class EvdevKeyResolver : IDisposable
             // one-shot: block any later Resolve/Reset (e.g. from a shutdown-race) from touching freed state
             if (!_disposed.TrySet()) return;
             if (_state != 0) { EvdevNativeMethods.xkb_state_unref(_state); _state = 0; }
-            if (_keymap != 0) EvdevNativeMethods.xkb_keymap_unref(_keymap);
-            if (_ctx != 0) EvdevNativeMethods.xkb_context_unref(_ctx);
+            if (_ownsKeymap) _xkb.Dispose();
         }
     }
 }

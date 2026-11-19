@@ -61,8 +61,8 @@ public class SlaveRelayConnection : RelayConnection
     public SlaveRelayConnection(IHydraProfile profile, ILogger<RelayConnection> log, IPlatformOutput output, IScreenDetector screens, IWorldState peerState,
         ICursorHider cursorHider, IScreenSaverSync screenSaverSync, IClipboardSync clipboardSync, FileTransferService fileTransfer,
         IFileSelectionDetector selectionDetector, IOsdNotification osd, IActivityTracker activityTracker, IDormancyState dormancy,
-        TimeProvider? clock = null, IWindowFocus? windowFocus = null)
-        : base(profile, log, peerState)
+        TimeProvider? clock = null, IWindowFocus? windowFocus = null, IRelayReady? relayReady = null)
+        : base(profile, log, peerState, relayReady)
     {
         _windowFocus = windowFocus ?? new NullWindowFocus();
         _output = output;

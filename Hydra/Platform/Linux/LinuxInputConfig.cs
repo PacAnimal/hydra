@@ -11,6 +11,7 @@ namespace Hydra.Platform.Linux;
 internal static class LinuxInputConfig
 {
     private const string KeyboardFile = "/etc/default/keyboard";
+    private const string UdevData = "/run/udev/data";
 
     // libinput normalises pointer motion to 1000 dpi. Match that, so MOUSE_DPI means here what it
     // means everywhere else: a mouse declared at 2000 dpi covers the same physical distance as one
@@ -39,15 +40,50 @@ internal static class LinuxInputConfig
         return Math.Clamp(ReferenceDpi / dpi.Value, 0.1, 10.0);
     }
 
+    // whether udev has finished with a device node: it writes the device's database entry last, after the node's
+    // permissions and hwdb properties. Without udev (no /run/udev/data) there is nothing to wait for.
+    internal static bool UdevSettled(string devicePath)
+    {
+        if (!Directory.Exists(UdevData)) return true;
+        try
+        {
+            return File.Exists($"{UdevData}/c{DeviceNumber(devicePath)}");
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    // "13:69", from sysfs
+    private static string DeviceNumber(string devicePath) =>
+        File.ReadAllText($"/sys/class/input/{NodeName(devicePath)}/dev").Trim();
+
+    // The input device behind an event node, "inputN": the kernel numbers those from a counter that never goes back,
+    // so unlike the node's own eventN it names one device for good. Null without sysfs.
+    internal static string? InputDeviceId(string devicePath)
+    {
+        try
+        {
+            return new DirectoryInfo($"/sys/class/input/{NodeName(devicePath)}/device").LinkTarget is { } target ? Path.GetFileName(target) : null;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    // the node's own name, "eventN", through any link to it
+    private static string NodeName(string devicePath) =>
+        Path.GetFileName(File.ResolveLinkTarget(devicePath, returnFinalTarget: true)?.FullName ?? devicePath);
+
     internal static int? MouseDpi(string devicePath)
     {
         try
         {
             // udev stores resolved properties per device under /run/udev/data, keyed c<major>:<minor>.
             // Read them from there rather than shelling out to udevadm.
-            var name = Path.GetFileName(devicePath);
-            var dev = File.ReadAllText($"/sys/class/input/{name}/dev").Trim();   // e.g. "13:69"
-            foreach (var line in File.ReadLines($"/run/udev/data/c{dev}"))
+            foreach (var line in File.ReadLines($"{UdevData}/c{DeviceNumber(devicePath)}"))
             {
                 const string prefix = "E:MOUSE_DPI=";
                 if (!line.StartsWith(prefix, StringComparison.Ordinal)) continue;

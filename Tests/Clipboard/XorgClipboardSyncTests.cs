@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text;
 using Hydra.Platform;
 using Hydra.Platform.Linux;
@@ -60,6 +61,149 @@ public class XorgClipboardSyncTests
         owner.SetClipboard(new ClipboardSnapshot(null, null, png));
 
         Assert.That(XclipRead("image/png"), Is.EqualTo(png));
+    }
+
+    // GTK 4's INCR reader hangs, so a clipboard that one ChangeProperty request carries is served whole, never by INCR
+    [Test]
+    public async Task Serve_OneMiB_IsOneProperty_WhenTheServerTakesSuchARequest()
+    {
+        var requestor = NativeMethods.XOpenDisplay(null);
+        try
+        {
+            var size = 1024 * 1024;
+            if (XorgClipboardSync.MaxPropertyBytes(requestor) < size)
+                Assert.Ignore("this X server takes no request large enough for 1 MiB (no BIG-REQUESTS)");
+            var text = new string('x', size);
+            using var owner = new XorgClipboardSync();
+            owner.SetClipboard(new ClipboardSnapshot(text, null, null));
+
+            var window = NativeMethods.XCreateSimpleWindow(requestor, NativeMethods.XDefaultRootWindow(requestor), 0, 0, 1, 1, 0, nint.Zero, nint.Zero);
+            var utf8 = NativeMethods.XInternAtom(requestor, "UTF8_STRING", false);
+            var property = NativeMethods.XInternAtom(requestor, "HYDRA_TEST_SERVED", false);
+            _ = NativeMethods.XConvertSelection(requestor, NativeMethods.XInternAtom(requestor, "CLIPBOARD", false), utf8, property, window, NativeMethods.CurrentTime);
+            _ = NativeMethods.XFlush(requestor);
+            var notify = await ReadEvents(stop => NextEvent(requestor, ev => ev.Type == NativeMethods.SelectionNotify, "the SelectionNotify", stop));
+            Assert.That(notify.SelectionNotifyProperty, Is.EqualTo(property), "the owner refused the conversion");
+
+            var rc = NativeMethods.XGetWindowProperty(requestor, window, property, 0, size / 4 + 1, false, NativeMethods.AnyPropertyType,
+                out var type, out var format, out var nitems, out var bytesAfter, out var prop);
+            if (prop != nint.Zero) _ = NativeMethods.XFree(prop);
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(rc, Is.Zero);
+                Assert.That(type, Is.EqualTo(utf8), "served by INCR, not as one property");
+                Assert.That(format, Is.EqualTo(8));
+                Assert.That(nitems, Is.EqualTo((nint)size));
+                Assert.That(bytesAfter, Is.EqualTo(nint.Zero));
+            }
+        }
+        finally
+        {
+            _ = NativeMethods.XCloseDisplay(requestor);
+        }
+    }
+
+    // above the property limit, the owner serves by INCR: the INCR property with the whole size, then chunks no larger
+    // than the limit, each after the requestor took the last, then a zero-length end
+    [Test]
+    public async Task Serve_AboveThePropertyLimit_IsByIncr_InChunksWithinIt()
+    {
+        const int limit = 64 * 1024;
+        var data = new byte[300 * 1024];
+        for (var i = 0; i < data.Length; i++) data[i] = (byte)('a' + i % 26);
+        using var owner = new XorgClipboardSync(maxPropertyBytes: limit);
+        owner.SetClipboard(new ClipboardSnapshot(Encoding.UTF8.GetString(data), null, null));
+
+        var requestor = NativeMethods.XOpenDisplay(null);
+        try
+        {
+            var window = NativeMethods.XCreateSimpleWindow(requestor, NativeMethods.XDefaultRootWindow(requestor), 0, 0, 1, 1, 0, nint.Zero, nint.Zero);
+            _ = NativeMethods.XSelectInput(requestor, window, NativeMethods.PropertyChangeMask);
+            var utf8 = NativeMethods.XInternAtom(requestor, "UTF8_STRING", false);
+            var incr = NativeMethods.XInternAtom(requestor, "INCR", false);
+            var property = NativeMethods.XInternAtom(requestor, "HYDRA_TEST_SERVED", false);
+
+            var received = await ReadEvents(stop =>
+            {
+                _ = NativeMethods.XConvertSelection(requestor, NativeMethods.XInternAtom(requestor, "CLIPBOARD", false), utf8, property, window,
+                    NativeMethods.CurrentTime);
+                _ = NativeMethods.XFlush(requestor);
+                var notify = NextEvent(requestor, ev => ev.Type == NativeMethods.SelectionNotify, "the SelectionNotify", stop);
+                Assert.That(notify.SelectionNotifyProperty, Is.EqualTo(property), "the owner refused the conversion");
+
+                // deleting the INCR property asks for the first chunk
+                var start = TakeProperty(requestor, window, property);
+                using (Assert.EnterMultipleScope())
+                {
+                    Assert.That(start.Type, Is.EqualTo(incr), "served whole, not by INCR");
+                    Assert.That(start.Format, Is.EqualTo(32));
+                    Assert.That(BitConverter.ToInt64(start.Data), Is.EqualTo(data.Length), "the INCR property's size");
+                }
+
+                using var whole = new MemoryStream();
+                while (true)
+                {
+                    _ = NextEvent(requestor, ev => ev.Type == NativeMethods.PropertyNotify && ev.EventWindow == window && ev.PropertyNotifyAtom == property
+                                                   && ev.PropertyNotifyState == NativeMethods.PropertyNewValue, "the next chunk", stop);
+                    var chunk = TakeProperty(requestor, window, property);
+                    using (Assert.EnterMultipleScope())
+                    {
+                        Assert.That(chunk.Type, Is.EqualTo(utf8));
+                        Assert.That(chunk.Format, Is.EqualTo(8));
+                        Assert.That(chunk.Data, Has.Length.LessThanOrEqualTo(limit), "a chunk larger than the property limit");
+                    }
+                    if (chunk.Data.Length == 0) return whole.ToArray();
+                    whole.Write(chunk.Data);
+                }
+            });
+
+            Assert.That(received, Is.EqualTo(data));
+        }
+        finally
+        {
+            _ = NativeMethods.XCloseDisplay(requestor);
+        }
+    }
+
+    // a requestor's event loop on another thread, stopped at Bound. Awaited whole rather than through WaitAsync, so it has
+    // returned before its display is closed: closing one that a thread is still reading is undefined behaviour
+    private static async Task<T> ReadEvents<T>(Func<CancellationToken, T> read)
+    {
+        using var stop = new CancellationTokenSource(Bound);
+        return await Task.Run(() => read(stop.Token), CancellationToken.None);
+    }
+
+    // the next event that matches, past any other; waits on the connection's fd in short polls rather than blocking in
+    // XNextEvent, so a stopped reader returns
+    private static XEvent NextEvent(nint display, Func<XEvent, bool> wanted, string what, CancellationToken stop)
+    {
+        var poll = new PollFd { Fd = NativeMethods.XConnectionNumber(display), Events = NativeMethods.POLLIN };
+        while (true)
+        {
+            while (NativeMethods.XEventsQueued(display, NativeMethods.QueuedAfterReading) > 0)
+            {
+                _ = NativeMethods.XNextEvent(display, out var ev);
+                if (wanted(ev)) return ev;
+            }
+            if (stop.IsCancellationRequested) throw new TimeoutException($"Timed out waiting for {what}");
+            poll.Revents = 0;
+            _ = NativeMethods.Poll(ref poll, 1, 100);
+        }
+    }
+
+    // a property read whole and deleted: its type, format and bytes, 32-bit items as Xlib's longs
+    private static TakenProperty TakeProperty(nint display, nint window, nint property)
+    {
+        var rc = NativeMethods.XGetWindowProperty(display, window, property, 0, int.MaxValue / 4, true, NativeMethods.AnyPropertyType,
+            out var type, out var format, out var nitems, out _, out var prop);
+        Assert.That(rc, Is.Zero, "XGetWindowProperty failed");
+        var data = new byte[(int)nitems * (format == 32 ? nint.Size : format / 8)];
+        if (prop != nint.Zero)
+        {
+            Marshal.Copy(prop, data, 0, data.Length);
+            _ = NativeMethods.XFree(prop);
+        }
+        return new TakenProperty(type, format, data);
     }
 
     [Test]
@@ -467,6 +611,66 @@ public class XorgClipboardSyncTests
         });
     }
 
+    // GTK 4 answers TIMESTAMP with each request's own time, not its taking's: a stamp that only echoes the request is
+    // no change, so the copy is read
+    [Test]
+    public async Task ReadAll_OwnerEchoingTheRequestTimeAsTimestamp_IsRead()
+    {
+        await WithForeignOwner(async owner =>
+        {
+            var utf8 = NativeMethods.XInternAtom(owner, "UTF8_STRING", false);
+            var timestamp = NativeMethods.XInternAtom(owner, "TIMESTAMP", false);
+            using var reader = new XorgClipboardSync();
+            var read = Task.Run(reader.ReadAll);
+            var served = Task.Run(() =>
+            {
+                ServeTargets(owner, NextRequest(owner), [timestamp, utf8]);
+                ServeStamp(owner, NextRequest(owner), echo: true);
+                // a stamp that only echoes its request is not asked for again
+                ServeBytes(owner, NextRequest(owner), "copied"u8.ToArray());
+            });
+
+            await served.WaitAsync(Bound);
+            Assert.That((await read.WaitAsync(Bound)).Text, Is.EqualTo("copied"));
+        });
+    }
+
+    // an owner taking CLIPBOARD again mid-read, same window, new content: its TIMESTAMP moves, so the read starts over
+    [Test]
+    public async Task ReadAll_SameOwnerCopiesAgainDuringTheRead_ReadsTheNewCopy()
+    {
+        await WithForeignOwner(async owner =>
+        {
+            var utf8 = NativeMethods.XInternAtom(owner, "UTF8_STRING", false);
+            var timestamp = NativeMethods.XInternAtom(owner, "TIMESTAMP", false);
+            using var reader = new XorgClipboardSync();
+            var read = Task.Run(reader.ReadAll);
+            var served = Task.Run(() =>
+            {
+                ServeTargets(owner, NextRequest(owner), [timestamp, utf8]);
+                ServeStamp(owner, NextRequest(owner), echo: false, taken: 1000);
+                ServeBytes(owner, NextRequest(owner), "old"u8.ToArray());
+                ServeStamp(owner, NextRequest(owner), echo: false, taken: 2000);
+                ServeTargets(owner, NextRequest(owner), [timestamp, utf8]);
+                ServeStamp(owner, NextRequest(owner), echo: false, taken: 2000);
+                ServeBytes(owner, NextRequest(owner), "new"u8.ToArray());
+                ServeStamp(owner, NextRequest(owner), echo: false, taken: 2000);
+            });
+
+            await served.WaitAsync(Bound);
+            Assert.That((await read.WaitAsync(Bound)).Text, Is.EqualTo("new"));
+        });
+    }
+
+    // a TIMESTAMP answer: the request's own time when echo, else the given time of taking
+    private static void ServeStamp(nint display, XEvent request, bool echo, uint taken = 0)
+    {
+        var time = echo ? (uint)request.SelectionRequestTime : taken;
+        _ = NativeMethods.XChangeProperty(display, request.SelectionRequestRequestor, request.SelectionRequestProperty,
+            NativeMethods.XInternAtom(display, "INTEGER", false), 32, NativeMethods.PropModeReplace, [(nint)time], 1);
+        Notify(display, request, request.SelectionRequestTarget, request.SelectionRequestProperty);
+    }
+
     // an owner that never answers for its TARGETS leaves the clipboard unreadable, never empty
     [Test]
     public async Task ReadAll_SilentTargets_IsUnreadable()
@@ -860,4 +1064,6 @@ public class XorgClipboardSyncTests
         p.StandardInput.BaseStream.Close();
         p.WaitForExit(5000);
     }
+
+    private sealed record TakenProperty(nint Type, int Format, byte[] Data);
 }

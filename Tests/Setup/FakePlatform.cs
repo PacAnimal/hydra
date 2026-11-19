@@ -5,7 +5,7 @@ using Hydra.Screen;
 
 namespace Tests.Setup;
 
-public sealed class FakePlatform : IPlatformInput, ICursorHider
+public sealed class FakePlatform : IPlatformInput, ICursorHider, IBarrierHits
 {
     private Action<double, double>? _onMouseMove;
     private Action<double, double>? _onMouseDelta;
@@ -42,6 +42,7 @@ public sealed class FakePlatform : IPlatformInput, ICursorHider
     private void Flush() => AfterFireCallback?.Invoke().GetAwaiter().GetResult();
 
     public void FireMouseMove(double x, double y) { _onMouseMove?.Invoke(x, y); Flush(); }
+    public void FireBarrierHit(double x, double y, long hit) { _onBarrierHit?.Invoke(x, y, hit); Flush(); }
     public void FireMouseDelta(double dx, double dy) { _onMouseDelta?.Invoke(dx, dy); Flush(); }
     public void FireKeyEvent(KeyEvent e) { _onKeyEvent?.Invoke(e); Flush(); }
     public void FireMouseButton(MouseButtonEvent e) { _onMouseButton?.Invoke(e); Flush(); }
@@ -124,5 +125,13 @@ public sealed class FakePlatform : IPlatformInput, ICursorHider
 
     public ValueTask HideCursor() { HideCursorCalled = true; return ValueTask.CompletedTask; }
     public ValueTask ShowCursor() { ShowCursorCalled = true; return ValueTask.CompletedTask; }
+    // every CrossableEdgesChanged, in order; the last is what the platform holds now
+    public List<IReadOnlyList<CrossableEdge>> CrossableEdgeReports { get; } = [];
+    public void CrossableEdgesChanged(IReadOnlyList<CrossableEdge> edges) => CrossableEdgeReports.Add(edges);
+    // the serials of the barrier hits the router answered StayedHome, in order
+    public List<long> StayedHomeHits { get; } = [];
+    private Action<double, double, long>? _onBarrierHit;
+    public void ReportHitsTo(Action<double, double, long> onHit) => _onBarrierHit = onHit;
+    public void StayedHome(long hit) => StayedHomeHits.Add(hit);
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }

@@ -6,8 +6,10 @@ namespace Hydra.Platform.Linux;
 
 public sealed class XorgClipboardSync : IClipboardSync, IDisposable
 {
-    // max bytes to send/receive in a single XChangeProperty (INCR threshold)
-    private const int MaxPropertyBytes = 256 * 1024;
+    // the most one INCR chunk carries
+    private const int IncrChunkBytes = 256 * 1024;
+    // room left in a request for ChangeProperty's own header, BIG-REQUESTS' length word included
+    private const int RequestHeaderBytes = 1024;
     // how much of a property one read takes, in 32-bit units; owners send more than this by INCR
     private const int ReadPropertyLongs = 1_000_000 / 4;
     private const int ClipboardTimeoutMs = 2000;
@@ -18,6 +20,8 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
 
     private readonly nint _display;
     private readonly nint _window;
+    // the largest property served in one ChangeProperty; only more goes by INCR, which GTK 4's reader hangs on
+    private readonly int _maxPropertyBytes;
 
     // atoms
     private readonly nint _atomClipboard;
@@ -89,12 +93,16 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
     private Thread? _eventThread;
     private volatile bool _running;
 
-    public XorgClipboardSync()
+    public XorgClipboardSync() : this(null) { }
+
+    // maxPropertyBytes overrides the display's request limit, so tests reach INCR serving below it
+    internal XorgClipboardSync(int? maxPropertyBytes)
     {
         _display = XlibRuntime.OpenDisplayOrThrow("the clipboard");
 
         var root = NativeMethods.XDefaultRootWindow(_display);
         _window = NativeMethods.XCreateSimpleWindow(_display, root, 0, 0, 1, 1, 0, nint.Zero, nint.Zero);
+        _maxPropertyBytes = maxPropertyBytes ?? MaxPropertyBytes(_display);
 
         // need PropertyChange events for INCR receive and server timestamps
         _ = NativeMethods.XSelectInput(_display, _window, NativeMethods.PropertyChangeMask);
@@ -125,6 +133,15 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
     }
 
     internal bool OwnsPrimary => NativeMethods.XGetSelectionOwner(_display, NativeMethods.XA_PRIMARY) == _window;
+
+    // what one ChangeProperty request can carry on this display: the server's largest request, BIG-REQUESTS' when it
+    // has them, less its header
+    internal static int MaxPropertyBytes(nint display)
+    {
+        var units = (long)NativeMethods.XExtendedMaxRequestSize(display);
+        if (units == 0) units = NativeMethods.XMaxRequestSize(display);
+        return (int)Math.Clamp(units * 4 - RequestHeaderBytes, 1, int.MaxValue);
+    }
 
     // never echo-suppressed: the selection travels as it stands, even when Hydra set it
     public string? GetPrimaryText()
@@ -165,21 +182,50 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
             return new ClipboardRead(plain?.DecodeText(), null, null, null, false);
         }
         var targets = Atoms(listed.Data);
-        var stamped = targets.Contains(_atomTimestamp);
-        var stamp = stamped ? ReadSelection(_atomClipboard, _atomTimestamp)?.Data : null;
+        var taken = TakenAt();
+        var stamp = targets.Contains(_atomTimestamp) ? ReadStamp() : null;
         var text = targets.Contains(_atomUtf8String) ? ReadSelection(_atomClipboard, _atomUtf8String)
             : targets.Contains(NativeMethods.XA_STRING) ? ReadSelection(_atomClipboard, NativeMethods.XA_STRING) : null;
         var image = targets.Contains(_atomImagePng) ? ReadSelection(_atomClipboard, _atomImagePng)?.Data : null;
         var html = targets.Contains(_atomTextHtml) ? ReadSelection(_atomClipboard, _atomTextHtml)?.DecodeText() : null;
         var hint = targets.Contains(_atomPasswordHint) ? ReadSelection(_atomClipboard, _atomPasswordHint)?.Data : null;
         if (NativeMethods.XGetSelectionOwner(_display, _atomClipboard) != owner) return null;
-        if (stamped && !stamp.AsSpan().SequenceEqual(ReadSelection(_atomClipboard, _atomTimestamp)?.Data)) return null;
+        if (!SameTaking(stamp, taken)) return null;
 
         return new ClipboardRead(text?.DecodeText(), image, html, null, hint.AsSpan().SequenceEqual(PasswordHintSecret));
     }
 
     // a 32-bit property's items, which Xlib hands back as longs
     private static nint[] Atoms(byte[] data) => MemoryMarshal.Cast<byte, nint>(data).ToArray();
+
+    // When the owner took CLIPBOARD, by its TIMESTAMP target, read again after the formats: a change means an identical
+    // re-copy by the same window, which the owner check misses. ICCCM has TIMESTAMP answer the time of the owner's
+    // taking, but GTK 4 answers the time of the request itself; ServerTime makes every request's time newer than the
+    // last, so such a stamp never matches twice and says nothing of the taking. It is told by equalling the request's
+    // own time and set aside then, as is a stamp that could not be read as one. XFixes' newest owner notice covers the
+    // same re-copy without the owner's help (its notices are handled on the event loop, so one landing just after the
+    // read is the next read's)
+    private bool SameTaking(Stamp? before, uint? takenBefore)
+    {
+        if (TakenAt() != takenBefore) return false;
+        if (before is not { Echoed: false } first) return true;
+        return ReadStamp() is not { Echoed: false } again || first.Time == again.Time;
+    }
+
+    // the owner's TIMESTAMP answer, null when it gave none; Echoed when it is the time the request was sent with
+    private Stamp? ReadStamp()
+    {
+        // one 32-bit item, which Xlib hands back as a long: its low four bytes, little-endian on every Linux Hydra runs on
+        if (ReadSelection(_atomClipboard, _atomTimestamp) is not { Data.Length: >= 4 } read) return null;
+        var time = BitConverter.ToUInt32(read.Data, 0);
+        return new Stamp(time, time == _lastStamp);
+    }
+
+    // the newest XFixes owner notice's time, null without XFixes or before any
+    private uint? TakenAt()
+    {
+        lock (_dataLock) return _lastTaken;
+    }
 
     // whether CLIPBOARD is still Hydra's write: SelectionClear forgets it once another client takes it
     public bool CanUseEchoFallback()
@@ -405,7 +451,7 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
     // in one property when it fits, else by INCR
     private nint ServeBytes(nint requestor, nint property, nint type, byte[] bytes)
     {
-        if (bytes.Length > MaxPropertyBytes) return StartIncrSend(requestor, property, type, bytes);
+        if (bytes.Length > _maxPropertyBytes) return StartIncrSend(requestor, property, type, bytes);
         _ = NativeMethods.XChangeProperty(_display, requestor, property, type, 8, NativeMethods.PropModeReplace, bytes, bytes.Length);
         return property;
     }
@@ -435,7 +481,7 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
             return;
         }
 
-        var chunkSize = Math.Min(remaining, MaxPropertyBytes);
+        var chunkSize = Math.Min(remaining, Math.Min(IncrChunkBytes, _maxPropertyBytes));
         var chunk = new byte[chunkSize];
         Buffer.BlockCopy(send.Data, send.Offset, chunk, 0, chunkSize);
         _ = NativeMethods.XChangeProperty(_display, requestor, send.Property,
@@ -729,6 +775,9 @@ public sealed class XorgClipboardSync : IClipboardSync, IDisposable
 
     // a read given up on: what it asked for and of whom
     private sealed record GivenUp(nint Selection, nint Target, nint Owner);
+
+    // an owner's TIMESTAMP answer, and whether it only echoed the time its request was sent with
+    private sealed record Stamp(uint Time, bool Echoed);
 
     private sealed class IncrSendState
     {

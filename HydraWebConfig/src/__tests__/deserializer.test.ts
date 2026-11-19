@@ -262,12 +262,23 @@ describe('deserialize', () => {
     })
   })
 
+  describe('macScrollLines', () => {
+    it('reads the number back', () => {
+      expect(deserialize(asFile('[{"mode":"Slave","macScrollLines":3}]')).profiles[0].macScrollLines).toBe(3)
+    })
+
+    it('reads a missing key as unset', () => {
+      expect(deserialize(asFile('[{"mode":"Slave"}]')).profiles[0].macScrollLines).toBeUndefined()
+    })
+  })
+
   describe('the other profile settings Hydra has', () => {
     it('reads them back, so loading and saving a file keeps them', () => {
       const p = deserialize(asFile(
-        '[{"mode":"Master","accelerateMouseWheel":false,"allowSystemSleep":true,"clipboardSync":"system","hideCursor":true,"maxMouseHz":250}]',
+        '[{"mode":"Master","accelerateMouseWheel":false,"allowSystemSleep":true,"clipboardSync":"system","hideCursor":true,"maxMouseHz":250,"readKeyboardsForHotkeys":false}]',
       )).profiles[0]
-      expect([p.accelerateMouseWheel, p.allowSystemSleep, p.clipboardSync, p.hideCursor, p.maxMouseHz]).toEqual([false, true, 'System', true, 250])
+      expect([p.accelerateMouseWheel, p.allowSystemSleep, p.clipboardSync, p.hideCursor, p.maxMouseHz, p.readKeyboardsForHotkeys])
+        .toEqual([false, true, 'System', true, 250, false])
     })
 
     it('reads clipboardSync by number and maxMouseHz from a string, as Hydra does', () => {
