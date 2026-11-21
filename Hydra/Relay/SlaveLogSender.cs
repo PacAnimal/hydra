@@ -4,7 +4,7 @@ using Microsoft.Extensions.Logging;
 namespace Hydra.Relay;
 
 public sealed class SlaveLogSender(IRelaySender relay, SlaveLogForwarder logForwarder, IWorldState peerState, ILogger<SlaveLogSender> log)
-    : SimpleHostedService(log, TimeSpan.FromSeconds(15))
+    : SimpleHostedService(log, TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(15))
 {
     protected override async Task Execute(CancellationToken cancel)
     {

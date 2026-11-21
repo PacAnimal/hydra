@@ -10,7 +10,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Hydra.Update;
 
-internal sealed class SelfUpdater(IHydraProfile profile, ILogger<SelfUpdater> log) : SimpleHostedService(log, TimeSpan.FromMinutes(30))
+internal sealed class SelfUpdater(IHydraProfile profile, ILogger<SelfUpdater> log) : SimpleHostedService(log, TimeSpan.FromMinutes(30), TimeSpan.FromMinutes(30))
 {
     private const string Repo = "pacanimal/hydra";
     private readonly Toggle _warned = new();

@@ -35,7 +35,7 @@ internal sealed class NetworkWatcher : SimpleHostedService
     private readonly Toggle _gatewayUnresolved = new(); // warned once per run of checks the unresolved gateway decided
 
     public NetworkWatcher(INetworkDetector detector, Func<int> screenCountProvider, List<HydraConfig> configs, HydraConfig? activeConfig, string? profileOverride, IDormancyState dormancy, ILogger<NetworkWatcher> log, Action? restart = null, Func<DateTime>? clock = null)
-        : base(log, TimeSpan.FromSeconds(10))
+        : base(log, TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(10))
     {
         _detector = detector;
         _screenCountProvider = screenCountProvider;

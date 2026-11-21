@@ -7,7 +7,7 @@ namespace Hydra.Platform;
 // starts a passive event tap on the slave to track local keyboard/mouse activity.
 // all events pass through unchanged — nothing is consumed or forwarded.
 internal sealed class SlaveLocalInputWatcher(ILocalEventTap tap, IActivityTracker tracker, ILogger<SlaveLocalInputWatcher> log)
-    : SimpleHostedService(log)
+    : SimpleHostedService(log, null, Timeout.InfiniteTimeSpan)
 {
     protected override async Task Execute(CancellationToken cancel)
     {

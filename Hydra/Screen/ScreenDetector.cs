@@ -18,7 +18,7 @@ public interface IScreenDetector
 
 public record LocalScreenSnapshot(List<ScreenRect> Screens, List<ScreenInfoEntry> Entries);
 
-public abstract class ScreenDetector(IHydraProfile profile, ILogger log) : SimpleHostedService(log, loopTime: TimeSpan.FromSeconds(2)), IScreenDetector
+public abstract class ScreenDetector(IHydraProfile profile, ILogger log) : SimpleHostedService(log, loopTime: TimeSpan.FromSeconds(2), exceptionLoopTime: TimeSpan.FromSeconds(2)), IScreenDetector
 {
     internal static readonly JsonSerializerOptions JsonOptions = new()
     {

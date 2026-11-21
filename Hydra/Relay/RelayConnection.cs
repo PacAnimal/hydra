@@ -18,7 +18,7 @@ namespace Hydra.Relay;
 
 // relayReady is the in-process embedded relay this client dials, when there is one: the first connect waits for it
 public class RelayConnection(IHydraProfile profile, ILogger<RelayConnection> log, IWorldState peerState, IRelayReady? relayReady = null)
-    : SimpleHostedService(log), IStyxClient, IRelaySender
+    : SimpleHostedService(log, null, Timeout.InfiniteTimeSpan), IStyxClient, IRelaySender
 {
     protected ILogger<RelayConnection> Log => log;
     protected IHydraProfile Profile => profile;

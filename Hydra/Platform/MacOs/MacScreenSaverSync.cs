@@ -21,7 +21,7 @@ public sealed class MacScreenSaverSync : SimpleHostedService, IScreenSaverSync
     public event Action? ScreenLocked;
     public event Action? ScreenUnlocked;
 
-    public MacScreenSaverSync(ILogger<MacScreenSaverSync> log) : base(log, TimeSpan.FromSeconds(1))
+    public MacScreenSaverSync(ILogger<MacScreenSaverSync> log) : base(log, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1))
     {
         _log = log;
         RegisterScreensaverNotifications();

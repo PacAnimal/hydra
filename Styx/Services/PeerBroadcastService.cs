@@ -16,7 +16,7 @@ public interface IPeerBroadcaster
 
 public class PeerBroadcastService(IClientRegistry registry, PeerWriter writer, [FromKeyedServices(typeof(PeerWriter))] TimeProvider clock,
     ILogger<PeerBroadcastService> log)
-    : SimpleHostedService(log), IPeerBroadcaster
+    : SimpleHostedService(log, null, TimeSpan.FromSeconds(1)), IPeerBroadcaster
 {
     private readonly Channel<PeerBroadcast> _channel = Channel.CreateUnbounded<PeerBroadcast>(new UnboundedChannelOptions
     {

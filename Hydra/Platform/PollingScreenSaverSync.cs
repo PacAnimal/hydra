@@ -6,7 +6,7 @@ namespace Hydra.Platform;
 // shared polling loop for screensaver detection.
 // subclasses implement IsScreensaverOn() and the activation/idle reset methods.
 // always running as a hosted service; fires ScreensaverActivated/Deactivated events on state changes.
-public abstract class PollingScreenSaverSync(ILogger log) : SimpleHostedService(log, TimeSpan.FromSeconds(1)), IScreenSaverSync
+public abstract class PollingScreenSaverSync(ILogger log) : SimpleHostedService(log, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1)), IScreenSaverSync
 {
     private readonly ILogger _log = log;
     private bool _wasOn;

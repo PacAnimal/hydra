@@ -22,7 +22,7 @@ public interface IDormancyState
     bool RequestWake();
 }
 
-public sealed class DormancyState(ILogger<DormancyState> log, Func<DateTime>? clock = null) : SimpleHostedService(log, TimeSpan.FromSeconds(1)), IDormancyState
+public sealed class DormancyState(ILogger<DormancyState> log, Func<DateTime>? clock = null) : SimpleHostedService(log, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1)), IDormancyState
 {
     // how long a woken machine has to bring its displays back and match the profile again
     public static readonly TimeSpan WakeDeadline = TimeSpan.FromSeconds(30);

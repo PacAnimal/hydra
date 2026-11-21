@@ -7,7 +7,7 @@ namespace Hydra.Platform.Windows;
 
 [SupportedOSPlatform("windows")]
 internal sealed class SessionWatchdog(ILogger<SessionWatchdog> log, string childArguments)
-    : SimpleHostedService(log, TimeSpan.FromMilliseconds(500))
+    : SimpleHostedService(log, TimeSpan.FromMilliseconds(500), TimeSpan.FromMilliseconds(500))
 {
     private uint _lastSession = Win32Session.NoSession;
     private readonly Boxed<ChildProcess?> _child = new(null);
