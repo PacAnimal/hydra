@@ -24,7 +24,7 @@ public interface ICursorHider
 }
 
 public sealed class CursorHiderService(ILogger<CursorHiderService> log, IPlatformInput platform)
-    : SimpleHostedService(log, TimeSpan.FromSeconds(1)), ICursorHider
+    : SimpleHostedService(log, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1)), ICursorHider
 {
     private const int LocalPollMs = 100;
     private const int LocalTimeoutMs = 5000;
