@@ -75,10 +75,11 @@ public class ModifierNumLockForwardingTests : ServicesFixture
         Assert.That(bundle.Relay.Sent.Of<KeyEventMessage>(MessageKind.KeyEvent).Select(m => m.Key), Is.EqualTo([SpecialKey.KP_Left]));
     }
 
+    // by the monitor switch, since a key held on the remote refuses the edge home
     private static void ReturnHome(TestServiceBundle bundle)
     {
-        for (var i = 0; i < 60 && bundle.Platform.IsOnVirtualScreen; i++)
-            bundle.Platform.FireMouseDelta(-100, 0);
+        bundle.Platform.PressHotkey(SpecialKey.Left);
+        bundle.Platform.PressHotkey(SpecialKey.Left, up: true);
         Assert.That(bundle.Platform.IsOnVirtualScreen, Is.False, "pre-condition: home again");
     }
 

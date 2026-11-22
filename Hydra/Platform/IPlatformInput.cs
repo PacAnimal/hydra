@@ -52,6 +52,11 @@ public interface IPlatformInput : IAsyncDisposable, ICursor, ILocalEventTap
     // its window manager binding's grab the keyboard). The platforms that cannot ask cheaply say false.
     bool AnyKeyHeld() => false;
 
+    // Whether the key a resolver stamped as physicalKey is down here though the event tap swallowed it, so a lost up
+    // cannot hold the cursor on a remote (macOS, Xorg). Null where a swallowed key is hidden (a Windows hook) or
+    // cannot be asked (evdev, Wayland).
+    bool? KeyHeld(int physicalKey) => null;
+
     // False while a visit's keyboard grab is still being retried (Xorg), so the typing is still here: the router tells
     // the remote nothing until it is true (KeyboardCapturedLate), and CaptureFailed ends the visit if it never becomes so.
     bool KeyboardCaptured => true;

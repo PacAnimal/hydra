@@ -233,6 +233,9 @@ public sealed class XorgInputHandler : IPlatformInput
 
     public bool AnyKeyHeld() => XorgDisplayHelper.HeldKeycodes(_display).Count > 0;
 
+    // the keymap sees through our XGrabKeyboard; a physical key is its keycode
+    public bool? KeyHeld(int physicalKey) => XorgDisplayHelper.HeldKeycodes(_display).Contains((uint)physicalKey);
+
     public void StopEventTap()
     {
         _running = false;

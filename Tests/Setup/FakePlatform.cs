@@ -81,6 +81,9 @@ public sealed class FakePlatform : IPlatformInput, ICursorHider, IBarrierHits
     public bool AnyKeyHeld { get; set; }
     public bool KeyboardCaptured { get; set; } = true;
     bool IPlatformInput.AnyKeyHeld() => AnyKeyHeld;
+    // what KeyHeld answers for any key; null, the default, is a platform that cannot see a swallowed key
+    public bool? KeyHeldByOs { get; set; }
+    public bool? KeyHeld(int physicalKey) => KeyHeldByOs;
     public bool CursorIsVisible { get; set; }
     // what CursorShownAtHome answers; null reads the input as X11's tools do, the interface's default
     public bool? ShownAtHome { get; set; }

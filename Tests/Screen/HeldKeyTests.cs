@@ -129,8 +129,9 @@ public class HeldKeyTests : ServicesFixture
         var bundle = await Started(TransitionTestHelper.ChainConfig);
         TransitionTestHelper.EnterRemote(bundle.Platform);
         bundle.Platform.FireKeyEvent(Char(KeyEventType.KeyDown, 'a', KeyA));
-        for (var i = 0; i < 30; i++)
-            bundle.Platform.FireMouseDelta(100, 0);
+        // a held key refuses the edge, so the monitor switch changes host
+        bundle.Platform.PressHotkey(SpecialKey.Right);
+        bundle.Platform.PressHotkey(SpecialKey.Right, up: true);
         Assert.That(bundle.Relay.Sent.Of<EnterScreenMessage>(MessageKind.EnterScreen, "remote2"), Is.Not.Empty,
             "pre-condition: on remote2");
         bundle.Relay.Sent.Clear();
@@ -168,7 +169,9 @@ public class HeldKeyTests : ServicesFixture
         var bundle = await Started();
         TransitionTestHelper.EnterRemote(bundle.Platform);
         bundle.Platform.FireKeyEvent(Char(KeyEventType.KeyDown, 'a', KeyA));
-        bundle.Platform.FireMouseMove(1276, 720);
+        // a held key refuses the edge, so the monitor switch returns
+        bundle.Platform.PressHotkey(SpecialKey.Left);
+        bundle.Platform.PressHotkey(SpecialKey.Left, up: true);
         Assert.That(bundle.Platform.IsOnVirtualScreen, Is.False, "pre-condition: returned");
         TransitionTestHelper.EnterRemote(bundle.Platform);
         bundle.Relay.Sent.Clear();

@@ -193,6 +193,10 @@ internal sealed class MacInputHandler(ILogger<MacInputHandler> log, MacShieldPro
         return false;
     }
 
+    // the hardware's key state, which our tap does not hide; a media key's PhysicalKey is no keycode, so is not asked
+    public bool? KeyHeld(int physicalKey) =>
+        physicalKey is >= 0 and <= ushort.MaxValue ? NativeMethods.CGEventSourceKeyState(NativeMethods.KCGEventSourceStateHidSystemState, (ushort)physicalKey) : null;
+
     public void StopEventTap()
     {
         // claim the run loop atomically and clear the field — a thread's CFRunLoop is freed by macOS
