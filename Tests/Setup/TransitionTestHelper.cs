@@ -121,12 +121,15 @@ public static class TransitionTestHelper
     }
 
     // pushes the cursor right, a remote at a time, until it enters host
-    public static void MoveRightTo(FakePlatform platform, FakeRelay relay, string host)
+    public static void MoveRightTo(FakePlatform platform, FakeRelay relay, string host) => MoveTo(platform, relay, host, 100);
+
+    // pushes the cursor by dx until host has been entered entries times
+    public static void MoveTo(FakePlatform platform, FakeRelay relay, string host, int dx, int entries = 1)
     {
-        bool Entered() => relay.Sent.Of(MessageKind.EnterScreen, host).Count > 0;
+        bool Entered() => relay.Sent.Of(MessageKind.EnterScreen, host).Count >= entries;
         for (var i = 0; i < 40 && !Entered(); i++)
-            platform.FireMouseDelta(100, 0);
-        Assert.That(Entered(), Is.True, $"pre-condition: on {host}");
+            platform.FireMouseDelta(dx, 0);
+        Assert.That(Entered(), Is.True, $"pre-condition: on {host} ({entries} entries)");
     }
 
     // remote-only: single remote host "mac", no local screens

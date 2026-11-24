@@ -1,9 +1,7 @@
 namespace Hydra.Platform;
 
-// the clipboard of a headless master (Linux, no display server, remoteOnly): nothing but Hydra reads or writes it, so it
-// is only the last copy a slave sent, kept to hand the next slave. Every format is kept, and no user copies on this
-// machine, so the change counter moves only with Hydra's own writes, and the clipboard stays Hydra's (CanUseEchoFallback's
-// default)
+// a headless master's clipboard: the last copy a slave sent, for the next one. Only Hydra writes it, so the counter
+// moves only with those writes
 public sealed class MemoryClipboardSync : IClipboardSync
 {
     private readonly Lock _lock = new();
@@ -36,7 +34,7 @@ public sealed class MemoryClipboardSync : IClipboardSync
             return _changes;
     }
 
-    public ClipboardSnapshot? SetClipboard(ClipboardSnapshot contents)
+    public ClipboardSnapshot SetClipboard(ClipboardSnapshot contents)
     {
         lock (_lock)
         {

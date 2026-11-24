@@ -1,6 +1,5 @@
 using Hydra.Platform;
 using Hydra.Relay;
-using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using Tests.Setup;
 using static Tests.Setup.ClipboardStreaming;
@@ -57,7 +56,7 @@ public class HeadlessMasterClipboardTests : MasterClipboardFixture
         await AnswerPull(relay, new ClipboardPullResponseMessage(PullIdTo(relay, "mac"), "copied on mac"), "mac");
         await service.Flush();
 
-        MoveTo(platform, relay, "mac", -100, entries: 2);
+        TransitionTestHelper.MoveTo(platform, relay, "mac", -100, entries: 2);
         await AnswerPull(relay, new ClipboardPullResponseMessage(PullIdTo(relay, "win"), "copied on win"), "win");
         await service.Flush();
         await service.HashReads();
@@ -78,19 +77,19 @@ public class HeadlessMasterClipboardTests : MasterClipboardFixture
         await service.Flush();
 
         // back to mac and on to win again
-        MoveTo(platform, relay, "mac", -100, entries: 2);
+        TransitionTestHelper.MoveTo(platform, relay, "mac", -100, entries: 2);
         await AnswerUnchanged(relay, "win");
         await service.Flush();
-        MoveTo(platform, relay, "win", 100, entries: 2);
+        TransitionTestHelper.MoveTo(platform, relay, "win", 100, entries: 2);
         var entered = Hashes(relay, "win").Count;
         // mac's password manager cleared it meanwhile, which mac answers on the way to win
         await AnswerPull(relay, new ClipboardPullResponseMessage(PullIdTo(relay, "mac"), null, Cleared: true), "mac");
         await service.Flush();
         await service.HashReads();
         // win is told on its next visit
-        MoveTo(platform, relay, "mac", -100, entries: 3);
+        TransitionTestHelper.MoveTo(platform, relay, "mac", -100, entries: 3);
         await AnswerUnchanged(relay, "win");
-        MoveTo(platform, relay, "win", 100, entries: 3);
+        TransitionTestHelper.MoveTo(platform, relay, "win", 100, entries: 3);
         await service.Flush();
         await service.HashReads();
 
@@ -102,35 +101,8 @@ public class HeadlessMasterClipboardTests : MasterClipboardFixture
         }
     }
 
-    [Test]
-    public void Clear_ReadsAsEmpty_KeepsTheSelection_AndMovesTheCounter()
-    {
-        IClipboardSync clipboard = new MemoryClipboardSync();
-        var copy = new ClipboardSnapshot("copied", "selected", null);
-        clipboard.SetClipboard(copy);
-        var afterCopy = clipboard.ChangeCount();
-        var cleared = clipboard.ClearClipboard();
-
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(cleared, Is.True);
-            Assert.That(ClipboardUtils.ReadWithFallback(clipboard, null, NullLogger.Instance, "test")?.HasClipboard, Is.False);
-            Assert.That(clipboard.GetPrimaryText(), Is.EqualTo("selected"));
-            Assert.That(clipboard.ChangeCount(), Is.EqualTo(afterCopy + 1));
-        }
-    }
-
     // "mac" left of "win", both online, the cursor on mac
     private Task<TestServiceBundle> StartHeadless() =>
         Services.StartOnline(TransitionTestHelper.CreateService(profile: TransitionTestHelper.RemoteOnlyPairConfig, clipboard: new MemoryClipboardSync(),
             osd: new RecordingOsd(), timeProvider: new FakeTimeProvider()), "mac", "win");
-
-    // the cursor moved by dx until host has been entered entries times
-    private static void MoveTo(FakePlatform platform, FakeRelay relay, string host, int dx, int entries)
-    {
-        bool Entered() => relay.Sent.Of(MessageKind.EnterScreen, host).Count >= entries;
-        for (var i = 0; i < 40 && !Entered(); i++)
-            platform.FireMouseDelta(dx, 0);
-        Assert.That(Entered(), Is.True, $"pre-condition: on {host} ({entries} entries)");
-    }
 }

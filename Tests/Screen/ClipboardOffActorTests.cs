@@ -172,8 +172,7 @@ public class ClipboardOffActorTests : MasterClipboardFixture
         clipboard.ReadGate.Hold();
         await Chunks(relay, stream);
         await clipboard.ReadsParked.Next("the owed read");
-        for (var i = 0; i < 40 && relay.Sent.Of(MessageKind.EnterScreen, "remote").Count < 2; i++)
-            platform.FireMouseDelta(-100, 0);
+        TransitionTestHelper.MoveTo(platform, relay, "remote", -100, entries: 2);
         var left = relay.Sent.Of(MessageKind.LeaveScreen, "remote2").Count;
         clipboard.ReadGate.Release();
         await service.HashReads();
