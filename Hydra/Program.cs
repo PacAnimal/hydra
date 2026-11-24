@@ -409,6 +409,10 @@ if (config != null)
     }
     else if (OperatingSystem.IsLinux() && hasXDisplay)
         services.AddSingleton<IClipboardSync, XorgClipboardSync>();
+    // a headless master (no display server, always remoteOnly) has no OS clipboard, but still carries a copy from one
+    // slave to the next
+    else if (linuxConsoleMode && profile.Mode == Mode.Master)
+        services.AddSingleton<IClipboardSync, MemoryClipboardSync>();
     else
         services.AddSingleton<IClipboardSync, NullClipboardSync>();
 

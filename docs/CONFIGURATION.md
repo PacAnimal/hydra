@@ -657,6 +657,8 @@ Requirements:
 
 > If no `$DISPLAY` and `remoteOnly` is not set, Hydra exits with an error — it can't capture input without either a display server or remote-only mode.
 
+With no display server there is no OS clipboard, so the master keeps in memory the last copy a slave sent, and hands it to the next slave the cursor visits: a copy still crosses from one slave to another. Nothing on the master itself can paste it, and it is gone when Hydra restarts.
+
 ## Networking with Styx
 
 For machines on different networks, **Styx** is a relay server that securely tunnels Hydra connections. You can run Styx as a **standalone** server (Docker or from source) or **embedded** directly inside a Hydra process.
