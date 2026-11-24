@@ -21,7 +21,7 @@ public static class TransitionTestHelper
 
     // the standard two-host master, with room for the one setting a test wants to vary
     public static IHydraProfile ProfileWith(int? maxMouseHz = null, bool hideCursor = false, Dictionary<string, List<string>>? hotkeys = null,
-        ClipboardSyncMode clipboardSync = ClipboardSyncMode.Hydra, bool? modifierNumLock = null) =>
+        ClipboardSyncMode clipboardSync = ClipboardSyncMode.Hydra, bool? modifierNumLock = null, bool injectedInputReturnsHome = true) =>
         Profile("home", new HydraConfig
         {
             Mode = Mode.Master,
@@ -30,6 +30,7 @@ public static class TransitionTestHelper
             Hotkeys = hotkeys,
             ClipboardSync = clipboardSync,
             ModifierNumLock = modifierNumLock,
+            InjectedInputReturnsHome = injectedInputReturnsHome,
             Hosts =
             [
                 new HostConfig

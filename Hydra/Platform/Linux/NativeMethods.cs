@@ -42,9 +42,11 @@ internal static partial class NativeMethods
     internal const int XI_RawButtonPress = 15;
     internal const int XI_RawButtonRelease = 16;
     internal const int XI_RawMotion = 17;
+    internal const int XI_HierarchyChanged = 11;
 
     // -- XI2 device constants --
 
+    internal const int XIAllDevices = 0;
     internal const int XIAllMasterDevices = 1;
 
     // -- window class / attribute constants --
@@ -176,6 +178,15 @@ internal static partial class NativeMethods
     [LibraryImport(Xi)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial int XISelectEvents(nint display, nint window, ref XIEventMask mask, int numMasks);
+
+    // returns an XIDeviceInfo array of numDevices, freed with XIFreeDeviceInfo; null for an unknown device
+    [LibraryImport(Xi)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint XIQueryDevice(nint display, int deviceid, out int numDevices);
+
+    [LibraryImport(Xi)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void XIFreeDeviceInfo(nint info);
 
     [LibraryImport(X11, StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
@@ -678,6 +689,15 @@ internal struct XIEventMask
     internal nint Mask;   // byte* to the bitmask array
 }
 
+// XIDeviceInfo on 64-bit LP64: int deviceid [0], (pad [4]), char* name [8], int use [16], int attachment [20],
+// int enabled [24], int num_classes [28], XIAnyClassInfo** classes [32]; 40 bytes. Only the name is read.
+[StructLayout(LayoutKind.Explicit, Size = 40)]
+internal struct XIDeviceInfo
+{
+    [FieldOffset(0)] internal int DeviceId;
+    [FieldOffset(8)] internal nint Name;   // char*
+}
+
 // XSetWindowAttributes — 112 bytes on 64-bit LP64; we only set override_redirect at offset 88
 [StructLayout(LayoutKind.Explicit, Size = 112)]
 internal struct XSetWindowAttributes
@@ -697,6 +717,7 @@ internal struct XSetWindowAttributes
 [StructLayout(LayoutKind.Explicit)]
 internal struct XIRawEvent
 {
+    [FieldOffset(52)] internal int SourceId;
     [FieldOffset(56)] internal int Detail;
     [FieldOffset(64)] internal int ValuatorsMaskLen;
     [FieldOffset(72)] internal nint ValuatorsMask;    // unsigned char*

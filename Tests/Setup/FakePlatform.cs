@@ -51,6 +51,8 @@ public sealed class FakePlatform : IPlatformInput, ICursorHider, IBarrierHits
     public event Action? CaptureFailed;
     public void FireKeyboardCapturedLate() { KeyboardCapturedLate?.Invoke(); Flush(); }
     public event Action? KeyboardCapturedLate;
+    public void FireInjectedInput(ScreenPoint? at) { InjectedInput?.Invoke(at); Flush(); }
+    public event Action<ScreenPoint?>? InjectedInput;
 
     // the hotkey chord with this letter, pressed (or, with up, released)
     public void PressHotkey(char ch, bool up = false) => FireKeyEvent(KeyEvent.Char(up ? KeyEventType.KeyUp : KeyEventType.KeyDown, ch, HotkeyChord.Modifiers));

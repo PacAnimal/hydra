@@ -299,6 +299,7 @@ public sealed class WindowsInputHandler(ILogger<WindowsInputHandler> log, IHydra
     public bool SeesSwallowed(MouseButton button) => false;
     public event Action? CaptureFailed { add { } remove { } }
     public event Action? KeyboardCapturedLate { add { } remove { } }
+    public event Action<ScreenPoint?>? InjectedInput { add { } remove { } }
 
     // the async state, since the router asks from a thread that reads no input of its own (GetKeyState would always say
     // up there)

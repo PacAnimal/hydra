@@ -70,6 +70,12 @@ public interface IPlatformInput : IAsyncDisposable, ICursor, ILocalEventTap
     // Raised when a retry wins the keyboard grab KeyboardCaptured said was missing at entry (Xorg): the visit can begin.
     event Action? KeyboardCapturedLate;
 
+    // Raised during a visit when another program injects pointer input into this machine's own display (Xorg: XTest, as
+    // a VNC server or xdotool does), with where the local pointer is now, null if on no screen. That input is someone at
+    // this machine, so it is not forwarded and the router brings the cursor home (injectedInputReturnsHome). The other
+    // platforms never raise it.
+    event Action<ScreenPoint?>? InjectedInput;
+
     // True when AnyMouseButtonHeld sees this button though the event tap swallowed it (macOS; Xorg's Left/Middle/Right). A
     // Windows hook hides it from GetAsyncKeyState, and evdev cannot ask at all.
     bool SeesSwallowed(MouseButton button);

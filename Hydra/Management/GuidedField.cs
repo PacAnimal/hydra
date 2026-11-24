@@ -143,13 +143,16 @@ internal static class GuidedFields
     internal static readonly GuidedField MacScrollLines = new(GuidedSection.Behaviour, 20, 0, null, "macScrollLines", GuidedFieldKind.Integer,
         "Mac Scroll Lines", $"macOS slave: lines one wheel notch scrolls, 1 to {HydraProfile.MaxMacScrollLines}. 3 matches Windows and X11 apps.")
     { DefaultHint = $"{HydraProfile.DefaultMacScrollLines} line" };
+    internal static readonly GuidedField InjectedInputReturnsHome = new(GuidedSection.Behaviour, 22, 0, null, "injectedInputReturnsHome", GuidedFieldKind.Toggle,
+        "Injected Input Home", "X11 master: pointer input a VNC server or xdotool injects here brings the cursor home and crosses no edge; off treats it as yours.")
+    { Fallback = GuidedValues.On };
     internal static readonly IReadOnlyList<GuidedField> All =
     [
         Name, LogLevel, ProfileOverride, AutoUpdate, UpdateChannel, DebugShield, DebugMouse,
         ProfileName, Mode, Ssid, ScreenCount, ClipboardSync, IsPluggedIn, Address, GatewayMac, Wired, MouseScale, RelativeMouseScale, DeadCorners, MaxMouseHz,
         NetworkConfig, EmbeddedServer, EmbeddedPassword, EmbeddedPort, EmbeddedServerPassword,
         HideCursor, RemoteOnly, SyncScreensaver, ScreenLockPropagation, AccelerateMouseWheel, AllowSystemSleep, ModifierNumLock,
-        InvertScrollX, InvertScrollY, ReadKeyboardsForHotkeys, MacScrollLines
+        InvertScrollX, InvertScrollY, ReadKeyboardsForHotkeys, MacScrollLines, InjectedInputReturnsHome
     ];
 
     internal static readonly IReadOnlyList<GuidedField> Root = [.. All.Where(f => f.IsRoot)];

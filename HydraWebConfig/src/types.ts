@@ -114,6 +114,8 @@ export interface HydraProfile {
   hideCursor?: boolean
   // hyprland: false serves the hotkeys at home from the GlobalShortcuts portal instead of /dev/input
   readKeyboardsForHotkeys?: boolean
+  // x11: false treats pointer input a VNC server or xdotool injects as the user's own, instead of bringing the cursor home
+  injectedInputReturnsHome?: boolean
   maxMouseHz?: number
   // the keypad's NumLock under Super/Ctrl/Alt: true digits, false navigation, undefined as pressed
   modifierNumLock?: boolean

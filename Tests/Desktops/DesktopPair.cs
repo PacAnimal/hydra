@@ -77,6 +77,8 @@ public abstract class DesktopPair(DesktopKind masterKind, DesktopKind slaveKind)
     protected virtual string? SlaveLayout => null;
     // the master's xkb option list, as in "grp:switch"; null is the image's default
     protected virtual string? MasterOptions => null;
+    // whether the master takes the hands' input as injected (x11: they are xtest's) and goes home on it during a visit
+    protected virtual bool InjectedInputReturnsHome => false;
 
     [OneTimeSetUp]
     public async Task StartPair()
@@ -105,7 +107,7 @@ public abstract class DesktopPair(DesktopKind masterKind, DesktopKind slaveKind)
         try
         {
             _master = await HydraInstance.Start(_masterDesktop, MasterName,
-                HydraInstance.MasterConfig(MasterName, SlaveName, port, remoteOnly: EvdevMaster));
+                HydraInstance.MasterConfig(MasterName, SlaveName, port, remoteOnly: EvdevMaster, injectedInputReturnsHome: InjectedInputReturnsHome));
             // the slave dials the master's embedded relay; started before it listens, its first connect is refused and its
             // retry waits a whole reconnect delay, which a cold desktop can push past the setup's bound
             await Master.WaitForLog("Embedded Styx relay listening", StartupBound);

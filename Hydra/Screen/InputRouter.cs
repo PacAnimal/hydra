@@ -192,6 +192,7 @@ public class InputRouter(
         _screenSaverSync.ScreenUnlocked += OnScreenUnlocked;
         platform.CaptureFailed += OnCaptureFailed;
         platform.KeyboardCapturedLate += OnKeyboardCapturedLate;
+        platform.InjectedInput += OnInjectedInput;
         if (profile.HideCursor)
             cursorHider.Hide();
     }
@@ -212,6 +213,7 @@ public class InputRouter(
         _screenSaverSync.ScreenUnlocked -= OnScreenUnlocked;
         platform.CaptureFailed -= OnCaptureFailed;
         platform.KeyboardCapturedLate -= OnKeyboardCapturedLate;
+        platform.InjectedInput -= OnInjectedInput;
         platform.StopEventTap();
 
         // no more samples can arrive, so nothing may post a batch after the writer completes
@@ -450,6 +452,23 @@ public class InputRouter(
             var announced = !st.EnterPending;
             if (ReturnHome(st, LocalLandingPoint(st), slaveReachable: announced) is { } host && log.IsEnabled(LogLevel.Warning))
                 log.LogWarning("Returned to local screen from '{Host}': input capture failed or was lost", host);
+            return ValueTask.CompletedTask;
+        });
+    }
+
+    // Pointer input injected into this machine's own display during a visit (a VNC viewer used on it) is someone here, so the
+    // visit ends where that input put the local pointer, else as a disconnect lands. Like a failed capture it ends even
+    // while a key or button holds the host: the user has left the remote for this machine. Motion captured before it
+    // is sealed first, so it cannot overtake that motion; the platform has not forwarded the injected input itself.
+    private void OnInjectedInput(ScreenPoint? at)
+    {
+        SealMouseBatch();
+        _ = _commands.Writer.TryWrite(st =>
+        {
+            if (!st.Mouse.IsOnVirtualScreen) return ValueTask.CompletedTask;
+            var landing = at is { } p && FindLocalScreenAt(st, p.X, p.Y) != null ? p : LocalLandingPoint(st);
+            if (ReturnHome(st, landing, slaveReachable: !st.EnterPending) is { } host && log.IsEnabled(LogLevel.Information))
+                log.LogInformation("Returned to local screen from '{Host}': input was injected on this display (XTest: a VNC server or xdotool)", host);
             return ValueTask.CompletedTask;
         });
     }

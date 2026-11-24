@@ -46,8 +46,9 @@ public sealed class HydraInstance : IAsyncDisposable
         return Task.FromResult(new HydraInstance(name, process));
     }
 
-    // a master on the left of one slave, serving the relay itself; an evdev master has no local screen
-    public static string MasterConfig(string name, string slaveName, int port, bool remoteOnly = false)
+    // a master on the left of one slave, serving the relay itself; an evdev master has no local screen. The x11 hands
+    // are xtest's, so injectedInputReturnsHome is off unless a test is about it
+    public static string MasterConfig(string name, string slaveName, int port, bool remoteOnly = false, bool injectedInputReturnsHome = false)
     {
         var profile = new JsonObject
         {
@@ -62,6 +63,7 @@ public sealed class HydraInstance : IAsyncDisposable
         };
         if (remoteOnly)
             profile["remoteOnly"] = true;
+        profile["injectedInputReturnsHome"] = injectedInputReturnsHome;
         return Root(name, profile);
     }
 
