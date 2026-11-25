@@ -127,8 +127,8 @@ public class MonitorSwitchTests : ServicesFixture
     public async Task WithTheCursorLocked_ItStillMoves()
     {
         var (platform, _, _) = await Services.Visiting(TransitionTestHelper.CreateService());
-        platform.PressHotkey('l');
-        platform.PressHotkey('l', up: true);
+        platform.PressHotkey('k');
+        platform.PressHotkey('k', up: true);
 
         Switch(platform, SpecialKey.Left);
 
@@ -269,12 +269,12 @@ public class MonitorSwitchTests : ServicesFixture
         };
         var (platform, _, _) = await Services.StartOnline(TransitionTestHelper.CreateService(profile: profile, screens: screens), "mac");
         Assert.That(platform.IsOnVirtualScreen, Is.True, "pre-condition: a remote-only master enters its remote");
-        platform.PressHotkey('l');
+        platform.PressHotkey('k');
         Assert.That(platform.IsOnVirtualScreen, Is.False, "pre-condition: the lock hotkey hands input to this machine");
 
         Switch(platform, SpecialKey.Right);
         var onTheRemote = platform.IsOnVirtualScreen;
-        platform.PressHotkey('l');
+        platform.PressHotkey('k');
 
         using (Assert.EnterMultipleScope())
         {

@@ -270,8 +270,8 @@ case "$KIND" in
 			printf 'input = { accel_profile = "flat", sensitivity = 0%s },\n' "$kb"
 			cat <<-'LUA'
 				})
-				hl.bind("CTRL + ALT + SUPER + L", hl.dsp.global("org.cathedral.Hydra:ToggleCursorLock-0"))
-				hl.bind("CTRL + ALT + SUPER + K", hl.dsp.global("org.cathedral.Hydra:LockSlaves-0"))
+				hl.bind("CTRL + ALT + SUPER + K", hl.dsp.global("org.cathedral.Hydra:ToggleCursorLock-0"))
+				hl.bind("CTRL + ALT + SUPER + L", hl.dsp.global("org.cathedral.Hydra:LockSlaves-0"))
 				hl.bind("CTRL + ALT + SUPER + C", hl.dsp.global("org.cathedral.Hydra:CopyFiles-0"))
 				hl.bind("CTRL + ALT + SUPER + V", hl.dsp.global("org.cathedral.Hydra:PasteFiles-0"))
 				-- the probes stand in for fullscreen apps; tiled, they get resized and lose focus, so report no pointer leave

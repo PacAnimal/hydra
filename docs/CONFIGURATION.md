@@ -52,8 +52,8 @@ See the [project README](../README.md) for installation and a quick-start guide.
 `xdg-desktop-portal-hyprland` does not bind Hydra's hotkeys itself, so a Hyprland master reads the hotkeys at home from the keyboards instead (without a grab, so the desktop still gets every key), and every hotkey except a monitor switch to a remote works at home. That needs read access to `/dev/input`, e.g. the user in the `input` group; Hydra logs `Hotkeys at home: read from the keyboards (evdev)` when it has it. Reading the keyboards means Hydra sees every key typed on the machine, the lock screen included, though it only acts on its hotkeys and sends nothing from home to a slave; set `readKeyboardsForHotkeys: false` in the profile (default: `true`) to leave `/dev/input` alone and have the portal serve them instead. Without read access, or with that setting off, the portal serves the hotkeys at home, and they work there only once bound in Hyprland's config. Hydra then warns at startup with the lines to add, in both forms. It warns even when they are already bound, since the portal never reports a shortcut's keys. For the default hotkeys, on Hyprland 0.56 and later, in `hyprland.lua`:
 
 ```lua
-hl.bind("CTRL + ALT + SUPER + L", hl.dsp.global("org.cathedral.Hydra:ToggleCursorLock-0"))
-hl.bind("CTRL + ALT + SUPER + K", hl.dsp.global("org.cathedral.Hydra:LockSlaves-0"))
+hl.bind("CTRL + ALT + SUPER + K", hl.dsp.global("org.cathedral.Hydra:ToggleCursorLock-0"))
+hl.bind("CTRL + ALT + SUPER + L", hl.dsp.global("org.cathedral.Hydra:LockSlaves-0"))
 hl.bind("CTRL + ALT + SUPER + C", hl.dsp.global("org.cathedral.Hydra:CopyFiles-0"))
 hl.bind("CTRL + ALT + SUPER + V", hl.dsp.global("org.cathedral.Hydra:PasteFiles-0"))
 ```
@@ -61,8 +61,8 @@ hl.bind("CTRL + ALT + SUPER + V", hl.dsp.global("org.cathedral.Hydra:PasteFiles-
 On older Hyprland, in `hyprland.conf`:
 
 ```
-bind = CTRL ALT SUPER, l, global, org.cathedral.Hydra:ToggleCursorLock-0
-bind = CTRL ALT SUPER, k, global, org.cathedral.Hydra:LockSlaves-0
+bind = CTRL ALT SUPER, k, global, org.cathedral.Hydra:ToggleCursorLock-0
+bind = CTRL ALT SUPER, l, global, org.cathedral.Hydra:LockSlaves-0
 bind = CTRL ALT SUPER, c, global, org.cathedral.Hydra:CopyFiles-0
 bind = CTRL ALT SUPER, v, global, org.cathedral.Hydra:PasteFiles-0
 ```
@@ -387,11 +387,11 @@ of them can be rebound or turned off — see [Customising hotkeys](#customising-
 
 | Default hotkey | Action name | Action |
 |--------|--------|--------|
-| `Ctrl+Alt+Super+L` | `toggleCursorLock` | Toggle cursor lock — lock to current screen, or unlock to roam freely |
+| `Ctrl+Alt+Super+K` | `toggleCursorLock` | Toggle cursor lock — lock to current screen, or unlock to roam freely |
 | `Ctrl+Alt+Super+M` | `toggleRelativeMouse` | Toggle relative mouse mode on the current remote screen (useful for games) |
 | `Ctrl+Alt+Super+C` | `copyFiles` | Copy selected files/folders to Hydra's cross-machine clipboard (macOS, Windows) |
 | `Ctrl+Alt+Super+V` | `pasteFiles` | Paste previously copied files to the current machine |
-| `Ctrl+Alt+Super+K` | `lockSlaves` | Lock every connected slave |
+| `Ctrl+Alt+Super+L` | `lockSlaves` | Lock every connected slave |
 | `Ctrl+Alt+Super+Z` | `missionControl` | Send Mission Control to the current remote screen (macOS slave) |
 | `Ctrl+Alt+Super+Up` | `switchMonitorUp` | Move to the screen above (see [Switching monitors](#switching-monitors)) |
 | `Ctrl+Alt+Super+Down` | `switchMonitorDown` | Move to the screen below |
@@ -437,7 +437,7 @@ nothing.
 {
   "mode": "Master",
   "hotkeys": {
-    "toggleCursorLock": ["Ctrl+Alt+Super+L", "ScrollLock"],
+    "toggleCursorLock": ["Ctrl+Alt+Super+K", "ScrollLock"],
     "toggleRelativeMouse": ["F13"]
   },
   "hosts": [...]
@@ -479,7 +479,7 @@ reason. `ScrollLock`, `NumLock` and `CapsLock` can — they are toggles, and bin
 
 A binding Hydra cannot parse is logged as a warning at startup and ignored, and that action keeps its default,
 so a typo never leaves an action unreachable or stops Hydra starting. Lock states are not part of a chord:
-`Ctrl+Alt+Super+L` still fires with CapsLock on.
+`Ctrl+Alt+Super+K` still fires with CapsLock on.
 
 ### Bindable keys
 

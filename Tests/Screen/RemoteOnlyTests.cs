@@ -149,11 +149,11 @@ public class RemoteOnlyTests : ServicesFixture
     public async Task LockHotkey_RelockWhileAButtonIsHeld_StaysLocalUntilItsRelease()
     {
         await TransitionTestHelper.BringHostOnline(_relay, "mac");
-        _platform.PressHotkey('l');
+        _platform.PressHotkey('k');
         Assert.That(_platform.IsOnVirtualScreen, Is.False, "pre-condition: unlocked");
         _platform.AnyMouseButtonHeld = true;
 
-        _platform.PressHotkey('l');
+        _platform.PressHotkey('k');
         var whileHeld = _platform.IsOnVirtualScreen;
         _platform.AnyMouseButtonHeld = false;
         _platform.FireMouseButton(new MouseButtonEvent(MouseButton.Left, false));
@@ -206,7 +206,7 @@ public class RemoteOnlyTests : ServicesFixture
         await TransitionTestHelper.BringHostOnline(_relay, "mac");
 
         // unlock — cursor leaves virtual screen
-        _platform.PressHotkey('l');
+        _platform.PressHotkey('k');
         Assert.That(_platform.IsOnVirtualScreen, Is.False, "pre-condition: not on virtual screen");
 
         _relay.Sent.Clear();
@@ -225,7 +225,7 @@ public class RemoteOnlyTests : ServicesFixture
         Assert.That(_platform.IsOnVirtualScreen, Is.True, "pre-condition: on virtual screen");
 
         _platform.ShowCursorCalled = false;
-        _platform.PressHotkey('l');
+        _platform.PressHotkey('k');
 
         using (Assert.EnterMultipleScope())
         {
@@ -240,7 +240,7 @@ public class RemoteOnlyTests : ServicesFixture
         await TransitionTestHelper.BringHostOnline(_relay, "mac");
         _platform.Calls.Clear();
 
-        _platform.PressHotkey('l');
+        _platform.PressHotkey('k');
 
         Assert.That(_platform.Calls.Where(c => c is "show" or "flag:False" or "warp"), Is.EqualTo(["show", "flag:False"]));
     }
@@ -251,12 +251,12 @@ public class RemoteOnlyTests : ServicesFixture
         await TransitionTestHelper.BringHostOnline(_relay, "mac");
 
         // unlock
-        _platform.PressHotkey('l');
+        _platform.PressHotkey('k');
         Assert.That(_platform.IsOnVirtualScreen, Is.False, "pre-condition: unlocked");
 
         // relock
         _platform.HideCursorCalled = false;
-        _platform.PressHotkey('l');
+        _platform.PressHotkey('k');
 
         using (Assert.EnterMultipleScope())
         {
@@ -271,7 +271,7 @@ public class RemoteOnlyTests : ServicesFixture
         await TransitionTestHelper.BringHostOnline(_relay, "mac");
         _relay.Sent.Clear();
 
-        _platform.PressHotkey('l');
+        _platform.PressHotkey('k');
 
         var leaves = _relay.Sent.Of(MessageKind.LeaveScreen);
         Assert.That(leaves, Is.Not.Empty, "should send LeaveScreen on unlock");
@@ -318,7 +318,7 @@ public class RemoteOnlyTests : ServicesFixture
         await TransitionTestHelper.BringHostOnline(_relay, "mac");
 
         // unlock before disconnect
-        _platform.PressHotkey('l');
+        _platform.PressHotkey('k');
         await _relay.FireDisconnected();
 
         _platform.HideCursorCalled = false;

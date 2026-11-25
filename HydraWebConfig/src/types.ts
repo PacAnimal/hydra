@@ -7,11 +7,11 @@ export type ClipboardSyncMode = 'Hydra' | 'System' | 'Off'
 
 // Hydra's rebindable hotkey actions and their defaults (docs/CONFIGURATION.md, Hotkeys)
 export const HOTKEY_ACTIONS: { action: string; label: string; defaultChord: string }[] = [
-  { action: 'toggleCursorLock', label: 'Cursor Lock', defaultChord: 'Ctrl+Alt+Super+L' },
+  { action: 'toggleCursorLock', label: 'Cursor Lock', defaultChord: 'Ctrl+Alt+Super+K' },
   { action: 'toggleRelativeMouse', label: 'Relative Mouse', defaultChord: 'Ctrl+Alt+Super+M' },
   { action: 'copyFiles', label: 'Copy Files', defaultChord: 'Ctrl+Alt+Super+C' },
   { action: 'pasteFiles', label: 'Paste Files', defaultChord: 'Ctrl+Alt+Super+V' },
-  { action: 'lockSlaves', label: 'Lock Slaves', defaultChord: 'Ctrl+Alt+Super+K' },
+  { action: 'lockSlaves', label: 'Lock Slaves', defaultChord: 'Ctrl+Alt+Super+L' },
   { action: 'missionControl', label: 'Mission Control', defaultChord: 'Ctrl+Alt+Super+Z' },
   { action: 'switchMonitorUp', label: 'Monitor Up', defaultChord: 'Ctrl+Alt+Super+Up' },
   { action: 'switchMonitorDown', label: 'Monitor Down', defaultChord: 'Ctrl+Alt+Super+Down' },

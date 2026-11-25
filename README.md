@@ -152,7 +152,7 @@ All hotkeys use **Ctrl+Alt+Super** (Super = ⌘ on macOS, Win key on Windows), a
 
 | Hotkey | Action |
 |--------|--------|
-| `Ctrl+Alt+Super+L` | Toggle cursor lock — pin to current screen, or release to roam freely |
+| `Ctrl+Alt+Super+K` | Toggle cursor lock — pin to current screen, or release to roam freely |
 | `Ctrl+Alt+Super+M` | Toggle relative mouse mode on the current remote screen (useful for games) |
 | `Ctrl+Alt+Super+C` | Copy selected files/folders to Hydra's cross-machine clipboard (macOS, Windows) |
 | `Ctrl+Alt+Super+V` | Paste previously copied files to the current machine |

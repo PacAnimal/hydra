@@ -24,7 +24,7 @@ public enum HotkeyAction
 // one parsed hotkey: the modifiers that must be held, plus either a named key or a literal character.
 public sealed record HotkeyBinding(KeyModifiers Modifiers, SpecialKey? Key, char? Character)
 {
-    // lock states are never part of a chord. CapsLock being on must not stop Ctrl+Alt+Super+L matching,
+    // lock states are never part of a chord. CapsLock being on must not stop Ctrl+Alt+Super+K matching,
     // and binding ScrollLock is self-defeating otherwise: pressing it sets its own lock bit on the very
     // event meant to trigger the hotkey.
     private const KeyModifiers LockStates = KeyModifiers.CapsLock | KeyModifiers.NumLock | KeyModifiers.ScrollLock;
@@ -180,8 +180,8 @@ public sealed class HotkeyBindings
 {
     private static readonly Dictionary<HotkeyAction, string[]> Defaults = new()
     {
-        [HotkeyAction.ToggleCursorLock] = ["Ctrl+Alt+Super+L"],
-        [HotkeyAction.LockSlaves] = ["Ctrl+Alt+Super+K"],
+        [HotkeyAction.ToggleCursorLock] = ["Ctrl+Alt+Super+K"],
+        [HotkeyAction.LockSlaves] = ["Ctrl+Alt+Super+L"],
         [HotkeyAction.ToggleRelativeMouse] = ["Ctrl+Alt+Super+M"],
         [HotkeyAction.CopyFiles] = ["Ctrl+Alt+Super+C"],
         [HotkeyAction.PasteFiles] = ["Ctrl+Alt+Super+V"],

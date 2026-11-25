@@ -214,7 +214,7 @@ public class HeldButtonTests : ServicesFixture
         Press(bundle.Platform);
         bundle.Relay.Sent.Clear();
 
-        bundle.Platform.PressHotkey('l');
+        bundle.Platform.PressHotkey('k');
 
         var returned = !bundle.Platform.IsOnVirtualScreen;
         Assert.That(returned, Is.True, "pre-condition: returned home");

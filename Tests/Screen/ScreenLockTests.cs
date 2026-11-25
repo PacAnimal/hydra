@@ -33,7 +33,7 @@ public class ScreenLockTests : ServicesFixture
         await SetUp();
 
         // lock
-        _platform.PressHotkey('l');
+        _platform.PressHotkey('k');
 
         // attempt transition — should be blocked
         _platform.HideCursorCalled = false;
@@ -41,7 +41,7 @@ public class ScreenLockTests : ServicesFixture
         Assert.That(_platform.HideCursorCalled, Is.False, "transition should be blocked when locked");
 
         // unlock
-        _platform.PressHotkey('l');
+        _platform.PressHotkey('k');
 
         // transition should work again
         _platform.HideCursorCalled = false;
@@ -52,8 +52,8 @@ public class ScreenLockTests : ServicesFixture
     [Test]
     public void LockHotkey_WrongModifiers_DoesNotLock()
     {
-        // ctrl+L only — missing Alt and Super
-        _platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyDown, 'l', KeyModifiers.Control));
+        // ctrl+K only — missing Alt and Super
+        _platform.FireKeyEvent(KeyEvent.Char(KeyEventType.KeyDown, 'k', KeyModifiers.Control));
 
         _platform.HideCursorCalled = false;
         _platform.FireMouseMove(2559, 720);
@@ -64,7 +64,7 @@ public class ScreenLockTests : ServicesFixture
     public void LockHotkey_KeyUp_DoesNotToggle()
     {
         // key-up event should not toggle
-        _platform.PressHotkey('l', up: true);
+        _platform.PressHotkey('k', up: true);
 
         _platform.HideCursorCalled = false;
         _platform.FireMouseMove(2559, 720);
@@ -92,7 +92,7 @@ public class ScreenLockTests : ServicesFixture
         TransitionTestHelper.EnterRemote(_platform);
 
         // lock while on virtual screen
-        _platform.PressHotkey('l');
+        _platform.PressHotkey('k');
 
         var warpX = _platform.WarpX;
         var warpY = _platform.WarpY;
@@ -115,7 +115,7 @@ public class ScreenLockTests : ServicesFixture
     public async Task Locked_PreventsCrossingBetweenRemotes_AbsolutePath()
     {
         var (platform, relay, _) = await VisitingChain();
-        platform.PressHotkey('l');
+        platform.PressHotkey('k');
         relay.Sent.Clear();
 
         for (var i = 0; i < 30; i++)
@@ -128,7 +128,7 @@ public class ScreenLockTests : ServicesFixture
     public async Task Locked_PreventsCrossingBetweenRemotes_DeltaPath()
     {
         var (platform, relay, _) = await VisitingChain();
-        platform.PressHotkey('l');
+        platform.PressHotkey('k');
         relay.Sent.Clear();
 
         for (var i = 0; i < 30; i++)
@@ -142,7 +142,7 @@ public class ScreenLockTests : ServicesFixture
     public async Task Locked_RefusesTheEdgeWithoutQueryingButtons()
     {
         var (platform, _, _) = await VisitingChain();
-        platform.PressHotkey('l');
+        platform.PressHotkey('k');
         // a held button on a platform that sees it would be asked about, unless the lock refuses first
         platform.SeesSwallowedButtons = true;
         platform.FireMouseButton(new MouseButtonEvent(MouseButton.Left, true));
@@ -197,7 +197,7 @@ public class ScreenLockTests : ServicesFixture
         Assert.That(platform.IsOnVirtualScreen, Is.True, "pre-condition: on mac");
 
         if (confined)
-            platform.PressHotkey('l');
+            platform.PressHotkey('k');
         relay.Sent.Clear();
 
         // mac's two monitors are 5120 wide in total, entered at the centre of the first

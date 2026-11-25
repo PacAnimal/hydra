@@ -10,7 +10,7 @@ namespace Tests.Screen;
 [TestFixture]
 public class HeldKeyTests : ServicesFixture
 {
-    private const int KeyA = 30, KeyE = 18, ShiftL = 42, CtrlL = 29, AltL = 56, SuperL = 125, KeyL = 38, KeyM = 50;
+    private const int KeyA = 30, KeyE = 18, ShiftL = 42, CtrlL = 29, AltL = 56, SuperL = 125, KeyK = 37, KeyM = 50;
 
     private static KeyEvent Char(KeyEventType type, char ch, int key, KeyModifiers mods = KeyModifiers.None) =>
         KeyEvent.Char(type, ch, mods) with { PhysicalKey = key };
@@ -201,14 +201,14 @@ public class HeldKeyTests : ServicesFixture
     {
         var (platform, relay, _) = await Services.Start(TransitionTestHelper.CreateRemoteOnlyService());
         await TransitionTestHelper.BringHostOnline(relay, "mac");
-        platform.FireKeyEvent(Char(KeyEventType.KeyDown, 'l', KeyL, HotkeyChord.Modifiers)); // unlock: local
-        platform.FireKeyEvent(Char(KeyEventType.KeyUp, 'l', KeyL, HotkeyChord.Modifiers));
+        platform.FireKeyEvent(Char(KeyEventType.KeyDown, 'k', KeyK, HotkeyChord.Modifiers)); // unlock: local
+        platform.FireKeyEvent(Char(KeyEventType.KeyUp, 'k', KeyK, HotkeyChord.Modifiers));
         Assert.That(platform.IsOnVirtualScreen, Is.False, "pre-condition: local");
 
-        platform.FireKeyEvent(Char(KeyEventType.KeyDown, 'l', KeyL, HotkeyChord.Modifiers)); // relock: enters with the chord held
+        platform.FireKeyEvent(Char(KeyEventType.KeyDown, 'k', KeyK, HotkeyChord.Modifiers)); // relock: enters with the chord held
         Assert.That(platform.IsOnVirtualScreen, Is.True, "pre-condition: entered");
         relay.Sent.Clear();
-        platform.FireKeyEvent(Char(KeyEventType.KeyUp, 'l', KeyL, HotkeyChord.Modifiers));
+        platform.FireKeyEvent(Char(KeyEventType.KeyUp, 'k', KeyK, HotkeyChord.Modifiers));
         platform.FireKeyEvent(Special(KeyEventType.KeyUp, SpecialKey.Super_L, SuperL, KeyModifiers.Control | KeyModifiers.Alt));
         platform.FireKeyEvent(Special(KeyEventType.KeyUp, SpecialKey.Alt_L, AltL, KeyModifiers.Control));
         platform.FireKeyEvent(Special(KeyEventType.KeyUp, SpecialKey.Control_L, CtrlL));

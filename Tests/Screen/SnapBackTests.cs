@@ -175,8 +175,8 @@ public class SnapBackTests : ServicesFixture
         var bundle = await Visiting(screenSaverSync);
         await PendingRestore(bundle, screenSaverSync);
         // locked and unlocked again, so only the cancel keeps the cursor home
-        bundle.Platform.PressHotkey('l');
-        bundle.Platform.PressHotkey('l');
+        bundle.Platform.PressHotkey('k');
+        bundle.Platform.PressHotkey('k');
 
         bundle.Platform.FireMouseMove(1000, 720);
 

@@ -123,7 +123,7 @@ public class LatinShortcutKeysymTests
 [Category("Linux")]
 public class EvdevLatinShortcutTests
 {
-    private const uint KeyQ = 16, KeyY = 21, KeyG = 34, KeyJ = 36, KeyL = 38, KeyC = 46, KeyV = 47;
+    private const uint KeyQ = 16, KeyY = 21, KeyG = 34, KeyJ = 36, KeyK = 37, KeyL = 38, KeyC = 46, KeyV = 47;
     private const uint Key1 = 2, Key2 = 3, KeyMinus = 12, KeyLeftBrace = 26, KeySemicolon = 39, KeyApostrophe = 40, KeyGrave = 41;
     private const uint KeyComma = 51, KeyDot = 52, KeySlash = 53;
     private const uint KeyLeftCtrl = 29, KeyLeftShift = 42, KeyLeftAlt = 56, KeyCapsLock = 58, KeyLeftMeta = 125, KeyRightAlt = 100;
@@ -176,13 +176,13 @@ public class EvdevLatinShortcutTests
         NextGroup(resolver);
 
         var copy = Press(resolver, KeyC, KeyLeftCtrl);
-        var cursorLock = Press(resolver, KeyL, KeyLeftCtrl, KeyLeftAlt, KeyLeftMeta);
+        var cursorLock = Press(resolver, KeyK, KeyLeftCtrl, KeyLeftAlt, KeyLeftMeta);
 
         using (Assert.EnterMultipleScope())
         {
             Assert.That(copy.Character, Is.EqualTo('c'));
             Assert.That(copy.Modifiers & KeyModifiers.Control, Is.EqualTo(KeyModifiers.Control));
-            Assert.That(cursorLock.Character, Is.EqualTo('l'));
+            Assert.That(cursorLock.Character, Is.EqualTo('k'));
             Assert.That(HotkeyBindings.Build(null).Match(cursorLock), Is.EqualTo(HotkeyAction.ToggleCursorLock));
         }
     }
@@ -267,14 +267,14 @@ public class EvdevLatinShortcutTests
     }
 
     [Test]
-    public void Us_CtrlAltSuperL_IsTheCursorLockHotkey()
+    public void Us_CtrlAltSuperK_IsTheCursorLockHotkey()
     {
         using var resolver = PlainUs();
-        var chord = Press(resolver, KeyL, KeyLeftCtrl, KeyLeftAlt, KeyLeftMeta);
+        var chord = Press(resolver, KeyK, KeyLeftCtrl, KeyLeftAlt, KeyLeftMeta);
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(chord.Character, Is.EqualTo('l'));
+            Assert.That(chord.Character, Is.EqualTo('k'));
             Assert.That(HotkeyBindings.Build(null).Match(chord), Is.EqualTo(HotkeyAction.ToggleCursorLock));
         }
     }
@@ -343,7 +343,7 @@ public class EvdevLatinShortcutTests
         {
             Assert.That(Press(resolver, KeyL).Character, Is.EqualTo('l'));
             Assert.That(Press(resolver, KeyC, KeyLeftCtrl).Character, Is.EqualTo('c'));
-            Assert.That(HotkeyBindings.Build(null).Match(Press(resolver, KeyL, KeyLeftCtrl, KeyLeftAlt, KeyLeftMeta)),
+            Assert.That(HotkeyBindings.Build(null).Match(Press(resolver, KeyK, KeyLeftCtrl, KeyLeftAlt, KeyLeftMeta)),
                 Is.EqualTo(HotkeyAction.ToggleCursorLock));
         }
     }

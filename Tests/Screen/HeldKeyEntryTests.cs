@@ -42,8 +42,8 @@ public class HeldKeyEntryTests : ServicesFixture
         var once = Refusals(log);
         bundle.Platform.AnyKeyHeld = false;
         TransitionTestHelper.EnterRemote(bundle.Platform);
-        bundle.Platform.PressHotkey('l');
-        bundle.Platform.PressHotkey('l');
+        bundle.Platform.PressHotkey('k');
+        bundle.Platform.PressHotkey('k');
         bundle.Platform.FireMouseMove(1000, 720);
         bundle.Platform.AnyKeyHeld = true;
         bundle.Platform.FireMouseMove(2559, 720);

@@ -224,9 +224,9 @@ public class ClipboardEdgeModeTests : MasterClipboardFixture
         await Begin(relay, stream);
         await Chunk(relay, stream.Chunks[0]);
 
-        platform.PressHotkey('l');
+        platform.PressHotkey('k');
         await Chunk(relay, stream.Chunks[1]);
-        platform.PressHotkey('l');
+        platform.PressHotkey('k');
         var before = Hashes(relay, "remote").Count;
         TransitionTestHelper.EnterRemote(platform);
         await Chunks(relay, stream, from: 2);
@@ -258,12 +258,12 @@ public class ClipboardEdgeModeTests : MasterClipboardFixture
         await SimulatePullRequest(relay, "mac");
         await relay.Sent.WaitFor(MessageKind.ClipboardStreamBegin, 1, "mac");
 
-        platform.PressHotkey('l');
+        platform.PressHotkey('k');
         var unlockedHome = !platform.IsOnVirtualScreen;
         // the slave counts the push still streaming to it as applied
         await AnswerPull(relay, new ClipboardPullResponseMessage(PullIdTo(relay, "mac"), null, Unchanged: true), "mac");
         var before = Hashes(relay, "mac").Count;
-        platform.PressHotkey('l');
+        platform.PressHotkey('k');
         await service.Flush();
         await service.HashReads();
         relay.Reliable.Release();

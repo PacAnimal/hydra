@@ -11,8 +11,8 @@ public class HotkeyTests
     private static KeyEvent Char(char ch, KeyModifiers mods) => KeyEvent.Char(KeyEventType.KeyDown, ch, mods);
     private static KeyEvent Special(SpecialKey key, KeyModifiers mods = KeyModifiers.None) => KeyEvent.Special(KeyEventType.KeyDown, key, mods);
 
-    [TestCase('l', HotkeyAction.ToggleCursorLock)]
-    [TestCase('k', HotkeyAction.LockSlaves)]
+    [TestCase('k', HotkeyAction.ToggleCursorLock)]
+    [TestCase('l', HotkeyAction.LockSlaves)]
     [TestCase('m', HotkeyAction.ToggleRelativeMouse)]
     [TestCase('c', HotkeyAction.CopyFiles)]
     [TestCase('v', HotkeyAction.PasteFiles)]
@@ -34,8 +34,8 @@ public class HotkeyTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(hotkeys.Match(Char('q', HotkeyChord.Modifiers)), Is.Null);
-            Assert.That(hotkeys.Match(Char('l', KeyModifiers.None)), Is.Null, "plain 'l' must stay typeable");
-            Assert.That(hotkeys.Match(Char('l', KeyModifiers.Control)), Is.Null, "a partial chord must not fire");
+            Assert.That(hotkeys.Match(Char('k', KeyModifiers.None)), Is.Null, "plain 'k' must stay typeable");
+            Assert.That(hotkeys.Match(Char('k', KeyModifiers.Control)), Is.Null, "a partial chord must not fire");
         }
     }
 
@@ -44,7 +44,7 @@ public class HotkeyTests
     {
         // CapsLock/NumLock/ScrollLock ride along in Modifiers as lock state, not as part of the chord
         var hotkeys = HotkeyBindings.Build(null);
-        Assert.That(hotkeys.Match(Char('l', HotkeyChord.Modifiers | KeyModifiers.CapsLock | KeyModifiers.NumLock)),
+        Assert.That(hotkeys.Match(Char('k', HotkeyChord.Modifiers | KeyModifiers.CapsLock | KeyModifiers.NumLock)),
             Is.EqualTo(HotkeyAction.ToggleCursorLock));
     }
 
@@ -58,18 +58,18 @@ public class HotkeyTests
             Assert.That(hotkeys.Match(Special(SpecialKey.ScrollLock)), Is.EqualTo(HotkeyAction.ToggleCursorLock));
             // pressing ScrollLock also sets its own lock bit on that very event
             Assert.That(hotkeys.Match(Special(SpecialKey.ScrollLock, KeyModifiers.ScrollLock)), Is.EqualTo(HotkeyAction.ToggleCursorLock));
-            Assert.That(hotkeys.Match(Char('l', HotkeyChord.Modifiers)), Is.Null, "a configured array replaces the default");
+            Assert.That(hotkeys.Match(Char('k', HotkeyChord.Modifiers)), Is.Null, "a configured array replaces the default");
         }
     }
 
     [Test]
     public void MultipleBindings_BothFireTheSameAction()
     {
-        var hotkeys = HotkeyBindings.Build(new() { ["toggleCursorLock"] = ["Ctrl+Alt+Super+L", "ScrollLock"] });
+        var hotkeys = HotkeyBindings.Build(new() { ["toggleCursorLock"] = ["Ctrl+Alt+Super+K", "ScrollLock"] });
         Assert.That(hotkeys.Errors, Is.Empty);
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(hotkeys.Match(Char('l', HotkeyChord.Modifiers)), Is.EqualTo(HotkeyAction.ToggleCursorLock));
+            Assert.That(hotkeys.Match(Char('k', HotkeyChord.Modifiers)), Is.EqualTo(HotkeyAction.ToggleCursorLock));
             Assert.That(hotkeys.Match(Special(SpecialKey.ScrollLock)), Is.EqualTo(HotkeyAction.ToggleCursorLock));
         }
     }
@@ -85,17 +85,17 @@ public class HotkeyTests
         }
     }
 
-    [TestCase("Cmd+Alt+Ctrl+L")]
-    [TestCase("win+option+control+l")]
-    [TestCase("  Super + Alt + Ctrl + L  ")]
-    [TestCase("L+Ctrl+Alt+Super")]
+    [TestCase("Cmd+Alt+Ctrl+K")]
+    [TestCase("win+option+control+k")]
+    [TestCase("  Super + Alt + Ctrl + K  ")]
+    [TestCase("K+Ctrl+Alt+Super")]
     public void ModifierAliases_AndOrder_AndCase_AllResolveTheSame(string spec)
     {
         var hotkeys = HotkeyBindings.Build(new() { ["toggleCursorLock"] = [spec] });
         using (Assert.EnterMultipleScope())
         {
             Assert.That(hotkeys.Errors, Is.Empty, $"'{spec}' should parse");
-            Assert.That(hotkeys.Match(Char('l', HotkeyChord.Modifiers)), Is.EqualTo(HotkeyAction.ToggleCursorLock));
+            Assert.That(hotkeys.Match(Char('k', HotkeyChord.Modifiers)), Is.EqualTo(HotkeyAction.ToggleCursorLock));
         }
     }
 
@@ -151,7 +151,7 @@ public class HotkeyTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(hotkeys.Errors, Has.One.Contains(expectedError));
-            Assert.That(hotkeys.Match(Char('l', HotkeyChord.Modifiers)), Is.EqualTo(HotkeyAction.ToggleCursorLock),
+            Assert.That(hotkeys.Match(Char('k', HotkeyChord.Modifiers)), Is.EqualTo(HotkeyAction.ToggleCursorLock),
                 "a rejected binding must leave the action on its default, not unreachable");
         }
     }
@@ -171,7 +171,7 @@ public class HotkeyTests
         {
             Assert.That(hotkeys.Errors, Is.Empty);
             Assert.That(hotkeys.Disabled, Is.EqualTo([HotkeyAction.ToggleCursorLock]));
-            Assert.That(hotkeys.Match(Char('l', HotkeyChord.Modifiers)), Is.Null);
+            Assert.That(hotkeys.Match(Char('k', HotkeyChord.Modifiers)), Is.Null);
         }
     }
 
@@ -192,12 +192,12 @@ public class HotkeyTests
     [Test]
     public void AChordBoundTwice_StaysWithTheFirstAction_AndTheOtherKeepsItsDefault()
     {
-        var hotkeys = HotkeyBindings.Build(new() { ["lockSlaves"] = ["Ctrl+Alt+Super+L"] });
+        var hotkeys = HotkeyBindings.Build(new() { ["lockSlaves"] = ["Ctrl+Alt+Super+K"] });
         using (Assert.EnterMultipleScope())
         {
             Assert.That(hotkeys.Errors, Has.One.Contains("already bound to ToggleCursorLock"));
-            Assert.That(hotkeys.Match(Char('l', HotkeyChord.Modifiers)), Is.EqualTo(HotkeyAction.ToggleCursorLock));
-            Assert.That(hotkeys.Match(Char('k', HotkeyChord.Modifiers)), Is.EqualTo(HotkeyAction.LockSlaves));
+            Assert.That(hotkeys.Match(Char('k', HotkeyChord.Modifiers)), Is.EqualTo(HotkeyAction.ToggleCursorLock));
+            Assert.That(hotkeys.Match(Char('l', HotkeyChord.Modifiers)), Is.EqualTo(HotkeyAction.LockSlaves));
         }
     }
 
@@ -205,12 +205,12 @@ public class HotkeyTests
     [Test]
     public void ADefaultTakenByAnotherAction_IsWarnedOfOnce()
     {
-        var hotkeys = HotkeyBindings.Build(new() { ["toggleCursorLock"] = ["Ctrl+Alt+Super+K"] });
+        var hotkeys = HotkeyBindings.Build(new() { ["toggleCursorLock"] = ["Ctrl+Alt+Super+L"] });
         using (Assert.EnterMultipleScope())
         {
             Assert.That(hotkeys.Errors, Has.Exactly(1).Contains("LockSlaves").And.Contains("already bound to ToggleCursorLock"));
             Assert.That(hotkeys.For(HotkeyAction.LockSlaves), Is.Empty);
-            Assert.That(hotkeys.Match(Char('k', HotkeyChord.Modifiers)), Is.EqualTo(HotkeyAction.ToggleCursorLock));
+            Assert.That(hotkeys.Match(Char('l', HotkeyChord.Modifiers)), Is.EqualTo(HotkeyAction.ToggleCursorLock));
         }
     }
 
