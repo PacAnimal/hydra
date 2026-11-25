@@ -43,6 +43,10 @@ internal static partial class CairoNativeMethods
 
     [LibraryImport(Cairo)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint cairo_surface_reference(nint surface);
+
+    [LibraryImport(Cairo)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial nint cairo_create(nint surface);
 
     [LibraryImport(Cairo)]
@@ -108,4 +112,8 @@ internal static partial class CairoNativeMethods
     [LibraryImport(Cairo)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void cairo_paint(nint cr);
+
+    [LibraryImport(Cairo)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void cairo_paint_with_alpha(nint cr, double alpha);
 }

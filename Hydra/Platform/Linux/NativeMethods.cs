@@ -295,6 +295,57 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial int XClearWindow(nint display, nint window);
 
+    // -- graphics contexts --
+
+    internal const int IncludeInferiors = 1;
+
+    // values may be zero when valueMask is
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint XCreateGC(nint display, nint drawable, nuint valueMask, nint values);
+
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int XFreeGC(nint display, nint gc);
+
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int XSetSubwindowMode(nint display, nint gc, int mode);
+
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int XSetGraphicsExposures(nint display, nint gc, [MarshalAs(UnmanagedType.Bool)] bool exposures);
+
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int XSetForeground(nint display, nint gc, nuint foreground);
+
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int XFillRectangle(nint display, nint drawable, nint gc, int x, int y, uint width, uint height);
+
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int XCopyArea(nint display, nint source, nint destination, nint gc,
+        int sourceX, int sourceY, uint width, uint height, int destinationX, int destinationY);
+
+    // -- images --
+
+    internal const int ZPixmap = 2;
+
+    // an XImage*, XDestroyImage it
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint XGetImage(nint display, nint drawable, int x, int y, uint width, uint height, nuint planeMask, int format);
+
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nuint XGetPixel(nint image, int x, int y);
+
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int XDestroyImage(nint image);
+
     // -- keyboard grab --
 
     [LibraryImport(X11)]

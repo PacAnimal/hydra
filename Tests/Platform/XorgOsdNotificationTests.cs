@@ -4,8 +4,8 @@ using Tests.Setup;
 
 namespace Tests.Platform;
 
-// the X11 OSD against a live X server: a window over the screen, clicked through, gone after its time; faded where a
-// compositor owns _NET_WM_CM_S0, shaped to its text where none does
+// the X11 OSD against a live X server: a window over the screen, clicked through, faded out and gone after its time;
+// faded by the compositor where one owns _NET_WM_CM_S0, shaped to its text and faded by its own frames where none does
 [TestFixture]
 [Category("Linux")]
 [NonParallelizable]
@@ -19,6 +19,8 @@ public class XorgOsdNotificationTests
 
     private nint _display;
     private nint _compositor;
+    private nint _backdrop;
+    private bool _rootPainted;
 
     [OneTimeSetUp]
     public void RequireX11() => X11Required.OrIgnore();
@@ -29,8 +31,11 @@ public class XorgOsdNotificationTests
     [TearDown]
     public void CloseDisplay()
     {
-        if (_compositor != nint.Zero) _ = NativeMethods.XDestroyWindow(_display, _compositor);
-        _compositor = nint.Zero;
+        foreach (var window in (nint[])[_compositor, _backdrop])
+            if (window != nint.Zero) _ = NativeMethods.XDestroyWindow(_display, window);
+        _compositor = _backdrop = nint.Zero;
+        if (_rootPainted) _ = NativeMethods.XClearWindow(_display, NativeMethods.XDefaultRootWindow(_display));
+        _rootPainted = false;
         if (_display != nint.Zero) _ = NativeMethods.XCloseDisplay(_display);
         _display = nint.Zero;
     }
@@ -53,26 +58,63 @@ public class XorgOsdNotificationTests
             Assert.That(OnScreen(attributes), Is.True);
             Assert.That(ShapeRectangles(window, NativeMethods.ShapeInput), Is.Zero, "the pointer clicks through");
             Assert.That(ShapeRectangles(window, NativeMethods.ShapeBounding), Is.GreaterThan(1), "shaped to the text");
-            Assert.That(OpacityOf(window), Is.Null);
+            Assert.That(OpacityOf(window), Is.Null, "no compositor reads the property");
         }
     }
 
+    // with nothing to blend it, the OSD blends its text over a copy of the screen under it, frame by frame: its pixels
+    // start as the text and end as the screen
     [Test]
-    public async Task WithoutACompositor_ItGoesAfterItsTime_WithNoFade()
+    public async Task WithoutACompositor_ItFadesIntoTheScreenUnderIt_BeforeItGoes()
     {
+        const uint background = 0x3A6EA5;
+        MapBackdrop(background);
+
         using var osd = new XorgOsdNotification(NullLogger<XorgOsdNotification>.Instance, ShowFor, FadeFor);
         var (shown, hidden) = Watch(osd);
-        var opacities = 0;
-        osd.Opacity += (_, _) => Interlocked.Increment(ref opacities);
+        var frames = Record(osd, frame => OnScreenDistanceFrom(frame.Window, background));
 
         osd.Show("Cursor lock: Off");
-        var window = await shown.Task.WaitAsync(TestBound.Bound);
+        var shownWindow = await shown.Task.WaitAsync(TestBound.Bound);
+        Assert.That(await hidden.Task.WaitAsync(TestBound.Bound), Is.EqualTo(shownWindow));
 
-        Assert.That(await hidden.Task.WaitAsync(TestBound.Bound), Is.EqualTo(window));
+        var seen = frames.Take();
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(Exists(window), Is.False);
-            Assert.That(opacities, Is.Zero);
+            Assert.That(Exists(shownWindow), Is.False);
+            Assert.That(seen[0].Opacity, Is.EqualTo(1), "shown at full opacity");
+            Assert.That(seen.Skip(1).Select(f => f.Opacity), Is.Not.Empty.And.All.LessThan(1), "faded before it went");
+            Assert.That(seen.Skip(1).Select(f => f.Opacity), Is.Ordered.Descending);
+            Assert.That(seen[0].Measure, Is.GreaterThan(0), "the text shows over the screen");
+            // as far as the fade got before it went: a stalled runner may skip its last frames
+            Assert.That(seen[^1].Measure, Is.LessThan(seen[0].Measure * (seen[^1].Opacity + 0.1)), "the text fades into the screen");
+        }
+    }
+
+    // a notice that replaces one still showing fades into the screen as it was under both, not into what the first one
+    // left. the screen is the root window's own pixels, painted the colour once; the second notice copies it while the
+    // first still covers it, before the server repaints the root's default background where the first one was: only
+    // the first notice's copy of the screen has the plain colour there
+    [Test]
+    public async Task WithoutACompositor_AReplacingNotice_FadesIntoTheScreen_NotIntoTheOneItReplaced()
+    {
+        const uint background = 0x3A6EA5;
+        PaintRootUnrepainted(background);
+
+        using var osd = new XorgOsdNotification(NullLogger<XorgOsdNotification>.Instance, Held, FadeFor);
+        var frames = Record(osd, frame => DistanceFrom(frame.Under, background, frame.Window));
+
+        osd.Show("Relative mouse: On");
+        var first = await frames.WaitFor(1);
+        osd.Show("Off");
+        var second = await frames.WaitFor(2);
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(second.Window, Is.Not.EqualTo(first.Window));
+            Assert.That(Exists(first.Window), Is.False, "the first is gone");
+            Assert.That(first.Measure, Is.Zero, "the first copied the plain screen");
+            Assert.That(second.Measure, Is.Zero, "the second's copy has no trace of the first");
         }
     }
 
@@ -103,22 +145,19 @@ public class XorgOsdNotificationTests
         ClaimCompositorSelection();
         using var osd = new XorgOsdNotification(NullLogger<XorgOsdNotification>.Instance, ShowFor, FadeFor);
         var (shown, hidden) = Watch(osd);
-        var opacities = new List<uint>();
-        osd.Opacity += (_, value) => { lock (opacities) opacities.Add(value); };
+        var frames = Record(osd, _ => 0);
 
         osd.Show("Pasted!");
         var window = await shown.Task.WaitAsync(TestBound.Bound);
         Assert.That(await hidden.Task.WaitAsync(TestBound.Bound), Is.EqualTo(window));
 
-        lock (opacities)
+        var opacities = frames.Take().Select(f => f.Opacity).ToList();
+        using (Assert.EnterMultipleScope())
         {
-            using (Assert.EnterMultipleScope())
-            {
-                Assert.That(Exists(window), Is.False);
-                Assert.That(opacities[0], Is.EqualTo(uint.MaxValue), "shown at full opacity");
-                Assert.That(opacities.Skip(1), Is.Not.Empty.And.All.LessThan(uint.MaxValue), "faded before it went");
-                Assert.That(opacities.Skip(1), Is.Ordered.Descending);
-            }
+            Assert.That(Exists(window), Is.False);
+            Assert.That(opacities[0], Is.EqualTo(1), "shown at full opacity");
+            Assert.That(opacities.Skip(1), Is.Not.Empty.And.All.LessThan(1), "faded before it went");
+            Assert.That(opacities.Skip(1), Is.Ordered.Descending);
         }
     }
 
@@ -223,6 +262,134 @@ public class XorgOsdNotificationTests
         Assert.That(XErrors.Succeeds(_display, () => _ = NativeMethods.XGetWindowAttributes(_display, window, out attributes)), Is.True,
             "the window exists");
         return attributes;
+    }
+
+    // a full-screen window of the colour, which the server repaints when what covered it goes
+    private void MapBackdrop(uint colour)
+    {
+        var root = NativeMethods.XDefaultRootWindow(_display);
+        var screen = NativeMethods.XDefaultScreen(_display);
+        _backdrop = NativeMethods.XCreateSimpleWindow(_display, root, 0, 0, (uint)NativeMethods.XDisplayWidth(_display, screen),
+            (uint)NativeMethods.XDisplayHeight(_display, screen), 0, 0, (nint)colour);
+        _ = NativeMethods.XMapWindow(_display, _backdrop);
+        _ = NativeMethods.XSync(_display, false);
+    }
+
+    // the root window's pixels painted the colour once, over its default background (a None background on the root
+    // is the default one); the server repaints that default only where an expose asks, and XClearWindow in TearDown
+    // puts the whole of it back
+    private void PaintRootUnrepainted(uint colour)
+    {
+        var root = NativeMethods.XDefaultRootWindow(_display);
+        var screen = NativeMethods.XDefaultScreen(_display);
+        _ = NativeMethods.XSetWindowBackgroundPixmap(_display, root, nint.Zero);
+        var gc = NativeMethods.XCreateGC(_display, root, 0, nint.Zero);
+        _ = NativeMethods.XSetForeground(_display, gc, colour);
+        _ = NativeMethods.XFillRectangle(_display, root, gc, 0, 0, (uint)NativeMethods.XDisplayWidth(_display, screen),
+            (uint)NativeMethods.XDisplayHeight(_display, screen));
+        _ = NativeMethods.XFreeGC(_display, gc);
+        _ = NativeMethods.XSync(_display, false);
+        _rootPainted = true;
+    }
+
+    // how far what the screen shows where the window is lies from the colour: read from the root, so outside the
+    // window's shape it is what is under it, as the user sees it
+    private double OnScreenDistanceFrom(nint window, uint colour)
+    {
+        var at = Attributes(window);
+        return DistanceFrom(NativeMethods.XDefaultRootWindow(_display), colour, at.X, at.Y, at.Width, at.Height);
+    }
+
+    // how far the drawable's pixels are from the colour, summed over red, green and blue (24-bit TrueColor, 0xRRGGBB,
+    // as the lane's Xvfb runs), over the window's size
+    private double DistanceFrom(nint drawable, uint colour, nint sizeOf)
+    {
+        var size = Attributes(sizeOf);
+        return DistanceFrom(drawable, colour, 0, 0, size.Width, size.Height);
+    }
+
+    private double DistanceFrom(nint drawable, uint colour, int x, int y, int width, int height)
+    {
+        var image = NativeMethods.XGetImage(_display, drawable, x, y, (uint)width, (uint)height, nuint.MaxValue, NativeMethods.ZPixmap);
+        if (image == nint.Zero) throw new InvalidOperationException("XGetImage failed");
+        try
+        {
+            double sum = 0;
+            for (var row = 0; row < height; row++)
+                for (var column = 0; column < width; column++)
+                {
+                    var pixel = (uint)NativeMethods.XGetPixel(image, column, row);
+                    for (var shift = 0; shift < 24; shift += 8)
+                        sum += Math.Abs((int)((pixel >> shift) & 0xFF) - (int)((colour >> shift) & 0xFF));
+                }
+            return sum;
+        }
+        finally
+        {
+            _ = NativeMethods.XDestroyImage(image);
+        }
+    }
+
+    // each frame the OSD shows, measured on the OSD thread while the frame is current; a measurement that throws is
+    // kept and thrown on the test's thread, where the OSD's own handling cannot swallow it
+    private Frames Record(XorgOsdNotification osd, Func<OsdFrame, double> measure)
+    {
+        var frames = new Frames();
+        osd.Frame += frame =>
+        {
+            try
+            {
+                _ = NativeMethods.XSync(_display, false);
+                frames.Add(new MeasuredFrame(frame.Window, frame.Opacity, measure(frame)));
+            }
+            catch (Exception ex)
+            {
+                frames.Fail(ex);
+            }
+        };
+        return frames;
+    }
+
+    private sealed record MeasuredFrame(nint Window, double Opacity, double Measure);
+
+    private sealed class Frames
+    {
+        private readonly List<MeasuredFrame> _frames = [];
+        private Exception? _failure;
+        private readonly SemaphoreSlim _added = new(0);
+
+        internal void Add(MeasuredFrame frame)
+        {
+            lock (_frames) _frames.Add(frame);
+            _added.Release();
+        }
+
+        internal void Fail(Exception ex)
+        {
+            lock (_frames) _failure ??= ex;
+            _added.Release();
+        }
+
+        internal List<MeasuredFrame> Take()
+        {
+            lock (_frames)
+            {
+                if (_failure != null) throw new AssertionException("measuring a frame failed", _failure);
+                return [.. _frames];
+            }
+        }
+
+        // the count'th frame (from 1), once shown
+        internal async Task<MeasuredFrame> WaitFor(int count)
+        {
+            using var timeout = new CancellationTokenSource(TestBound.Bound);
+            while (true)
+            {
+                var frames = Take();
+                if (frames.Count >= count) return frames[count - 1];
+                await _added.WaitAsync(timeout.Token);
+            }
+        }
     }
 
     private bool Exists(nint window) =>

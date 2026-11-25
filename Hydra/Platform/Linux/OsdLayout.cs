@@ -2,7 +2,7 @@ using Hydra.Screen;
 
 namespace Hydra.Platform.Linux;
 
-// where the X11 OSD goes and what of it is solid, apart from Xlib so it can be tested anywhere
+// where the X11 OSD goes and what of it has ink, apart from Xlib so it can be tested anywhere
 internal static class OsdLayout
 {
     // the screen under the pointer, else the one nearest to it; null when there is none
@@ -10,9 +10,9 @@ internal static class OsdLayout
         screens.FirstOrDefault(s => pointer.X >= s.X && pointer.X < s.X + s.Width && pointer.Y >= s.Y && pointer.Y < s.Y + s.Height)
         ?? screens.MinBy(s => DistanceSquared(s, pointer));
 
-    // the rows of an ARGB32 image (little-endian, alpha the 4th byte) as runs of pixels at least half opaque: the
-    // window's shape where no compositor blends its alpha, so the text shows without a black box round it
-    internal static List<XRectangle> OpaqueRuns(byte[] pixels, int width, int height, int stride)
+    // the rows of an ARGB32 image (little-endian, alpha the 4th byte) as runs of pixels with any ink: the window's shape
+    // where no compositor blends its alpha, so only the text and its glow cover the screen, never a box round them
+    internal static List<XRectangle> InkRuns(byte[] pixels, int width, int height, int stride)
     {
         var runs = new List<XRectangle>();
         for (var y = 0; y < height; y++)
@@ -21,9 +21,9 @@ internal static class OsdLayout
             var x = 0;
             while (x < width)
             {
-                while (x < width && pixels[row + x * 4 + 3] < 0x80) x++;
+                while (x < width && pixels[row + x * 4 + 3] == 0) x++;
                 var start = x;
-                while (x < width && pixels[row + x * 4 + 3] >= 0x80) x++;
+                while (x < width && pixels[row + x * 4 + 3] != 0) x++;
                 if (x > start) runs.Add(new XRectangle { X = (short)start, Y = (short)y, Width = (ushort)(x - start), Height = 1 });
             }
         }

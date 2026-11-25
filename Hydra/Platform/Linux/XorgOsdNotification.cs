@@ -8,13 +8,16 @@ using static Hydra.Platform.Linux.CairoNativeMethods;
 namespace Hydra.Platform.Linux;
 
 // the OSD on an X11 display, to OsdStyle as macOS and Windows show it: outlined text, centred on the screen the pointer
-// is on, 10% of its height from the bottom, shown then faded. a borderless override-redirect window the
-// pointer clicks through (an empty input shape), drawn once with cairo into its background pixmap, so it needs no
-// redraws. where a compositor runs (a _NET_WM_CM_Sn owner) it is a 32-bit ARGB window, faded through
-// _NET_WM_WINDOW_OPACITY; with none, alpha would show as a black box, so it is shaped to the text's solid pixels and
-// hidden without a fade. every X call runs on the OSD's own thread and connection; a display that cannot be opened,
-// or no cairo, XFIXES or SHAPE, leaves the OSD silent, logged once at its start. a notice that fails is logged and
-// dropped, and the OSD carries on.
+// is on, 10% of its height from the bottom, shown then faded, with or without a compositor. a borderless
+// override-redirect window the pointer clicks through (an empty input shape), its picture in its background pixmap,
+// so the server repaints it with no help. where a compositor runs (a _NET_WM_CM_Sn owner) it is a 32-bit ARGB window,
+// faded by the compositor through _NET_WM_WINDOW_OPACITY. with none, the server blends nothing: the window is shaped
+// to the text's inked pixels, and each frame of the show and the fade is the text blended by cairo over a copy of the
+// screen taken under it before it was mapped (where a notice replaces one still showing, the old one's own copy fills
+// in what it covered). what changes under the text while it shows is not seen through it.
+// every X call runs on the OSD's own thread and connection; a display that cannot be opened, or no cairo, XFIXES or
+// SHAPE, leaves the OSD silent, logged once at its start. a notice that fails is logged and dropped, and the OSD
+// carries on.
 internal sealed class XorgOsdNotification : IOsdNotification, IDisposable
 {
     private const string WindowName = "Hydra OSD";
@@ -33,15 +36,21 @@ internal sealed class XorgOsdNotification : IOsdNotification, IDisposable
     private nint _window;
     private nint _pixmap;
     private nint _colormap;
-    private bool _faded;
+    // no compositor: the screen under the window, the window's visual, and the picture it shows
+    private nint _under, _visual;
+    private ScreenPoint _at;
+    private OsdImage? _image;
+    private bool _composited;
     private nint _windowType, _notificationType, _opacity;
     private long _hideAt, _fadeStart;
 
     // for tests: the window just mapped, and the window just hidden; raised on the OSD thread
     internal event Action<nint>? Shown;
     internal event Action<nint>? Hidden;
-    // for tests: each opacity set on the window, before it is sent
-    internal event Action<nint, uint>? Opacity;
+    // for tests: each opacity the window is shown at, 0 to 1, once the server has the request that shows it; raised on
+    // the OSD thread, with the window and (no compositor) the pixmap holding the screen under it
+    internal event Action<OsdFrame>? Frame;
+
 
     public XorgOsdNotification(ILogger<XorgOsdNotification> log) : this(log, OsdStyle.ShowFor, OsdStyle.FadeFor) { }
 
@@ -167,7 +176,7 @@ internal sealed class XorgOsdNotification : IOsdNotification, IDisposable
         if (_fadeStart == 0)
         {
             if (now < _hideAt) return;
-            if (!_faded || _fadeFor <= TimeSpan.Zero) { Hide(); return; }
+            if (_fadeFor <= TimeSpan.Zero) { Hide(); return; }
             // the first fade step is one tick in, so every step is below the full opacity it was shown at
             _fadeStart = now - (long)OsdStyle.FadeTick.TotalMilliseconds;
         }
@@ -175,58 +184,93 @@ internal sealed class XorgOsdNotification : IOsdNotification, IDisposable
         var left = 1 - (now - _fadeStart) / _fadeFor.TotalMilliseconds;
         if (left <= 0) { Hide(); return; }
         SetOpacity(left);
-        _ = NativeMethods.XFlush(_display);
     }
 
     private void ShowNow(string text)
     {
-        DestroyWindow();
-
         var screenNumber = NativeMethods.XDefaultScreen(_display);
         var root = NativeMethods.XDefaultRootWindow(_display);
         // pixels at 96 dpi, scaled by Xft.dpi
         var emSize = OsdStyle.EmSize * DpiScale();
         if (text.Length > MaxChars) text = text[..(char.IsHighSurrogate(text[MaxChars - 2]) ? MaxChars - 2 : MaxChars - 1)] + "…";
         using var image = OsdImage.Render(text, emSize);
-        if (image == null) return;
+        // a notice that cannot show still takes down the one it replaces
+        if (image == null) { DestroyWindow(); return; }
 
         var pointer = XorgDisplayHelper.CursorPosition(_display, root) ?? new ScreenPoint(0, 0);
         var screens = XorgDisplayHelper.GetAllScreens(_display, root).Select(s => s.Bounds).ToList();
-        if (OsdLayout.ScreenAt(screens, pointer) is not { } screen) return;
+        if (OsdLayout.ScreenAt(screens, pointer) is not { } screen) { DestroyWindow(); return; }
         var at = OsdStyle.Place(screen, image.Width, image.Height);
 
         var hasArgb = NativeMethods.XMatchVisualInfo(_display, screenNumber, 32, NativeMethods.TrueColor, out var argb) != 0;
-        _faded = hasArgb && Composited(screenNumber);
-        var visual = _faded ? argb.Visual : NativeMethods.XDefaultVisual(_display, screenNumber);
-        var depth = _faded ? 32 : NativeMethods.XDefaultDepth(_display, screenNumber);
+        var composited = hasArgb && Composited(screenNumber);
+        var depth = composited ? 32 : NativeMethods.XDefaultDepth(_display, screenNumber);
+        var (width, height) = ((uint)image.Width, (uint)image.Height);
 
+        // the screen under the new window, taken while a notice it replaces still covers its part of it: its pixels
+        // there come from that notice's own copy, since the clients under it have not yet repainted what it hid
+        var under = composited ? nint.Zero : ScreenUnder(root, at, width, height, (uint)depth);
+        DestroyWindow();
+
+        _composited = composited;
+        _visual = composited ? argb.Visual : NativeMethods.XDefaultVisual(_display, screenNumber);
+        _under = under;
+        _at = at;
         // the ARGB visual needs its own colormap; the default visual takes the screen's
-        if (_faded) _colormap = NativeMethods.XCreateColormap(_display, root, visual, NativeMethods.AllocNone);
-        var attributes = new XSetWindowAttributes { OverrideRedirect = 1, Colormap = _faded ? _colormap : NativeMethods.XDefaultColormap(_display, screenNumber) };
-        _window = NativeMethods.XCreateWindow(_display, root, at.X, at.Y, (uint)image.Width, (uint)image.Height, 0, depth,
-            NativeMethods.InputOutput, visual,
+        if (composited) _colormap = NativeMethods.XCreateColormap(_display, root, _visual, NativeMethods.AllocNone);
+        var attributes = new XSetWindowAttributes { OverrideRedirect = 1, Colormap = composited ? _colormap : NativeMethods.XDefaultColormap(_display, screenNumber) };
+        _window = NativeMethods.XCreateWindow(_display, root, at.X, at.Y, width, height, 0, depth,
+            NativeMethods.InputOutput, _visual,
             NativeMethods.CWOverrideRedirect | NativeMethods.CWColormap | NativeMethods.CWBorderPixel | NativeMethods.CWBackPixel,
             ref attributes);
         if (_window == nint.Zero) return;
         _ = NativeMethods.XStoreName(_display, _window, WindowName);
         SetWindowType();
-
-        _pixmap = NativeMethods.XCreatePixmap(_display, _window, (uint)image.Width, (uint)image.Height, (uint)depth);
-        image.PaintOnto(_display, _pixmap, visual, opaque: !_faded);
-        _ = NativeMethods.XSetWindowBackgroundPixmap(_display, _window, _pixmap);
-
         SetShape(NativeMethods.ShapeInput, []);
-        if (!_faded) SetShape(NativeMethods.ShapeBounding, [.. OsdLayout.OpaqueRuns(image.Pixels(), image.Width, image.Height, image.Stride)]);
-        if (_faded) SetOpacity(1);
+        _pixmap = NativeMethods.XCreatePixmap(_display, _window, width, height, (uint)depth);
+
+        // the first frame is drawn before the pixmap becomes the background: drawing into a background pixmap after
+        // it is set is undefined (the server may have copied it)
+        if (composited) image.PaintOnto(_display, _pixmap, _visual, under: nint.Zero, alpha: 1);
+        else
+        {
+            SetShape(NativeMethods.ShapeBounding, [.. OsdLayout.InkRuns(image.Pixels(), image.Width, image.Height, image.Stride)]);
+            _image = image.Keep();
+            _image.PaintOnto(_display, _pixmap, _visual, _under, 1);
+        }
+        _ = NativeMethods.XSetWindowBackgroundPixmap(_display, _window, _pixmap);
+        if (composited) SetOpacityProperty(1);
 
         _ = NativeMethods.XMapWindow(_display, _window);
         _ = NativeMethods.XRaiseWindow(_display, _window);
-        _ = NativeMethods.XClearWindow(_display, _window);
         _ = NativeMethods.XSync(_display, false);
-
         _fadeStart = 0;
         _hideAt = Environment.TickCount64 + (long)_showFor.TotalMilliseconds;
+        Frame?.Invoke(new OsdFrame(_window, _under, 1));
         Shown?.Invoke(_window);
+    }
+
+    // a new pixmap holding the screen at the rectangle, with what a showing uncomposited notice covers taken from its
+    // copy of the screen
+    private nint ScreenUnder(nint root, ScreenPoint at, uint width, uint height, uint depth)
+    {
+        var under = NativeMethods.XCreatePixmap(_display, root, width, height, depth);
+        var gc = NativeMethods.XCreateGC(_display, root, 0, nint.Zero);
+        try
+        {
+            // no GraphicsExpose/NoExpose events: this connection never reads them, and they would pile up in its queue
+            _ = NativeMethods.XSetGraphicsExposures(_display, gc, false);
+            _ = NativeMethods.XSetSubwindowMode(_display, gc, NativeMethods.IncludeInferiors);
+            _ = NativeMethods.XCopyArea(_display, root, under, gc, at.X, at.Y, width, height, 0, 0);
+            // a source rectangle past the old copy's edges copies only the part inside it
+            if (_window != nint.Zero && _under != nint.Zero)
+                _ = NativeMethods.XCopyArea(_display, _under, under, gc, at.X - _at.X, at.Y - _at.Y, width, height, 0, 0);
+        }
+        finally
+        {
+            _ = NativeMethods.XFreeGC(_display, gc);
+        }
+        return under;
     }
 
     private void Hide()
@@ -243,7 +287,10 @@ internal sealed class XorgOsdNotification : IOsdNotification, IDisposable
         if (_window != nint.Zero) _ = NativeMethods.XDestroyWindow(_display, _window);
         if (_pixmap != nint.Zero) _ = NativeMethods.XFreePixmap(_display, _pixmap);
         if (_colormap != nint.Zero) _ = NativeMethods.XFreeColormap(_display, _colormap);
-        _window = _pixmap = _colormap = nint.Zero;
+        if (_under != nint.Zero) _ = NativeMethods.XFreePixmap(_display, _under);
+        _image?.Dispose();
+        _image = null;
+        _window = _pixmap = _colormap = _under = nint.Zero;
     }
 
     // a compositor owns _NET_WM_CM_S<screen> while it runs (EWMH)
@@ -269,10 +316,25 @@ internal sealed class XorgOsdNotification : IOsdNotification, IDisposable
     private void SetWindowType() =>
         _ = NativeMethods.XChangeProperty(_display, _window, _windowType, NativeMethods.XA_ATOM, 32, NativeMethods.PropModeReplace, [_notificationType], 1);
 
+    // with a compositor, the window's opacity property; without, the frame drawn again at that alpha over the copy of
+    // the screen, set as the background again and the window repainted from it
     private void SetOpacity(double opacity)
     {
-        var value = (nint)(uint)Math.Round(Math.Clamp(opacity, 0, 1) * uint.MaxValue);
-        Opacity?.Invoke(_window, (uint)value);
+        opacity = Math.Clamp(opacity, 0, 1);
+        if (_composited) SetOpacityProperty(opacity);
+        else if (_image != null)
+        {
+            _image.PaintOnto(_display, _pixmap, _visual, _under, opacity);
+            _ = NativeMethods.XSetWindowBackgroundPixmap(_display, _window, _pixmap);
+            _ = NativeMethods.XClearWindow(_display, _window);
+        }
+        _ = NativeMethods.XSync(_display, false);
+        Frame?.Invoke(new OsdFrame(_window, _under, opacity));
+    }
+
+    private void SetOpacityProperty(double opacity)
+    {
+        var value = (nint)(uint)Math.Round(opacity * uint.MaxValue);
         _ = NativeMethods.XChangeProperty(_display, _window, _opacity, NativeMethods.XA_CARDINAL, 32, NativeMethods.PropModeReplace, [value], 1);
     }
 
@@ -283,6 +345,9 @@ internal sealed class XorgOsdNotification : IOsdNotification, IDisposable
         NativeMethods.XFixesDestroyRegion(_display, region);
     }
 }
+
+// one frame the OSD showed: its window, the pixmap with the screen under it (zero with a compositor) and the opacity
+internal readonly record struct OsdFrame(nint Window, nint Under, double Opacity);
 
 // the OSD's text drawn by cairo on a transparent ARGB32 image, in OsdStyle's passes: a graduated dark glow, a
 // near-white fill and a hard outline
@@ -352,28 +417,34 @@ internal sealed class OsdImage : IDisposable
         return bytes;
     }
 
-    // copies the image onto an X drawable of the visual: as it is (alpha kept, for a composited window), or over black
-    // (an opaque window, shaped to the text)
-    internal void PaintOnto(nint display, nint drawable, nint visual, bool opaque)
+    // the image draws into an X drawable of the visual at the alpha: over the drawable `under` (of the same visual and
+    // size) as it is, or, with none, onto transparency (an ARGB drawable a compositor blends)
+    internal void PaintOnto(nint display, nint drawable, nint visual, nint under, double alpha)
     {
         var target = cairo_xlib_surface_create(display, drawable, visual, Width, Height);
         var cr = cairo_create(target);
+        var background = under == nint.Zero ? nint.Zero : cairo_xlib_surface_create(display, under, visual, Width, Height);
         try
         {
             cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
-            cairo_set_source_rgba(cr, 0, 0, 0, opaque ? 1 : 0);
+            if (background == nint.Zero) cairo_set_source_rgba(cr, 0, 0, 0, 0);
+            else cairo_set_source_surface(cr, background, 0, 0);
             cairo_paint(cr);
-            if (opaque) cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
+            cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
             cairo_set_source_surface(cr, _surface, 0, 0);
-            cairo_paint(cr);
+            cairo_paint_with_alpha(cr, alpha);
             cairo_surface_flush(target);
         }
         finally
         {
             cairo_destroy(cr);
+            if (background != nint.Zero) cairo_surface_destroy(background);
             cairo_surface_destroy(target);
         }
     }
+
+    // a second owner of the same image, disposed apart from this one
+    internal OsdImage Keep() => new(cairo_surface_reference(_surface), Width, Height);
 
     public void Dispose()
     {

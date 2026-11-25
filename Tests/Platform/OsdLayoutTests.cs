@@ -34,21 +34,20 @@ public class OsdLayoutTests
         Assert.That(OsdLayout.ScreenAt([], new ScreenPoint(0, 0)), Is.Null);
     }
 
-    // ARGB32 rows: alpha is each pixel's 4th byte; half opaque and up is solid; a row may have padding past its pixels
+    // ARGB32 rows: alpha is each pixel's 4th byte; any alpha is ink; a row may have padding past its pixels
     [Test]
-    public void OpaqueRuns_AreTheSolidSpansOfEachRow()
+    public void InkRuns_AreTheInkedSpansOfEachRow()
     {
         const int width = 5, height = 2, stride = 24;
         var pixels = new byte[stride * height];
         void Alpha(int x, int y, byte a) => pixels[y * stride + x * 4 + 3] = a;
         Alpha(1, 0, 0xFF);
-        Alpha(2, 0, 0x80);
-        Alpha(3, 0, 0x7F);
-        Alpha(4, 0, 0xFF);
+        Alpha(2, 0, 0x01);
+        Alpha(4, 0, 0x28);
         Alpha(0, 1, 0xC0);
         pixels[1 * stride + 5 * 4 + 3] = 0xFF; // padding past the row's last pixel
 
-        var runs = OsdLayout.OpaqueRuns(pixels, width, height, stride);
+        var runs = OsdLayout.InkRuns(pixels, width, height, stride);
 
         Assert.That(runs.Select(r => (r.X, r.Y, r.Width, r.Height)), Is.EqualTo(new (short, short, ushort, ushort)[]
         {
