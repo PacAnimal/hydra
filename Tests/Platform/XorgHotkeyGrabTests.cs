@@ -40,12 +40,12 @@ public class XorgHotkeyGrabTests
                 HotkeyAction.SwitchMonitorLeft, HotkeyAction.SwitchMonitorRight,
             ]));
             Assert.That(keys.Select(k => k.Mods), Has.All.EqualTo(ChordMask));
-            Assert.That(keys.Single(k => k.Action == HotkeyAction.ToggleCursorLock).Keycode, Is.EqualTo(Keycode(0x006C)), "XK_l");
+            Assert.That(keys.Single(k => k.Action == HotkeyAction.ToggleCursorLock).Keycode, Is.EqualTo(Keycode(0x006B)), "XK_k");
             Assert.That(keys.Single(k => k.Action == HotkeyAction.SwitchMonitorUp).Keycode, Is.EqualTo(Keycode(0xFF52)), "XK_Up");
         }
     }
 
-    // the lock as configured, no longer always Ctrl+Alt+Super+L; a disabled action grabs nothing
+    // the lock as configured, no longer always the default chord; a disabled action grabs nothing
     [Test]
     public void ARebindingIsGrabbed_AndADisabledActionIsNot()
     {

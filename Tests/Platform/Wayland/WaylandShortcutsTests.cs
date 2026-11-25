@@ -321,7 +321,7 @@ public class WaylandShortcutEventsTests
     {
         using var resolver = new EvdevKeyResolver(new LinuxInputConfig.XkbNames("us", "pc105", null, null));
         using var lookup = new XkbKeymapLookup(resolver.KeymapText());
-        var binding = Chord("Ctrl+Alt+Super+L");
+        var binding = Chord("Ctrl+Alt+Super+K");
         var keys = WaylandShortcuts.Keys(lookup, binding.Modifiers, lookup.EvdevKeyFor(WaylandShortcuts.Keysym(binding)))!;
         var hotkeys = HotkeyBindings.Build(null);
 
@@ -334,7 +334,7 @@ public class WaylandShortcutEventsTests
             Assert.That(downs.Select(e => e.PhysicalKey).ToList(), Is.EqualTo(keys.Downs.Select(k => (int)k).ToList()));
             Assert.That(downs.Take(3).Select(e => e.Key).ToList(), Is.EqualTo(new SpecialKey?[] { SpecialKey.Control_L, SpecialKey.Alt_L, SpecialKey.Super_L }));
             Assert.That(downs[^1].Type, Is.EqualTo(KeyEventType.KeyDown));
-            Assert.That(downs[^1].Character, Is.EqualTo('l'));
+            Assert.That(downs[^1].Character, Is.EqualTo('k'));
             Assert.That(hotkeys.Match(downs[^1]), Is.EqualTo(HotkeyAction.ToggleCursorLock));
             Assert.That(ups.Select(e => e.PhysicalKey).ToList(), Is.EqualTo(keys.Ups.Select(k => (int)k).ToList()));
             Assert.That(ups.Select(e => e.Type), Is.All.EqualTo(KeyEventType.KeyUp));
@@ -349,7 +349,7 @@ public class WaylandShortcutEventsTests
     {
         using var resolver = new EvdevKeyResolver(new LinuxInputConfig.XkbNames("us", "pc105", null, options));
         using var lookup = new XkbKeymapLookup(resolver.KeymapText());
-        var binding = Chord("Ctrl+Alt+Super+L");
+        var binding = Chord("Ctrl+Alt+Super+K");
         var keys = WaylandShortcuts.Keys(lookup, binding.Modifiers, lookup.EvdevKeyFor(WaylandShortcuts.Keysym(binding)))!;
 
         var downs = WaylandShortcuts.Events(resolver, keys.Downs, down: true);
@@ -358,7 +358,7 @@ public class WaylandShortcutEventsTests
         {
             Assert.That(keys.Modifiers, Is.EqualTo([ctrl, alt, super]));
             Assert.That(downs.Take(3).Select(e => e.Key).ToList(), Is.EqualTo(new SpecialKey?[] { SpecialKey.Control_L, SpecialKey.Alt_L, SpecialKey.Super_L }));
-            Assert.That(downs[^1].Character, Is.EqualTo('l'));
+            Assert.That(downs[^1].Character, Is.EqualTo('k'));
             Assert.That(HotkeyBinding.ChordModifiers(downs[^1]), Is.EqualTo(KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Super));
             Assert.That(HotkeyBindings.Build(null).Match(downs[^1]), Is.EqualTo(HotkeyAction.ToggleCursorLock));
         }
