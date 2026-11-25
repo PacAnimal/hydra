@@ -30,8 +30,10 @@ internal static class Keys
     public const int KeyLeftAlt = EvdevNativeMethods.KEY_LEFTALT;
     public const int KeyLeftMeta = EvdevNativeMethods.KEY_LEFTMETA;
     public const int BtnLeft = EvdevNativeMethods.BTN_LEFT;
+    public const int KeyRight = 106;
 
     // the default hotkeys, on ctrl+alt+super
     public static readonly int[] RelativeMouseHotkey = [KeyLeftCtrl, KeyLeftAlt, KeyLeftMeta, KeyM];
     public static readonly int[] CursorLockHotkey = [KeyLeftCtrl, KeyLeftAlt, KeyLeftMeta, KeyL];
+    public static readonly int[] SwitchRightHotkey = [KeyLeftCtrl, KeyLeftAlt, KeyLeftMeta, KeyRight];
 }

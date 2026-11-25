@@ -209,7 +209,8 @@ public class GuidedConfigDocumentTests
             "invertScrollX": true,
             "invertScrollY": true,
             "readKeyboardsForHotkeys": false,
-            "macScrollLines": 3
+            "macScrollLines": 3,
+            "injectedInputReturnsHome": false
           }]
         }
         """;
@@ -404,6 +405,7 @@ public class GuidedConfigDocumentTests
             Assert.That(profile.InvertScrollY, Is.True);
             Assert.That(profile.ReadKeyboardsForHotkeys, Is.False);
             Assert.That(profile.MacScrollLines, Is.EqualTo(3));
+            Assert.That(profile.InjectedInputReturnsHome, Is.False);
         }
     }
 
@@ -485,7 +487,8 @@ public class GuidedConfigDocumentTests
         [GuidedFields.InvertScrollX] = GuidedValues.On,
         [GuidedFields.InvertScrollY] = GuidedValues.On,
         [GuidedFields.ReadKeyboardsForHotkeys] = GuidedValues.Off,
-        [GuidedFields.MacScrollLines] = "3"
+        [GuidedFields.MacScrollLines] = "3",
+        [GuidedFields.InjectedInputReturnsHome] = GuidedValues.Off
     };
 
     private static IEnumerable<string> KeysOf(JsonNode node) => node.AsObject().Select(p => p.Key);

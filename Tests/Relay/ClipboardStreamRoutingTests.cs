@@ -1760,21 +1760,13 @@ public class ClipboardStreamRoutingTests : MasterClipboardFixture
         await relay.Sent.WaitFor(MessageKind.ClipboardStreamBegin, 1, "remote2");
         var id = relay.Sent.Of<ClipboardStreamBeginMessage>(MessageKind.ClipboardStreamBegin, "remote2").Single().Id;
 
-        MoveTo(platform, relay, "remote3", -100, 1);
+        TransitionTestHelper.MoveTo(platform, relay, "remote3", -100);
         await AnswerPull(relay, new ClipboardPullResponseMessage(PullIdTo(relay, "remote2"), null, Unchanged: true), "remote2");
-        MoveTo(platform, relay, "remote2", 100, 2);
+        TransitionTestHelper.MoveTo(platform, relay, "remote2", 100, 2);
         Assert.That(relay.Sent.Of(MessageKind.ClipboardPull, "remote3"), Has.Count.EqualTo(1), "pre-condition: pulled from remote3");
         return id;
     }
 
-    // pushes the cursor by dx until host has been entered the given number of times
-    private static void MoveTo(FakePlatform platform, FakeRelay relay, string host, int dx, int entries)
-    {
-        bool Entered() => relay.Sent.Of(MessageKind.EnterScreen, host).Count >= entries;
-        for (var i = 0; i < 40 && !Entered(); i++)
-            platform.FireMouseDelta(dx, 0);
-        Assert.That(Entered(), Is.True, $"pre-condition: on {host}");
-    }
     // remote3 ← remote2 ← home → remote, all online
     private static readonly IHydraProfile QuadConfig = TransitionTestHelper.Profile("home", new HydraConfig
     {
@@ -1801,14 +1793,8 @@ public class ClipboardStreamRoutingTests : MasterClipboardFixture
         await Begin(relay, stream);
         await Chunk(relay, stream.Chunks[0]);
         EnterLeftHost(platform, relay);
-        bool Entered() => relay.Sent.Of(MessageKind.EnterScreen, "remote3").Count > 0;
-        for (var i = 0; i < 40 && !Entered(); i++)
-            platform.FireMouseDelta(-100, 0);
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(Entered(), Is.True, "pre-condition: on remote3");
-            Assert.That(relay.Sent.Of(MessageKind.ClipboardPull, "remote2"), Has.Count.EqualTo(1), "pre-condition: pulled from remote2");
-        }
+        TransitionTestHelper.MoveTo(platform, relay, "remote3", -100);
+        Assert.That(relay.Sent.Of(MessageKind.ClipboardPull, "remote2"), Has.Count.EqualTo(1), "pre-condition: pulled from remote2");
         return stream;
     }
 

@@ -131,6 +131,7 @@ internal sealed class WaylandInputHandler(ICaptureSession session, IHydraProfile
 
     public event Action? CaptureFailed;
     public event Action? KeyboardCapturedLate { add { } remove { } }
+    public event Action<ScreenPoint?>? InjectedInput { add { } remove { } }
 
     public bool IsOnVirtualScreen
     {

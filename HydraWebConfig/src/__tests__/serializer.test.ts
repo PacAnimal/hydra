@@ -360,6 +360,14 @@ describe('serialize', () => {
       expect(['readKeyboardsForHotkeys' in on, 'readKeyboardsForHotkeys' in slave]).toEqual([false, false])
     })
 
+    it('writes injectedInputReturnsHome on a master only, and only when off', () => {
+      const off = JSON.parse(serialize(state({ mode: 'Master', injectedInputReturnsHome: false }))).profiles[0]
+      const on = JSON.parse(serialize(state({ mode: 'Master', injectedInputReturnsHome: true }))).profiles[0]
+      const slave = JSON.parse(serialize(state({ mode: 'Slave', injectedInputReturnsHome: false }))).profiles[0]
+      expect(off.injectedInputReturnsHome).toBe(false)
+      expect(['injectedInputReturnsHome' in on, 'injectedInputReturnsHome' in slave]).toEqual([false, false])
+    })
+
     it('writes allowSystemSleep and clipboardSync only when not the default', () => {
       const set = JSON.parse(serialize(state({ mode: 'Slave', allowSystemSleep: true, clipboardSync: 'System' }))).profiles[0]
       const unset = JSON.parse(serialize(state({ mode: 'Slave', allowSystemSleep: false, clipboardSync: 'Hydra' }))).profiles[0]

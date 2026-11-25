@@ -76,6 +76,9 @@ public class HydraConfig
     public bool AccelerateMouseWheel { get; init; } = true;
     // hyprland master only — read hotkeys at home from /dev/input; false uses the GlobalShortcuts portal
     public bool ReadKeyboardsForHotkeys { get; init; } = true;
+    // x11 master only — pointer input injected into this display (XTest: a VNC server, xdotool) brings the cursor home
+    // to where it points during a visit and crosses no edge at home; false treats it as the user's own
+    public bool InjectedInputReturnsHome { get; init; } = true;
     // slave only — flip the scroll a master sends on that axis before injecting it
     public bool InvertScrollX { get; init; }
     public bool InvertScrollY { get; init; }

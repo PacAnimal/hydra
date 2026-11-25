@@ -51,6 +51,8 @@ public sealed class FakePlatform : IPlatformInput, ICursorHider, IBarrierHits
     public event Action? CaptureFailed;
     public void FireKeyboardCapturedLate() { KeyboardCapturedLate?.Invoke(); Flush(); }
     public event Action? KeyboardCapturedLate;
+    public void FireInjectedInput(ScreenPoint? at) { InjectedInput?.Invoke(at); Flush(); }
+    public event Action<ScreenPoint?>? InjectedInput;
 
     // the hotkey chord with this letter, pressed (or, with up, released)
     public void PressHotkey(char ch, bool up = false) => FireKeyEvent(KeyEvent.Char(up ? KeyEventType.KeyUp : KeyEventType.KeyDown, ch, HotkeyChord.Modifiers));
@@ -81,6 +83,9 @@ public sealed class FakePlatform : IPlatformInput, ICursorHider, IBarrierHits
     public bool AnyKeyHeld { get; set; }
     public bool KeyboardCaptured { get; set; } = true;
     bool IPlatformInput.AnyKeyHeld() => AnyKeyHeld;
+    // what KeyHeld answers for any key; null, the default, is a platform that cannot see a swallowed key
+    public bool? KeyHeldByOs { get; set; }
+    public bool? KeyHeld(int physicalKey) => KeyHeldByOs;
     public bool CursorIsVisible { get; set; }
     // what CursorShownAtHome answers; null reads the input as X11's tools do, the interface's default
     public bool? ShownAtHome { get; set; }

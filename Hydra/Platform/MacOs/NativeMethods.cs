@@ -216,6 +216,14 @@ internal static partial class NativeMethods
     [return: MarshalAs(UnmanagedType.U1)]
     internal static partial bool CGEventSourceButtonState(int stateId, uint button);
 
+    // kCGEventSourceStateHIDSystemState = 1: the hardware's own state, which no event tap changes
+    internal const int KCGEventSourceStateHidSystemState = 1;
+
+    [LibraryImport(CoreGraphics)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    [return: MarshalAs(UnmanagedType.U1)]
+    internal static partial bool CGEventSourceKeyState(int stateId, ushort key);
+
     // -- CoreGraphics: event creation and injection --
 
     [LibraryImport(CoreGraphics)]

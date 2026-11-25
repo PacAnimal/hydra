@@ -10,6 +10,9 @@ public static class SpecialKeyExtensions
         SpecialKey.Alt_L or SpecialKey.Alt_R or
         SpecialKey.Super_L or SpecialKey.Super_R;
 
+    // a lock key toggles a state rather than being held; a macOS master reports CapsLock's on as its down, off as its up
+    public static bool IsLock(this SpecialKey key) => key is SpecialKey.CapsLock or SpecialKey.NumLock or SpecialKey.ScrollLock;
+
     // a numlock-off keypad key and the dedicated navigation key it stands for (KP_Begin has none)
     private static readonly Dictionary<SpecialKey, SpecialKey> KeypadNavigation = new()
     {

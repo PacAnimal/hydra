@@ -318,14 +318,8 @@ public class ClipboardEdgeCursorTests : MasterClipboardFixture
         Services.StartOnline(TransitionTestHelper.CreateService(profile: profile, clipboard: clipboard, timeProvider: new FakeTimeProvider()), hosts);
 
     // pushes the cursor by dx until it enters host once more
-    private static void Cross(FakePlatform platform, FakeRelay relay, string host, int dx)
-    {
-        var entries = relay.Sent.Of(MessageKind.EnterScreen, host).Count + 1;
-        bool Entered() => relay.Sent.Of(MessageKind.EnterScreen, host).Count >= entries;
-        for (var i = 0; i < 40 && !Entered(); i++)
-            platform.FireMouseDelta(dx, 0);
-        Assert.That(Entered(), Is.True, $"pre-condition: on {host}");
-    }
+    private static void Cross(FakePlatform platform, FakeRelay relay, string host, int dx) =>
+        TransitionTestHelper.MoveTo(platform, relay, host, dx, relay.Sent.Of(MessageKind.EnterScreen, host).Count + 1);
 
     // pushes the cursor by dx until it enters screen once more, on the host it is on
     private static void ToMonitor(FakePlatform platform, FakeRelay relay, string screen, int dx)

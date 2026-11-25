@@ -194,6 +194,14 @@ export function GlobalSettings({ config, serverError, onChange }: Props) {
                 />
                 Read Keyboards For Hotkeys
               </label>
+              <label className="checkbox-label" title="X11: pointer input a VNC server or xdotool injects into this display brings the cursor home and crosses no edge; unchecked, it is treated as yours">
+                <input
+                  type="checkbox"
+                  checked={config.injectedInputReturnsHome !== false}
+                  onChange={e => onChange({ injectedInputReturnsHome: e.target.checked ? undefined : false })}
+                />
+                Injected Input Returns Home
+              </label>
             </>
           )}
         </div>

@@ -165,6 +165,33 @@ public class XorgHeldKeyTests
         }
     }
 
+    [Test]
+    public async Task KeyHeld_AsksTheServerForTheKeyTheResolverStamped()
+    {
+        // what lets a lost up not hold the cursor on a remote: the keymap sees through our grab
+        await using var handler = new XorgInputHandler(NullLogger<XorgInputHandler>.Instance, TransitionTestHelper.TestConfig);
+        await handler.StartEventTap((_, _) => { }, null, _ => { }, _ => { }, _ => { });
+        var stamped = new XorgKeyResolver().Resolve(NativeMethods.KeyPress, _keycodeA, 0, _display)![0]!.PhysicalKey;
+
+        bool? down, up;
+        try
+        {
+            FakeKey(_keycodeA, isPress: true);
+            down = handler.KeyHeld(stamped);
+        }
+        finally
+        {
+            FakeKey(_keycodeA, isPress: false);
+        }
+        up = handler.KeyHeld(stamped);
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(down, Is.True);
+            Assert.That(up, Is.False);
+        }
+    }
+
     private KeyEvent?[] Press(XorgKeyResolver resolver, uint keycode) => resolver.Resolve(NativeMethods.KeyPress, keycode, 0, _display)!;
 
     private void FakeKey(uint keycode, bool isPress)

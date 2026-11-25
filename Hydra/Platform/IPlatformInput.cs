@@ -52,6 +52,11 @@ public interface IPlatformInput : IAsyncDisposable, ICursor, ILocalEventTap
     // its window manager binding's grab the keyboard). The platforms that cannot ask cheaply say false.
     bool AnyKeyHeld() => false;
 
+    // Whether the key a resolver stamped as physicalKey is down here though the event tap swallowed it, so a lost up
+    // cannot hold the cursor on a remote (macOS, Xorg). Null where a swallowed key is hidden (a Windows hook) or
+    // cannot be asked (evdev, Wayland).
+    bool? KeyHeld(int physicalKey) => null;
+
     // False while a visit's keyboard grab is still being retried (Xorg), so the typing is still here: the router tells
     // the remote nothing until it is true (KeyboardCapturedLate), and CaptureFailed ends the visit if it never becomes so.
     bool KeyboardCaptured => true;
@@ -64,6 +69,12 @@ public interface IPlatformInput : IAsyncDisposable, ICursor, ILocalEventTap
 
     // Raised when a retry wins the keyboard grab KeyboardCaptured said was missing at entry (Xorg): the visit can begin.
     event Action? KeyboardCapturedLate;
+
+    // Raised during a visit when another program injects pointer input into this machine's own display (Xorg: XTest, as
+    // a VNC server or xdotool does), with where the local pointer is now, null if on no screen. That input is someone at
+    // this machine, so it is not forwarded and the router brings the cursor home (injectedInputReturnsHome). The other
+    // platforms never raise it.
+    event Action<ScreenPoint?>? InjectedInput;
 
     // True when AnyMouseButtonHeld sees this button though the event tap swallowed it (macOS; Xorg's Left/Middle/Right). A
     // Windows hook hides it from GetAsyncKeyState, and evdev cannot ask at all.

@@ -23,6 +23,7 @@ internal sealed class SlavePlatformInput(ICursor cursor) : IPlatformInput
     public bool AnyMouseButtonHeld() => false;
     public event Action? CaptureFailed { add { } remove { } }
     public event Action? KeyboardCapturedLate { add { } remove { } }
+    public event Action<ScreenPoint?>? InjectedInput { add { } remove { } }
     public bool SeesSwallowed(MouseButton button) => false;
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }

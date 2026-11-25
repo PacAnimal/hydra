@@ -32,6 +32,10 @@ public sealed class XorgInputHandler : IPlatformInput
     private readonly Lock _grabLock = new();
     private readonly XGrabSession _keyboard;
     private readonly XGrabSession _pointer;
+    private readonly bool _injectedInputReturnsHome;
+    // each source device seen on a raw event, and whether it is an XTEST device (another client's injected input);
+    // only the event thread touches it, and a hierarchy change empties it, since a device id can be reused
+    private readonly Dictionary<int, bool> _xtestSources = [];
 
     // XI2 event mask for raw key press (13), raw button press/release (15, 16) and raw motion (17).
     // XISetMask(mask, n) = mask[n>>3] |= 1 << (n&7)
@@ -43,9 +47,17 @@ public sealed class XorgInputHandler : IPlatformInput
         0,
     ];
 
+    // XI2 event mask for hierarchy changes (11), selected for all devices: a device added or removed
+    private static readonly byte[] HierarchyMask =
+    [
+        0,
+        1 << (NativeMethods.XI_HierarchyChanged & 7),  // byte 1: bit 3 (event 11)
+    ];
+
     public XorgInputHandler(ILogger<XorgInputHandler> log, IHydraProfile profile)
     {
         _log = log;
+        _injectedInputReturnsHome = profile.InjectedInputReturnsHome;
         _display = XlibRuntime.OpenDisplayOrThrow("input capture");
 
         _rootWindow = NativeMethods.XDefaultRootWindow(_display);
@@ -144,6 +156,7 @@ public sealed class XorgInputHandler : IPlatformInput
 
     public event Action? CaptureFailed;
     public event Action? KeyboardCapturedLate;
+    public event Action<ScreenPoint?>? InjectedInput;
 
     public bool IsOnVirtualScreen
     {
@@ -233,6 +246,9 @@ public sealed class XorgInputHandler : IPlatformInput
 
     public bool AnyKeyHeld() => XorgDisplayHelper.HeldKeycodes(_display).Count > 0;
 
+    // the keymap sees through our XGrabKeyboard; a physical key is its keycode
+    public bool? KeyHeld(int physicalKey) => XorgDisplayHelper.HeldKeycodes(_display).Contains((uint)physicalKey);
+
     public void StopEventTap()
     {
         _running = false;
@@ -278,6 +294,27 @@ public sealed class XorgInputHandler : IPlatformInput
 
         try
         {
+            if (ev.XCookieEvType == NativeMethods.XI_HierarchyChanged)
+            {
+                _xtestSources.Clear();
+                return;
+            }
+
+            // Pointer input another client injects here (XTest: a VNC server, xdotool) is someone at this display, not
+            // the user's hands on the remote. During a visit none of it is forwarded, and the cursor comes home to where
+            // it points; the grab has already taken the core press of a click or scroll that ends a visit, so that one is
+            // lost. At home it moves the pointer but crosses no edge, or a VNC user at the edge facing a remote would be
+            // bounced between the two; nor does it count as local activity. Injected keys are left alone: xcape, espanso
+            // and keep-awake scripts inject them while the user works on a remote.
+            if (_injectedInputReturnsHome && IsInjectedPointer(ev))
+            {
+                // read once: an entry landing between two reads would drop an injected click without ending the visit
+                bool visiting = _isOnVirtualScreen;
+                if (visiting && ev.XCookieEvType is NativeMethods.XI_RawButtonPress or NativeMethods.XI_RawMotion)
+                    InjectedInput?.Invoke(XorgDisplayHelper.CursorPosition(_display, _rootWindow));
+                if (visiting || ev.XCookieEvType == NativeMethods.XI_RawMotion) return;
+            }
+
             if (ev.XCookieEvType == NativeMethods.XI_RawKeyPress && !_isOnVirtualScreen)
             {
                 // grab-based KeyPress/KeyRelease only arrive when cursor is on a slave; raw key presses
@@ -333,6 +370,33 @@ public sealed class XorgInputHandler : IPlatformInput
         {
             NativeMethods.XFreeEventData(_display, ref ev);
         }
+    }
+
+    // whether a raw pointer event came from an XTEST pointer, the device XTest injects through: each master pointer has
+    // one, named "<master> XTEST pointer". Asked once per source device, on the event thread.
+    private bool IsInjectedPointer(XEvent ev)
+    {
+        if (ev.XCookieEvType is not (NativeMethods.XI_RawButtonPress or NativeMethods.XI_RawButtonRelease or NativeMethods.XI_RawMotion))
+            return false;
+        var source = Marshal.PtrToStructure<XIRawEvent>(ev.XCookieData).SourceId;
+        if (_xtestSources.TryGetValue(source, out var xtest)) return xtest;
+
+        xtest = false;
+        var info = NativeMethods.XIQueryDevice(_display, source, out var count);
+        if (info != nint.Zero)
+        {
+            try
+            {
+                if (count > 0 && Marshal.PtrToStringUTF8(Marshal.PtrToStructure<XIDeviceInfo>(info).Name) is { } name)
+                    xtest = name.EndsWith(" XTEST pointer", StringComparison.Ordinal);
+            }
+            finally
+            {
+                NativeMethods.XIFreeDeviceInfo(info);
+            }
+        }
+        _xtestSources[source] = xtest;
+        return xtest;
     }
 
     // runs before each XGrabKeyboard; the grab then drops the seeds released in between. a key going down in between
@@ -395,6 +459,23 @@ public sealed class XorgInputHandler : IPlatformInput
         finally
         {
             maskHandle.Free();
+        }
+
+        var hierarchyHandle = GCHandle.Alloc(HierarchyMask, GCHandleType.Pinned);
+        try
+        {
+            var hierarchyMask = new XIEventMask
+            {
+                DeviceId = NativeMethods.XIAllDevices,
+                MaskLen = HierarchyMask.Length,
+                Mask = hierarchyHandle.AddrOfPinnedObject(),
+            };
+            _ = NativeMethods.XISelectEvents(_display, _rootWindow, ref hierarchyMask, 1);
+            _ = NativeMethods.XFlush(_display);
+        }
+        finally
+        {
+            hierarchyHandle.Free();
         }
     }
 

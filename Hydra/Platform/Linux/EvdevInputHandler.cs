@@ -1,6 +1,7 @@
 using Cathedral.Utils;
 using Hydra.Keyboard;
 using Hydra.Mouse;
+using Hydra.Screen;
 using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform.Linux;
@@ -97,6 +98,7 @@ internal sealed class EvdevInputHandler(ILogger<EvdevInputHandler> log) : IPlatf
     public bool AnyMouseButtonHeld() => false;
     public event Action? CaptureFailed { add { } remove { } }
     public event Action? KeyboardCapturedLate { add { } remove { } }
+    public event Action<ScreenPoint?>? InjectedInput { add { } remove { } }
     public bool SeesSwallowed(MouseButton button) => false;
 
     public Task StartEventTap(

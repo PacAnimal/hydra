@@ -191,6 +191,7 @@ function parseProfile(obj: Record<string, unknown>): HydraProfile {
     clipboardSync: coerceClipboardSync(obj.clipboardSync),
     hideCursor: strictBool(obj.hideCursor),
     readKeyboardsForHotkeys: strictBool(obj.readKeyboardsForHotkeys),
+    injectedInputReturnsHome: strictBool(obj.injectedInputReturnsHome),
     invertScrollX: strictBool(obj.invertScrollX),
     invertScrollY: strictBool(obj.invertScrollY),
     macScrollLines: optNumber(obj.macScrollLines),

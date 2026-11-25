@@ -400,17 +400,25 @@ if (config != null)
         services.AddSingleton<IClipboardSync, MacClipboardSync>();
     else if (OperatingSystem.IsWindows())
         services.AddSingleton<IClipboardSync, WindowsClipboardSync>();
-    else if (wayland)
-    {
-        // wl-clipboard when the portal has no clipboard; the master's input handler claims it for each visit
-        services.AddSingleton<PortalClipboardSync>();
-        services.AddSingleton<IClipboardSync>(sp => sp.GetRequiredService<PortalClipboardSync>());
-        services.AddSingleton<ICaptureClipboard>(sp => sp.GetRequiredService<PortalClipboardSync>());
-    }
-    else if (OperatingSystem.IsLinux() && hasXDisplay)
-        services.AddSingleton<IClipboardSync, XorgClipboardSync>();
     else
-        services.AddSingleton<IClipboardSync, NullClipboardSync>();
+        switch (LinuxClipboards.Choose(wayland, hasXDisplay, profile.Mode))
+        {
+            case LinuxClipboard.Portal:
+                // wl-clipboard when the portal has no clipboard; the master's input handler claims it for each visit
+                services.AddSingleton<PortalClipboardSync>();
+                services.AddSingleton<IClipboardSync>(sp => sp.GetRequiredService<PortalClipboardSync>());
+                services.AddSingleton<ICaptureClipboard>(sp => sp.GetRequiredService<PortalClipboardSync>());
+                break;
+            case LinuxClipboard.Xorg:
+                services.AddSingleton<IClipboardSync, XorgClipboardSync>();
+                break;
+            case LinuxClipboard.Memory:
+                services.AddSingleton<IClipboardSync, MemoryClipboardSync>();
+                break;
+            default:
+                services.AddSingleton<IClipboardSync, NullClipboardSync>();
+                break;
+        }
 
     if (!RunMode.IsSessionChild)
         services.AddHostedService<SelfUpdater>();
