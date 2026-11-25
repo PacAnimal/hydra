@@ -1,4 +1,4 @@
-// mirrors Xlib, XInput2, XFixes, XTest, XRandR, XScreenSaver and DPMS headers (<X11/*.h>, <X11/extensions/*.h>) and <poll.h>
+// mirrors Xlib, XInput2, XFixes, shape, XTest, XRandR, XScreenSaver and DPMS headers (<X11/*.h>, <X11/extensions/*.h>) and <poll.h>
 // ReSharper disable InconsistentNaming
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -53,6 +53,11 @@ internal static partial class NativeMethods
 
     internal const int InputOnly = 2;
     internal const ulong CWOverrideRedirect = 0x200;
+    internal const ulong CWBackPixel = 0x2;
+    internal const ulong CWBorderPixel = 0x8;
+    internal const ulong CWColormap = 0x2000;
+    internal const int TrueColor = 4;
+    internal const int AllocNone = 0;
 
     // -- grab constants --
 
@@ -115,6 +120,28 @@ internal static partial class NativeMethods
     [LibraryImport(X11)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial int XDisplayWidth(nint display, int screen);
+
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint XDefaultVisual(nint display, int screen);
+
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int XDefaultDepth(nint display, int screen);
+
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint XDefaultColormap(nint display, int screen);
+
+    // nonzero when the screen has a visual of that depth and class
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int XMatchVisualInfo(nint display, int screen, int depth, int @class, out XVisualInfo visualInfo);
+
+    // a resource database value, such as Xft.dpi; owned by Xlib, never freed
+    [LibraryImport(X11, StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint XGetDefault(nint display, string program, string option);
 
     [LibraryImport(X11)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
@@ -239,6 +266,35 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial int XRaiseWindow(nint display, nint window);
 
+    [LibraryImport(X11, StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int XStoreName(nint display, nint window, string name);
+
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint XCreateColormap(nint display, nint window, nint visual, int alloc);
+
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int XFreeColormap(nint display, nint colormap);
+
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint XCreatePixmap(nint display, nint drawable, uint width, uint height, uint depth);
+
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int XFreePixmap(nint display, nint pixmap);
+
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int XSetWindowBackgroundPixmap(nint display, nint window, nint pixmap);
+
+    // repaints the whole window with its background
+    [LibraryImport(X11)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int XClearWindow(nint display, nint window);
+
     // -- keyboard grab --
 
     [LibraryImport(X11)]
@@ -305,6 +361,32 @@ internal static partial class NativeMethods
     [LibraryImport(XFixes)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void XFixesSelectSelectionInput(nint display, nint window, nint selection, nuint eventMask);
+
+    // -- window shapes (XFixes regions, <X11/extensions/shape.h> kinds) --
+
+    internal const int ShapeBounding = 0;
+    internal const int ShapeInput = 2;
+
+    [LibraryImport(XFixes)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint XFixesCreateRegion(nint display, XRectangle[] rectangles, int count);
+
+    [LibraryImport(XFixes)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void XFixesDestroyRegion(nint display, nint region);
+
+    [LibraryImport(XFixes)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void XFixesSetWindowShapeRegion(nint display, nint window, int shapeKind, int xOffset, int yOffset, nint region);
+
+    [LibraryImport(XFixes)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint XFixesCreateRegionFromWindow(nint display, nint window, int shapeKind);
+
+    // XRectangle*, XFree it
+    [LibraryImport(XFixes)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint XFixesFetchRegion(nint display, nint region, out int count);
 
     // -- XTest input injection --
 
@@ -557,6 +639,7 @@ internal static partial class NativeMethods
     internal const nint SubstructureNotifyMask = 1 << 19;
     internal const nint SubstructureRedirectMask = 1 << 20;
     internal const nint XA_WINDOW = 33;
+    internal const nint XA_CARDINAL = 6;
 
     // children are bottom to top; XFree it
     [LibraryImport(X11)]
@@ -586,6 +669,7 @@ internal struct XWindowAttributes
     [FieldOffset(4)] internal int Y;
     [FieldOffset(8)] internal int Width;
     [FieldOffset(12)] internal int Height;
+    [FieldOffset(20)] internal int Depth;
     [FieldOffset(40)] internal int Class;
     [FieldOffset(92)] internal int MapState;
     [FieldOffset(120)] internal int OverrideRedirect;
@@ -698,11 +782,32 @@ internal struct XIDeviceInfo
     [FieldOffset(8)] internal nint Name;   // char*
 }
 
-// XSetWindowAttributes — 112 bytes on 64-bit LP64; we only set override_redirect at offset 88
+// XSetWindowAttributes — 112 bytes on 64-bit LP64; only the fields set here
 [StructLayout(LayoutKind.Explicit, Size = 112)]
 internal struct XSetWindowAttributes
 {
+    [FieldOffset(8)] internal nuint BackgroundPixel;
+    [FieldOffset(24)] internal nuint BorderPixel;
     [FieldOffset(88)] internal int OverrideRedirect;
+    [FieldOffset(96)] internal nint Colormap;
+}
+
+// XVisualInfo — 64 bytes on LP64; only the fields read here
+[StructLayout(LayoutKind.Explicit, Size = 64)]
+internal struct XVisualInfo
+{
+    [FieldOffset(0)] internal nint Visual;
+    [FieldOffset(20)] internal int Depth;
+}
+
+// XRectangle
+[StructLayout(LayoutKind.Sequential)]
+internal struct XRectangle
+{
+    internal short X;
+    internal short Y;
+    internal ushort Width;
+    internal ushort Height;
 }
 
 // XIRawEvent layout on 64-bit LP64:

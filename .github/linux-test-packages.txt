@@ -7,3 +7,5 @@ libxfixes3
 libxkbcommon0
 xkb-data
 libxtst6
+libcairo2
+fonts-dejavu-core

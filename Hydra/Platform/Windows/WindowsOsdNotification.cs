@@ -4,6 +4,7 @@ using System.Drawing.Drawing2D;
 using System.Drawing.Text;
 using System.Runtime.CompilerServices;
 using System.Runtime.Versioning;
+using Hydra.Screen;
 using Microsoft.Extensions.Logging;
 
 namespace Hydra.Platform.Windows;
@@ -24,9 +25,10 @@ internal sealed class WindowsOsdNotification : IOsdNotification, IDisposable
 
     private const nuint TimerId = 1;
     private const nuint FadeTimerId = 2;
-    private const uint ShowDurationMs = 1500; // solid display before fade (matches Mac)
-    private const uint FadeTickMs = 16;       // ~60fps
-    private const int FadeStep = 14;          // 255/14 ≈ 18 ticks ≈ 0.29s fade (matches Mac 0.3s)
+    private static readonly uint ShowDurationMs = (uint)OsdStyle.ShowFor.TotalMilliseconds;
+    private static readonly uint FadeTickMs = (uint)OsdStyle.FadeTick.TotalMilliseconds;
+    // the alpha lost each tick, so the fade takes OsdStyle.FadeFor
+    private static readonly int FadeStep = (int)Math.Ceiling(255 / (OsdStyle.FadeFor / OsdStyle.FadeTick));
 
     public WindowsOsdNotification(ILogger<WindowsOsdNotification> log)
     {
@@ -85,8 +87,7 @@ internal sealed class WindowsOsdNotification : IOsdNotification, IDisposable
         _hbmp = bmp.GetHbitmap(Color.FromArgb(0));
         _bmpW = bmpW;
         _bmpH = bmpH;
-        _posX = mx + (sw - bmpW) / 2;
-        _posY = my + sh - bmpH - (int)(sh * 0.1);
+        (_posX, _posY) = OsdStyle.Place(new ScreenBounds(mx, my, sw, sh), bmpW, bmpH);
 
         NativeMethods.SetWindowPos(Hwnd, NativeMethods.HWND_TOPMOST, _posX, _posY, _bmpW, _bmpH,
             NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_SHOWWINDOW);
@@ -147,12 +148,9 @@ internal sealed class WindowsOsdNotification : IOsdNotification, IDisposable
         _hbmp = nint.Zero;
     }
 
-    // Logical em size, in the same spirit as the macOS OSD's fixed point size. Multiplied by the
-    // monitor's dpi scale, since this process is PerMonitorV2 aware and GDI+ renders into a 96 dpi
-    // bitmap: without that a 4K display at 150% would show a noticeably smaller OSD.
-    // 28pt, the same size the macOS OSD uses (main.swift, systemFont ofSize: 28, .bold), so the two
-    // platforms match by construction rather than by a tuned Windows-only number.
-    private const float BaseEmSize = 28f;
+    // OsdStyle.EmSize, the macOS OSD's 28 pt, multiplied by the monitor's dpi scale, since this process is
+    // PerMonitorV2 aware and GDI+ renders into a 96 dpi bitmap: without that a 4K display at 150% would show a
+    // noticeably smaller OSD.
 
     // 96 dpi is USER_DEFAULT_SCREEN_DPI, i.e. 100% scaling. Fall back to that if the query fails,
     // which leaves the OSD at its plain logical size rather than an arbitrary one.
@@ -165,8 +163,8 @@ internal sealed class WindowsOsdNotification : IOsdNotification, IDisposable
 
     private static Bitmap RenderText(string text, float dpiScale, out int width, out int height)
     {
-        var emSize = BaseEmSize * dpiScale;
-        var padding = (int)(emSize * 0.6f);
+        var emSize = (float)(OsdStyle.EmSize * dpiScale);
+        var padding = OsdStyle.PaddingFor(emSize);
 
         // measure first on a throwaway bitmap
         using var measure = new Bitmap(1, 1);
@@ -191,20 +189,19 @@ internal sealed class WindowsOsdNotification : IOsdNotification, IDisposable
 
         // multi-pass graduated glow — approximates a blurred shadow (GDI+ has no blur)
         // outermost pass is widest and most transparent; each inner pass narrows and darkens
-        (float widthFactor, int alpha)[] glowPasses = [(0.20f, 40), (0.13f, 80), (0.08f, 140), (0.05f, 200)];
-        foreach (var (wf, alpha) in glowPasses)
+        foreach (var (wf, alpha) in OsdStyle.GlowPasses)
         {
-            using var pen = new Pen(Color.FromArgb(alpha, 0, 0, 0), emSize * wf);
+            using var pen = new Pen(Color.FromArgb(alpha, 0, 0, 0), emSize * (float)wf);
             pen.LineJoin = LineJoin.Round;
             g.DrawPath(pen, renderPath);
         }
 
         // near-white fill
-        using var fillBrush = new SolidBrush(Color.FromArgb(240, 242, 242, 242));
+        using var fillBrush = new SolidBrush(Color.FromArgb(OsdStyle.FillAlpha, OsdStyle.FillGrey, OsdStyle.FillGrey, OsdStyle.FillGrey));
         g.FillPath(fillBrush, renderPath);
 
         // hard 1px outline on top of fill
-        using var outlinePen = new Pen(Color.FromArgb(200, 0, 0, 0), 1.0f);
+        using var outlinePen = new Pen(Color.FromArgb(OsdStyle.OutlineAlpha, 0, 0, 0), 1.0f);
         outlinePen.LineJoin = LineJoin.Round;
         g.DrawPath(outlinePen, renderPath);
 

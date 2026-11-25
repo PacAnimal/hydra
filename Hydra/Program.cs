@@ -448,7 +448,10 @@ if (config != null)
     else
     {
         services.AddSingleton<IFileTransferDialog, NullFileTransferDialog>();
-        services.AddSingleton<IOsdNotification, NullOsdNotification>();
+        if (OperatingSystem.IsLinux() && !wayland && hasXDisplay)
+            services.AddSingleton<IOsdNotification, XorgOsdNotification>();
+        else
+            services.AddSingleton<IOsdNotification, NullOsdNotification>();
         services.AddSingleton<IDropTargetResolver, NullDropTargetResolver>();
     }
     services.AddSingleton<FileTransferService>();
