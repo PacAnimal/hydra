@@ -28,8 +28,9 @@ dotnet publish Hydra --runtime linux-arm64 --self-contained   # Linux arm64 (e.g
 
 Output lands in `Hydra/bin/Release/net10.0/<rid>/publish/`. Both macOS builds need macOS 14 or later, the oldest .NET 10 supports.
 
-`dotnet test` skips the Linux X11 and Windows-only tests on other platforms. `./run-tests.sh linux` runs the X11
-tests under Xvfb in Docker.
+`dotnet test` skips the Linux X11 and Windows-only tests on other platforms. `./run-tests.sh linux` runs the whole
+suite on Linux in Docker: the image from `Tests/Linux` (the newest Ubuntu with .NET 10, Xvfb, Node LTS, stable Rust,
+Python), as a user that is not root. CI's `test-linux` job runs the same command.
 
 The Rust reference code builds against a pinned `Tests/Styx/StyxDocs.Cargo.lock`. After changing Styx.md's
 `styx-test:cargo` block, regenerate it from the repository root:

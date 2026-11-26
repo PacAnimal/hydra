@@ -5,8 +5,9 @@
 #   - mac     → runs natively on this Mac. Windows-only tests self-skip; the [Category("Linux")] X11
 #               tests self-skip too (no DISPLAY, and libX11 never loads), so a plain `dotnet test`
 #               is safe. This is what runs on every commit.
-#   - linux   → the real X11 selection-protocol tests (XorgClipboardSync) against a headless Xvfb
-#               server, inside a Linux dotnet-sdk container with Xvfb + xclip.
+#   - linux   → the WHOLE suite on Linux: the image built from Tests/Linux (the newest Ubuntu with .NET 10,
+#               Xvfb, Node LTS, stable Rust, Python), as a user that is not root, with uinput test devices
+#               and a scoped IPv6 link-local address. CI's test-linux job runs this same lane.
 #   - desktops → the [Category("Desktops")] tests against real headless GNOME (mutter), KDE (kwin,
 #               Wayland and X11) and openbox desktops, in the Fedora image built from Tests/Wayland.
 #   - hyprland → the same tests against a real Hyprland on a qemu VM's virtio-gpu (Tests/Wayland/vm/vm.sh).
@@ -32,7 +33,7 @@
 # Usage:
 #   ./run-tests.sh          # default: mac, then linux
 #   ./run-tests.sh mac      # only the Mac-native run
-#   ./run-tests.sh linux    # only the container X11 lane (Category=Linux, under Xvfb)
+#   ./run-tests.sh linux    # only the container lane (the whole suite on Linux, under Xvfb)
 #   ./run-tests.sh desktops # only the container desktops lane (Category=Desktops)
 #   ./run-tests.sh hyprland # only the VM Hyprland lane (Category=Desktops; Tests/Wayland/vm/vm.sh down stops the VM)
 #   ./run-tests.sh windows  # only the Windows lane (sync + test on the real box)
@@ -161,20 +162,20 @@ run_mac() {
 	dotnet test "$SLN"
 }
 
-# Container X11 lane: install Xvfb + xclip + the X client libs, then run the Category=Linux
-# tests under xvfb-run (which starts a headless X server, sets DISPLAY, and tears it down).
-# The package list is shared with CI's Linux test job, and so are the server arguments: without -noreset
-# Xvfb resets each time its last client leaves, and a test connecting during that reset gets no display.
-# Privileged, with the kernel's devtmpfs bound over /dev/input, so the evdev tests' uinput devices get real nodes there.
+# Container linux lane: the whole suite, built from Tests/Linux. --pull takes the newest of each base image's tag, so
+# the lane tests on current software; the build cache keeps an unchanged image to seconds. Tests/Linux/lane.sh runs
+# the suite as a user that is not root, under Xvfb started with -noreset (without it the server resets each time its
+# last client leaves, and a test connecting during that reset gets no display). Privileged, so it can bind the
+# kernel's devtmpfs over /dev/input for the evdev tests' uinput devices and make a link-local interface; the host's
+# udev database comes in read-only, since the host's udev handles those devices' nodes too. NuGet
+# packages, crates and the Rust reference build stay in the hydra-linux-cache volume between runs.
 run_linux() {
-	echo "── Container X11 tests (Category=Linux, headless Xvfb) ────────────"
-	docker run --rm --privileged -v "$PWD":/src -w /src "$SDK_IMAGE" bash -c '
-		set -e
-		mkdir -p /run/devtmpfs /dev/input && mount -t devtmpfs devtmpfs /run/devtmpfs && mount --bind /run/devtmpfs/input /dev/input
-		apt-get update -qq
-		DEBIAN_FRONTEND=noninteractive xargs apt-get install -y -qq < .github/linux-test-packages.txt >/dev/null
-		xvfb-run -a -s "-screen 0 1280x1024x24 -noreset" dotnet test Hydra.sln --filter "Category=Linux"
-	'
+	echo "── Container tests (the whole suite on Linux, headless Xvfb) ──────"
+	docker build --pull -t hydra-linux -f Tests/Linux/Dockerfile Tests/Linux || return 1
+	local udev=()
+	# the host's udev database, read-only, so the lane opens a test device up only once the host's udev is done with it
+	[ -d /run/udev/data ] && udev=(-v /run/udev:/run/host-udev:ro)
+	docker run --rm --privileged -v "$PWD":/src -v hydra-linux-cache:/cache "${udev[@]}" hydra-linux "$@"
 }
 
 # Container desktops lane: the Category=Desktops tests against real headless desktops (mutter, kwin

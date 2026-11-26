@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   version:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
 
@@ -48,11 +48,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: linux
-            runner: ubuntu-24.04
-            # xvfb-run provides a headless X server + DISPLAY so the real X11 selection tests execute here.
-            # -noreset: otherwise the server resets whenever its last client leaves, and a test connecting then gets no display
-            wrapper: xvfb-run -a -s "-screen 0 1280x1024x24 -noreset"
           - os: windows
             runner: windows-latest
           - os: macos
@@ -65,40 +60,40 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v5
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: "10.0.x"
 
       # the crates Styx.md's Rust example builds with, pinned by its lock file, so a run rarely needs crates.io
       - name: Cache Rust crates
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
           key: cargo-${{ runner.os }}-${{ hashFiles('Tests/Styx/StyxDocs.Cargo.lock') }}
 
-      - name: Install X11 headless deps
-        if: matrix.os == 'linux'
-        run: sudo apt-get update -qq && xargs sudo apt-get install -y -qq < .github/linux-test-packages.txt
-
-      # the evdev tests make keyboards and mice through uinput; the runner's user may write uinput and read their nodes
-      - name: Allow uinput test devices
-        if: matrix.os == 'linux'
-        run: |
-          sudo modprobe uinput || true   # built in on some kernels
-          test -c /dev/uinput
-          echo 'KERNEL=="uinput", MODE="0666"' | sudo tee /etc/udev/rules.d/99-hydra-tests.rules
-          echo 'SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="hydra-test*", MODE="0666"' | sudo tee -a /etc/udev/rules.d/99-hydra-tests.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=uinput
-          sudo chmod 0666 /dev/uinput
-
       - name: Restore
         run: dotnet restore Hydra.sln
 
       - name: Test
-        run: ${{ matrix.wrapper }} dotnet test Hydra.sln --no-restore
+        run: dotnet test Hydra.sln --no-restore
+
+  # the whole suite on Linux: the same lane, image and script as ./run-tests.sh linux
+  test-linux:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # the lane's uinput test devices are made through the runner's /dev/uinput
+      - name: Load uinput
+        run: |
+          sudo modprobe uinput || true   # built in on some kernels
+          test -c /dev/uinput
+
+      - name: Test
+        run: ./run-tests.sh linux
 
   # the TUI end to end, through a real pty and xterm.js; macOS because node-pty ships prebuilds for it
   test-tui:
@@ -108,13 +103,13 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v5
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: "10.0.x"
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: lts/*
           cache: npm
           cache-dependency-path: HydraWebConfig/tools/tui-tests/package-lock.json
 
@@ -132,7 +127,7 @@ jobs:
   # the Category=Desktops tests against real headless GNOME, KDE (Wayland and X11) and openbox desktops and an evdev
   # (console) master, in the two Fedora images from Tests/Wayland
   test-desktops:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v7
@@ -174,7 +169,7 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v5
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: "10.0.x"
 
@@ -219,9 +214,9 @@ jobs:
           path: hydra-${{ matrix.rid }}.*
 
   release:
-    needs: [build, test, test-tui, version]
+    needs: [build, test, test-linux, test-tui, version]
     if: github.event_name == 'push'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     permissions:
       contents: write
 
