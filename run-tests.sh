@@ -166,16 +166,12 @@ run_mac() {
 # the lane tests on current software; the build cache keeps an unchanged image to seconds. Tests/Linux/lane.sh runs
 # the suite as a user that is not root, under Xvfb started with -noreset (without it the server resets each time its
 # last client leaves, and a test connecting during that reset gets no display). Privileged, so it can bind the
-# kernel's devtmpfs over /dev/input for the evdev tests' uinput devices and make a link-local interface; the host's
-# udev database comes in read-only, since the host's udev handles those devices' nodes too. NuGet
+# kernel's devtmpfs over /dev/input for the evdev tests' uinput devices and make a link-local interface. NuGet
 # packages, crates and the Rust reference build stay in the hydra-linux-cache volume between runs.
 run_linux() {
 	echo "── Container tests (the whole suite on Linux, headless Xvfb) ──────"
 	docker build --pull -t hydra-linux -f Tests/Linux/Dockerfile Tests/Linux || return 1
-	local udev=()
-	# the host's udev database, read-only, so the lane opens a test device up only once the host's udev is done with it
-	[ -d /run/udev/data ] && udev=(-v /run/udev:/run/host-udev:ro)
-	docker run --rm --privileged -v "$PWD":/src -v hydra-linux-cache:/cache "${udev[@]}" hydra-linux "$@"
+	docker run --rm --privileged -v "$PWD":/src -v hydra-linux-cache:/cache hydra-linux "$@"
 }
 
 # Container desktops lane: the Category=Desktops tests against real headless desktops (mutter, kwin
